@@ -41,7 +41,16 @@ type Session struct {
 	cols     int
 	rows     int
 	firstSet bool // whether AutoName already consumed a first turn
+
+	histMu sync.Mutex
+	hist   []byte // recent raw PTY output, replayed to newly-attached sinks
 }
+
+// maxHist caps a session's replay buffer. claude is a full-screen TUI that
+// repaints frequently, so a freshly-attached client only needs enough recent
+// output to reconstruct the current frame; the next repaint corrects any escape
+// sequence clipped at the trim boundary.
+const maxHist = 256 * 1024
 
 // CmdSpec describes the child process to launch under a PTY. It is platform
 // neutral (name + args + dir + env) so go-pty can build the command for the
@@ -116,6 +125,28 @@ func (s *Session) Write(p []byte) (int, error) {
 // Read reads bytes from the session's PTY stdout. The mux pumps this into a
 // per-session output buffer / fan-out.
 func (s *Session) Read(p []byte) (int, error) { return s.pt.Read(p) }
+
+// recordHist appends raw output to the replay buffer, trimming the oldest bytes
+// once it exceeds maxHist.
+func (s *Session) recordHist(b []byte) {
+	s.histMu.Lock()
+	defer s.histMu.Unlock()
+	s.hist = append(s.hist, b...)
+	if len(s.hist) > maxHist {
+		trimmed := make([]byte, maxHist)
+		copy(trimmed, s.hist[len(s.hist)-maxHist:])
+		s.hist = trimmed
+	}
+}
+
+// History returns a copy of the session's replay buffer.
+func (s *Session) History() []byte {
+	s.histMu.Lock()
+	defer s.histMu.Unlock()
+	out := make([]byte, len(s.hist))
+	copy(out, s.hist)
+	return out
+}
 
 // Resize propagates new terminal dimensions to the PTY.
 func (s *Session) Resize(cols, rows int) error {

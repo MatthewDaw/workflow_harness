@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/workflow-harness/claude-plus/internal/diag"
 	"github.com/workflow-harness/claude-plus/internal/pty"
 )
 
@@ -126,6 +127,7 @@ func (d *Daemon) Stop() {
 // a hello starts a full attach session with output fan-out.
 func (d *Daemon) handle(conn net.Conn) {
 	defer conn.Close()
+	defer diag.Recover("daemon.handle")
 	r := bufio.NewReader(conn)
 
 	first, err := readFrame(r)
@@ -148,14 +150,6 @@ func (d *Daemon) handle(conn net.Conn) {
 func (d *Daemon) attach(conn net.Conn, r *bufio.Reader) {
 	clientID := genID()
 
-	// Ensure at least one session exists when a client first attaches.
-	if d.mux.Count() == 0 {
-		if _, err := d.mux.Spawn("", ""); err != nil {
-			_ = writeFrame(conn, Frame{Type: FrameAck, Err: err.Error()})
-			return
-		}
-	}
-
 	// Serialize writes to this client (mux fan-out is concurrent).
 	var wmu sync.Mutex
 	send := func(f Frame) {
@@ -164,12 +158,24 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader) {
 		_ = writeFrame(conn, f)
 	}
 
+	// Stream every session's output (tagged with its id). The client keeps a
+	// mirror terminal per session and renders the focused one, so switching is
+	// instant and a freshly spawned session is never blank. AddSink also replays
+	// each existing session's recent output, so reattaching renders immediately.
+	// Register the sink BEFORE spawning the initial session so claude's one-time
+	// welcome paint is captured live rather than lost.
 	d.mux.AddSink(clientID, func(sessID string, b []byte) {
-		// Only stream the focused session's bytes to the terminal client.
-		if f := d.mux.Focused(); f != nil && f.ID == sessID {
-			send(Frame{Type: FrameOutput, SessID: sessID, Data: base64.StdEncoding.EncodeToString(b)})
-		}
+		send(Frame{Type: FrameOutput, SessID: sessID, Data: base64.StdEncoding.EncodeToString(b)})
 	})
+
+	// Ensure at least one session exists when a client first attaches.
+	if d.mux.Count() == 0 {
+		if _, err := d.mux.Spawn("", ""); err != nil {
+			d.mux.RemoveSink(clientID)
+			_ = writeFrame(conn, Frame{Type: FrameAck, Err: err.Error()})
+			return
+		}
+	}
 
 	d.mu.Lock()
 	d.clients[clientID] = conn

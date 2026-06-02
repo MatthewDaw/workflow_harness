@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/capture"
@@ -91,7 +92,7 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 
 	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{})}
 	recv := d.NewControlReceiver()
-	rt.client = transport.NewClient(cfg.URL, cfg.Token, buf, recv.Handle)
+	rt.client = transport.NewClient(cfg.URL, cfg.Token, instanceID, buf, recv.Handle)
 	go rt.client.Run()
 
 	// Per-session transcript tailers feed the envelope stream.
@@ -99,13 +100,25 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 	return rt
 }
 
-// captureLoop spawns a transcript tailer for each session and forwards its
-// envelopes outbound. Sessions appearing later are picked up on the poll tick.
+// captureLoop announces each session to HQ (session.start) and tails its
+// transcript, forwarding events outbound. Sessions appearing later are picked up
+// on the poll tick. Announcement is independent of the transcript tailer so a
+// session shows in HQ immediately, even before claude writes any transcript.
 func (rt *Runtime) captureLoop(instanceID string) {
 	tailed := map[string]*capture.Tailer{}
+	announced := map[string]bool{}
 	tk := time.NewTicker(time.Second)
 	defer tk.Stop()
 	host := hostName()
+	projectID := projectIDFor(rt.d.repoRoot)
+
+	emit := func(sid string, e event.Event) {
+		env := event.Envelope{
+			V: 1, InstanceID: instanceID, Host: host,
+			TS: time.Now().UnixMilli(), Seq: rt.seq.Next(sid), Event: e,
+		}
+		_ = rt.client.Send(env)
+	}
 
 	for {
 		select {
@@ -113,6 +126,13 @@ func (rt *Runtime) captureLoop(instanceID string) {
 			return
 		case <-tk.C:
 			for _, v := range rt.d.mux.List() {
+				// Announce a newly-seen session with session.start (seq 0 for this
+				// session) so HQ has its identity — project, name, ticket — from the
+				// first event, before any transcript activity.
+				if !announced[v.ID] {
+					announced[v.ID] = true
+					emit(v.ID, event.SessionStart(v.ID, projectID, host, v.Name, "", v.Ticket))
+				}
 				if _, ok := tailed[v.ID]; ok {
 					continue
 				}
@@ -121,24 +141,39 @@ func (rt *Runtime) captureLoop(instanceID string) {
 					continue
 				}
 				sid := v.ID
-				emit := func(e event.Event) {
-					env := event.Envelope{
-						V: 1, InstanceID: instanceID, Host: host,
-						TS: time.Now().UnixMilli(), Seq: rt.seq.Next(sid), Event: e,
-					}
-					_ = rt.client.Send(env)
-				}
 				onFirst := func(sessID, text string) {
 					if renamed, name := rt.d.mux.ApplyAutoName(sessID, text); renamed {
-						emit(event.SessionRename(sessID, name))
+						emit(sessID, event.SessionRename(sessID, name))
 					}
 				}
-				t := capture.NewTailer(sid, path, emit, onFirst)
+				t := capture.NewTailer(sid, path, func(e event.Event) { emit(sid, e) }, onFirst)
 				tailed[sid] = t
 				go t.Run(500*time.Millisecond, rt.stop)
 			}
 		}
 	}
+}
+
+// projectIDFor derives a stable, readable project id from the repo path (its
+// base directory name, slugified). Sessions in HQ are grouped under this id.
+func projectIDFor(repoRoot string) string {
+	base := strings.ToLower(filepath.Base(repoRoot))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	if s == "" {
+		return "project"
+	}
+	return s
 }
 
 // Stop tears down the runtime.

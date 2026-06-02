@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	vt "github.com/hinshun/vt10x"
+	"github.com/mattn/go-runewidth"
 )
 
 // Chrome layout: row 0 is the tab bar, row 1 the session sub-tabs, the last row
@@ -322,18 +323,39 @@ func (c *Compositor) renderSessionBody(w, h int) (curX, curY int, curVis bool) {
 		return 0, 0, false
 	}
 	pw, ph := p.Size()
+	// vt10x stores one logical cell per rune (no spacer after a wide rune), but a
+	// wide rune (emoji/CJK) draws two columns. Map logical cells -> visual
+	// columns by accumulating rune widths so alignment matches what claude drew.
 	for y := 0; y < ph && y < bodyH; y++ {
-		for x := 0; x < pw && x < w; x++ {
+		vx := 0
+		for x := 0; x < pw && vx < w; x++ {
 			g := p.Cell(x, y)
 			ch := g.Char
 			if ch == 0 {
 				ch = ' '
 			}
-			c.screen.Set(x, bodyTop+y, Cell{Ch: ch, FG: g.FG, BG: g.BG})
+			rw := runewidth.RuneWidth(ch)
+			if rw < 1 {
+				rw = 1
+			}
+			c.screen.Set(vx, bodyTop+y, Cell{Ch: ch, FG: g.FG, BG: g.BG})
+			if rw == 2 && vx+1 < w {
+				c.screen.Set(vx+1, bodyTop+y, Cell{Ch: ' ', FG: g.FG, BG: g.BG, WideCont: true})
+			}
+			vx += rw
 		}
 	}
+	// Map the cursor's logical column to its visual column the same way.
 	cx, cy, vis := p.Cursor()
-	return cx, bodyTop + cy, vis
+	vcx := 0
+	for i := 0; i < cx && i < pw; i++ {
+		rw := runewidth.RuneWidth(p.Cell(i, cy).Char)
+		if rw < 1 {
+			rw = 1
+		}
+		vcx += rw
+	}
+	return vcx, bodyTop + cy, vis
 }
 
 func (c *Compositor) renderPlaceholderBody(w, h int) {

@@ -14,6 +14,10 @@ type Cell struct {
 	FG, BG  vt.Color
 	Reverse bool
 	Bold    bool
+	// WideCont marks the right half of a wide (2-cell) character. The terminal
+	// draws nothing here — the wide rune to the left already covers it — so the
+	// painter skips it.
+	WideCont bool
 }
 
 func blank() Cell { return Cell{Ch: ' ', FG: vt.DefaultFG, BG: vt.DefaultBG} }
@@ -117,6 +121,9 @@ func (s *Screen) Flush(curX, curY int, curVisible bool) {
 	for y := 0; y < s.h; y++ {
 		for x := 0; x < s.w; x++ {
 			c := s.cur[y][x]
+			if c.WideCont {
+				continue // covered by the wide rune to its left
+			}
 			if c == s.prev[y][x] {
 				continue
 			}

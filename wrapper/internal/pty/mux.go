@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/workflow-harness/claude-plus/internal/diag"
 )
 
 // Mux multiplexes multiple claude PTY sessions inside one daemon. It tracks the
@@ -77,12 +78,14 @@ func (m *Mux) Spawn(name, ticket string) (*Session, error) {
 // pump continuously reads a session's PTY and fans output to all sinks. On EOF
 // (child exited) it marks the session done and re-focuses a neighbor.
 func (m *Mux) pump(s *Session) {
+	defer diag.Recover("mux.pump")
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := s.Read(buf)
 		if n > 0 {
 			b := make([]byte, n)
 			copy(b, buf[:n])
+			s.recordHist(b)
 			m.mu.RLock()
 			for _, sink := range m.sinks {
 				sink(s.ID, b)
@@ -122,11 +125,20 @@ func (m *Mux) onSessionExit(id string) {
 	}
 }
 
-// AddSink registers an output consumer keyed by id (e.g. an attach client).
+// AddSink registers an output consumer keyed by id (e.g. an attach client) and
+// replays each session's recent output to it, so a freshly-attached client
+// renders the current screen immediately instead of staying blank until the
+// next repaint.
 func (m *Mux) AddSink(id string, fn func(sessID string, b []byte)) {
 	m.mu.Lock()
 	m.sinks[id] = fn
+	sessions := append([]*Session(nil), m.sessions...)
 	m.mu.Unlock()
+	for _, s := range sessions {
+		if h := s.History(); len(h) > 0 {
+			fn(s.ID, h)
+		}
+	}
 }
 
 // RemoveSink deregisters an output consumer.

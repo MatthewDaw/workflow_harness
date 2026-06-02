@@ -3,11 +3,16 @@ package main
 import (
 	"io"
 	"os"
+	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/daemon"
+	"github.com/workflow-harness/claude-plus/internal/diag"
 	"github.com/workflow-harness/claude-plus/internal/shell"
 	"golang.org/x/term"
 )
@@ -32,11 +37,48 @@ func runShell(c *daemon.Client, instance string) error {
 
 	// Alternate screen + raw mode + SGR mouse reporting; restore all on exit.
 	// 1000 = click tracking, 1006 = SGR extended coordinates (cols/rows > 223).
-	os.Stdout.WriteString("\x1b[?1049h\x1b[2J\x1b[?1000h\x1b[?1006h")
-	defer os.Stdout.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l")
+	//
+	// Teardown MUST happen on every exit path — including a panic in a background
+	// goroutine or an external terminate signal — or the user's terminal is left
+	// stuck in raw + mouse-reporting mode (keystrokes/mouse echo as escape
+	// sequences). restore() is idempotent and undoes everything: mouse off, alt
+	// screen off, cursor shown, raw mode restored.
+	var rawState *term.State
 	if term.IsTerminal(inFd) {
 		if old, mkErr := term.MakeRaw(inFd); mkErr == nil {
-			defer func() { _ = term.Restore(inFd, old) }()
+			rawState = old
+		}
+	}
+	os.Stdout.WriteString("\x1b[?1049h\x1b[2J\x1b[?1000h\x1b[?1006h")
+	var restoreOnce sync.Once
+	restore := func() {
+		restoreOnce.Do(func() {
+			os.Stdout.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l")
+			if rawState != nil {
+				_ = term.Restore(inFd, rawState)
+			}
+		})
+	}
+	defer restore()
+
+	// External terminate signals (window close, SIGTERM, SIGHUP) bypass deferred
+	// teardown — catch them and restore before exiting. Ctrl-C is delivered as a
+	// raw byte (ISIG is off in raw mode), so it still reaches claude.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		restore()
+		os.Exit(1)
+	}()
+
+	// A panic in either background goroutine would otherwise kill the process
+	// without running the deferred restore. Capture it, restore, and exit clean.
+	guard := func(where string) {
+		if r := recover(); r != nil {
+			diag.LogPanic(where, r, debug.Stack())
+			restore()
+			os.Exit(1)
 		}
 	}
 
@@ -57,8 +99,8 @@ func runShell(c *daemon.Client, instance string) error {
 		}
 	}
 
-	c.Out = func(b []byte) {
-		comp.FeedOutput(comp.FocusedSessionID(), b)
+	c.Out = func(sessID string, b []byte) {
+		comp.FeedOutput(sessID, b)
 		markDirty()
 	}
 	c.OnSessions = func(list []daemon.SessInfo) {
@@ -67,10 +109,16 @@ func runShell(c *daemon.Client, instance string) error {
 	}
 
 	readErr := make(chan error, 1)
-	go func() { readErr <- c.Run() }()
+	go func() {
+		defer guard("client.Run")
+		readErr <- c.Run()
+	}()
 
 	events := make(chan inputEvent, 1024)
-	go parseInput(os.Stdin, events)
+	go func() {
+		defer guard("parseInput")
+		parseInput(os.Stdin, events)
+	}()
 
 	frame := time.NewTicker(16 * time.Millisecond)
 	defer frame.Stop()
@@ -88,7 +136,12 @@ func runShell(c *daemon.Client, instance string) error {
 		case <-frame.C:
 			select {
 			case <-dirty:
-				comp.Render()
+				// Swallow a transient render panic (e.g. an emulator edge case)
+				// so one bad frame is logged, not fatal — the chrome keeps running.
+				func() {
+					defer diag.Recover("render")
+					comp.Render()
+				}()
 			default:
 			}
 		case <-resize.C:

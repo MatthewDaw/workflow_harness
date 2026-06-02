@@ -1,7 +1,7 @@
 package transport
 
 import (
-	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,10 +37,11 @@ type ControlHandler func(ControlFrame)
 // pending envelopes on (re)connect, and dispatches inbound control frames to a
 // handler. Networking is strictly outbound (KTD5/KTD6): no inbound ports.
 type Client struct {
-	url     string
-	token   string // device token (Sec-WebSocket auth header)
-	buf     *RingBuffer
-	onCtrl  ControlHandler
+	url        string
+	token      string // device token, sent on the handshake query string
+	instanceID string // this daemon's instance id, for HQ → daemon control routing
+	buf        *RingBuffer
+	onCtrl     ControlHandler
 
 	mu        sync.Mutex
 	conn      *websocket.Conn
@@ -50,26 +51,40 @@ type Client struct {
 	stopCh chan struct{}
 
 	// dial is overridable in tests to inject a fake transport.
-	dial func(url, token string) (*websocket.Conn, error)
+	dial func(url, token, instanceID string) (*websocket.Conn, error)
 }
 
 // NewClient constructs a transport client. buf must be open; onCtrl receives
-// control frames routed down from HQ.
-func NewClient(url, token string, buf *RingBuffer, onCtrl ControlHandler) *Client {
+// control frames routed down from HQ. instanceID identifies this daemon so HQ can
+// route steering commands back to it (the `$connect` handler indexes it).
+func NewClient(url, token, instanceID string, buf *RingBuffer, onCtrl ControlHandler) *Client {
 	return &Client{
-		url: url, token: token, buf: buf, onCtrl: onCtrl,
+		url: url, token: token, instanceID: instanceID, buf: buf, onCtrl: onCtrl,
 		sendCh: make(chan event.Envelope, 256),
 		stopCh: make(chan struct{}),
 		dial:   defaultDial,
 	}
 }
 
-func defaultDial(url, token string) (*websocket.Conn, error) {
-	h := http.Header{}
-	if token != "" {
-		h.Set("Authorization", "Bearer "+token)
+// defaultDial opens the WebSocket. API Gateway's `$connect` Lambda authorizer
+// reads the credential from the handshake query string
+// (`route.request.querystring.token`) — a WS upgrade can't carry custom headers
+// reliably — so the token, role, and instanceId go on the URL, not in a header.
+func defaultDial(rawURL, token, instanceID string) (*websocket.Conn, error) {
+	dialURL := rawURL
+	if u, err := url.Parse(rawURL); err == nil {
+		q := u.Query()
+		if token != "" {
+			q.Set("token", token)
+		}
+		q.Set("role", "daemon")
+		if instanceID != "" {
+			q.Set("instanceId", instanceID)
+		}
+		u.RawQuery = q.Encode()
+		dialURL = u.String()
 	}
-	c, _, err := websocket.DefaultDialer.Dial(url, h)
+	c, _, err := websocket.DefaultDialer.Dial(dialURL, nil)
 	return c, err
 }
 
@@ -101,7 +116,7 @@ func (c *Client) Run() {
 			return
 		default:
 		}
-		conn, err := c.dial(c.url, c.token)
+		conn, err := c.dial(c.url, c.token, c.instanceID)
 		if err != nil {
 			if !c.sleep(backoff) {
 				return
@@ -134,7 +149,7 @@ func (c *Client) replay(conn *websocket.Conn) error {
 		return err
 	}
 	for _, env := range pending {
-		if err := conn.WriteJSON(wireMsg{Action: "event", Envelope: env}); err != nil {
+		if err := conn.WriteJSON(eventFrame{Action: "event", Envelope: env}); err != nil {
 			return err
 		}
 	}
@@ -150,12 +165,12 @@ func (c *Client) serve(conn *websocket.Conn) {
 	go func() {
 		defer close(readErr)
 		for {
-			var msg wireMsg
+			var msg inMsg
 			if err := conn.ReadJSON(&msg); err != nil {
 				return
 			}
-			if msg.Action == "control" && c.onCtrl != nil {
-				c.onCtrl(msg.Control)
+			if msg.Type == "control" && c.onCtrl != nil {
+				c.onCtrl(ControlFrame{SessionID: msg.SessionID, Action: msg.Action, Payload: msg.Payload})
 			}
 		}
 	}()
@@ -167,7 +182,7 @@ func (c *Client) serve(conn *websocket.Conn) {
 		case <-readErr:
 			return
 		case env := <-c.sendCh:
-			if err := conn.WriteJSON(wireMsg{Action: "event", Envelope: env}); err != nil {
+			if err := conn.WriteJSON(eventFrame{Action: "event", Envelope: env}); err != nil {
 				return
 			}
 			_ = c.buf.Ack(1)
@@ -196,11 +211,22 @@ func (c *Client) Stop() {
 	c.mu.Unlock()
 }
 
-// wireMsg is the frame exchanged with the WebSocket API. Outbound carries an
-// event Envelope; inbound carries a ControlFrame. The `action` field matches the
-// WebSocket API route keys (event / control) defined by the backend (U6/U7).
-type wireMsg struct {
-	Action   string         `json:"action"`
-	Envelope event.Envelope `json:"envelope,omitempty"`
-	Control  ControlFrame   `json:"control,omitempty"`
+// eventFrame is the OUTBOUND frame (daemon → HQ). API Gateway routes on
+// `$request.body.action`, and the `event` Lambda then validates the entire body
+// as an Envelope (`parseEnvelope(body)`). So the envelope fields are flattened to
+// the top level (anonymous embed) and sit alongside `action` — the backend's zod
+// schema ignores the extra `action` key.
+type eventFrame struct {
+	Action string `json:"action"`
+	event.Envelope
+}
+
+// inMsg is the INBOUND frame (HQ → daemon). The backend posts control frames as
+// `{ type: 'control', sessionId, action, payload }` (and event fan-out as
+// `{ type: 'event', ... }`, which daemons ignore). We dispatch on `type`.
+type inMsg struct {
+	Type      string        `json:"type"`
+	SessionID string        `json:"sessionId"`
+	Action    ControlAction `json:"action"`
+	Payload   string        `json:"payload,omitempty"`
 }

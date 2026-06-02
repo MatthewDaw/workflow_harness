@@ -21,8 +21,9 @@ type Client struct {
 	conn net.Conn
 	r    *bufio.Reader
 
-	// Out receives decoded PTY output bytes for rendering (stdout or TUI).
-	Out func(b []byte)
+	// Out receives decoded PTY output bytes (tagged with the session id) for
+	// rendering. Every session streams, so the client routes by id.
+	Out func(sessID string, b []byte)
 	// OnSessions receives session-list updates for the sub-tab row.
 	OnSessions func([]SessInfo)
 
@@ -116,7 +117,7 @@ func (c *Client) Run() error {
 		case FrameOutput:
 			if c.Out != nil {
 				b, _ := base64.StdEncoding.DecodeString(f.Data)
-				c.Out(b)
+				c.Out(f.SessID, b)
 			}
 		case FrameAck, FrameSessAck:
 			if c.OnSessions != nil && f.List != nil {

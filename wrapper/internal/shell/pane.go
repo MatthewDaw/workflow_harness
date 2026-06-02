@@ -51,19 +51,36 @@ func (p *Pane) Size() (cols, rows int) {
 	return p.cols, p.rows
 }
 
-// Cell returns the glyph at (x, y) in the emulator grid.
+// Cell returns the glyph at (x, y) in the emulator grid. Out-of-range coordinates
+// return a blank glyph rather than panicking — the emulator's grid and a caller's
+// cached dimensions can momentarily disagree across a resize.
 func (p *Pane) Cell(x, y int) vt.Glyph {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if x < 0 || y < 0 || x >= p.cols || y >= p.rows {
+		return vt.Glyph{Char: ' ', FG: vt.DefaultFG, BG: vt.DefaultBG}
+	}
 	return p.term.Cell(x, y)
 }
 
-// Cursor returns the emulator cursor position and visibility.
+// Cursor returns the emulator cursor position and visibility, clamped into the
+// current grid so callers can index Cell with it safely.
 func (p *Pane) Cursor() (x, y int, visible bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	c := p.term.Cursor()
-	return c.X, c.Y, p.term.CursorVisible()
+	cx, cy := int(c.X), int(c.Y)
+	if cx < 0 {
+		cx = 0
+	} else if cx >= p.cols {
+		cx = p.cols - 1
+	}
+	if cy < 0 {
+		cy = 0
+	} else if cy >= p.rows {
+		cy = p.rows - 1
+	}
+	return cx, cy, p.term.CursorVisible()
 }
 
 func clampSize(cols, rows int) (int, int) {
