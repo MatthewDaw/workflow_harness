@@ -1,7 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useDispatch } from 'react-redux';
 import type { AuthClient, AuthUser } from './authClient.js';
 import { readCognitoConfig } from './authClient.js';
 import { createMockClient } from './mockClient.js';
+import { setIdToken } from '../app/authSlice.js';
 
 interface AuthState {
   user: AuthUser | null;
@@ -34,6 +36,7 @@ export function AuthProvider({
   /** Injectable client for tests; defaults to Cognito-or-mock. */
   client?: AuthClient;
 }) {
+  const dispatch = useDispatch();
   const [resolvedClient, setResolvedClient] = useState<AuthClient | null>(client ?? null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,12 +50,16 @@ export function AuthProvider({
       const current = await c.getCurrentUser();
       if (!active) return;
       setUser(current);
+      // Restore the bearer token into the store so API calls are authorized
+      // across reloads, not just immediately after an interactive sign-in.
+      if (current) dispatch(setIdToken(await c.getIdToken()));
+      if (!active) return;
       setLoading(false);
     })();
     return () => {
       active = false;
     };
-  }, [client]);
+  }, [client, dispatch]);
 
   const value = useMemo<AuthState>(
     () => ({
@@ -62,14 +69,17 @@ export function AuthProvider({
         if (!resolvedClient) throw new Error('auth client not ready');
         const u = await resolvedClient.signIn(username, password);
         setUser(u);
+        // Capture the bearer token so RTK Query's prepareHeaders can attach it.
+        dispatch(setIdToken(await resolvedClient.getIdToken()));
       },
       async signOut() {
         if (!resolvedClient) return;
         await resolvedClient.signOut();
         setUser(null);
+        dispatch(setIdToken(null));
       },
     }),
-    [user, loading, resolvedClient],
+    [user, loading, resolvedClient, dispatch],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

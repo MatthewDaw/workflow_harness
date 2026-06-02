@@ -27,3 +27,5 @@ wrapper/dist/
 
 # python scaffolding (vestigial)
 .venv/
+infra/cdk.bundles/
+infra/cdk-outputs.json

@@ -1,44 +1,41 @@
+import * as path from 'path';
 import * as cdk from 'aws-cdk-lib/core';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
-import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
-import { WebSocketLambdaAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import {
+  HttpLambdaIntegration,
+  WebSocketLambdaIntegration,
+} from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import {
+  HttpJwtAuthorizer,
+  WebSocketLambdaAuthorizer,
+} from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { Construct } from 'constructs';
 
 /**
- * U5 — API stack: the serverless backend the Lambda handlers attach to.
+ * U5 — API stack: the serverless backend.
  *
- * Provisions:
- *  - a DynamoDB single-table (`harness`) with overloaded PK/SK, a GSI1 for the
- *    cross-cutting queries (live sessions, user→projects), and Streams enabled
- *    so projections/roll-ups (U6/U10) can react to writes;
- *  - an HTTP API (apigatewayv2) fronting the REST handlers, guarded by a Cognito
- *    JWT authorizer bound to the AuthStack user pool;
- *  - a WebSocket API carrying event ingestion + the live/control path, with the
- *    standard `$connect`/`$disconnect`/`$default` routes plus the custom
- *    `event`/`subscribe`/`control` routes, and a Lambda authorizer on `$connect`
- *    that runs the device/JWT verifier (packages/backend/src/auth);
- *  - the Lambda functions wired to those routes with least-privilege IAM to the
- *    table.
+ *  - a DynamoDB single-table (`harness`) with overloaded PK/SK, GSI1 (live
+ *    sessions, user→projects), and Streams (projections/roll-ups);
+ *  - an HTTP API (REST) guarded by a Cognito JWT authorizer, with CORS for the
+ *    SPA, routing to the real bundled `@harness/backend` handlers;
+ *  - a WebSocket API (ingest + live + control) with `$connect`/`$disconnect`/
+ *    `$default` + the custom `event`/`subscribe`/`control` routes and a device-
+ *    token Lambda authorizer on `$connect`.
  *
- * The handler source lands in later units (U6/U7/U8…). To keep `cdk synth`
- * self-contained here — no bundler, no Docker, no dependency on files that do
- * not yet exist — each function is provisioned with an inline placeholder whose
- * `handler` points at the eventual backend module path. Swapping the inline
- * `Code` for the bundled backend asset in U29 is a one-line change per function;
- * the routes, authorizers, IAM, and env wiring are final.
+ * Each Lambda's code is the esbuild bundle produced by
+ * `infra/scripts/bundle-backend.mjs` (run before synth/deploy), referenced via
+ * `lambda.Code.fromAsset(cdk.bundles/<key>)` with the CJS export `index.handler`.
  */
 
 export interface ApiStackProps extends cdk.StackProps {
-  /** Cognito user pool the HTTP API's JWT authorizer trusts (from AuthStack). */
   readonly userPool: cognito.IUserPool;
-  /** App client id the JWT authorizer accepts as an audience (from AuthStack). */
   readonly userPoolClient: cognito.IUserPoolClient;
 }
+
+const BUNDLES = path.join(__dirname, '..', 'cdk.bundles');
 
 export class ApiStack extends cdk.Stack {
   readonly table: dynamodb.Table;
@@ -49,9 +46,6 @@ export class ApiStack extends cdk.Stack {
     super(scope, id, props);
 
     // ---- DynamoDB single-table ------------------------------------------------
-    // PK/SK overloaded across every entity (see packages/backend/src/db/keys.ts).
-    // GSI1 carries the live-session list and the user→projects query. Streams
-    // feed the projection/roll-up Lambdas added in later units.
     this.table = new dynamodb.Table(this, 'HarnessTable', {
       tableName: 'harness',
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
@@ -61,7 +55,6 @@ export class ApiStack extends cdk.Stack {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
-
     this.table.addGlobalSecondaryIndex({
       indexName: 'GSI1',
       partitionKey: { name: 'GSI1PK', type: dynamodb.AttributeType.STRING },
@@ -70,51 +63,42 @@ export class ApiStack extends cdk.Stack {
     });
 
     // ---- Lambda scaffolding ---------------------------------------------------
-    // Common runtime + env shared by every handler. The handler string is the
-    // real backend module path so wiring matches once bundling is enabled (U29).
     const commonEnv: Record<string, string> = {
       HARNESS_TABLE: this.table.tableName,
       USER_POOL_ID: props.userPool.userPoolId,
       USER_POOL_CLIENT_ID: props.userPoolClient.userPoolClientId,
-      // Resolved from Secrets Manager / SSM in deploy units; present so the
-      // device-token verifier has a binding at runtime.
       DEVICE_TOKEN_SECRET: process.env.DEVICE_TOKEN_SECRET ?? 'placeholder-dev-secret',
     };
 
-    // Placeholder code keeps synth bundler-free; replaced by the bundled backend
-    // asset in U29. The `handler` already names the eventual module export.
-    const placeholder = lambda.Code.fromInline(
-      'exports.handler = async () => ({ statusCode: 501, body: "not implemented" });',
-    );
-
-    const makeFn = (id: string, handler: string): lambda.Function => {
-      const fn = new lambda.Function(this, id, {
+    const makeFn = (id: string, bundleKey: string): lambda.Function =>
+      new lambda.Function(this, id, {
         runtime: lambda.Runtime.NODEJS_20_X,
         architecture: lambda.Architecture.ARM_64,
-        handler,
-        code: placeholder,
+        handler: 'index.handler',
+        code: lambda.Code.fromAsset(path.join(BUNDLES, bundleKey)),
         timeout: cdk.Duration.seconds(15),
         memorySize: 256,
         environment: commonEnv,
       });
-      return fn;
-    };
 
-    // Read-only vs read-write split keeps IAM least-privilege per handler.
     const grantRead = (fn: lambda.Function) => this.table.grantReadData(fn);
     const grantReadWrite = (fn: lambda.Function) => this.table.grantReadWriteData(fn);
 
     // ---- HTTP API (REST) ------------------------------------------------------
-    // Handlers read/write the table scoped to the caller's uid. A single
-    // Cognito JWT authorizer guards the API; the issuer is the user pool.
-    const restProjectsFn = makeFn('RestProjectsFn', 'rest/projects.handler');
-    const restSessionsFn = makeFn('RestSessionsFn', 'rest/sessions.handler');
-    const restAgentsFn = makeFn('RestAgentsFn', 'rest/agents.handler');
-    const restObjectivesFn = makeFn('RestObjectivesFn', 'rest/objectives.handler');
-    grantReadWrite(restProjectsFn);
-    grantRead(restSessionsFn);
-    grantReadWrite(restAgentsFn);
-    grantReadWrite(restObjectivesFn);
+    const projectsFn = makeFn('RestProjectsFn', 'rest_projects');
+    const sessionsFn = makeFn('RestSessionsFn', 'rest_sessions');
+    const agentsFn = makeFn('RestAgentsFn', 'rest_agents');
+    const skillsFn = makeFn('RestSkillsFn', 'rest_skills');
+    const objectivesFn = makeFn('RestObjectivesFn', 'rest_objectives');
+    const ticketsFn = makeFn('RestTicketsFn', 'rest_tickets');
+    const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
+    grantReadWrite(projectsFn);
+    grantRead(sessionsFn);
+    grantReadWrite(agentsFn);
+    grantReadWrite(skillsFn);
+    grantReadWrite(objectivesFn);
+    grantReadWrite(ticketsFn);
+    grantReadWrite(weeklyFn);
 
     const region = cdk.Stack.of(this).region;
     const jwtIssuer = `https://cognito-idp.${region}.amazonaws.com/${props.userPool.userPoolId}`;
@@ -126,56 +110,74 @@ export class ApiStack extends cdk.Stack {
     this.httpApi = new apigwv2.HttpApi(this, 'HqHttpApi', {
       apiName: 'command-hq-http',
       defaultAuthorizer: jwtAuthorizer,
+      // The SPA is served from CloudFront (a different origin) and sends a bearer
+      // token, so CORS must allow it. Preflight (OPTIONS) is handled by API
+      // Gateway before the authorizer runs.
+      corsPreflight: {
+        allowOrigins: ['*'],
+        allowMethods: [
+          apigwv2.CorsHttpMethod.GET,
+          apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.PUT,
+          apigwv2.CorsHttpMethod.DELETE,
+          apigwv2.CorsHttpMethod.OPTIONS,
+        ],
+        allowHeaders: ['authorization', 'content-type'],
+        maxAge: cdk.Duration.hours(1),
+      },
     });
 
-    const route = (
-      path: string,
+    const M = apigwv2.HttpMethod;
+    const r = (
+      routePath: string,
       methods: apigwv2.HttpMethod[],
       fn: lambda.Function,
       integrationId: string,
     ) =>
       this.httpApi.addRoutes({
-        path,
+        path: routePath,
         methods,
         integration: new HttpLambdaIntegration(integrationId, fn),
       });
 
-    route(
-      '/projects',
-      [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
-      restProjectsFn,
-      'ProjectsIntegration',
-    );
-    route('/projects/{id}', [apigwv2.HttpMethod.GET], restProjectsFn, 'ProjectByIdIntegration');
-    route('/sessions', [apigwv2.HttpMethod.GET], restSessionsFn, 'SessionsIntegration');
-    route('/sessions/{id}', [apigwv2.HttpMethod.GET], restSessionsFn, 'SessionByIdIntegration');
-    route(
-      '/agents',
-      [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
-      restAgentsFn,
-      'AgentsIntegration',
-    );
-    route(
-      '/skills',
-      [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
-      restAgentsFn,
-      'SkillsIntegration',
-    );
-    route('/objectives', [apigwv2.HttpMethod.GET], restObjectivesFn, 'ObjectivesIntegration');
+    r('/projects', [M.GET, M.POST], projectsFn, 'Projects');
+    r('/projects/{id}', [M.GET], projectsFn, 'ProjectById');
+
+    r('/sessions', [M.GET], sessionsFn, 'Sessions');
+    r('/sessions/{id}', [M.GET], sessionsFn, 'SessionById');
+
+    r('/agents', [M.GET, M.POST], agentsFn, 'Agents');
+    r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName');
+    r('/agents/{name}/scope', [M.POST], agentsFn, 'AgentScope');
+
+    r('/skills', [M.GET, M.POST], skillsFn, 'Skills');
+    r('/skills/{name}', [M.GET, M.PUT, M.DELETE], skillsFn, 'SkillByName');
+    r('/skills/{name}/members', [M.POST], skillsFn, 'SkillMembers');
+    r('/skills/{name}/members/{member}', [M.DELETE], skillsFn, 'SkillMemberDelete');
+    r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve');
+    r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage');
+
+    r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
+    r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
+
+    r('/tickets', [M.GET, M.POST], ticketsFn, 'Tickets');
+    r('/tickets/{tid}', [M.GET, M.PUT], ticketsFn, 'TicketById');
+    r('/tickets/{tid}/status', [M.POST], ticketsFn, 'TicketStatus');
+
+    r('/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly');
+    r('/weekly/{week}', [M.GET], weeklyFn, 'WeeklyByWeek');
+    r('/weekly/{week}/publish', [M.POST], weeklyFn, 'WeeklyPublish');
 
     // ---- WebSocket API (ingest + live + control) ------------------------------
-    // $connect runs a Lambda authorizer (device token for daemons, Cognito JWT
-    // for web). Ingestion (`event`), fan-out subscription (`subscribe`), and the
-    // steer path (`control`) are the three custom routes the daemons/web use.
-    const wsAuthorizerFn = makeFn('WsAuthorizerFn', 'ws/authorizer.handler');
+    const wsAuthorizerFn = makeFn('WsAuthorizerFn', 'ws_authorizer');
     grantRead(wsAuthorizerFn);
 
-    const wsConnectFn = makeFn('WsConnectFn', 'ws/connect.handler');
-    const wsDisconnectFn = makeFn('WsDisconnectFn', 'ws/disconnect.handler');
-    const wsDefaultFn = makeFn('WsDefaultFn', 'ws/default.handler');
-    const wsEventFn = makeFn('WsEventFn', 'ws/event.handler');
-    const wsSubscribeFn = makeFn('WsSubscribeFn', 'ws/subscribe.handler');
-    const wsControlFn = makeFn('WsControlFn', 'ws/control.handler');
+    const wsConnectFn = makeFn('WsConnectFn', 'ws_connect');
+    const wsDisconnectFn = makeFn('WsDisconnectFn', 'ws_disconnect');
+    const wsDefaultFn = makeFn('WsDefaultFn', 'ws_default');
+    const wsEventFn = makeFn('WsEventFn', 'ws_event');
+    const wsSubscribeFn = makeFn('WsSubscribeFn', 'ws_subscribe');
+    const wsControlFn = makeFn('WsControlFn', 'ws_control');
     grantReadWrite(wsConnectFn);
     grantReadWrite(wsDisconnectFn);
     grantReadWrite(wsEventFn);
@@ -184,8 +186,6 @@ export class ApiStack extends cdk.Stack {
 
     const wsAuthorizer = new WebSocketLambdaAuthorizer('WsConnectAuthorizer', wsAuthorizerFn, {
       authorizerName: 'command-hq-ws',
-      // Daemons present the device token on the connect query string (no headers
-      // available in browsers' WS handshake either); web passes its JWT the same way.
       identitySource: ['route.request.querystring.token'],
     });
 
@@ -202,7 +202,6 @@ export class ApiStack extends cdk.Stack {
         integration: new WebSocketLambdaIntegration('WsDefaultIntegration', wsDefaultFn),
       },
     });
-
     this.webSocketApi.addRoute('event', {
       integration: new WebSocketLambdaIntegration('WsEventIntegration', wsEventFn),
     });
@@ -219,11 +218,8 @@ export class ApiStack extends cdk.Stack {
       autoDeploy: true,
     });
 
-    // The handlers that push frames back out (fan-out + control routing) need
-    // execute-api:ManageConnections on this API's connections.
     for (const fn of [wsEventFn, wsSubscribeFn, wsControlFn, wsDisconnectFn]) {
       this.webSocketApi.grantManageConnections(fn);
-      // Expose the callback endpoint so handlers can construct the management client.
       fn.addEnvironment('WS_CALLBACK_URL', wsStage.callbackUrl);
     }
 
