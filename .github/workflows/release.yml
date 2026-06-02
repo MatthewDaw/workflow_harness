@@ -1,0 +1,73 @@
+# Release the claude+ wrapper on tag (U18).
+#
+# Cross-compiles via goreleaser, publishes the GitHub release with archives +
+# checksums, then publishes the npm wrapper package and its per-platform binary
+# packages. Also runs a smoke job that installs via npm in a clean container and
+# runs `claude+ --version` and `claude+ ls`.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: wrapper/go.sum
+      - name: go test
+        working-directory: wrapper
+        run: go test ./...
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+          workdir: wrapper
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  npm-publish:
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      # The per-platform @claude-plus/* packages are assembled from the release
+      # archives by scripts/pack-npm.js (downloads each archive, lays the binary
+      # into the package), then published alongside the launcher package.
+      - name: Publish npm wrapper
+        working-directory: npm/claude-plus
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  smoke:
+    needs: npm-publish
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install via npm
+        run: npm i -g claude-plus
+      - name: Smoke check
+        run: |
+          claude+ --version
+          claude+ ls

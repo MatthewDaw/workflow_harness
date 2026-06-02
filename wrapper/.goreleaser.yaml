@@ -1,0 +1,56 @@
+# goreleaser configuration for the claude+ wrapper (U18).
+#
+# Cross-compiles the single static binary for the SSH/remote install targets
+# (darwin/linux x amd64/arm64), produces archives + checksums for the curl|sh
+# installer, and feeds the npm per-platform packages.
+#
+# Run locally:  goreleaser release --clean --snapshot   (no publish)
+# CI publishes on tag via .github/workflows/release.yml.
+version: 2
+
+project_name: claude-plus
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: claude-plus
+    main: ./cmd/claude-plus
+    binary: claude-plus
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: default
+    builds:
+      - claude-plus
+    name_template: "claude-plus_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+release:
+  github:
+    owner: workflow-harness
+    name: claude-plus
+  prerelease: auto
+
+changelog:
+  use: github
+  sort: asc

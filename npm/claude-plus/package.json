@@ -1,0 +1,30 @@
+{
+  "name": "claude-plus",
+  "version": "0.1.0",
+  "description": "claude+ — terminal wrapper that hosts the real claude CLI as a persistent per-repo daemon and streams every session event to Command HQ.",
+  "bin": {
+    "claude+": "bin/claude-plus.js",
+    "claude-plus": "bin/claude-plus.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/claude-plus.js",
+    "install.js"
+  ],
+  "optionalDependencies": {
+    "@claude-plus/darwin-arm64": "0.1.0",
+    "@claude-plus/darwin-x64": "0.1.0",
+    "@claude-plus/linux-arm64": "0.1.0",
+    "@claude-plus/linux-x64": "0.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/workflow-harness/claude-plus.git"
+  }
+}
