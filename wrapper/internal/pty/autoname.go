@@ -17,7 +17,7 @@ var (
 var stopWords = map[string]bool{
 	"the": true, "a": true, "an": true, "to": true, "of": true, "for": true,
 	"and": true, "or": true, "in": true, "on": true, "with": true, "please": true,
-	"can": true, "you": true, "i": true, "want": true, "need": true, "add": false,
+	"can": true, "you": true, "i": true, "want": true, "need": true, "add": true,
 }
 
 // Slug converts free text (a first user turn) into a stable, filesystem- and

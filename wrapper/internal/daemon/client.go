@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"io"
 	"net"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,12 +28,16 @@ type Client struct {
 }
 
 // Dial connects to the daemon serving repoRoot and performs the hello handshake.
+// The daemon's loopback address is discovered from its registry record.
 func Dial(repoRoot string) (*Client, error) {
-	sock, err := SockPath(repoRoot)
+	e, ok, err := Find(repoRoot)
 	if err != nil {
 		return nil, err
 	}
-	return dialSock(sock)
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return dialSock(e.Sock)
 }
 
 // DialIndex connects to the daemon at registry index n (`--session=N`).
@@ -45,7 +50,7 @@ func DialIndex(n int) (*Client, error) {
 }
 
 func dialSock(sock string) (*Client, error) {
-	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
+	conn, err := net.DialTimeout("tcp", sock, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}

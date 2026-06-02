@@ -38,17 +38,11 @@ func EnsureDaemon(repoRoot string) (Entry, error) {
 	// Let the parent return; the child is detached.
 	_ = cmd.Process.Release()
 
-	// Wait for the socket to answer.
-	sock, err := SockPath(repoRoot)
-	if err != nil {
-		return Entry{}, err
-	}
+	// Wait for the daemon to register its loopback address and answer a ping.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if alive(sock) {
-			if e, ok, _ := Find(repoRoot); ok {
-				return e, nil
-			}
+		if e, ok, _ := Find(repoRoot); ok && alive(e.Sock) {
+			return e, nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

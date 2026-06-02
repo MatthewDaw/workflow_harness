@@ -16,29 +16,48 @@ const PLATFORM_PACKAGES = {
   "darwin-x64": "@claude-plus/darwin-x64",
   "linux-arm64": "@claude-plus/linux-arm64",
   "linux-x64": "@claude-plus/linux-x64",
+  "win32-x64": "@claude-plus/win32-x64",
+  "win32-arm64": "@claude-plus/win32-arm64",
 };
 
 function platformKey() {
   return `${process.platform}-${process.arch}`;
 }
 
-// binaryPath returns the absolute path to the prebuilt binary, or null if the
-// matching optionalDependency is not installed (unsupported platform).
+function exeName() {
+  return process.platform === "win32" ? "claude-plus.exe" : "claude-plus";
+}
+
+// binaryPath returns the absolute path to the binary for the current platform.
+// It prefers the published per-platform optionalDependency package, and falls
+// back to a binary bundled directly in this package's bin/ directory (used by
+// local installs / source builds where the per-platform packages aren't
+// published). Returns null if neither is present.
 function binaryPath() {
+  const exe = exeName();
+
+  // 1) Published per-platform package (the esbuild optionalDependencies pattern).
   const pkg = PLATFORM_PACKAGES[platformKey()];
-  if (!pkg) return null;
-  const exe = process.platform === "win32" ? "claude-plus.exe" : "claude-plus";
-  try {
-    // Resolve the package's directory, then the binary inside it.
-    const pkgJson = require.resolve(`${pkg}/package.json`);
-    const bin = path.join(path.dirname(pkgJson), "bin", exe);
-    if (fs.existsSync(bin)) {
-      fs.chmodSync(bin, 0o755);
-      return bin;
+  if (pkg) {
+    try {
+      const pkgJson = require.resolve(`${pkg}/package.json`);
+      const bin = path.join(path.dirname(pkgJson), "bin", exe);
+      if (fs.existsSync(bin)) {
+        if (process.platform !== "win32") fs.chmodSync(bin, 0o755);
+        return bin;
+      }
+    } catch {
+      // fall through to the local fallback
     }
-  } catch {
-    return null;
   }
+
+  // 2) Local fallback: a binary bundled in this package (bin/<exe>).
+  const local = path.join(__dirname, "bin", exe);
+  if (fs.existsSync(local)) {
+    if (process.platform !== "win32") fs.chmodSync(local, 0o755);
+    return local;
+  }
+
   return null;
 }
 

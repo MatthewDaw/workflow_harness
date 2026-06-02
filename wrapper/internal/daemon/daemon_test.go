@@ -3,8 +3,6 @@
 package daemon
 
 import (
-	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -13,10 +11,8 @@ import (
 
 // fakeSpawn runs `cat` as a stand-in for `claude` so tests need no claude
 // install: `cat` echoes PTY stdin back to stdout, which lets us assert I/O.
-func fakeSpawn(repoRoot, sessionID string) *exec.Cmd {
-	cmd := exec.Command("cat")
-	cmd.Dir = repoRoot
-	return cmd
+func fakeSpawn(repoRoot, sessionID string) pty.CmdSpec {
+	return pty.CmdSpec{Name: "cat", Dir: repoRoot}
 }
 
 // startTestDaemon starts an in-process daemon on a temp HOME so it doesn't touch
@@ -33,16 +29,15 @@ func startTestDaemon(t *testing.T) (*Daemon, string) {
 	}
 	go func() { _ = d.Serve() }()
 
-	// Wait for the socket.
-	sock, _ := SockPath(repo)
+	// Wait for the daemon to register its loopback address and answer a ping.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if alive(sock) {
+		if e, ok, _ := Find(repo); ok && alive(e.Sock) {
 			return d, repo
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("daemon socket never came up")
+	t.Fatal("daemon never came up")
 	return nil, ""
 }
 
@@ -110,26 +105,6 @@ func TestByIndexOutOfRange(t *testing.T) {
 	if _, err := ByIndex(7); err == nil {
 		t.Error("expected out-of-range error")
 	}
-}
-
-// TestStaleSocketCleanup verifies a leftover socket from a dead daemon is
-// cleaned up so a new daemon can bind.
-func TestStaleSocketCleanup(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	repo := t.TempDir()
-	sock, _ := SockPath(repo)
-	// Simulate a stale socket file with no listener.
-	if err := os.WriteFile(sock, []byte{}, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	d, err := New(repo, fakeSpawn)
-	if err != nil {
-		t.Fatalf("New should clean stale socket: %v", err)
-	}
-	go func() { _ = d.Serve() }()
-	defer d.Stop()
-	waitFor(t, func() bool { return alive(sock) })
 }
 
 var _ pty.SpawnFunc = fakeSpawn

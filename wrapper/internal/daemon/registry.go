@@ -61,15 +61,6 @@ func repoKey(repoRoot string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// SockPath returns the Unix socket path for a repo root.
-func SockPath(repoRoot string) (string, error) {
-	dir, err := baseDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, repoKey(repoRoot)+".sock"), nil
-}
-
 // metaPath returns the registry metadata file for a repo root.
 func metaPath(repoRoot string) (string, error) {
 	dir, err := baseDir()

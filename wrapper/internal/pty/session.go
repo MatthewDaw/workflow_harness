@@ -3,10 +3,9 @@ package pty
 import (
 	"io"
 	"os"
-	"os/exec"
 	"sync"
 
-	"github.com/creack/pty"
+	pty "github.com/aymanbagabas/go-pty"
 )
 
 // Status mirrors the session lifecycle status used in the event contract.
@@ -22,48 +21,73 @@ const (
 // Session is one `claude` child process running under a PTY. The daemon owns a
 // set of these and multiplexes them; only the focused session's output is
 // streamed to the attached client, but all sessions keep running.
+//
+// The PTY is provided by go-pty, which uses ConPTY on Windows and native
+// pseudo-terminals on macOS/Linux — so a session hosts a real terminal on every
+// platform.
 type Session struct {
 	ID     string
 	Name   string
 	Ticket string
 
-	cmd *exec.Cmd
-	pt  *os.File // the PTY master
+	cmd *pty.Cmd
+	pt  pty.Pty // the pseudo-terminal (master/console)
 
-	mu      sync.RWMutex
-	status  Status
-	closed  bool
-	cols    int
-	rows    int
+	mu       sync.RWMutex
+	status   Status
+	closed   bool
+	cols     int
+	rows     int
 	firstSet bool // whether AutoName already consumed a first turn
 }
 
-// SpawnFunc creates the *exec.Cmd for a claude child. It is a field so tests can
-// substitute a fake command (e.g. `cat`) without a real claude install.
-type SpawnFunc func(repoRoot, sessionID string) *exec.Cmd
+// CmdSpec describes the child process to launch under a PTY. It is platform
+// neutral (name + args + dir + env) so go-pty can build the command for the
+// host OS; tests substitute a cross-platform fake (e.g. `cat` / `more`).
+type CmdSpec struct {
+	Name string
+	Args []string
+	Dir  string
+	Env  []string
+}
+
+// SpawnFunc produces the CmdSpec for a claude child. It is a field so tests can
+// substitute a fake command without a real claude install.
+type SpawnFunc func(repoRoot, sessionID string) CmdSpec
 
 // DefaultSpawn launches the real `claude` CLI in the repo root.
-func DefaultSpawn(repoRoot, sessionID string) *exec.Cmd {
-	cmd := exec.Command("claude")
-	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(),
+func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
+	return CmdSpec{
+		Name: "claude",
+		Dir:  repoRoot,
 		// Tag the child so the capture layer can correlate its transcript.
-		"CLAUDE_PLUS_SESSION="+sessionID,
-	)
-	return cmd
+		Env: append(os.Environ(), "CLAUDE_PLUS_SESSION="+sessionID),
+	}
 }
 
 // newSession starts a claude child under a PTY with the given dimensions.
 func newSession(id, name, ticket, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
-	cmd := spawn(repoRoot, id)
-	ws := &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}
-	pt, err := pty.StartWithSize(cmd, ws)
+	spec := spawn(repoRoot, id)
+	pt, err := pty.New()
 	if err != nil {
 		return nil, err
 	}
+	c := pt.Command(spec.Name, spec.Args...)
+	if spec.Dir != "" {
+		c.Dir = spec.Dir
+	}
+	if spec.Env != nil {
+		c.Env = spec.Env
+	}
+	if err := c.Start(); err != nil {
+		_ = pt.Close()
+		return nil, err
+	}
+	// Size the pseudo-terminal once the child is attached.
+	_ = pt.Resize(cols, rows)
 	return &Session{
 		ID: id, Name: name, Ticket: ticket,
-		cmd: cmd, pt: pt, status: StatusActive, cols: cols, rows: rows,
+		cmd: c, pt: pt, status: StatusActive, cols: cols, rows: rows,
 	}, nil
 }
 
@@ -82,12 +106,12 @@ func (s *Session) Write(p []byte) (int, error) {
 // per-session output buffer / fan-out.
 func (s *Session) Read(p []byte) (int, error) { return s.pt.Read(p) }
 
-// Resize propagates new terminal dimensions to the PTY (SIGWINCH).
+// Resize propagates new terminal dimensions to the PTY.
 func (s *Session) Resize(cols, rows int) error {
 	s.mu.Lock()
 	s.cols, s.rows = cols, rows
 	s.mu.Unlock()
-	return pty.Setsize(s.pt, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	return s.pt.Resize(cols, rows)
 }
 
 // SetStatus updates the cached lifecycle status (driven by capture hooks).

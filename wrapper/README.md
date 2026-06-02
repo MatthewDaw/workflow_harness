@@ -10,17 +10,25 @@ U12–U18.
 
 ## Status
 
-Units U12–U18 authored. **Unverified: Go is not installed in this environment**,
-so `go build`/`go test`/`go mod tidy` have not been run. Before building:
+Units U12–U18 implemented and **cross-platform**: builds and tests pass on
+Windows, macOS, and Linux. The PTY layer uses [`go-pty`](https://github.com/aymanbagabas/go-pty)
+(ConPTY on Windows, native pseudo-terminals on macOS/Linux), and the daemon
+attach IPC is loopback TCP (`127.0.0.1:<port>`) rather than Unix sockets, so the
+daemon runs on every platform. Verified on Windows: ConPTY hosts a real child
+process, and the daemon binds loopback + appears in `claude+ ls`.
 
-1. Install Go 1.23+.
-2. From `wrapper/`, run `go mod tidy` to generate `go.sum` (the module pins are
-   in `go.mod`; `go.sum` is intentionally not hand-written).
-3. `go build ./...` and `go test ./...`.
+Build:
+
+```
+cd wrapper
+go build ./...     # or: GOOS=windows|darwin|linux GOARCH=amd64|arm64 go build ./cmd/claude-plus
+go test ./...
+```
 
 ## Prerequisites
 
 - Go 1.23+ (`go version`).
+- The real `claude` CLI on PATH (the wrapper hosts it).
 
 ## Layout
 

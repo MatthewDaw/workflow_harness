@@ -10,14 +10,16 @@
     "postinstall": "node install.js"
   },
   "files": [
-    "bin/claude-plus.js",
+    "bin/",
     "install.js"
   ],
   "optionalDependencies": {
     "@claude-plus/darwin-arm64": "0.1.0",
     "@claude-plus/darwin-x64": "0.1.0",
     "@claude-plus/linux-arm64": "0.1.0",
-    "@claude-plus/linux-x64": "0.1.0"
+    "@claude-plus/linux-x64": "0.1.0",
+    "@claude-plus/win32-x64": "0.1.0",
+    "@claude-plus/win32-arm64": "0.1.0"
   },
   "engines": {
     "node": ">=18"

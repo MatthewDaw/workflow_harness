@@ -83,7 +83,7 @@ func readFrame(r *bufio.Reader) (Frame, error) {
 // Used by the registry to distinguish running from stale daemons, and to clean
 // up orphaned sockets.
 func alive(sock string) bool {
-	conn, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", sock, 300*time.Millisecond)
 	if err != nil {
 		return false
 	}
@@ -102,7 +102,7 @@ func alive(sock string) bool {
 
 // pingSessions returns the live session count reported by the daemon.
 func pingSessions(sock string) (int, error) {
-	conn, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", sock, 300*time.Millisecond)
 	if err != nil {
 		return 0, err
 	}

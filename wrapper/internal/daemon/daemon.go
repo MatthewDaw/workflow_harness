@@ -29,18 +29,10 @@ type Daemon struct {
 }
 
 // New constructs a daemon bound to repoRoot. spawn may be nil (DefaultSpawn).
+// The loopback listen address is assigned in Serve (a free port on 127.0.0.1).
 func New(repoRoot string, spawn pty.SpawnFunc) (*Daemon, error) {
-	sock, err := SockPath(repoRoot)
-	if err != nil {
-		return nil, err
-	}
-	// Clean up a stale socket left by a previous crash.
-	if _, statErr := os.Stat(sock); statErr == nil && !alive(sock) {
-		_ = os.Remove(sock)
-	}
 	return &Daemon{
 		repoRoot: repoRoot,
-		sock:     sock,
 		started:  time.Now(),
 		mux:      pty.NewMux(repoRoot, 80, 24, spawn),
 		clients:  map[string]net.Conn{},
@@ -57,12 +49,12 @@ func (d *Daemon) RepoRoot() string { return d.repoRoot }
 // Serve binds the socket, records the registry entry, and accepts clients until
 // Stop is called. It is the daemon's main loop.
 func (d *Daemon) Serve() error {
-	ln, err := net.Listen("unix", d.sock)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
 	d.ln = ln
-	defer os.Remove(d.sock)
+	d.sock = ln.Addr().String() // 127.0.0.1:<assigned-port>
 
 	if err := writeMeta(d.entry()); err != nil {
 		return err
