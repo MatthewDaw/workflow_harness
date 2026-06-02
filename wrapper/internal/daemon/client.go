@@ -3,7 +3,7 @@ package daemon
 import (
 	"bufio"
 	"encoding/base64"
-	"io"
+	"errors"
 	"net"
 	"os"
 	"time"
@@ -66,7 +66,7 @@ func dialSock(sock string) (*Client, error) {
 	}
 	if ack.Err != "" {
 		conn.Close()
-		return nil, io.ErrUnexpectedEOF
+		return nil, errors.New(ack.Err)
 	}
 	return c, nil
 }

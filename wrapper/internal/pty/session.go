@@ -3,6 +3,8 @@ package pty
 import (
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sync"
 
 	pty "github.com/aymanbagabas/go-pty"
@@ -68,11 +70,20 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 // newSession starts a claude child under a PTY with the given dimensions.
 func newSession(id, name, ticket, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
 	spec := spawn(repoRoot, id)
+	// Resolve a bare command name against PATH up front. go-pty/os-exec would
+	// otherwise resolve it relative to Dir (the repo root) and fail to find a
+	// PATH binary like `claude` once a working directory is set.
+	cmdName := spec.Name
+	if filepath.Base(cmdName) == cmdName {
+		if lp, lpErr := exec.LookPath(cmdName); lpErr == nil {
+			cmdName = lp
+		}
+	}
 	pt, err := pty.New()
 	if err != nil {
 		return nil, err
 	}
-	c := pt.Command(spec.Name, spec.Args...)
+	c := pt.Command(cmdName, spec.Args...)
 	if spec.Dir != "" {
 		c.Dir = spec.Dir
 	}
