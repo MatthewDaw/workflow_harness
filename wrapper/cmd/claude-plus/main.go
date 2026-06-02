@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/daemon"
+	"golang.org/x/term"
 )
 
 // version is overridden at build time via -ldflags (goreleaser).
@@ -122,8 +123,60 @@ func cmdAttachIndex(n int) error {
 // runClient runs the foreground attach loop. (Terminal raw-mode setup and the
 // Bubble Tea program are wired here in the full build; this keeps the attach
 // surface minimal and exercises the client read loop.)
+// runClient drives the foreground attach: it sizes the hosted PTY to the real
+// terminal, switches to raw mode so keystrokes pass through verbatim, forwards
+// stdin to the daemon, propagates terminal resizes, and streams daemon output.
 func runClient(c *daemon.Client) error {
+	inFd := int(os.Stdin.Fd())
+	outFd := int(os.Stdout.Fd())
+
+	// Match the hosted PTY to our real terminal so the TUI renders at the right
+	// width (otherwise the daemon's default 80x24 wraps a wide layout into a mess).
+	w, h, err := term.GetSize(outFd)
+	if err != nil || w <= 0 || h <= 0 {
+		w, h = 80, 24
+	}
+	_ = c.Resize(w, h)
+
+	// Raw mode: forward keys (incl. Ctrl-C) straight to claude, no line cooking.
+	if term.IsTerminal(inFd) {
+		if old, mkErr := term.MakeRaw(inFd); mkErr == nil {
+			defer func() { _ = term.Restore(inFd, old) }()
+		}
+	}
+
 	c.Out = func(b []byte) { os.Stdout.Write(b) }
+
+	// Forward local stdin -> daemon's focused session.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := os.Stdin.Read(buf)
+			if n > 0 {
+				if c.Input(buf[:n]) != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+
+	// Propagate window resizes (cross-platform; Windows has no SIGWINCH, so poll).
+	go func() {
+		lastW, lastH := w, h
+		t := time.NewTicker(250 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
+			nw, nh, gerr := term.GetSize(outFd)
+			if gerr == nil && nw > 0 && nh > 0 && (nw != lastW || nh != lastH) {
+				lastW, lastH = nw, nh
+				_ = c.Resize(nw, nh)
+			}
+		}
+	}()
+
 	return c.Run()
 }
 
