@@ -18,6 +18,7 @@
     "format:check": "prettier --check ."
   },
   "devDependencies": {
+    "@types/node": "^20.19.41",
     "prettier": "^3.3.3",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
