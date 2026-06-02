@@ -108,10 +108,15 @@ func runShell(c *daemon.Client, instance string) error {
 			}
 			if ev.mouse {
 				if ev.press && ev.button == 0 { // plain left-click
-					if changed, sess := comp.Click(ev.x, ev.y); changed || sess != "" {
-						if sess != "" {
-							_ = c.Focus(sess)
-						}
+					changed, sess, newSess := comp.Click(ev.x, ev.y)
+					switch {
+					case newSess:
+						_ = c.NewSession("")
+						markDirty()
+					case sess != "":
+						_ = c.Focus(sess)
+						markDirty()
+					case changed:
 						markDirty()
 					}
 				}
@@ -129,6 +134,9 @@ func runShell(c *daemon.Client, instance string) error {
 				case actDetach:
 					_ = c.Detach()
 					return nil
+				case actNewSession:
+					_ = c.NewSession("")
+					markDirty()
 				case actHandled:
 					markDirty()
 				case actForward:
@@ -159,9 +167,10 @@ func applySessions(comp *shell.Compositor, list []daemon.SessInfo) {
 type keyAction int
 
 const (
-	actForward keyAction = iota // pass the byte to the hosted session
-	actHandled                  // consumed by the chrome
-	actDetach                   // leave the client; daemon survives
+	actForward    keyAction = iota // pass the byte to the hosted session
+	actHandled                     // consumed by the chrome
+	actDetach                      // leave the client; daemon survives
+	actNewSession                  // spawn another claude session in this instance
 )
 
 const ctrlG = 0x07
@@ -176,6 +185,8 @@ func handleKey(c *daemon.Client, comp *shell.Compositor, b byte, prefix *bool) k
 			comp.PrevTab()
 		case '1', '2', '3', '4', '5':
 			comp.SetTab(int(b - '1'))
+		case 'c':
+			return actNewSession
 		case 'd', ctrlG:
 			return actDetach
 		}

@@ -56,6 +56,7 @@ type Compositor struct {
 	// what was drawn.
 	tabSpans []span
 	subSpans []span
+	newSpan  span // the "+ new" session affordance in the sub-tab row
 
 	tokens   int
 	costUSD  float64
@@ -173,10 +174,13 @@ func (c *Compositor) FocusedSessionID() string {
 	return ""
 }
 
-// Click maps a mouse click at (x,y) to a chrome action. A tab-bar hit switches
-// the active tab (applied here -> changed=true). A sub-tab hit returns the
-// session id the caller should focus via the daemon. Body clicks return zero.
-func (c *Compositor) Click(x, y int) (changed bool, focusSessID string) {
+// Click maps a mouse click at (x,y) to a chrome action:
+//   - a tab-bar hit switches the active tab (applied here -> changed=true);
+//   - a sub-tab hit returns the session id the caller should focus;
+//   - the "+ new" hit returns newSession=true (caller spawns a session).
+//
+// Body clicks return zero.
+func (c *Compositor) Click(x, y int) (changed bool, focusSessID string, newSession bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch y {
@@ -185,21 +189,24 @@ func (c *Compositor) Click(x, y int) (changed bool, focusSessID string) {
 			if x >= sp.lo && x < sp.hi {
 				if c.active != sp.idx {
 					c.active = sp.idx
-					return true, ""
+					return true, "", false
 				}
-				return false, ""
+				return false, "", false
 			}
 		}
 	case rowSubTabs:
+		if c.newSpan.lo >= 0 && x >= c.newSpan.lo && x < c.newSpan.hi {
+			return false, "", true
+		}
 		for _, sp := range c.subSpans {
 			if x >= sp.lo && x < sp.hi {
 				if sp.idx >= 0 && sp.idx < len(c.subs) {
-					return false, c.subs[sp.idx].ID
+					return false, c.subs[sp.idx].ID, false
 				}
 			}
 		}
 	}
-	return false, ""
+	return false, "", false
 }
 
 // Render composes a frame and paints it.
@@ -251,11 +258,12 @@ func (c *Compositor) renderTabBar(w int) {
 
 func (c *Compositor) renderSubTabs(w int) {
 	c.subSpans = c.subSpans[:0]
-	if len(c.subs) == 0 {
-		c.screen.SetString(0, rowSubTabs, " (no sessions) ", colDim, vt.DefaultBG, false, false)
-		return
-	}
+	c.newSpan = span{lo: -1, hi: -1, idx: -1}
 	x := 0
+	if len(c.subs) == 0 {
+		c.screen.SetString(x, rowSubTabs, " (no sessions) ", colDim, vt.DefaultBG, false, false)
+		x += len(" (no sessions) ")
+	}
 	for i, st := range c.subs {
 		start := x
 		dot := "●"
@@ -281,6 +289,12 @@ func (c *Compositor) renderSubTabs(w int) {
 		if x >= w {
 			break
 		}
+	}
+	// "+ new" — click (or Ctrl-G c) to start another claude session.
+	label := " + new "
+	if x+len(label) <= w {
+		c.screen.SetString(x, rowSubTabs, label, colAccent, vt.DefaultBG, false, false)
+		c.newSpan = span{lo: x, hi: x + len(label), idx: -1}
 	}
 }
 
@@ -344,6 +358,6 @@ func (c *Compositor) renderStatusLine(w, h int) {
 	}
 	left := fmt.Sprintf(" %s  ▸ %s  %dtok  $%.2f", c.instance, focused, c.tokens, c.costUSD)
 	c.screen.SetString(0, row, left, colText, colBarBG, false, false)
-	hint := "click tabs · ⌃G n/p/1-5 · ⌃G d detach "
+	hint := "click tabs · + new session · ⌃G d detach "
 	c.screen.SetString(w-len(hint), row, hint, colDim, colBarBG, false, false)
 }

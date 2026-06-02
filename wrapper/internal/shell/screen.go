@@ -167,13 +167,32 @@ func writeSGR(out *bufio.Writer, st sgrState) {
 	if st.reverse {
 		out.WriteString(";7")
 	}
-	if st.fg < vt.DefaultFG {
-		out.WriteString(";38;5;")
-		out.WriteString(strconv.Itoa(int(st.fg)))
-	}
-	if st.bg < vt.DefaultFG {
-		out.WriteString(";48;5;")
-		out.WriteString(strconv.Itoa(int(st.bg)))
-	}
+	writeColor(out, 38, st.fg) // foreground
+	writeColor(out, 48, st.bg) // background
 	out.WriteByte('m')
+}
+
+// writeColor appends an SGR color clause for fg (base 38) or bg (base 48).
+// vt10x packs colors three ways: 0..15 ANSI, 16..255 xterm-256, and truecolor
+// as a 24-bit 0xRRGGBB value (which is < DefaultFG = 1<<24). Anything >=
+// DefaultFG is the terminal default and emits nothing.
+func writeColor(out *bufio.Writer, base int, c vt.Color) {
+	v := uint32(c)
+	if v >= uint32(vt.DefaultFG) {
+		return // default / special -> leave the terminal default
+	}
+	out.WriteByte(';')
+	out.WriteString(strconv.Itoa(base))
+	if v < 256 {
+		out.WriteString(";5;")
+		out.WriteString(strconv.Itoa(int(v)))
+		return
+	}
+	// Truecolor: unpack 0xRRGGBB -> 38;2;r;g;b
+	out.WriteString(";2;")
+	out.WriteString(strconv.Itoa(int((v >> 16) & 0xFF)))
+	out.WriteByte(';')
+	out.WriteString(strconv.Itoa(int((v >> 8) & 0xFF)))
+	out.WriteByte(';')
+	out.WriteString(strconv.Itoa(int(v & 0xFF)))
 }
