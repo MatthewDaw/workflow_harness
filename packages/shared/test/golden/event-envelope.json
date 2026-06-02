@@ -1,0 +1,100 @@
+[
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200000000,
+    "seq": 0,
+    "event": {
+      "kind": "session.start",
+      "sessionId": "a91f",
+      "projectId": "weekly-compass",
+      "host": "matt@mbp",
+      "name": "reconcile-variance",
+      "agent": "builder",
+      "ticket": "WC-42"
+    }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200001000,
+    "seq": 1,
+    "event": {
+      "kind": "session.rename",
+      "sessionId": "a91f",
+      "name": "reconcile-variance"
+    }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200002000,
+    "seq": 2,
+    "event": { "kind": "user.msg", "sessionId": "a91f", "tokens": 120 }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200003000,
+    "seq": 3,
+    "event": { "kind": "assistant.msg", "sessionId": "a91f", "tokens": 84 }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200004000,
+    "seq": 4,
+    "event": {
+      "kind": "tool.call",
+      "sessionId": "a91f",
+      "tool": "Read",
+      "argsSummary": "src/state/weeklyLifecycle.ts"
+    }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200005000,
+    "seq": 5,
+    "event": {
+      "kind": "tool.result",
+      "sessionId": "a91f",
+      "ok": true,
+      "ms": 8,
+      "summary": "142 lines"
+    }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200006000,
+    "seq": 6,
+    "event": {
+      "kind": "cost.tick",
+      "sessionId": "a91f",
+      "deltaUsd": 0.04,
+      "totalUsd": 0.62,
+      "tokens": 48000
+    }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200007000,
+    "seq": 7,
+    "event": {
+      "kind": "status.change",
+      "sessionId": "a91f",
+      "from": "active",
+      "to": "needs_input"
+    }
+  }
+]
