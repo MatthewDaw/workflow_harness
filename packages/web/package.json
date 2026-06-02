@@ -1,0 +1,7 @@
+{
+  "name": "@harness/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Command HQ — the React + Vite + Tailwind SPA. Scaffolded in U19."
+}

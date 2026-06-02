@@ -1,0 +1,25 @@
+{
+  "name": "workflow-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "claude+ and Command HQ — a harness for running and watching Claude workflows",
+  "workspaces": [
+    "packages/*",
+    "infra"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w @harness/shared && npm run build -w @harness/backend",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

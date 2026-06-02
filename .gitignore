@@ -1,0 +1,25 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# CDK
+infra/cdk.out/
+
+# Go wrapper build output
+wrapper/bin/
+wrapper/dist/
+
+# editor / local
+.idea/
+.vscode/
+
+# gstack local runtime + tokens (never commit)
+.gstack/
+
+# python scaffolding (vestigial)
+.venv/
