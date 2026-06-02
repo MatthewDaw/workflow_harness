@@ -2,10 +2,18 @@
 import * as cdk from 'aws-cdk-lib/core';
 import { InfraStack } from '../lib/infra-stack';
 import { AuthStack } from '../lib/auth-stack';
+import { ApiStack } from '../lib/api-stack';
 
 const app = new cdk.App();
 
-new AuthStack(app, 'AuthStack');
+const authStack = new AuthStack(app, 'AuthStack');
+
+// U5 — backend API: DynamoDB single-table + HTTP API + WebSocket API. The HTTP
+// API's JWT authorizer trusts the AuthStack user pool, so ApiStack references it.
+new ApiStack(app, 'ApiStack', {
+  userPool: authStack.userPool,
+  userPoolClient: authStack.userPoolClient,
+});
 
 new InfraStack(app, 'InfraStack', {
   /* If you don't specify 'env', this stack will be environment-agnostic.
