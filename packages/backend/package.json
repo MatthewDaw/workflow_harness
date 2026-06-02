@@ -11,6 +11,8 @@
     "@aws-sdk/client-dynamodb": "^3.693.0",
     "@aws-sdk/lib-dynamodb": "^3.693.0",
     "@harness/shared": "*",
+    "aws-jwt-verify": "^5.1.1",
+    "jose": "^6.2.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

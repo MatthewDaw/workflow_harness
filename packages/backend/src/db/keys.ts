@@ -84,6 +84,16 @@ export const weeklyKey = (projectId: string, isoWeek: string): PrimaryKey => ({
   SK: `WEEK#${isoWeek}`,
 });
 
+/**
+ * Pending device-authorization record for the wrapper's device-code login flow.
+ * Keyed by the opaque device code so a `poll` can look it up directly; the
+ * short user_code is carried as an attribute (the human approves against it).
+ */
+export const deviceAuthKey = (deviceCode: string): PrimaryKey => ({
+  PK: `DEVAUTH#${deviceCode}`,
+  SK: 'PENDING',
+});
+
 /** GSI1 attributes for a project, so it is queryable by its owner. */
 export const projectOwnerIndex = (
   ownerUserId: string,

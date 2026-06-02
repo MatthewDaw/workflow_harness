@@ -111,3 +111,24 @@ export const weeklyUpdateSchema = z.object({
   validated: z.boolean().default(false),
 });
 export type WeeklyUpdate = z.infer<typeof weeklyUpdateSchema>;
+
+/**
+ * A pending device-authorization record for the wrapper's device-code login.
+ * Created on `start`, transitioned to `approved` (with the issuing user/org)
+ * when the human approves in HQ, and consumed exactly once on the next `poll`.
+ */
+export const DEVICE_AUTH_STATUSES = ['pending', 'approved', 'consumed'] as const;
+export const deviceAuthStatusSchema = z.enum(DEVICE_AUTH_STATUSES);
+export type DeviceAuthStatus = z.infer<typeof deviceAuthStatusSchema>;
+
+export const deviceAuthSchema = z.object({
+  deviceCode: z.string().min(1),
+  userCode: z.string().min(1),
+  status: deviceAuthStatusSchema,
+  createdAt: z.number().int().nonnegative(),
+  expiresAt: z.number().int().nonnegative(),
+  /** Populated once approved: the identity the minted token is scoped to. */
+  userId: z.string().min(1).optional(),
+  org: z.string().min(1).optional(),
+});
+export type DeviceAuth = z.infer<typeof deviceAuthSchema>;

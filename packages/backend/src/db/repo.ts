@@ -3,9 +3,11 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type {
   Agent,
+  DeviceAuth,
   Envelope,
   ObjectiveNode,
   Project,
@@ -238,5 +240,85 @@ export class Repo {
       new GetCommand({ TableName: this.table, Key: k.weeklyKey(projectId, isoWeek) }),
     );
     return res.Item as WeeklyUpdate | undefined;
+  }
+
+  // --- Device-auth (wrapper device-code login) ---------------------------
+
+  /** Persist a freshly-started pending device-auth record. */
+  async putDeviceAuth(d: DeviceAuth): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.deviceAuthKey(d.deviceCode), ...d },
+      }),
+    );
+  }
+
+  async getDeviceAuth(deviceCode: string): Promise<DeviceAuth | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.deviceAuthKey(deviceCode) }),
+    );
+    return res.Item as DeviceAuth | undefined;
+  }
+
+  /**
+   * Approve a pending record, binding it to an identity. Conditional on the
+   * record existing and still being `pending`, so a double-approve is a no-op
+   * that surfaces as `approved: false`.
+   */
+  async approveDeviceAuth(
+    deviceCode: string,
+    userId: string,
+    org: string,
+  ): Promise<{ approved: boolean }> {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.table,
+          Key: k.deviceAuthKey(deviceCode),
+          UpdateExpression: 'SET #s = :approved, userId = :u, org = :o',
+          ConditionExpression: 'attribute_exists(PK) AND #s = :pending',
+          ExpressionAttributeNames: { '#s': 'status' },
+          ExpressionAttributeValues: {
+            ':approved': 'approved',
+            ':pending': 'pending',
+            ':u': userId,
+            ':o': org,
+          },
+        }),
+      );
+      return { approved: true };
+    } catch (err) {
+      if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+        return { approved: false };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Atomically consume an approved record so its token is issued exactly once.
+   * Conditional on `status = approved`; a second consume fails the condition and
+   * returns `consumed: false`, which the poll endpoint treats as already-claimed.
+   */
+  async consumeDeviceAuth(deviceCode: string): Promise<{ consumed: boolean }> {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.table,
+          Key: k.deviceAuthKey(deviceCode),
+          UpdateExpression: 'SET #s = :consumed',
+          ConditionExpression: 'attribute_exists(PK) AND #s = :approved',
+          ExpressionAttributeNames: { '#s': 'status' },
+          ExpressionAttributeValues: { ':consumed': 'consumed', ':approved': 'approved' },
+        }),
+      );
+      return { consumed: true };
+    } catch (err) {
+      if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+        return { consumed: false };
+      }
+      throw err;
+    }
   }
 }
