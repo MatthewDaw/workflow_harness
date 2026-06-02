@@ -14,6 +14,7 @@ import type {
   Project,
   ScopeRef,
   SessionProjection,
+  SessionVector,
   Skill,
   Ticket,
   WeeklyUpdate,
@@ -88,6 +89,28 @@ export class Repo {
       }),
     );
     return (res.Items ?? []) as Project[];
+  }
+
+  /**
+   * Record the `owner/repo` -> projectId mapping (U26). GitHub webhooks arrive
+   * keyed by repo full-name; this lets the webhook handler resolve the project
+   * without scanning. Idempotent: re-connecting the same repo overwrites.
+   */
+  async linkRepoToProject(repoFullName: string, projectId: string): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.repoProjectKey(repoFullName), repoFullName, projectId },
+      }),
+    );
+  }
+
+  /** Resolve the projectId a `owner/repo` is connected to, if any (U26). */
+  async getProjectIdForRepo(repoFullName: string): Promise<string | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.repoProjectKey(repoFullName) }),
+    );
+    return (res.Item as { projectId?: string } | undefined)?.projectId;
   }
 
   // --- Events + session projections --------------------------------------
@@ -353,6 +376,31 @@ export class Repo {
       }),
     );
     return (res.Items ?? []) as WeeklyUpdate[];
+  }
+
+  // --- Forge session vectors (U27) ---------------------------------------
+
+  /** Persist a summarized + embedded session vector for the brute-force k-NN. */
+  async putSessionVector(v: SessionVector): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.sessionVectorKey(v.userId, v.sessionId), ...v },
+      }),
+    );
+  }
+
+  /** All of a user's session vectors, for the brute-force cosine fallback. */
+  async listSessionVectors(userId: string): Promise<SessionVector[]> {
+    const { PK, skPrefix } = k.sessionVectorPrefix(userId);
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+      }),
+    );
+    return (res.Items ?? []) as SessionVector[];
   }
 
   // --- Device-auth (wrapper device-code login) ---------------------------

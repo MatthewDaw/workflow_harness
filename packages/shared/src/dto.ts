@@ -174,6 +174,86 @@ export const deviceAuthSchema = z.object({
 export type DeviceAuth = z.infer<typeof deviceAuthSchema>;
 
 /**
+ * A single git commit as read from the GitHub integration (U26). Used by the
+ * Weekly "done" assembly (U28): commits whose branch/PR/message references a
+ * ticket id are attributed to that ticket (and thus its objective).
+ */
+export const gitCommitSchema = z.object({
+  sha: z.string().min(1),
+  message: z.string(),
+  author: z.string().default(''),
+  /** ISO-8601 timestamp the commit was authored. */
+  committedAt: z.string().min(1),
+  /** Ticket ids referenced by this commit (parsed from message/branch/PR). */
+  ticketIds: z.array(z.string()).default([]),
+});
+export type GitCommit = z.infer<typeof gitCommitSchema>;
+
+/**
+ * The project framing read from a repo's `PRD.md` / `PROGRESS.md` on connect or
+ * sync (U26). `goal` is the PRD's stated goal; `supportingOutcomeIds` are the
+ * Supporting Outcomes the project owns; `progressPct` is parsed from PROGRESS.md.
+ */
+export const projectFramingSchema = z.object({
+  goal: z.string().optional(),
+  supportingOutcomeIds: z.array(z.string()).default([]),
+  progressPct: z.number().min(0).max(100).optional(),
+  /** True when a required file (PRD.md / PROGRESS.md) was absent. */
+  missingFiles: z.array(z.string()).default([]),
+});
+export type ProjectFraming = z.infer<typeof projectFramingSchema>;
+
+/**
+ * A summarized + embedded session, the unit Forge searches over (U27). Created
+ * on `session.done`: the session's transcript is summarized and embedded
+ * (Bedrock), and the skills/tools it used are recorded so similar sessions can
+ * be aggregated into an agent proposal. Vectors are stored in DynamoDB for the
+ * brute-force cosine fallback (KTD7); OpenSearch indexing is additive.
+ */
+export const sessionVectorSchema = z.object({
+  sessionId: z.string().min(1),
+  userId: z.string().min(1),
+  projectId: z.string().min(1),
+  summary: z.string().default(''),
+  /** The embedding vector for the summary. */
+  vector: z.array(z.number()),
+  /** Skills used during the session (for frequency aggregation). */
+  skills: z.array(z.string()).default([]),
+  /** Tools used during the session (for frequency aggregation). */
+  tools: z.array(z.string()).default([]),
+  createdAt: z.number().int().nonnegative(),
+});
+export type SessionVector = z.infer<typeof sessionVectorSchema>;
+
+/** A session ranked by similarity to a Forge query (U27). */
+export const scoredSessionSchema = z.object({
+  sessionId: z.string().min(1),
+  score: z.number(),
+  summary: z.string().default(''),
+  skills: z.array(z.string()).default([]),
+  tools: z.array(z.string()).default([]),
+});
+export type ScoredSession = z.infer<typeof scoredSessionSchema>;
+
+/**
+ * A drafted agent proposed by Forge from similar sessions (U27). `evidence`
+ * lists the sessions that informed it; `lowConfidence` flags skills/tools that
+ * appeared in too few sessions to be certain, so the editor can highlight them.
+ */
+export const agentProposalSchema = z.object({
+  name: z.string().min(1),
+  model: z.string().min(1),
+  prompt: z.string().default(''),
+  skills: z.array(z.string()).default([]),
+  tools: z.array(z.string()).default([]),
+  lowConfidence: z.array(z.string()).default([]),
+  evidence: z.array(scoredSessionSchema).default([]),
+  /** True when there was not enough history to mine; the draft is a blank slate. */
+  insufficientHistory: z.boolean().default(false),
+});
+export type AgentProposal = z.infer<typeof agentProposalSchema>;
+
+/**
  * A control frame sent from HQ web down to a live session via the control
  * gateway (U7) and applied by the wrapper's control receiver (U15). The backend
  * authorizes that the requesting user owns `sessionId`, then routes the frame to
