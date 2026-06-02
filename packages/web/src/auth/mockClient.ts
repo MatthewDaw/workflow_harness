@@ -19,11 +19,18 @@ export function createMockClient(initialUser: AuthUser | null = null): AuthClien
       current = { userId: `user-${username}`, username, org: 'acme' };
       return current;
     },
+    async signInWithGoogle() {
+      // No real IdP in the mock; sign in as the wireframe user.
+      current = { userId: 'user-google', username: 'matt', org: 'acme' };
+    },
     async signOut() {
       current = null;
     },
     async getIdToken() {
       return current ? `mock-token-${current.userId}` : null;
+    },
+    onChange() {
+      return () => {};
     },
   };
 }

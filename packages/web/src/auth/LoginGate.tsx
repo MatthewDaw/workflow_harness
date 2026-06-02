@@ -6,7 +6,7 @@ import { useAuth } from './AuthProvider.js';
  * shell once a user is present. The first authenticated route is Objectives.
  */
 export function LoginGate({ children }: { children: ReactNode }) {
-  const { user, loading, signIn } = useAuth();
+  const { user, loading, signIn, signInWithGoogle } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +84,27 @@ export function LoginGate({ children }: { children: ReactNode }) {
 
         <button type="submit" disabled={submitting} className="hq-btn hq-btn-pri w-full">
           {submitting ? 'Signing in…' : 'Sign in'}
+        </button>
+
+        <div className="my-4 flex items-center gap-3 text-[11px] uppercase tracking-wide text-faint">
+          <span className="h-px flex-1 bg-line" />
+          or
+          <span className="h-px flex-1 bg-line" />
+        </div>
+
+        <button
+          type="button"
+          onClick={async () => {
+            setError(null);
+            try {
+              await signInWithGoogle();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Google sign in failed');
+            }
+          }}
+          className="hq-btn w-full"
+        >
+          Continue with Google
         </button>
       </form>
     </div>

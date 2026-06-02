@@ -9,6 +9,7 @@ interface AuthState {
   user: AuthUser | null;
   loading: boolean;
   signIn: (username: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -61,6 +62,19 @@ export function AuthProvider({
     };
   }, [client, dispatch]);
 
+  // After a Hosted UI (Google) redirect returns, Amplify exchanges the code
+  // asynchronously and fires a Hub event. Re-fetch the user + token then, so the
+  // gate flips to the app without a manual reload.
+  useEffect(() => {
+    if (!resolvedClient) return;
+    const unsubscribe = resolvedClient.onChange(async () => {
+      const current = await resolvedClient.getCurrentUser();
+      setUser(current);
+      dispatch(setIdToken(current ? await resolvedClient.getIdToken() : null));
+    });
+    return unsubscribe;
+  }, [resolvedClient, dispatch]);
+
   const value = useMemo<AuthState>(
     () => ({
       user,
@@ -71,6 +85,10 @@ export function AuthProvider({
         setUser(u);
         // Capture the bearer token so RTK Query's prepareHeaders can attach it.
         dispatch(setIdToken(await resolvedClient.getIdToken()));
+      },
+      async signInWithGoogle() {
+        if (!resolvedClient) throw new Error('auth client not ready');
+        await resolvedClient.signInWithGoogle();
       },
       async signOut() {
         if (!resolvedClient) return;
