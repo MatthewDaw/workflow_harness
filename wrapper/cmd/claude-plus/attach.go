@@ -1,7 +1,10 @@
 package main
 
 import (
+	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/daemon"
@@ -27,9 +30,10 @@ func runShell(c *daemon.Client, instance string) error {
 		w, h = 80, 24
 	}
 
-	// Alternate screen + raw mode; restore both on exit.
-	os.Stdout.WriteString("\x1b[?1049h\x1b[2J")
-	defer os.Stdout.WriteString("\x1b[?25h\x1b[?1049l")
+	// Alternate screen + raw mode + SGR mouse reporting; restore all on exit.
+	// 1000 = click tracking, 1006 = SGR extended coordinates (cols/rows > 223).
+	os.Stdout.WriteString("\x1b[?1049h\x1b[2J\x1b[?1000h\x1b[?1006h")
+	defer os.Stdout.WriteString("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l")
 	if term.IsTerminal(inFd) {
 		if old, mkErr := term.MakeRaw(inFd); mkErr == nil {
 			defer func() { _ = term.Restore(inFd, old) }()
@@ -65,20 +69,8 @@ func runShell(c *daemon.Client, instance string) error {
 	readErr := make(chan error, 1)
 	go func() { readErr <- c.Run() }()
 
-	keyCh := make(chan byte, 1024)
-	go func() {
-		buf := make([]byte, 1024)
-		for {
-			n, e := os.Stdin.Read(buf)
-			for i := 0; i < n; i++ {
-				keyCh <- buf[i]
-			}
-			if e != nil {
-				close(keyCh)
-				return
-			}
-		}
-	}()
+	events := make(chan inputEvent, 1024)
+	go parseInput(os.Stdin, events)
 
 	frame := time.NewTicker(16 * time.Millisecond)
 	defer frame.Stop()
@@ -109,20 +101,40 @@ func runShell(c *daemon.Client, instance string) error {
 				_ = c.Resize(riw, rih)
 				markDirty()
 			}
-		case b, ok := <-keyCh:
+		case ev, ok := <-events:
 			if !ok {
-				keyCh = nil // stdin closed; keep rendering until detach or daemon drop
+				events = nil // stdin closed; keep rendering until detach or daemon drop
 				continue
 			}
-			switch handleKey(c, comp, b, &prefix) {
-			case actDetach:
-				_ = c.Detach()
-				return nil
-			case actHandled:
-				markDirty()
-			case actForward:
+			if ev.mouse {
+				if ev.press && ev.button == 0 { // plain left-click
+					if changed, sess := comp.Click(ev.x, ev.y); changed || sess != "" {
+						if sess != "" {
+							_ = c.Focus(sess)
+						}
+						markDirty()
+					}
+				}
+				continue
+			}
+			// Multi-byte escape sequences (arrows, etc.) forward intact to claude.
+			if len(ev.bytes) > 1 && ev.bytes[0] == 0x1b {
 				if comp.ActiveIsSession() {
-					_ = c.Input([]byte{b})
+					_ = c.Input(ev.bytes)
+				}
+				continue
+			}
+			for _, b := range ev.bytes {
+				switch handleKey(c, comp, b, &prefix) {
+				case actDetach:
+					_ = c.Detach()
+					return nil
+				case actHandled:
+					markDirty()
+				case actForward:
+					if comp.ActiveIsSession() {
+						_ = c.Input([]byte{b})
+					}
 				}
 			}
 		}
@@ -189,4 +201,83 @@ func handleKey(c *daemon.Client, comp *shell.Compositor, b byte, prefix *bool) k
 		}
 	}
 	return actForward
+}
+
+// inputEvent is a decoded stdin event: either raw key bytes (to interpret as
+// chrome keybinds or forward to the session) or a mouse event.
+type inputEvent struct {
+	mouse  bool
+	bytes  []byte // non-mouse: raw bytes
+	x, y   int    // mouse: 0-based screen coords
+	button int    // mouse: raw SGR button code (0 = plain left)
+	press  bool   // mouse: press (M) vs release (m)
+}
+
+// parseInput reads stdin and emits key/mouse events. SGR mouse sequences
+// (ESC [ < b ; col ; row M|m) are decoded so clicks reach the chrome; every
+// other byte/sequence passes through as raw bytes so the keyboard still drives
+// claude.
+func parseInput(r io.Reader, out chan<- inputEvent) {
+	buf := make([]byte, 1024)
+	var esc, mb []byte
+	state := 0 // 0 normal, 1 ESC, 2 CSI, 3 mouse params
+	emit := func(bs ...byte) { out <- inputEvent{bytes: append([]byte(nil), bs...)} }
+	for {
+		n, e := r.Read(buf)
+		for i := 0; i < n; i++ {
+			b := buf[i]
+			switch state {
+			case 0:
+				if b == 0x1b {
+					esc = []byte{b}
+					state = 1
+				} else {
+					emit(b)
+				}
+			case 1: // after ESC
+				esc = append(esc, b)
+				if b == '[' {
+					state = 2
+				} else {
+					emit(esc...)
+					esc, state = nil, 0
+				}
+			case 2: // after ESC [
+				if b == '<' {
+					state, mb = 3, mb[:0]
+				} else {
+					esc = append(esc, b)
+					emit(esc...)
+					esc, state = nil, 0
+				}
+			case 3: // mouse params after ESC [ <
+				if b == 'M' || b == 'm' {
+					if ev, ok := parseSGRMouse(mb, b == 'M'); ok {
+						out <- ev
+					}
+					esc, state = nil, 0
+				} else {
+					mb = append(mb, b)
+				}
+			}
+		}
+		if e != nil {
+			close(out)
+			return
+		}
+	}
+}
+
+func parseSGRMouse(params []byte, press bool) (inputEvent, bool) {
+	parts := strings.Split(string(params), ";") // "button;col;row"
+	if len(parts) != 3 {
+		return inputEvent{}, false
+	}
+	btn, e1 := strconv.Atoi(parts[0])
+	col, e2 := strconv.Atoi(parts[1])
+	row, e3 := strconv.Atoi(parts[2])
+	if e1 != nil || e2 != nil || e3 != nil {
+		return inputEvent{}, false
+	}
+	return inputEvent{mouse: true, button: btn, x: col - 1, y: row - 1, press: press}, true
 }

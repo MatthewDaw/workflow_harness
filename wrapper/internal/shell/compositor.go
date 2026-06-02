@@ -36,6 +36,10 @@ type SubTab struct {
 	Status string // active | needs_input | idle | done
 }
 
+// span is a clickable horizontal range [lo,hi) on a chrome row, mapped to an
+// index (tab index or sub-tab index) for mouse hit-testing.
+type span struct{ lo, hi, idx int }
+
 // Compositor frames a live session inside the claude+ chrome.
 type Compositor struct {
 	mu sync.Mutex
@@ -47,6 +51,11 @@ type Compositor struct {
 	subs       []SubTab
 	focusedSub int
 	panes      map[string]*Pane // sessionID -> mirror terminal
+
+	// Click regions recomputed each render so mouse hit-testing matches exactly
+	// what was drawn.
+	tabSpans []span
+	subSpans []span
 
 	tokens   int
 	costUSD  float64
@@ -164,6 +173,35 @@ func (c *Compositor) FocusedSessionID() string {
 	return ""
 }
 
+// Click maps a mouse click at (x,y) to a chrome action. A tab-bar hit switches
+// the active tab (applied here -> changed=true). A sub-tab hit returns the
+// session id the caller should focus via the daemon. Body clicks return zero.
+func (c *Compositor) Click(x, y int) (changed bool, focusSessID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch y {
+	case rowTabBar:
+		for _, sp := range c.tabSpans {
+			if x >= sp.lo && x < sp.hi {
+				if c.active != sp.idx {
+					c.active = sp.idx
+					return true, ""
+				}
+				return false, ""
+			}
+		}
+	case rowSubTabs:
+		for _, sp := range c.subSpans {
+			if x >= sp.lo && x < sp.hi {
+				if sp.idx >= 0 && sp.idx < len(c.subs) {
+					return false, c.subs[sp.idx].ID
+				}
+			}
+		}
+	}
+	return false, ""
+}
+
 // Render composes a frame and paints it.
 func (c *Compositor) Render() {
 	c.mu.Lock()
@@ -188,6 +226,7 @@ func (c *Compositor) Render() {
 }
 
 func (c *Compositor) renderTabBar(w int) {
+	c.tabSpans = c.tabSpans[:0]
 	x := 0
 	for i, name := range tabNames {
 		label := " " + name + " "
@@ -197,6 +236,7 @@ func (c *Compositor) renderTabBar(w int) {
 			fg = colText
 		}
 		c.screen.SetString(x, rowTabBar, label, fg, vt.DefaultBG, active, active)
+		c.tabSpans = append(c.tabSpans, span{lo: x, hi: x + len(label), idx: i})
 		x += len(label) + 1
 	}
 	// HQ-linked indicator on the right.
@@ -210,12 +250,14 @@ func (c *Compositor) renderTabBar(w int) {
 }
 
 func (c *Compositor) renderSubTabs(w int) {
+	c.subSpans = c.subSpans[:0]
 	if len(c.subs) == 0 {
 		c.screen.SetString(0, rowSubTabs, " (no sessions) ", colDim, vt.DefaultBG, false, false)
 		return
 	}
 	x := 0
 	for i, st := range c.subs {
+		start := x
 		dot := "●"
 		dotFG := colGreen
 		switch st.Status {
@@ -235,6 +277,7 @@ func (c *Compositor) renderSubTabs(w int) {
 		}
 		c.screen.SetString(x, rowSubTabs, st.Name+" ", nameFG, vt.DefaultBG, focused, false)
 		x += len(st.Name) + 2
+		c.subSpans = append(c.subSpans, span{lo: start, hi: x, idx: i})
 		if x >= w {
 			break
 		}
@@ -301,6 +344,6 @@ func (c *Compositor) renderStatusLine(w, h int) {
 	}
 	left := fmt.Sprintf(" %s  ▸ %s  %dtok  $%.2f", c.instance, focused, c.tokens, c.costUSD)
 	c.screen.SetString(0, row, left, colText, colBarBG, false, false)
-	hint := "⇥ tab · ⌃1-9 session · ⌃G detach "
+	hint := "click tabs · ⌃G n/p/1-5 · ⌃G d detach "
 	c.screen.SetString(w-len(hint), row, hint, colDim, colBarBG, false, false)
 }
