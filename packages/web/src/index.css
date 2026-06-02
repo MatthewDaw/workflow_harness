@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Shared visual styling promoted from wireframe.html. These component classes
+ * mirror the prototype's primitives (frame/box/pill/bar/btn/...) so screens stay
+ * faithful to the wireframe while remaining Tailwind-composable.
+ */
+@layer base {
+  body {
+    @apply bg-bg text-ink font-sans text-sm leading-normal;
+  }
+}
+
+@layer components {
+  .hq-frame {
+    @apply bg-paper border border-line rounded-lg shadow-frame;
+  }
+  .hq-box {
+    @apply border border-dashed border-line rounded-md p-3 bg-[#fbfbfa];
+  }
+  .hq-pad {
+    @apply p-4;
+  }
+  .hq-hr {
+    @apply h-px bg-line2 my-3;
+  }
+
+  .hq-pill {
+    @apply inline-block text-[11px] px-2 py-0.5 rounded-full border border-line text-mut bg-[#fafafa];
+  }
+  .hq-pill-live {
+    @apply text-white bg-live border-live;
+  }
+  .hq-pill-good {
+    @apply text-good border-[#bcd9c2] bg-[#eef6ef];
+  }
+  .hq-pill-idle {
+    @apply text-mut;
+  }
+  .hq-pill-skill {
+    @apply bg-[#eef2f7] border-[#cdd9e6] text-[#3a567a] font-mono;
+  }
+
+  .hq-dot {
+    @apply inline-block w-2 h-2 rounded-full bg-faint mr-1.5 align-middle;
+  }
+  .hq-dot-live {
+    @apply bg-live shadow-[0_0_0_3px_rgba(181,64,47,.15)];
+  }
+  .hq-dot-good {
+    @apply bg-good;
+  }
+
+  .hq-bar {
+    @apply h-[7px] bg-[#ededed] rounded-full overflow-hidden;
+  }
+  .hq-bar > i {
+    @apply block h-full bg-accent;
+  }
+
+  .hq-btn {
+    @apply inline-block border border-line rounded-md px-[11px] py-1.5 bg-[#fafafa] text-ink text-xs cursor-pointer;
+  }
+  .hq-btn-pri {
+    @apply bg-ink text-white border-ink;
+  }
+
+  .hq-note {
+    @apply text-xs text-accent bg-[#eef4fb] border-l-[3px] border-accent px-[11px] py-2 rounded-r-md my-3.5;
+  }
+
+  /* app nav (top bar) */
+  .hq-appnav {
+    @apply flex items-center gap-1 px-3.5 py-2.5 border-b border-line2;
+  }
+  .hq-appnav a {
+    @apply text-[13px] text-mut px-2.5 py-1.5 rounded-md no-underline cursor-pointer;
+  }
+  .hq-appnav a.on {
+    @apply text-ink bg-[#f0f0ee];
+  }
+
+  /* project sub-nav */
+  .hq-subnav {
+    @apply flex gap-0.5 px-3.5 border-b border-line2 bg-[#fafafa];
+  }
+  .hq-subnav a {
+    @apply text-[12.5px] text-mut px-3 py-2.5 no-underline border-b-2 border-transparent -mb-px cursor-pointer;
+  }
+  .hq-subnav a.on {
+    @apply text-ink border-b-ink font-semibold;
+  }
+}

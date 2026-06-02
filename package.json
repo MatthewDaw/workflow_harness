@@ -11,7 +11,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build -w @harness/shared && npm run build -w @harness/backend",
+    "build": "npm run build -w @harness/shared && npm run build -w @harness/backend && npm run build -w @harness/web",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "format": "prettier --write .",

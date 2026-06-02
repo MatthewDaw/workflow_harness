@@ -1,0 +1,82 @@
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import type { AuthClient, AuthUser } from './authClient.js';
+import { readCognitoConfig } from './authClient.js';
+import { createMockClient } from './mockClient.js';
+
+interface AuthState {
+  user: AuthUser | null;
+  loading: boolean;
+  signIn: (username: string, password: string) => Promise<void>;
+  signOut: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthState | null>(null);
+
+/**
+ * Lazily build the default AuthClient: Cognito when env config is present,
+ * otherwise the in-memory mock so the app runs without a deployed user pool.
+ * Kept async-imported so the Amplify dependency is only pulled when configured.
+ */
+async function buildDefaultClient(): Promise<AuthClient> {
+  const config = readCognitoConfig();
+  if (config) {
+    const { createCognitoClient } = await import('./cognitoClient.js');
+    return createCognitoClient(config);
+  }
+  return createMockClient();
+}
+
+export function AuthProvider({
+  children,
+  client,
+}: {
+  children: ReactNode;
+  /** Injectable client for tests; defaults to Cognito-or-mock. */
+  client?: AuthClient;
+}) {
+  const [resolvedClient, setResolvedClient] = useState<AuthClient | null>(client ?? null);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const c = client ?? (await buildDefaultClient());
+      if (!active) return;
+      setResolvedClient(c);
+      const current = await c.getCurrentUser();
+      if (!active) return;
+      setUser(current);
+      setLoading(false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [client]);
+
+  const value = useMemo<AuthState>(
+    () => ({
+      user,
+      loading,
+      async signIn(username, password) {
+        if (!resolvedClient) throw new Error('auth client not ready');
+        const u = await resolvedClient.signIn(username, password);
+        setUser(u);
+      },
+      async signOut() {
+        if (!resolvedClient) return;
+        await resolvedClient.signOut();
+        setUser(null);
+      },
+    }),
+    [user, loading, resolvedClient],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth(): AuthState {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  return ctx;
+}
