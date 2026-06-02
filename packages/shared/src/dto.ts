@@ -58,8 +58,28 @@ export const ticketSchema = z.object({
   sessionId: z.string().optional(),
   branch: z.string().optional(),
   pr: z.string().optional(),
+  /** The Supporting Outcome (objective node) this ticket advances; feeds roll-up. */
+  objectiveId: z.string().optional(),
 });
 export type Ticket = z.infer<typeof ticketSchema>;
+
+/**
+ * Allowed ticket status transitions. The board advances a ticket forward through
+ * backlog -> in_progress -> in_review -> done; any status may be moved to/from
+ * `icebox` (deferred). Anything else is rejected as an invalid transition.
+ */
+export const TICKET_TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = {
+  backlog: ['in_progress', 'icebox'],
+  in_progress: ['in_review', 'backlog', 'icebox'],
+  in_review: ['done', 'in_progress', 'icebox'],
+  done: ['icebox'],
+  icebox: ['backlog'],
+};
+
+export function isValidTicketTransition(from: TicketStatus, to: TicketStatus): boolean {
+  if (from === to) return true;
+  return TICKET_TRANSITIONS[from].includes(to);
+}
 
 export const agentSchema = z.object({
   name: z.string().min(1),
@@ -70,6 +90,17 @@ export const agentSchema = z.object({
   tools: z.array(z.string()).default([]),
 });
 export type Agent = z.infer<typeof agentSchema>;
+
+/**
+ * Request to elevate/demote an agent (or skill) to a new scope. The handler
+ * rewrites the scope key (delete old, put new), so the item moves between the
+ * org/user/project tiers. `elevate` widens (project -> user -> org); `demote`
+ * narrows.
+ */
+export const scopeChangeSchema = z.object({
+  scope: scopeRefSchema,
+});
+export type ScopeChange = z.infer<typeof scopeChangeSchema>;
 
 export const SKILL_KINDS = ['skill', 'bundle'] as const;
 export const skillKindSchema = z.enum(SKILL_KINDS);

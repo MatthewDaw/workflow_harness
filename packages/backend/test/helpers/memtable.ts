@@ -48,13 +48,27 @@ export function installInMemoryTable(
     const values = (input.ExpressionAttributeValues ?? {}) as Record<string, string>;
     const pk = values[':pk'];
     const skPrefix = values[':sk'];
+
+    // A GSI1 query keys on the GSI1PK/GSI1SK attributes instead of PK/SK. The
+    // Repo only ever begins_with(SK)-prefixes the base table, so for GSI1 we
+    // match on GSI1PK and sort by GSI1SK.
+    const onIndex = input.IndexName !== undefined;
+    const partKey = onIndex ? 'GSI1PK' : 'PK';
+    const sortKey = onIndex ? 'GSI1SK' : 'SK';
+
     let items = [...store.values()].filter((it) => {
-      if ((it as KeyShape).PK !== pk) return false;
-      if (skPrefix !== undefined) return String((it as KeyShape).SK).startsWith(skPrefix);
+      if ((it as Record<string, unknown>)[partKey] !== pk) return false;
+      if (!onIndex && skPrefix !== undefined) {
+        return String((it as KeyShape).SK).startsWith(skPrefix);
+      }
       return true;
     });
-    // Honour SK ordering + ScanIndexForward for event replay windows.
-    items.sort((a, b) => String((a as KeyShape).SK).localeCompare(String((b as KeyShape).SK)));
+    // Honour sort-key ordering + ScanIndexForward for event replay / live lists.
+    items.sort((a, b) =>
+      String((a as Record<string, unknown>)[sortKey] ?? '').localeCompare(
+        String((b as Record<string, unknown>)[sortKey] ?? ''),
+      ),
+    );
     if (input.ScanIndexForward === false) items.reverse();
     if (typeof input.Limit === 'number') items = items.slice(0, input.Limit);
     return { Items: items };

@@ -37,6 +37,19 @@ export interface ConnectionRecord {
 }
 
 /**
+ * A claude+ instance (one per repo+host) as projected from its lifecycle. Used
+ * by the Project detail screen to show live activity. Written by the ingestion
+ * path; read here for the REST projects API.
+ */
+export interface InstanceRecord {
+  projectId: string;
+  host: string;
+  online: boolean;
+  sessionCount?: number;
+  uptimeSec?: number;
+}
+
+/**
  * Intent-named access layer over the single `harness` table. Handlers depend on
  * this, never on raw DynamoDB commands. The DynamoDBDocumentClient is injected
  * so it can be mocked in tests.
@@ -181,6 +194,24 @@ export class Repo {
     return (res.Items ?? []) as SessionProjection[];
   }
 
+  async getInstance(projectId: string, host: string): Promise<InstanceRecord | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.instanceKey(projectId, host) }),
+    );
+    return res.Item as InstanceRecord | undefined;
+  }
+
+  async listInstances(projectId: string): Promise<InstanceRecord[]> {
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': `PROJ#${projectId}`, ':sk': 'INST#' },
+      }),
+    );
+    return (res.Items ?? []) as InstanceRecord[];
+  }
+
   // --- Tickets ------------------------------------------------------------
 
   async putTicket(t: Ticket): Promise<void> {
@@ -215,10 +246,32 @@ export class Repo {
     );
   }
 
+  async getAgent(scope: ScopeRef, name: string): Promise<Agent | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.agentKey(scope, name) }),
+    );
+    return res.Item as Agent | undefined;
+  }
+
+  async deleteAgent(scope: ScopeRef, name: string): Promise<void> {
+    await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.agentKey(scope, name) }));
+  }
+
   async putSkill(s: Skill): Promise<void> {
     await this.doc.send(
       new PutCommand({ TableName: this.table, Item: { ...k.skillKey(s.scope, s.name), ...s } }),
     );
+  }
+
+  async getSkill(scope: ScopeRef, name: string): Promise<Skill | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.skillKey(scope, name) }),
+    );
+    return res.Item as Skill | undefined;
+  }
+
+  async deleteSkill(scope: ScopeRef, name: string): Promise<void> {
+    await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.skillKey(scope, name) }));
   }
 
   /** Fetch all agents across the given scopes (caller resolves narrowest-wins). */
@@ -253,6 +306,17 @@ export class Repo {
     );
   }
 
+  async getObjective(org: string, id: string): Promise<ObjectiveNode | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.objectiveKey(org, id) }),
+    );
+    return res.Item as ObjectiveNode | undefined;
+  }
+
+  async deleteObjective(org: string, id: string): Promise<void> {
+    await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.objectiveKey(org, id) }));
+  }
+
   async listObjectives(org: string): Promise<ObjectiveNode[]> {
     const res = await this.doc.send(
       new QueryCommand({
@@ -278,6 +342,17 @@ export class Repo {
       new GetCommand({ TableName: this.table, Key: k.weeklyKey(projectId, isoWeek) }),
     );
     return res.Item as WeeklyUpdate | undefined;
+  }
+
+  async listWeekly(projectId: string): Promise<WeeklyUpdate[]> {
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': `PROJ#${projectId}`, ':sk': 'WEEK#' },
+      }),
+    );
+    return (res.Items ?? []) as WeeklyUpdate[];
   }
 
   // --- Device-auth (wrapper device-code login) ---------------------------
