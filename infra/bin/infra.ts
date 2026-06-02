@@ -3,10 +3,16 @@ import * as cdk from 'aws-cdk-lib/core';
 import { InfraStack } from '../lib/infra-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { ApiStack } from '../lib/api-stack';
+import { SearchStack } from '../lib/search-stack';
 
 const app = new cdk.App();
 
 const authStack = new AuthStack(app, 'AuthStack');
+
+// U27 (optional, synth-only) — Forge vector index. The default backend is the
+// brute-force cosine fallback; this provisions OpenSearch Serverless for when
+// volume justifies it. Never deploy from here.
+new SearchStack(app, 'SearchStack');
 
 // U5 — backend API: DynamoDB single-table + HTTP API + WebSocket API. The HTTP
 // API's JWT authorizer trusts the AuthStack user pool, so ApiStack references it.
