@@ -10,6 +10,8 @@ export function httpEvent(opts: {
   method: string;
   userId?: string | null;
   org?: string;
+  admin?: boolean;
+  rawPath?: string;
   path?: Record<string, string>;
   query?: Record<string, string>;
   body?: unknown;
@@ -17,16 +19,26 @@ export function httpEvent(opts: {
   const claims =
     opts.userId === null || opts.userId === undefined
       ? undefined
-      : { sub: opts.userId, 'custom:org': opts.org ?? 'acme' };
+      : {
+          sub: opts.userId,
+          'custom:org': opts.org ?? 'acme',
+          ...(opts.admin ? { 'custom:admin': 'true' } : {}),
+        };
 
   return {
     version: '2.0',
     routeKey: '$default',
-    rawPath: '/',
+    rawPath: opts.rawPath ?? '/',
     rawQueryString: '',
     headers: {},
     requestContext: {
-      http: { method: opts.method, path: '/', protocol: 'HTTP/1.1', sourceIp: '', userAgent: '' },
+      http: {
+        method: opts.method,
+        path: opts.rawPath ?? '/',
+        protocol: 'HTTP/1.1',
+        sourceIp: '',
+        userAgent: '',
+      },
       ...(claims ? { authorizer: { jwt: { claims } } } : {}),
     },
     pathParameters: opts.path,
