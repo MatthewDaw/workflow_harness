@@ -1,6 +1,10 @@
 node_modules/
 dist/
 *.tsbuildinfo
+# compiled output must never live in src/ (only .ts/.tsx belongs there)
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.js.map
 coverage/
 .DS_Store
 .env
