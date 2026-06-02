@@ -25,6 +25,10 @@ type Client struct {
 	Out func(b []byte)
 	// OnSessions receives session-list updates for the sub-tab row.
 	OnSessions func([]SessInfo)
+
+	// Sessions is the session list from the attach ack (consumed during the
+	// handshake, before Run starts), so the caller can seed the sub-tab row.
+	Sessions []SessInfo
 }
 
 // Dial connects to the daemon serving repoRoot and performs the hello handshake.
@@ -68,6 +72,7 @@ func dialSock(sock string) (*Client, error) {
 		conn.Close()
 		return nil, errors.New(ack.Err)
 	}
+	c.Sessions = ack.List // seed the sub-tab row before Run starts
 	return c, nil
 }
 

@@ -1,0 +1,77 @@
+// Package shell implements the claude+ terminal chrome: a hand-rolled screen
+// compositor (like tmux) that frames a live claude session inside the tab bar,
+// session sub-tabs, and status line from the wireframe.
+//
+// The Session pane is a real virtual terminal (vt10x): claude's PTY output is
+// fed in, and the compositor reads the resulting cell grid to render it inside
+// the chrome. This is what makes the embedded session render correctly (cursor
+// motion, screen clears, colors) rather than as a scrollback blob — and it
+// works over SSH because it emits nothing but ANSI to stdout.
+package shell
+
+import (
+	"sync"
+
+	vt "github.com/hinshun/vt10x"
+)
+
+// Pane is the virtual terminal for one session.
+type Pane struct {
+	mu         sync.Mutex
+	term       vt.Terminal
+	cols, rows int
+}
+
+// NewPane creates a virtual terminal of the given size.
+func NewPane(cols, rows int) *Pane {
+	cols, rows = clampSize(cols, rows)
+	return &Pane{term: vt.New(vt.WithSize(cols, rows)), cols: cols, rows: rows}
+}
+
+// Write feeds raw claude PTY output into the emulator.
+func (p *Pane) Write(b []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, _ = p.term.Write(b)
+}
+
+// Resize changes the virtual terminal dimensions.
+func (p *Pane) Resize(cols, rows int) {
+	cols, rows = clampSize(cols, rows)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.term.Resize(cols, rows)
+	p.cols, p.rows = cols, rows
+}
+
+// Size returns the current dimensions.
+func (p *Pane) Size() (cols, rows int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cols, p.rows
+}
+
+// Cell returns the glyph at (x, y) in the emulator grid.
+func (p *Pane) Cell(x, y int) vt.Glyph {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.term.Cell(x, y)
+}
+
+// Cursor returns the emulator cursor position and visibility.
+func (p *Pane) Cursor() (x, y int, visible bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	c := p.term.Cursor()
+	return c.X, c.Y, p.term.CursorVisible()
+}
+
+func clampSize(cols, rows int) (int, int) {
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return cols, rows
+}
