@@ -46,6 +46,17 @@ export const sessionKey = (projectId: string, sessionId: string): PrimaryKey => 
   SK: `SESS#${sessionId}`,
 });
 
+/**
+ * A direct sessionId -> projectId pointer. Session projections live under their
+ * project partition, but event ingestion and the control gateway often hold only
+ * a sessionId (events after `session.start` carry no projectId). This tiny
+ * record lets them resolve the projection in one extra get.
+ */
+export const sessionPointerKey = (sessionId: string): PrimaryKey => ({
+  PK: `SESS#${sessionId}`,
+  SK: 'PTR',
+});
+
 /** Events sort by seq (monotonic per session) so the SK is the dedupe key on (sessionId, seq). */
 export const eventKey = (sessionId: string, seq: number): PrimaryKey => ({
   PK: `SESS#${sessionId}`,
@@ -92,6 +103,41 @@ export const weeklyKey = (projectId: string, isoWeek: string): PrimaryKey => ({
 export const deviceAuthKey = (deviceCode: string): PrimaryKey => ({
   PK: `DEVAUTH#${deviceCode}`,
   SK: 'PENDING',
+});
+
+/**
+ * WebSocket connection registry (U6/U7). Two record families share the table:
+ *
+ *  - A daemon (or web) connection record, keyed by `connectionId`, carries the
+ *    authenticated `{uid, org}` and (for daemons) the `instanceId` they host.
+ *    `$disconnect` deletes it.
+ *  - A reverse index from `instanceId` to its current daemon `connectionId`, so
+ *    the control gateway can route a steer frame to the owning daemon without a
+ *    scan. Overwritten on reconnect; removed on disconnect.
+ */
+export const connectionKey = (connectionId: string): PrimaryKey => ({
+  PK: `CONN#${connectionId}`,
+  SK: 'META',
+});
+
+export const instanceConnKey = (instanceId: string): PrimaryKey => ({
+  PK: `INSTCONN#${instanceId}`,
+  SK: 'CURRENT',
+});
+
+/**
+ * A web client's subscription to a session's live feed. Keyed under the session
+ * so ingestion can list listeners for fan-out; the SK carries the listener's
+ * `connectionId` so a subscriber disconnect can delete its own record directly.
+ */
+export const listenerKey = (sessionId: string, connectionId: string): PrimaryKey => ({
+  PK: `SESSLISTEN#${sessionId}`,
+  SK: `CONN#${connectionId}`,
+});
+
+export const listenerPrefix = (sessionId: string): { PK: string; skPrefix: string } => ({
+  PK: `SESSLISTEN#${sessionId}`,
+  skPrefix: 'CONN#',
 });
 
 /** GSI1 attributes for a project, so it is queryable by its owner. */

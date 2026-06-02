@@ -21,6 +21,10 @@ export const sessionProjectionSchema = z.object({
   projectId: z.string().min(1),
   name: z.string().min(1),
   host: z.string().min(1),
+  /** The claude+ instance hosting this session; used to route control frames. */
+  instanceId: z.string().optional(),
+  /** The owning user; control authorizes that the requester matches this uid. */
+  ownerUserId: z.string().optional(),
   agent: z.string().optional(),
   ticket: z.string().optional(),
   status: sessionStatusSchema,
@@ -28,6 +32,11 @@ export const sessionProjectionSchema = z.object({
   costUsd: z.number().nonnegative().default(0),
   startedAt: z.number().int().nonnegative(),
   lastEventAt: z.number().int().nonnegative(),
+  /**
+   * Highest event `seq` folded into this projection. Out-of-order or duplicate
+   * envelopes (seq <= this) do not regress the latest-activity fields.
+   */
+  maxSeq: z.number().int().nonnegative().default(0),
 });
 export type SessionProjection = z.infer<typeof sessionProjectionSchema>;
 
@@ -132,3 +141,22 @@ export const deviceAuthSchema = z.object({
   org: z.string().min(1).optional(),
 });
 export type DeviceAuth = z.infer<typeof deviceAuthSchema>;
+
+/**
+ * A control frame sent from HQ web down to a live session via the control
+ * gateway (U7) and applied by the wrapper's control receiver (U15). The backend
+ * authorizes that the requesting user owns `sessionId`, then routes the frame to
+ * the owning daemon's WebSocket connection. `inject` writes `payload.text` to
+ * the session's PTY stdin; `pause`/`interrupt` map to signals on the daemon side.
+ */
+export const CONTROL_ACTIONS = ['inject', 'pause', 'interrupt'] as const;
+export const controlActionSchema = z.enum(CONTROL_ACTIONS);
+export type ControlAction = z.infer<typeof controlActionSchema>;
+
+export const controlFrameSchema = z.object({
+  sessionId: z.string().min(1),
+  action: controlActionSchema,
+  /** Action payload; `inject` carries `{ text }`, the others may be empty. */
+  payload: z.object({ text: z.string() }).partial().default({}),
+});
+export type ControlFrame = z.infer<typeof controlFrameSchema>;

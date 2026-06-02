@@ -1,4 +1,5 @@
 import {
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -18,6 +19,22 @@ import type {
   WeeklyUpdate,
 } from '@harness/shared';
 import * as k from './keys.js';
+
+/**
+ * A live WebSocket connection in the registry. Daemon connections also carry the
+ * `instanceId` they host (so control frames can be routed to them); web client
+ * connections omit it.
+ */
+export interface ConnectionRecord {
+  connectionId: string;
+  userId: string;
+  org: string;
+  /** Present for daemon connections; absent for web clients. */
+  instanceId?: string;
+  /** 'daemon' (event ingestion) or 'web' (live watch/steer). */
+  role: 'daemon' | 'web';
+  connectedAt: number;
+}
 
 /**
  * Intent-named access layer over the single `harness` table. Handlers depend on
@@ -110,6 +127,13 @@ export class Repo {
         Item: { ...k.sessionKey(s.projectId, s.sessionId), ...s, ...(live ?? {}) },
       }),
     );
+    // Maintain the sessionId -> projectId pointer for projectId-less lookups.
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.sessionPointerKey(s.sessionId), projectId: s.projectId },
+      }),
+    );
   }
 
   async getSession(projectId: string, sessionId: string): Promise<SessionProjection | undefined> {
@@ -117,6 +141,20 @@ export class Repo {
       new GetCommand({ TableName: this.table, Key: k.sessionKey(projectId, sessionId) }),
     );
     return res.Item as SessionProjection | undefined;
+  }
+
+  /**
+   * Resolve a session projection from the sessionId alone, via the pointer
+   * record. Used by event ingestion (events after `session.start` omit the
+   * projectId) and the control gateway. Returns undefined if unknown.
+   */
+  async getSessionById(sessionId: string): Promise<SessionProjection | undefined> {
+    const ptr = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.sessionPointerKey(sessionId) }),
+    );
+    const projectId = (ptr.Item as { projectId?: string } | undefined)?.projectId;
+    if (!projectId) return undefined;
+    return this.getSession(projectId, sessionId);
   }
 
   async listLiveSessions(): Promise<SessionProjection[]> {
@@ -320,5 +358,102 @@ export class Repo {
       }
       throw err;
     }
+  }
+
+  // --- WebSocket connection registry (U6/U7) ------------------------------
+
+  /**
+   * Record a freshly-opened connection. For daemon connections we also write a
+   * reverse `instanceId -> connectionId` index so the control gateway can route
+   * a steer frame to the owning daemon without scanning.
+   */
+  async putConnection(c: ConnectionRecord): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.connectionKey(c.connectionId), ...c },
+      }),
+    );
+    if (c.instanceId) {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: {
+            ...k.instanceConnKey(c.instanceId),
+            instanceId: c.instanceId,
+            connectionId: c.connectionId,
+            userId: c.userId,
+          },
+        }),
+      );
+    }
+  }
+
+  async getConnection(connectionId: string): Promise<ConnectionRecord | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.connectionKey(connectionId) }),
+    );
+    return res.Item as ConnectionRecord | undefined;
+  }
+
+  /** Resolve the daemon connectionId currently hosting an instance, if any. */
+  async getInstanceConnectionId(instanceId: string): Promise<string | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.instanceConnKey(instanceId) }),
+    );
+    return (res.Item as { connectionId?: string } | undefined)?.connectionId;
+  }
+
+  /** Remove a connection record (and its instance reverse index, if any). */
+  async deleteConnection(connectionId: string): Promise<ConnectionRecord | undefined> {
+    const existing = await this.getConnection(connectionId);
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.table, Key: k.connectionKey(connectionId) }),
+    );
+    if (existing?.instanceId) {
+      // Only clear the reverse index if it still points at this connection, so a
+      // reconnect that already re-claimed the instance is not clobbered.
+      const current = await this.getInstanceConnectionId(existing.instanceId);
+      if (current === connectionId) {
+        await this.doc.send(
+          new DeleteCommand({
+            TableName: this.table,
+            Key: k.instanceConnKey(existing.instanceId),
+          }),
+        );
+      }
+    }
+    return existing;
+  }
+
+  // --- Live-feed subscriptions (fan-out listeners) -----------------------
+
+  /** Register a web connection as a listener on a session's live feed. */
+  async addListener(sessionId: string, connectionId: string): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.listenerKey(sessionId, connectionId), sessionId, connectionId },
+      }),
+    );
+  }
+
+  async removeListener(sessionId: string, connectionId: string): Promise<void> {
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.table, Key: k.listenerKey(sessionId, connectionId) }),
+    );
+  }
+
+  /** All connectionIds currently subscribed to a session, for event fan-out. */
+  async listListeners(sessionId: string): Promise<string[]> {
+    const { PK, skPrefix } = k.listenerPrefix(sessionId);
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+      }),
+    );
+    return (res.Items ?? []).map((i) => (i as { connectionId: string }).connectionId);
   }
 }
