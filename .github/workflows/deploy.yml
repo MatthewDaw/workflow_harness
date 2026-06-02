@@ -1,0 +1,84 @@
+# Deploy Command HQ (U29): build the web SPA, synth all CDK stacks, and
+# (guarded) deploy them.
+#
+# Guardrails — this never deploys by accident:
+#   * The `deploy` job only runs on a manual `workflow_dispatch` with `deploy:
+#     true`, and is pinned to the protected `production` GitHub Environment
+#     (approvals/secrets gated there).
+#   * `cdk bootstrap` is a one-time manual prerequisite per account/region and is
+#     deliberately NOT run here.
+#   * On `push` / `pull_request` only the build + synth job runs (no AWS creds,
+#     no deploy) — a pure verification gate.
+name: deploy
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Actually deploy to AWS (otherwise build + synth only)"
+        type: boolean
+        default: false
+
+# OIDC role assumption for the deploy job; read-only otherwise.
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  build-and-synth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install workspaces
+        run: npm ci
+      - name: Build shared + backend + web
+        run: npm run build
+      - name: Synth all CDK stacks
+        working-directory: infra
+        run: npx cdk synth
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: packages/web/dist
+          if-no-files-found: error
+
+  deploy:
+    needs: build-and-synth
+    # Guard: only on an explicit manual dispatch that opts into deploying.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
+    runs-on: ubuntu-latest
+    # Protected environment: approvals + scoped secrets live here.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install workspaces
+        run: npm ci
+      - name: Build web (BucketDeployment sources packages/web/dist)
+        run: npm run build -w @harness/web
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      # NOTE: `cdk bootstrap` is a one-time manual prerequisite per
+      # account/region and is intentionally not run here.
+      - name: CDK deploy (all stacks, cache-invalidating site deploy)
+        working-directory: infra
+        run: npx cdk deploy --all --require-approval never
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
