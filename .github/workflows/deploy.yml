@@ -46,6 +46,11 @@ jobs:
       - name: Synth all CDK stacks
         working-directory: infra
         run: npx cdk synth
+        env:
+          # SearchStack is not in the synth app; the device-token secret is
+          # sourced from env so the synthesized API never carries the literal
+          # placeholder fallback.
+          DEVICE_TOKEN_SECRET: ${{ secrets.DEVICE_TOKEN_SECRET }}
       - name: Upload web build
         uses: actions/upload-artifact@v4
         with:
@@ -77,8 +82,12 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       # NOTE: `cdk bootstrap` is a one-time manual prerequisite per
       # account/region and is intentionally not run here.
+      # `--all` covers AuthStack, ApiStack, and SiteStack only — the OpenSearch
+      # SearchStack is not in the synth app, so it can never deploy here.
       - name: CDK deploy (all stacks, cache-invalidating site deploy)
         working-directory: infra
         run: npx cdk deploy --all --require-approval never
         env:
           CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          # The real device-token signing secret — never the literal fallback.
+          DEVICE_TOKEN_SECRET: ${{ secrets.DEVICE_TOKEN_SECRET }}

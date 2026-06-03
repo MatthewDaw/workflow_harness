@@ -72,4 +72,48 @@ describe('ApiStack', () => {
       AuthorizerType: 'JWT',
     });
   });
+
+  test('pins HTTP API CORS to the CloudFront origin, never "*"', () => {
+    // U20: CORS must be scoped to the SPA's CloudFront origin (+ local dev),
+    // not the permissive wildcard.
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      ProtocolType: 'HTTP',
+      CorsConfiguration: Match.objectLike({
+        AllowOrigins: Match.arrayWith(['https://d13sqkbwzqe38l.cloudfront.net']),
+      }),
+    });
+    // And the wildcard origin is absent.
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      ProtocolType: 'HTTP',
+      CorsConfiguration: Match.objectLike({
+        AllowOrigins: Match.not(Match.arrayWith(['*'])),
+      }),
+    });
+  });
+
+  test('sources DEVICE_TOKEN_SECRET from env, not the literal placeholder', () => {
+    // U20: the real signing secret is wired from the deploy env (CI secret).
+    const prev = process.env.DEVICE_TOKEN_SECRET;
+    process.env.DEVICE_TOKEN_SECRET = 'from-env-secret';
+    try {
+      const t = synth();
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: Match.objectLike({
+          Variables: Match.objectLike({ DEVICE_TOKEN_SECRET: 'from-env-secret' }),
+        }),
+      });
+      // The placeholder fallback must not leak into the synthesized template.
+      const fns = t.findResources('AWS::Lambda::Function');
+      for (const res of Object.values(fns)) {
+        const vars = (res as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables;
+        if (vars && 'DEVICE_TOKEN_SECRET' in vars) {
+          expect(vars.DEVICE_TOKEN_SECRET).not.toBe('placeholder-dev-secret');
+        }
+      }
+    } finally {
+      if (prev === undefined) delete process.env.DEVICE_TOKEN_SECRET;
+      else process.env.DEVICE_TOKEN_SECRET = prev;
+    }
+  });
 });
