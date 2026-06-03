@@ -3,11 +3,10 @@ import { NavLink, Outlet, useParams } from 'react-router-dom';
 /**
  * Project hub layout (U19/U21): renders the project sub-nav promoted from the
  * wireframe's `.subnav` and an <Outlet> for the active sub-tab. Sub-tabs:
- * Overview / Tickets / Weekly / Sessions / Agents.
+ * Overview / Weekly / Sessions / Agents.
  */
 const SUBTABS = [
   { to: '', label: 'Overview', end: true },
-  { to: 'tickets', label: 'Tickets' },
   { to: 'weekly', label: 'Weekly' },
   { to: 'sessions', label: 'Sessions' },
   { to: 'agents', label: 'Agents' },

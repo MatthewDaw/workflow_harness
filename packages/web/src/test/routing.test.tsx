@@ -68,8 +68,8 @@ describe('navigation + routing', () => {
     // Scope clicks to the project sub-nav (the top nav also has a "Sessions" link).
     const subnav = screen.getByRole('navigation', { name: 'Project sections' });
 
-    await userEvent.click(within(subnav).getByRole('link', { name: 'Tickets' }));
-    expect(await screen.findByTestId('project-tickets')).toBeInTheDocument();
+    // Tickets sub-tab was removed (the new model has no tickets).
+    expect(within(subnav).queryByRole('link', { name: 'Tickets' })).not.toBeInTheDocument();
 
     await userEvent.click(within(subnav).getByRole('link', { name: 'Weekly' }));
     expect(await screen.findByTestId('project-weekly')).toBeInTheDocument();

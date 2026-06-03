@@ -4,7 +4,6 @@ import { Objectives } from '../screens/Objectives/Objectives.js';
 import { Projects } from '../screens/Projects/Projects.js';
 import { ProjectLayout } from '../screens/ProjectDetail/ProjectLayout.js';
 import { Overview } from '../screens/ProjectDetail/Overview.js';
-import { ProjectTickets } from '../screens/ProjectDetail/ProjectTickets.js';
 import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
 import { ProjectAgents } from '../screens/ProjectDetail/ProjectAgents.js';
@@ -17,8 +16,8 @@ import { Weekly } from '../screens/Weekly/Weekly.js';
 
 /**
  * Route table mirroring wireframe.html (U19). Objectives is the first nav item
- * and the default landing route. Projects has the Overview/Tickets/Weekly/
- * Sessions/Agents sub-tabs; Sessions deep-links into the live watch surface.
+ * and the default landing route. Projects has the Overview/Weekly/Sessions/
+ * Agents sub-tabs; Sessions deep-links into the live watch surface.
  */
 export function AppRoutes() {
   return (
@@ -30,7 +29,6 @@ export function AppRoutes() {
         <Route path="projects" element={<Projects />} />
         <Route path="projects/:projectId" element={<ProjectLayout />}>
           <Route index element={<Overview />} />
-          <Route path="tickets" element={<ProjectTickets />} />
           <Route path="weekly" element={<ProjectWeekly />} />
           <Route path="sessions" element={<ProjectSessions />} />
           <Route path="agents" element={<ProjectAgents />} />

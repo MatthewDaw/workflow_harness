@@ -5,8 +5,6 @@ import type {
   ObjectiveNode,
   Agent,
   Skill,
-  Ticket,
-  TicketStatus,
   Priority,
   WeeklyUpdate,
   WeeklyItem,
@@ -63,7 +61,7 @@ export const baseApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ['Project', 'Session', 'Objective', 'Agent', 'Skill', 'Ticket', 'Weekly'],
+  tagTypes: ['Project', 'Session', 'Objective', 'Agent', 'Skill', 'Weekly'],
   endpoints: (build) => ({
     getProjects: build.query<Project[], void>({
       query: () => 'projects',
@@ -104,12 +102,6 @@ export const baseApi = createApi({
       providesTags: ['Skill'],
     }),
 
-    getTickets: build.query<Ticket[], string>({
-      query: (projectId) => `projects/${projectId}/tickets`,
-      transformResponse: unwrapArray<Ticket>('tickets'),
-      providesTags: ['Ticket'],
-    }),
-
     getWeekly: build.query<WeeklyUpdate[], string>({
       query: (projectId) => `projects/${projectId}/weekly`,
       transformResponse: unwrapArray<WeeklyUpdate>('weeks'),
@@ -117,34 +109,6 @@ export const baseApi = createApi({
     }),
 
     // ---- Mutations (U22/U24/U25) ----
-
-    /** Transition a ticket's lifecycle status (board moves, in-review, etc.). */
-    transitionTicket: build.mutation<
-      Ticket,
-      { projectId: string; ticketId: string; status: TicketStatus; sessionId?: string }
-    >({
-      query: ({ projectId, ticketId, ...body }) => ({
-        url: `projects/${projectId}/tickets/${ticketId}/status`,
-        method: 'POST',
-        body,
-      }),
-      transformResponse: unwrapOne<Ticket>('ticket'),
-      invalidatesTags: ['Ticket'],
-    }),
-
-    /** Update ticket fields (priority, title, agent, …). */
-    updateTicket: build.mutation<
-      Ticket,
-      { projectId: string; ticketId: string } & Partial<Pick<Ticket, 'priority' | 'title' | 'description'>>
-    >({
-      query: ({ projectId, ticketId, ...body }) => ({
-        url: `projects/${projectId}/tickets/${ticketId}`,
-        method: 'PUT',
-        body,
-      }),
-      transformResponse: unwrapOne<Ticket>('ticket'),
-      invalidatesTags: ['Ticket'],
-    }),
 
     /** Elevate/demote an agent: rewrite its scope key (project ↔ user ↔ org). */
     changeAgentScope: build.mutation<Agent, { name: string; from: ScopeRef; to: ScopeRef }>({
@@ -257,10 +221,7 @@ export const {
   useGetObjectivesQuery,
   useGetAgentsQuery,
   useGetSkillsQuery,
-  useGetTicketsQuery,
   useGetWeeklyQuery,
-  useTransitionTicketMutation,
-  useUpdateTicketMutation,
   useChangeAgentScopeMutation,
   useSaveAgentMutation,
   useChangeSkillScopeMutation,
