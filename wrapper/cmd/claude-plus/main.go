@@ -50,15 +50,24 @@ func main() {
 
 	var sessionN int
 	var showVersion bool
+	var gui bool
 	fs := flag.NewFlagSet("claude+", flag.ContinueOnError)
 	fs.IntVar(&sessionN, "session", -1, "attach to the daemon at registry index N")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
+	fs.BoolVar(&gui, "gui", false, "launch the desktop GUI for this repo")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 
 	if showVersion {
 		fmt.Println("claude+", version)
+		return
+	}
+
+	if gui {
+		if err := runGUI(); err != nil {
+			fail(err)
+		}
 		return
 	}
 
