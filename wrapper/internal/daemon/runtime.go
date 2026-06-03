@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -263,6 +264,10 @@ func (rt *Runtime) captureLoop(instanceID string) {
 	defer tk.Stop()
 	host := rt.host
 	projectID := projectIDFor(rt.d.repoRoot)
+	// repoName is the human-readable repo display name (git "owner/repo" or the
+	// repo folder name). Computed once per capture loop and carried on every
+	// session.start so HQ can register the Project under a meaningful name.
+	repoName := repoNameFor(rt.d.repoRoot)
 	emit := rt.emit
 
 	// closeAllTails stops every per-session tailer (daemon shutdown).
@@ -286,7 +291,7 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				// first event, before any transcript activity.
 				if !announced[v.ID] {
 					announced[v.ID] = true
-					emit(v.ID, event.SessionStart(v.ID, projectID, host, v.Name, ""))
+					emit(v.ID, event.SessionStart(v.ID, projectID, host, v.Name, "", repoName))
 				}
 				// Auto-sync HQ's effective skills/agents for this user+project on
 				// each NEW session so freshly-scoped skills appear locally (best
@@ -345,6 +350,86 @@ func projectIDFor(repoRoot string) string {
 		return "project"
 	}
 	return s
+}
+
+// gitRemoteURL returns the origin remote URL for repoRoot, or ("", false) if
+// there is no git repo / no origin remote / git is unavailable. It is a package
+// var so tests can stub it without invoking real git.
+var gitRemoteURL = func(repoRoot string) (string, bool) {
+	cmd := exec.Command("git", "-C", repoRoot, "remote", "get-url", "origin")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	url := strings.TrimSpace(string(out))
+	if url == "" {
+		return "", false
+	}
+	return url, true
+}
+
+// repoNameFor derives a human-readable repo display name for repoRoot. It
+// prefers the git origin remote reduced to "owner/repo" (host and trailing
+// .git stripped); when there is no usable remote it falls back to the repo
+// folder's base name. This is the value carried on session.start's `repo`
+// field and used by HQ as the Project's display name + repo.
+func repoNameFor(repoRoot string) string {
+	if url, ok := gitRemoteURL(repoRoot); ok {
+		if name := ownerRepoFromRemote(url); name != "" {
+			return name
+		}
+	}
+	return filepath.Base(repoRoot)
+}
+
+// ownerRepoFromRemote reduces a git remote URL to "owner/repo", stripping the
+// scheme/host and any trailing ".git". It handles both SCP-style
+// ("git@github.com:owner/repo.git") and URL-style
+// ("https://github.com/owner/repo.git") remotes. Returns "" if it can't
+// extract a sensible owner/repo pair.
+func ownerRepoFromRemote(url string) string {
+	s := strings.TrimSpace(url)
+	s = strings.TrimSuffix(s, "/")
+	// Drop a trailing ".git" suffix.
+	s = strings.TrimSuffix(s, ".git")
+	if s == "" {
+		return ""
+	}
+	// Normalize separators: SCP form uses ':' after the host; URL form uses '/'.
+	// Strip an explicit scheme first (e.g. "https://", "ssh://", "git://").
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+		// Strip optional "user@" before host.
+		if at := strings.Index(s, "@"); at >= 0 {
+			s = s[at+1:]
+		}
+	} else if at := strings.Index(s, "@"); at >= 0 {
+		// SCP-style "git@host:owner/repo".
+		s = s[at+1:]
+	}
+	// At this point s is "host[:/]owner/repo...". Replace the first ':' with '/'
+	// so the path splits uniformly.
+	s = strings.Replace(s, ":", "/", 1)
+	parts := strings.Split(s, "/")
+	// Drop empty segments (e.g. from leading host// artifacts).
+	clean := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			clean = append(clean, p)
+		}
+	}
+	if len(clean) < 3 {
+		// Need at least host + owner + repo; otherwise no meaningful owner/repo.
+		if len(clean) == 2 {
+			// No host segment (e.g. already "owner/repo"): take it as-is.
+			return clean[0] + "/" + clean[1]
+		}
+		return ""
+	}
+	// Last two segments are owner/repo; everything before is host/path.
+	owner := clean[len(clean)-2]
+	repo := clean[len(clean)-1]
+	return owner + "/" + repo
 }
 
 // installHooks resolves this binary's path and writes the managed hooks block

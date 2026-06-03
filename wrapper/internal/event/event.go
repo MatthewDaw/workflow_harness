@@ -66,6 +66,9 @@ type Event struct {
 	Host      string `json:"host,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Agent     string `json:"agent,omitempty"`
+	// Repo is the human/repo display name (git "owner/repo" or repo folder name).
+	// Optional; mirrors the optional `repo` field in the TS session.start schema.
+	Repo string `json:"repo,omitempty"`
 
 	// tool.call
 	Tool        string `json:"tool,omitempty"`
@@ -105,11 +108,13 @@ func f64Ptr(f float64) *float64   { return &f }
 
 // ----- Event constructors (kept parallel to the TS schemas) -----
 
-// SessionStart builds a session.start event.
-func SessionStart(sessionID, projectID, host, name string, agent string) Event {
+// SessionStart builds a session.start event. repo is the human-readable repo
+// display name (git "owner/repo" or the repo folder name); it may be empty, in
+// which case it is omitted from the JSON (older-daemon-compatible).
+func SessionStart(sessionID, projectID, host, name string, agent string, repo string) Event {
 	return Event{
 		Kind: KindSessionStart, SessionID: sessionID, ProjectID: projectID,
-		Host: host, Name: name, Agent: agent,
+		Host: host, Name: name, Agent: agent, Repo: repo,
 	}
 }
 
