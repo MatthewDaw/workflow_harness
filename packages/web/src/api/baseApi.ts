@@ -112,6 +112,28 @@ export const baseApi = createApi({
       providesTags: (_r, _e, id) => [{ type: 'Project', id }],
     }),
 
+    /**
+     * Connect a GitHub repo as a new project (the Projects "+ Connect repo"
+     * button). The caller supplies `{ id, name, repo }`; the backend stamps the
+     * owner from the auth principal — a client-supplied owner is never trusted.
+     */
+    createProject: build.mutation<Project, { id: string; name: string; repo: string }>({
+      query: (body) => ({ url: 'projects', method: 'POST', body }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: ['Project'],
+    }),
+
+    /**
+     * Re-read a project's framing from GitHub (`completion:` %, PRD goal, owned
+     * Supporting Outcomes) and store it. Fired right after connect so a new card
+     * shows real progress; GitHub being unreachable degrades to stale, never errors.
+     */
+    refreshProject: build.mutation<Project, string>({
+      query: (id) => ({ url: `projects/${id}/refresh`, method: 'POST' }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, id) => ['Project', { type: 'Project', id }],
+    }),
+
     getSessions: build.query<SessionProjection[], { live?: boolean } | void>({
       query: (arg) => (arg && arg.live ? 'sessions?live=true' : 'sessions'),
       transformResponse: unwrapArray<SessionProjection>('sessions'),
@@ -316,9 +338,11 @@ export const baseApi = createApi({
     }),
 
     /**
-     * Send a control frame (inject/pause/interrupt) down the control gateway
-     * (U7) to a live session. The backend authorizes ownership then routes the
-     * frame to the owning daemon's WebSocket connection.
+     * Send a control frame (inject/pause/interrupt/shutdown/kill) down the
+     * control gateway (U7) to a live session. The backend authorizes ownership
+     * then routes the frame to the owning daemon's WebSocket connection.
+     * `shutdown` terminates the session gracefully (force-fallback); `kill`
+     * terminates immediately.
      */
     sendControl: build.mutation<
       { ok: boolean },
@@ -351,6 +375,8 @@ export type { Priority };
 export const {
   useGetProjectsQuery,
   useGetProjectQuery,
+  useCreateProjectMutation,
+  useRefreshProjectMutation,
   useGetSessionsQuery,
   useGetSessionQuery,
   useGetObjectivesQuery,

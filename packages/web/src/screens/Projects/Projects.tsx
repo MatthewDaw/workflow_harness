@@ -1,11 +1,63 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useGetProjectsQuery } from '../../api/baseApi.js';
+import {
+  useCreateProjectMutation,
+  useGetProjectsQuery,
+  useRefreshProjectMutation,
+} from '../../api/baseApi.js';
 import { Bar, Pill, ScreenHeader } from '../../components/primitives.js';
+
+/**
+ * Normalize whatever the user pastes (a `owner/repo` slug, a `gh/owner/repo`,
+ * or a full `https://github.com/owner/repo(.git)` URL) into the bare
+ * `owner/repo` form the backend's GitHub client expects.
+ */
+export function normalizeRepoSlug(input: string): string {
+  return input
+    .trim()
+    .replace(/^https?:\/\/github\.com\//i, '')
+    .replace(/^gh\//, '')
+    .replace(/\.git$/, '')
+    .replace(/\/+$/, '');
+}
+
+/** A stable project id derived from the repo slug (`acme/Weekly-Compass` → `acme-weekly-compass`). */
+export function projectIdFor(slug: string): string {
+  return slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
 
 /** Projects overview (U21): a card per repo, framed by PRD goal + progress. */
 export function Projects() {
   const { data, isLoading, isError } = useGetProjectsQuery();
   const projects = data ?? [];
+
+  const [createProject, { isLoading: connecting, isError: connectError }] =
+    useCreateProjectMutation();
+  const [refreshProject] = useRefreshProjectMutation();
+
+  const [showConnect, setShowConnect] = useState(false);
+  const [repoInput, setRepoInput] = useState('');
+  const [nameInput, setNameInput] = useState('');
+
+  const slug = normalizeRepoSlug(repoInput);
+  const canConnect = slug.includes('/') && !connecting;
+
+  const resetForm = () => {
+    setShowConnect(false);
+    setRepoInput('');
+    setNameInput('');
+  };
+
+  const onConnect = async () => {
+    if (!canConnect) return;
+    const id = projectIdFor(slug);
+    const name = nameInput.trim() || (slug.split('/').pop() ?? slug);
+    await createProject({ id, name, repo: `gh/${slug}` }).unwrap();
+    // Best-effort: pull GitHub framing so the new card shows real progress.
+    // A failed/unreachable refresh degrades to "stale" server-side — never fatal.
+    refreshProject(id);
+    resetForm();
+  };
 
   return (
     <div className="hq-pad" data-testid="projects-screen">
@@ -15,10 +67,66 @@ export function Projects() {
       />
       <div className="mb-3 flex items-center justify-between">
         <div className="text-mut">{projects.length} projects</div>
-        <button type="button" className="hq-btn hq-btn-pri">
+        <button
+          type="button"
+          className="hq-btn hq-btn-pri"
+          data-testid="connect-repo-toggle"
+          aria-expanded={showConnect}
+          onClick={() => setShowConnect((v) => !v)}
+        >
           + Connect repo
         </button>
       </div>
+
+      {showConnect && (
+        <div className="hq-box bg-paper mb-3" data-testid="connect-repo-form">
+          <label className="block text-xs font-medium text-mut" htmlFor="connect-repo">
+            GitHub repo
+          </label>
+          <input
+            id="connect-repo"
+            className="hq-input mt-1 w-full"
+            data-testid="connect-repo-input"
+            placeholder="owner/repo"
+            value={repoInput}
+            onChange={(e) => setRepoInput(e.target.value)}
+          />
+
+          <label className="mt-3 block text-xs font-medium text-mut" htmlFor="connect-name">
+            Display name <span className="text-faint">(optional)</span>
+          </label>
+          <input
+            id="connect-name"
+            className="hq-input mt-1 w-full"
+            data-testid="connect-name-input"
+            placeholder={slug ? (slug.split('/').pop() ?? '') : 'weekly-compass'}
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+          />
+
+          {connectError && (
+            <div className="hq-note mt-2" role="alert">
+              Could not connect that repo.
+            </div>
+          )}
+
+          <div className="hq-hr" />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="hq-btn hq-btn-pri"
+              data-testid="connect-repo-submit"
+              disabled={!canConnect}
+              onClick={onConnect}
+            >
+              {connecting ? 'Connecting…' : 'Connect'}
+            </button>
+            <button type="button" className="hq-btn" onClick={resetForm}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {isLoading && <div className="text-mut">Loading projects…</div>}
       {isError && (
