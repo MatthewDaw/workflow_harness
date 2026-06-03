@@ -111,6 +111,42 @@ export const objectiveNodeSchema = z.object({
 export type ObjectiveNode = z.infer<typeof objectiveNodeSchema>;
 
 /**
+ * The org-wide **Definition of Done** (plan-mapping feature 1). It declares what
+ * `/update-progress` must verify before work is considered complete. It is
+ * ADVISORY — surfaced in HQ and reported on by the compliance report, but it
+ * NEVER hard-blocks a progress push ("conformity never blocks").
+ *
+ *  - `requiresUnitTests` is the org-wide floor / default (true): unit tests pass.
+ *  - `requiresProdE2E` (default false) tightens it: prod E2E suite verified green.
+ *  - `notes` is free-form guidance for the team (e.g. how to find the E2E suite).
+ *
+ * Storage is a single org-scoped record (one DoD per org), so it is not keyed by
+ * project — every repo in the org ladders up to the same floor.
+ */
+export const definitionOfDoneSchema = z.object({
+  requiresUnitTests: z.boolean().default(true),
+  requiresProdE2E: z.boolean().default(false),
+  notes: z.string().optional(),
+});
+export type DefinitionOfDone = z.infer<typeof definitionOfDoneSchema>;
+
+/** The org-wide default DoD when none has been configured (the floor). */
+export const DEFAULT_DEFINITION_OF_DONE: DefinitionOfDone = {
+  requiresUnitTests: true,
+  requiresProdE2E: false,
+};
+
+/**
+ * Org-level configuration block. Today it carries only the optional Definition
+ * of Done; it is the natural home for future org-wide settings. Stored as a
+ * single org-scoped record (see backend `getOrgDod`/`putOrgDod`).
+ */
+export const orgConfigSchema = z.object({
+  dod: definitionOfDoneSchema.optional(),
+});
+export type OrgConfig = z.infer<typeof orgConfigSchema>;
+
+/**
  * A weekly update is a client-generated report posted to HQ (KTD4). The
  * `/weekly-update` skill, running in claude+, reads the week's git diff,
  * interviews the user on next-week goals, computes a never-blocking conformity

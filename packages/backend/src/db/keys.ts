@@ -95,6 +95,16 @@ export const objectiveKey = (org: string, path: string): PrimaryKey => ({
   SK: `RCDO#${path}`,
 });
 
+/**
+ * The org-wide Definition of Done (plan-mapping feature 1). A single record per
+ * org — it lives in the org partition under a fixed meta SK, alongside the RCDO
+ * tree (`RCDO#…`). Advisory config that `/update-progress` reports against.
+ */
+export const orgDodKey = (org: string): PrimaryKey => ({
+  PK: `ORG#${org}`,
+  SK: 'CONFIG#DOD',
+});
+
 export const weeklyKey = (projectId: string, isoWeek: string): PrimaryKey => ({
   PK: `PROJ#${projectId}`,
   SK: `WEEK#${isoWeek}`,
