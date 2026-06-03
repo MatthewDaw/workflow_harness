@@ -115,6 +115,7 @@ func (d *Daemon) entry() Entry {
 		Started:  d.started,
 		Sock:     d.sock,
 		PID:      os.Getpid(),
+		Version:  ProtocolVersion,
 	}
 }
 
@@ -131,13 +132,25 @@ func (d *Daemon) refreshLoop() {
 	}
 }
 
-// Stop shuts the daemon down: closes sessions, the listener, and the registry.
+// Stop shuts the daemon down: closes sessions, the listener, and removes the
+// registry record + socket. It is safe to call more than once (the stop channel
+// guard makes the teardown idempotent) and cleans up the registry json eagerly
+// so a stopped daemon never lingers as a stale `ls` row or wedges the next
+// attach-or-create. (Serve also removes the record on its own exit; doing it
+// here too means cleanup happens even if Stop races ahead of Serve's defer or
+// Serve was never the one to exit the accept loop.)
 func (d *Daemon) Stop() {
-	close(d.stopCh)
+	select {
+	case <-d.stopCh:
+		// already stopped
+	default:
+		close(d.stopCh)
+	}
 	if d.ln != nil {
 		_ = d.ln.Close()
 	}
 	d.mux.CloseAll()
+	_ = removeMeta(d.repoRoot)
 }
 
 // handle serves one attach client. Liveness pings get a fast reply and close;
@@ -154,7 +167,10 @@ func (d *Daemon) handle(conn net.Conn) {
 
 	switch first.Type {
 	case FramePing:
-		_ = writeFrame(conn, Frame{Type: FramePong, Sessions: d.mux.Count()})
+		// Pong carries this daemon's ProtocolVersion so a client can detect a
+		// build/wire mismatch (and replace the daemon) BEFORE committing to a full
+		// attach handshake.
+		_ = writeFrame(conn, Frame{Type: FramePong, Version: ProtocolVersion, Sessions: d.mux.Count()})
 		return
 	case FrameHook:
 		// One-shot: the hook shim posts a single payload and disconnects. It must
@@ -310,7 +326,7 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 		case FrameSessLs:
 			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
 		case FramePing:
-			send(Frame{Type: FramePong, Sessions: d.mux.Count()})
+			send(Frame{Type: FramePong, Version: ProtocolVersion, Sessions: d.mux.Count()})
 		}
 	}
 }

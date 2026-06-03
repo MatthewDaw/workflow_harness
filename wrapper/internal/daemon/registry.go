@@ -36,6 +36,10 @@ type Entry struct {
 	Started  time.Time `json:"started"`
 	Sock     string    `json:"sock"`
 	PID      int       `json:"pid"`
+	// Version is the daemon's ProtocolVersion at the time it registered. It lets
+	// a freshly-built client detect an incompatible (older/newer build) daemon
+	// from the registry alone, and pick the stale entry out for replacement.
+	Version int `json:"version"`
 }
 
 // Uptime returns the entry's uptime relative to now.
@@ -135,19 +139,30 @@ func List() ([]Entry, error) {
 		}
 		var e Entry
 		if err := json.Unmarshal(b, &e); err != nil {
+			// Corrupt record: drop it so it can never wedge attach-or-create.
+			_ = os.Remove(m)
 			continue
 		}
-		// Liveness: if the socket no longer answers a ping, mark stale.
-		if alive(e.Sock) {
+		f, ok := probe(e.Sock)
+		switch {
+		case !ok:
+			// Dead/stale: the socket does not answer. Reap the record (and the
+			// process, in case a wedged image still holds the port) and drop it
+			// from the listing so stale rows never accumulate.
+			stopStale(e)
+			continue
+		case f.Version != ProtocolVersion:
+			// Alive but incompatible (an older/newer build lingering across a
+			// rebuild). Retire it proactively: this is exactly the daemon that
+			// would dead-end the attach handshake. Remove it so the next
+			// attach-or-create spawns a fresh, compatible daemon.
+			stopStale(e)
+			continue
+		default:
 			e.State = StateRunning
-			// Refresh the live session count if reachable.
-			if n, err := pingSessions(e.Sock); err == nil {
-				e.Sessions = n
-			}
-		} else {
-			e.State = StateStale
+			e.Sessions = f.Sessions
+			entries = append(entries, e)
 		}
-		entries = append(entries, e)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Started.Before(entries[j].Started)
@@ -180,6 +195,27 @@ func ByIndex(n int) (Entry, error) {
 		return Entry{}, fmt.Errorf("session index %d out of range (have %d)", n, len(entries))
 	}
 	return entries[n], nil
+}
+
+// stopStale forcibly retires a daemon described by e: it kills the daemon's
+// process (so a still-running incompatible/stale build can no longer answer the
+// recorded port) and removes its registry record. It is best-effort and
+// idempotent — a process that is already gone, or a record already deleted, is
+// not an error. This is the core of cross-rebuild auto-recovery: the client
+// calls it the moment a probe/attach reveals an incompatible daemon, then
+// respawns a fresh one.
+func stopStale(e Entry) {
+	terminatePID(e.PID)
+	_ = removeMeta(e.Repo)
+}
+
+// Prune removes registry records for daemons that are no longer usable: the
+// process is dead, the socket no longer answers, OR the daemon answers with a
+// protocol version this build cannot speak. It returns the surviving (live and
+// compatible) entries, freshly indexed. `ls` calls List (which prunes inline);
+// callers that want an explicit sweep can use Prune.
+func Prune() ([]Entry, error) {
+	return List()
 }
 
 // removeMeta deletes the registry record for a repo root (on clean shutdown).
