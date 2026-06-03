@@ -2,7 +2,9 @@ package shell
 
 import (
 	"fmt"
+	"strings"
 	"sync"
+	"unicode/utf8"
 
 	vt "github.com/hinshun/vt10x"
 	"github.com/mattn/go-runewidth"
@@ -45,6 +47,16 @@ type SubTab struct {
 // index (tab index or sub-tab index) for mouse hit-testing.
 type span struct{ lo, hi, idx int }
 
+// ClickResult is a pure hit-test result for a mouse click on the chrome. It
+// carries no timing: double-click detection is the caller's job. Exactly one of
+// the fields is meaningful per click (or none, for an inert body click).
+type ClickResult struct {
+	Changed     bool   // active top tab changed (caller just re-renders)
+	FocusSessID string // a session sub-tab was hit (caller focuses it / detects double-click)
+	NewSession  bool   // the "+ new" affordance was hit
+	CloseSessID string // a session's ✕ was hit (caller closes it)
+}
+
 // Compositor frames a live session inside the claude+ chrome.
 type Compositor struct {
 	mu sync.Mutex
@@ -59,9 +71,21 @@ type Compositor struct {
 
 	// Click regions recomputed each render so mouse hit-testing matches exactly
 	// what was drawn.
-	tabSpans []span
-	subSpans []span
-	newSpan  span // the "+ new" session affordance in the sub-tab row
+	tabSpans   []span
+	subSpans   []span
+	closeSpans []span // each session's ✕ hit-box, idx = session index
+	newSpan    span   // the "+ new" session affordance in the sub-tab row
+
+	// editingID is the id of the session whose name is being inline-renamed, or ""
+	// when no rename draft is open. Keying by id (not index) keeps the draft bound
+	// to the right session across async session-list reorders/closes. draft holds
+	// the in-progress text.
+	editingID string
+	draft     string
+
+	// scrollOff is the scrollback viewport offset of the focused session, in
+	// lines back from the live bottom (0 = pinned to live).
+	scrollOff int
 
 	tokens   int
 	costUSD  float64
@@ -148,8 +172,22 @@ func (c *Compositor) ResizePanes() {
 func (c *Compositor) SetSubs(subs []SubTab, focused int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	prevID := c.focusedIDLocked()
 	c.subs = subs
 	c.focusedSub = focused
+	// scrollOff is the focused session's viewport offset, so it must not carry
+	// across a focus switch — reset to live when the focused session changes.
+	if c.focusedIDLocked() != prevID {
+		c.scrollOff = 0
+	}
+}
+
+// focusedIDLocked returns the focused session's id, or "" if none. Caller holds c.mu.
+func (c *Compositor) focusedIDLocked() string {
+	if c.focusedSub >= 0 && c.focusedSub < len(c.subs) {
+		return c.subs[c.focusedSub].ID
+	}
+	return ""
 }
 
 // SetStatus updates the token/cost readout.
@@ -193,19 +231,19 @@ func (c *Compositor) ActiveIsSession() bool {
 func (c *Compositor) FocusedSessionID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.focusedSub >= 0 && c.focusedSub < len(c.subs) {
-		return c.subs[c.focusedSub].ID
-	}
-	return ""
+	return c.focusedIDLocked()
 }
 
-// Click maps a mouse click at (x,y) to a chrome action:
-//   - a tab-bar hit switches the active tab (applied here -> changed=true);
-//   - a sub-tab hit returns the session id the caller should focus;
-//   - the "+ new" hit returns newSession=true (caller spawns a session).
+// Click maps a mouse click at (x,y) to a chrome action (a pure hit-test, no
+// timing):
+//   - a tab-bar hit switches the active tab (applied here -> Changed=true);
+//   - a session ✕ hit returns CloseSessID (checked first, since it nests inside
+//     the sub-tab span);
+//   - the "+ new" hit returns NewSession=true (caller spawns a session);
+//   - a sub-tab hit returns FocusSessID (caller focuses it / detects 2×click).
 //
-// Body clicks return zero.
-func (c *Compositor) Click(x, y int) (changed bool, focusSessID string, newSession bool) {
+// Body clicks return the zero ClickResult.
+func (c *Compositor) Click(x, y int) ClickResult {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch y {
@@ -214,24 +252,162 @@ func (c *Compositor) Click(x, y int) (changed bool, focusSessID string, newSessi
 			if x >= sp.lo && x < sp.hi {
 				if c.active != sp.idx {
 					c.active = sp.idx
-					return true, "", false
+					return ClickResult{Changed: true}
 				}
-				return false, "", false
+				return ClickResult{}
 			}
 		}
 	case rowSubTabs:
+		// ✕ first — its hit-box sits inside the session's sub-tab span.
+		for _, sp := range c.closeSpans {
+			if x >= sp.lo && x < sp.hi {
+				if sp.idx >= 0 && sp.idx < len(c.subs) {
+					return ClickResult{CloseSessID: c.subs[sp.idx].ID}
+				}
+			}
+		}
 		if c.newSpan.lo >= 0 && x >= c.newSpan.lo && x < c.newSpan.hi {
-			return false, "", true
+			return ClickResult{NewSession: true}
 		}
 		for _, sp := range c.subSpans {
 			if x >= sp.lo && x < sp.hi {
 				if sp.idx >= 0 && sp.idx < len(c.subs) {
-					return false, c.subs[sp.idx].ID, false
+					return ClickResult{FocusSessID: c.subs[sp.idx].ID}
 				}
 			}
 		}
 	}
-	return false, "", false
+	return ClickResult{}
+}
+
+// Editing reports whether an inline rename draft is currently open.
+func (c *Compositor) Editing() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.editingID != ""
+}
+
+// BeginRename opens a rename draft for the session with the given id, seeded
+// from that session's current name. No-op if the id isn't a known sub-tab.
+func (c *Compositor) BeginRename(sessID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, st := range c.subs {
+		if st.ID == sessID {
+			c.editingID = sessID
+			c.draft = st.Name
+			return
+		}
+	}
+}
+
+// RenameInput applies one input byte to the open draft: a printable byte is
+// appended; 0x7f (DEL) or 0x08 (BS) deletes the last rune. No-op when no draft
+// is open.
+func (c *Compositor) RenameInput(b byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.editingID == "" {
+		return
+	}
+	switch b {
+	case 0x7f, 0x08: // DEL / Backspace
+		if len(c.draft) > 0 {
+			_, sz := utf8.DecodeLastRuneInString(c.draft)
+			c.draft = c.draft[:len(c.draft)-sz]
+		}
+	default:
+		if b >= 0x20 && b < 0x7f { // printable ASCII
+			c.draft += string(rune(b))
+		}
+	}
+}
+
+// CommitRename closes the draft and returns the edited session id and trimmed
+// name. ok is false (and editing left cleared) when the trimmed draft is empty
+// or no draft was open.
+func (c *Compositor) CommitRename() (sessID, name string, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.editingID
+	trimmed := strings.TrimSpace(c.draft)
+	c.editingID, c.draft = "", ""
+	if id == "" || trimmed == "" {
+		return "", "", false
+	}
+	// Drop the commit if the session disappeared while the draft was open, so a
+	// concurrent close can never rename a different (reused) row.
+	for _, st := range c.subs {
+		if st.ID == id {
+			return id, trimmed, true
+		}
+	}
+	return "", "", false
+}
+
+// CancelRename discards the draft and clears editing state.
+func (c *Compositor) CancelRename() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.editingID, c.draft = "", ""
+}
+
+// ScrollUp moves the scrollback viewport up (older) by lines, clamped to the
+// available history.
+func (c *Compositor) ScrollUp(lines int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	maxOff := c.focusedHistoryLenLocked()
+	c.scrollOff += lines
+	if c.scrollOff > maxOff {
+		c.scrollOff = maxOff
+	}
+	if c.scrollOff < 0 {
+		c.scrollOff = 0
+	}
+}
+
+// ScrollDown moves the viewport down (newer) by lines; past 0 clamps to live.
+func (c *Compositor) ScrollDown(lines int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.scrollOff -= lines
+	if c.scrollOff < 0 {
+		c.scrollOff = 0
+	}
+}
+
+// ScrollToBottom pins the viewport back to the live bottom.
+func (c *Compositor) ScrollToBottom() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.scrollOff = 0
+}
+
+// focusedHistoryLenLocked returns the focused session's scrollback length.
+// Caller holds c.mu.
+func (c *Compositor) focusedHistoryLenLocked() int {
+	p := c.focusedPaneLocked()
+	if p == nil {
+		return 0
+	}
+	return len(p.History())
+}
+
+// focusedPaneLocked returns the pane for the focused session, falling back to
+// the sole pane in the common single-session case. Caller holds c.mu.
+func (c *Compositor) focusedPaneLocked() *Pane {
+	id := ""
+	if c.focusedSub >= 0 && c.focusedSub < len(c.subs) {
+		id = c.subs[c.focusedSub].ID
+	}
+	if p := c.panes[id]; p != nil {
+		return p
+	}
+	for _, only := range c.panes {
+		return only
+	}
+	return nil
 }
 
 // Render composes a frame and paints it.
@@ -286,6 +462,7 @@ func (c *Compositor) renderTabBar(w int) {
 
 func (c *Compositor) renderSubTabs(w int) {
 	c.subSpans = c.subSpans[:0]
+	c.closeSpans = c.closeSpans[:0]
 	c.newSpan = span{lo: -1, hi: -1, idx: -1}
 	x := 0
 	if len(c.subs) == 0 {
@@ -303,17 +480,39 @@ func (c *Compositor) renderSubTabs(w int) {
 			dotFG = colDim
 		}
 		focused := i == c.focusedSub
+		editing := st.ID == c.editingID
+		// " ●␣"
 		c.screen.SetString(x, rowSubTabs, " ", vt.DefaultFG, vt.DefaultBG, false, false)
 		x++
 		c.screen.SetString(x, rowSubTabs, dot, dotFG, vt.DefaultBG, false, false)
 		x += 2
-		nameFG := colDim
-		if focused {
-			nameFG = colText
+		if editing {
+			// Render the live draft + a block cursor, styled like an active input
+			// (reverse video), in place of the name. The ✕ is hidden while editing.
+			c.screen.SetString(x, rowSubTabs, c.draft, colText, vt.DefaultBG, false, true)
+			x += len(c.draft)
+			c.screen.Set(x, rowSubTabs, Cell{Ch: ' ', FG: colText, BG: vt.DefaultBG, Reverse: true})
+			x++
+			c.screen.SetString(x, rowSubTabs, " ", vt.DefaultFG, vt.DefaultBG, false, false)
+			x++
+			c.subSpans = append(c.subSpans, span{lo: start, hi: x, idx: i})
+		} else {
+			nameFG := colDim
+			if focused {
+				nameFG = colText
+			}
+			// "name␣"
+			c.screen.SetString(x, rowSubTabs, st.Name+" ", nameFG, vt.DefaultBG, focused, false)
+			x += len(st.Name) + 1
+			// "✕␣" — a dim, always-visible close affordance.
+			closeLo := x
+			c.screen.SetString(x, rowSubTabs, "✕", colDim, vt.DefaultBG, false, false)
+			x++
+			c.closeSpans = append(c.closeSpans, span{lo: closeLo, hi: x, idx: i})
+			c.screen.SetString(x, rowSubTabs, " ", vt.DefaultFG, vt.DefaultBG, false, false)
+			x++
+			c.subSpans = append(c.subSpans, span{lo: start, hi: x, idx: i})
 		}
-		c.screen.SetString(x, rowSubTabs, st.Name+" ", nameFG, vt.DefaultBG, focused, false)
-		x += len(st.Name) + 2
-		c.subSpans = append(c.subSpans, span{lo: start, hi: x, idx: i})
 		if x >= w {
 			break
 		}
@@ -333,30 +532,62 @@ func (c *Compositor) renderSessionBody(w, h int) (curX, curY int, curVis bool) {
 	if bodyH < 1 {
 		return 0, 0, false
 	}
-	id := ""
-	if c.focusedSub >= 0 && c.focusedSub < len(c.subs) {
-		id = c.subs[c.focusedSub].ID
-	}
-	p := c.panes[id]
-	if p == nil {
-		// Fall back to any single pane (common single-session case).
-		for _, only := range c.panes {
-			p = only
-			break
-		}
-	}
+	p := c.focusedPaneLocked()
 	if p == nil {
 		c.screen.SetString(2, bodyTop, "(starting session…)", colDim, vt.DefaultBG, false, false)
 		return 0, 0, false
 	}
 	pw, ph := p.Size()
+	// The scrollback viewport composes a virtual buffer of history (older, on top)
+	// followed by the live grid (newer). The visible window is bodyH rows ending
+	// scrollOff lines back from the live bottom: window top = total - bodyH - off.
+	// When scrollOff==0 the window is exactly the live grid (history excluded),
+	// behaving identically to before.
+	hist := p.History()
+	if c.scrollOff > len(hist) {
+		c.scrollOff = len(hist)
+	}
+	total := len(hist) + ph
+	winTop := total - bodyH - c.scrollOff
+	if winTop < 0 {
+		winTop = 0
+	}
+	// rowAt returns the logical cells for a virtual row r: a history line (r <
+	// len(hist)) or a live-grid row. liveY is the live-grid row index or -1.
+	rowAt := func(r int) (cells []vt.Glyph, liveY int) {
+		if r < len(hist) {
+			return hist[r], -1
+		}
+		return nil, r - len(hist)
+	}
+	cellAt := func(cells []vt.Glyph, liveY, x int) vt.Glyph {
+		if liveY >= 0 {
+			return p.Cell(x, liveY)
+		}
+		if x < len(cells) {
+			return cells[x]
+		}
+		return vt.Glyph{Char: ' ', FG: vt.DefaultFG, BG: vt.DefaultBG}
+	}
+	rowWidth := func(cells []vt.Glyph, liveY int) int {
+		if liveY >= 0 {
+			return pw
+		}
+		return len(cells)
+	}
 	// vt10x stores one logical cell per rune (no spacer after a wide rune), but a
 	// wide rune (emoji/CJK) draws two columns. Map logical cells -> visual
 	// columns by accumulating rune widths so alignment matches what claude drew.
-	for y := 0; y < ph && y < bodyH; y++ {
+	for y := 0; y < bodyH; y++ {
+		r := winTop + y
+		if r >= total {
+			break
+		}
+		cells, liveY := rowAt(r)
+		rw0 := rowWidth(cells, liveY)
 		vx := 0
-		for x := 0; x < pw && vx < w; x++ {
-			g := p.Cell(x, y)
+		for x := 0; x < rw0 && vx < w; x++ {
+			g := cellAt(cells, liveY, x)
 			ch := g.Char
 			if ch == 0 {
 				ch = ' '
@@ -372,7 +603,12 @@ func (c *Compositor) renderSessionBody(w, h int) (curX, curY int, curVis bool) {
 			vx += rw
 		}
 	}
-	// Map the cursor's logical column to its visual column the same way.
+	// While scrolled up, the hardware cursor would be meaningless — hide it.
+	if c.scrollOff > 0 {
+		return 0, 0, false
+	}
+	// Map the cursor's logical column to its visual column the same way. The live
+	// grid occupies body rows [len(hist)-winTop .. ], so offset the cursor row.
 	cx, cy, vis := p.Cursor()
 	vcx := 0
 	for i := 0; i < cx && i < pw; i++ {
@@ -382,7 +618,8 @@ func (c *Compositor) renderSessionBody(w, h int) (curX, curY int, curVis bool) {
 		}
 		vcx += rw
 	}
-	return vcx, bodyTop + cy, vis
+	bodyCursorY := (len(hist) + cy) - winTop
+	return vcx, bodyTop + bodyCursorY, vis
 }
 
 // renderStreamBody draws the live event feed (the Stream tab): the most recent
@@ -462,7 +699,10 @@ func (c *Compositor) renderStatusLine(w, h int) {
 		focused = c.subs[c.focusedSub].Name
 	}
 	left := fmt.Sprintf(" %s  ▸ %s  %dtok  $%.2f", c.instance, focused, c.tokens, c.costUSD)
+	if c.scrollOff > 0 {
+		left += fmt.Sprintf("  ↑ scrolled (%d)", c.scrollOff)
+	}
 	c.screen.SetString(0, row, left, colText, colBarBG, false, false)
-	hint := "click tabs · + new session · ⌃G d detach "
-	c.screen.SetString(w-len(hint), row, hint, colDim, colBarBG, false, false)
+	hint := "click tabs · ✕ close · 2×click rename · scroll wheel · + new · ⌃G d detach "
+	c.screen.SetString(w-len([]rune(hint)), row, hint, colDim, colBarBG, false, false)
 }

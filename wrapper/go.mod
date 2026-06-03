@@ -42,3 +42,8 @@ require (
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 )
+
+// Local patched fork of vt10x: adds a scrollback history ring + Scrollback()
+// accessor so the compositor can offer a scrollback viewport (upstream discards
+// evicted lines). Import paths stay github.com/hinshun/vt10x.
+replace github.com/hinshun/vt10x => ./third_party/vt10x

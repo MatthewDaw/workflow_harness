@@ -63,6 +63,18 @@ func (p *Pane) Cell(x, y int) vt.Glyph {
 	return p.term.Cell(x, y)
 }
 
+// History returns the session's scrollback — lines evicted off the top of the
+// live grid, oldest-first. Backed by the patched vt10x history ring; the
+// returned glyph slices are copies safe to read after the lock is released.
+func (p *Pane) History() [][]vt.Glyph {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.term.Lock()
+	h := p.term.Scrollback()
+	p.term.Unlock()
+	return h
+}
+
 // Cursor returns the emulator cursor position and visibility, clamped into the
 // current grid so callers can index Cell with it safely.
 func (p *Pane) Cursor() (x, y int, visible bool) {

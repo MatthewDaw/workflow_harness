@@ -123,6 +123,14 @@ func runShell(c *daemon.Client, instance string) error {
 	markDirty() // initial paint
 	prefix := false
 
+	// Double-click detection lives here because Compositor.Click is a pure
+	// hit-test with no timing: a second left-click on the SAME session sub-tab
+	// within the window opens the inline rename draft (the terminal analogue of
+	// the desktop double-click <input>); otherwise the hit just focuses it.
+	var lastClickSess string
+	var lastClickAt time.Time
+	const dblClickWindow = 400 * time.Millisecond
+
 	for {
 		select {
 		case <-readErr:
@@ -183,18 +191,79 @@ func runShell(c *daemon.Client, instance string) error {
 				continue
 			}
 			if ev.mouse {
+				// A click while a rename draft is open commits it first (onBlur
+				// parity with the desktop <input>), then the click is processed.
+				if comp.Editing() {
+					if id, name, ok := comp.CommitRename(); ok {
+						_ = c.Rename(id, name)
+					}
+					markDirty()
+				}
 				if ev.press && ev.button == 0 { // plain left-click
-					changed, sess, newSess := comp.Click(ev.x, ev.y)
+					res := comp.Click(ev.x, ev.y)
 					switch {
-					case newSess:
+					case res.NewSession:
 						_ = c.NewSession()
 						markDirty()
-					case sess != "":
-						_ = c.Focus(sess)
+					case res.CloseSessID != "":
+						_ = c.CloseSession(res.CloseSessID)
 						markDirty()
-					case changed:
+					case res.FocusSessID != "":
+						// Second click on the same sub-tab inside the window =
+						// double-click -> open the inline rename draft.
+						if res.FocusSessID == lastClickSess && time.Since(lastClickAt) < dblClickWindow {
+							comp.BeginRename(res.FocusSessID)
+							lastClickSess = "" // consume; a 3rd click shouldn't re-trigger
+						} else {
+							_ = c.Focus(res.FocusSessID)
+							lastClickSess, lastClickAt = res.FocusSessID, time.Now()
+						}
+						markDirty()
+					case res.Changed:
 						markDirty()
 					}
+				} else if ev.press && comp.ActiveIsSession() {
+					// Wheel events scroll the focused session body's scrollback.
+					// SGR codes: 64 = wheel up (toward history), 65 = wheel down.
+					switch ev.button {
+					case 64:
+						comp.ScrollUp(3)
+						markDirty()
+					case 65:
+						comp.ScrollDown(3)
+						markDirty()
+					}
+				}
+				continue
+			}
+			// While an inline rename draft is open the keyboard drives the draft,
+			// not the hosted session: intercept every keystroke here BEFORE the
+			// escape-sequence forward and the handleKey/forward path below.
+			if comp.Editing() {
+				if len(ev.bytes) == 0 {
+					continue
+				}
+				b := ev.bytes[0]
+				switch {
+				case b == 0x0d || b == 0x0a: // Enter -> commit
+					if id, name, ok := comp.CommitRename(); ok {
+						_ = c.Rename(id, name)
+					}
+					markDirty()
+				case b == 0x1b || b == 0x03: // ESC or Ctrl-C -> cancel
+					// Ctrl-C is a single byte, so it cancels immediately. A lone ESC
+					// is buffered by parseInput's state machine and only arrives once
+					// coalesced with the next key — Ctrl-C is the reliable cancel. A
+					// leading ESC (arrow-key sequence) also cancels rather than
+					// corrupting the draft.
+					comp.CancelRename()
+					markDirty()
+				default:
+					// Backspace (0x7f/0x08) and printable bytes feed the draft.
+					for _, rb := range ev.bytes {
+						comp.RenameInput(rb)
+					}
+					markDirty()
 				}
 				continue
 			}
