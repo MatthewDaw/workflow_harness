@@ -30,6 +30,27 @@ describe('event envelope schema', () => {
     }
   });
 
+  it('parses a session.start envelope without a ticket field', () => {
+    const parsed = parseEnvelope({
+      v: 1,
+      instanceId: 'inst-0',
+      host: 'h',
+      ts: 1,
+      seq: 0,
+      event: {
+        kind: 'session.start',
+        sessionId: 'a91f',
+        projectId: 'weekly-compass',
+        host: 'h',
+        name: 'reconcile-variance',
+        agent: 'builder',
+      },
+    });
+    expect(parsed.event).not.toHaveProperty('ticket');
+    const roundTripped = JSON.parse(JSON.stringify(parsed));
+    expect(roundTripped.event).toMatchObject({ kind: 'session.start', sessionId: 'a91f' });
+  });
+
   it('rejects an unknown event kind', () => {
     const bad = {
       v: 1,

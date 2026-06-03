@@ -26,7 +26,6 @@ export const sessionProjectionSchema = z.object({
   /** The owning user; control authorizes that the requester matches this uid. */
   ownerUserId: z.string().optional(),
   agent: z.string().optional(),
-  ticket: z.string().optional(),
   status: sessionStatusSchema,
   tokens: z.number().int().nonnegative().default(0),
   costUsd: z.number().nonnegative().default(0),
@@ -40,46 +39,9 @@ export const sessionProjectionSchema = z.object({
 });
 export type SessionProjection = z.infer<typeof sessionProjectionSchema>;
 
-export const TICKET_STATUSES = ['backlog', 'in_progress', 'in_review', 'done', 'icebox'] as const;
-export const ticketStatusSchema = z.enum(TICKET_STATUSES);
-export type TicketStatus = z.infer<typeof ticketStatusSchema>;
-
 export const PRIORITIES = ['high', 'medium', 'low'] as const;
 export const prioritySchema = z.enum(PRIORITIES);
 export type Priority = z.infer<typeof prioritySchema>;
-
-export const ticketSchema = z.object({
-  id: z.string().min(1),
-  projectId: z.string().min(1),
-  title: z.string().min(1),
-  description: z.string().optional(),
-  status: ticketStatusSchema,
-  priority: prioritySchema,
-  sessionId: z.string().optional(),
-  branch: z.string().optional(),
-  pr: z.string().optional(),
-  /** The Supporting Outcome (objective node) this ticket advances; feeds roll-up. */
-  objectiveId: z.string().optional(),
-});
-export type Ticket = z.infer<typeof ticketSchema>;
-
-/**
- * Allowed ticket status transitions. The board advances a ticket forward through
- * backlog -> in_progress -> in_review -> done; any status may be moved to/from
- * `icebox` (deferred). Anything else is rejected as an invalid transition.
- */
-export const TICKET_TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = {
-  backlog: ['in_progress', 'icebox'],
-  in_progress: ['in_review', 'backlog', 'icebox'],
-  in_review: ['done', 'in_progress', 'icebox'],
-  done: ['icebox'],
-  icebox: ['backlog'],
-};
-
-export function isValidTicketTransition(from: TicketStatus, to: TicketStatus): boolean {
-  if (from === to) return true;
-  return TICKET_TRANSITIONS[from].includes(to);
-}
 
 export const agentSchema = z.object({
   name: z.string().min(1),
@@ -175,8 +137,8 @@ export type DeviceAuth = z.infer<typeof deviceAuthSchema>;
 
 /**
  * A single git commit as read from the GitHub integration (U26). Used by the
- * Weekly "done" assembly (U28): commits whose branch/PR/message references a
- * ticket id are attributed to that ticket (and thus its objective).
+ * Weekly "done" assembly (U28): commits are attributed to the objectives their
+ * branch/PR/message advances.
  */
 export const gitCommitSchema = z.object({
   sha: z.string().min(1),
@@ -184,8 +146,6 @@ export const gitCommitSchema = z.object({
   author: z.string().default(''),
   /** ISO-8601 timestamp the commit was authored. */
   committedAt: z.string().min(1),
-  /** Ticket ids referenced by this commit (parsed from message/branch/PR). */
-  ticketIds: z.array(z.string()).default([]),
 });
 export type GitCommit = z.infer<typeof gitCommitSchema>;
 

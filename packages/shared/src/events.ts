@@ -19,7 +19,6 @@ export const sessionStartEventSchema = z.object({
   host: z.string().min(1),
   name: z.string().min(1),
   agent: z.string().min(1).optional(),
-  ticket: z.string().min(1).optional(),
 });
 
 export const sessionRenameEventSchema = z.object({
