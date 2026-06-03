@@ -7,7 +7,6 @@ import type {
   Skill,
   Priority,
   WeeklyUpdate,
-  WeeklyItem,
   ScopeRef,
   ControlAction,
 } from '@harness/shared';
@@ -235,10 +234,17 @@ export const baseApi = createApi({
       invalidatesTags: ['Skill'],
     }),
 
-    /** Store a weekly-update draft (done[]/plan[]) for a given iso week. */
+    /** Store a weekly-update draft (free-form done/plan prose) for an iso week. */
     putWeekly: build.mutation<
       WeeklyUpdate,
-      { projectId: string; isoWeek: string; done: WeeklyItem[]; plan: WeeklyItem[]; validated?: boolean }
+      {
+        projectId: string;
+        isoWeek: string;
+        done: string;
+        plan: string;
+        conformityScore?: number;
+        validated?: boolean;
+      }
     >({
       query: ({ projectId, isoWeek, ...body }) => ({
         url: `projects/${projectId}/weekly/${isoWeek}`,

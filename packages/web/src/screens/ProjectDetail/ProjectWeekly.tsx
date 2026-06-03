@@ -21,6 +21,11 @@ export function ProjectWeekly() {
         <div className="text-mut">
           {latest ? `Week ${latest.isoWeek}` : 'No weekly update yet'}{' '}
           {latest?.validated && <Pill variant="good">plan validated</Pill>}
+          {latest?.conformityScore !== undefined && (
+            <Pill variant={latest.conformityScore >= 70 ? 'good' : 'idle'}>
+              conformity {latest.conformityScore}
+            </Pill>
+          )}
         </div>
         <button type="button" className="hq-btn hq-btn-pri">
           ▶ Draft with agent
@@ -31,24 +36,20 @@ export function ProjectWeekly() {
         <div className="flex gap-3.5">
           <div className="hq-box flex-1 bg-paper">
             <b>Done last week</b>
-            <div className="my-1.5">
-              <Bar pct={75} color="#3f7d4e" />
-            </div>
-            <ul className="text-[12.5px] text-mut">
-              {latest.done.map((d, i) => (
-                <li key={i}>✓ {d.text}</li>
-              ))}
-            </ul>
+            {latest.conformityScore !== undefined && (
+              <div className="my-1.5">
+                <Bar pct={latest.conformityScore} color="#3f7d4e" />
+              </div>
+            )}
+            <p className="whitespace-pre-wrap text-[12.5px] text-mut">
+              {latest.done || 'No summary recorded.'}
+            </p>
           </div>
           <div className="hq-box flex-1 border-l-[3px] border-l-accent bg-paper">
             <b>Plan next week</b>
-            <ul className="mt-1.5 text-[12.5px] text-mut">
-              {latest.plan.map((p, i) => (
-                <li key={i}>
-                  {i + 1}. {p.text}
-                </li>
-              ))}
-            </ul>
+            <p className="mt-1.5 whitespace-pre-wrap text-[12.5px] text-mut">
+              {latest.plan || 'No plan recorded.'}
+            </p>
           </div>
         </div>
       )}
