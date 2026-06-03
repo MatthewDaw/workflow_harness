@@ -8,12 +8,14 @@ import (
 	"encoding/base64"
 
 	"github.com/workflow-harness/claude-plus/internal/daemon"
+	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
 // Event names emitted to the webview. Keep in sync with the frontend listeners.
 const (
 	EventOutput   = "pty:output"
 	EventSessions = "sessions:update"
+	EventStream   = "stream:event"
 )
 
 // OutputEvent carries a chunk of a session's PTY output to the webview. Bytes
@@ -29,6 +31,7 @@ type OutputEvent struct {
 // it without a live daemon.
 type attachClient interface {
 	SetHandlers(out func(sessID string, b []byte), onSessions func([]daemon.SessInfo))
+	SetEventHandler(fn func(env event.Envelope))
 	Input(b []byte) error
 	Resize(cols, rows int) error
 	Focus(sessID string) error
@@ -67,6 +70,9 @@ func (b *Bridge) Start() {
 			b.em.Emit(EventSessions, list)
 		},
 	)
+	b.c.SetEventHandler(func(env event.Envelope) {
+		b.em.Emit(EventStream, env)
+	})
 }
 
 // Run blocks on the attach read loop until the daemon connection closes.

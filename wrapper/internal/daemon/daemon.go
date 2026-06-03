@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/diag"
+	"github.com/workflow-harness/claude-plus/internal/event"
 	"github.com/workflow-harness/claude-plus/internal/pty"
 )
 
@@ -27,6 +28,10 @@ type Daemon struct {
 	mu      sync.Mutex
 	clients map[string]net.Conn // attach client connections by id
 
+	evMu       sync.Mutex
+	eventSinks map[string]func(event.Envelope) // local event subscribers by id
+	recent     []event.Envelope                // bounded replay buffer for new subscribers
+
 	stopCh chan struct{}
 }
 
@@ -34,11 +39,12 @@ type Daemon struct {
 // The loopback listen address is assigned in Serve (a free port on 127.0.0.1).
 func New(repoRoot string, spawn pty.SpawnFunc) (*Daemon, error) {
 	return &Daemon{
-		repoRoot: repoRoot,
-		started:  time.Now(),
-		mux:      pty.NewMux(repoRoot, 80, 24, spawn),
-		clients:  map[string]net.Conn{},
-		stopCh:   make(chan struct{}),
+		repoRoot:   repoRoot,
+		started:    time.Now(),
+		mux:        pty.NewMux(repoRoot, 80, 24, spawn),
+		clients:    map[string]net.Conn{},
+		eventSinks: map[string]func(event.Envelope){},
+		stopCh:     make(chan struct{}),
 	}, nil
 }
 
@@ -180,6 +186,14 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 		send(Frame{Type: FrameOutput, SessID: sessID, Data: base64.StdEncoding.EncodeToString(b)})
 	})
 
+	// Subscribe this client to the local event stream (Stream panel). AddEventSink
+	// replays the recent buffer immediately so the panel renders on open.
+	d.AddEventSink(clientID, func(env event.Envelope) {
+		if b, err := env.Marshal(); err == nil {
+			send(Frame{Type: FrameEvent, EvJSON: string(b)})
+		}
+	})
+
 	// Ensure at least one session exists when a client first attaches.
 	if d.mux.Count() == 0 {
 		if _, err := d.mux.Spawn("", ""); err != nil {
@@ -200,6 +214,7 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 	defer func() {
 		d.mux.RemoveSink(clientID)
 		d.mux.UnregisterClient(clientID)
+		d.RemoveEventSink(clientID)
 		d.mu.Lock()
 		delete(d.clients, clientID)
 		d.mu.Unlock()

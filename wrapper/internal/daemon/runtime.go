@@ -75,27 +75,25 @@ func trimCR(s string) string {
 	return s
 }
 
-// StartRuntime wires capture+transport for a daemon if HQ is configured. It is a
-// no-op (returns nil) when no credentials are present, so local-only use keeps
-// working. The returned Runtime is stopped on daemon shutdown.
+// StartRuntime starts the capture loop for a daemon and, when HQ credentials are
+// present, also streams envelopes outbound. Capture runs regardless of
+// credentials so local subscribers (the desktop Stream panel via the daemon
+// event bus) see events even without `claude+ login`; only the outbound HQ
+// transport is gated on credentials. The returned Runtime is stopped on daemon
+// shutdown.
 func StartRuntime(d *Daemon, instanceID string) *Runtime {
-	cfg, ok := loadHQConfig()
-	if !ok {
-		return nil
-	}
-
-	home, _ := os.UserHomeDir()
-	buf, err := transport.OpenRingBuffer(filepath.Join(home, ".claude-plus", "outbound.jsonl"))
-	if err != nil {
-		return nil
-	}
-
 	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{})}
-	recv := d.NewControlReceiver()
-	rt.client = transport.NewClient(cfg.URL, cfg.Token, instanceID, buf, recv.Handle)
-	go rt.client.Run()
 
-	// Per-session transcript tailers feed the envelope stream.
+	if cfg, ok := loadHQConfig(); ok {
+		home, _ := os.UserHomeDir()
+		if buf, err := transport.OpenRingBuffer(filepath.Join(home, ".claude-plus", "outbound.jsonl")); err == nil {
+			recv := d.NewControlReceiver()
+			rt.client = transport.NewClient(cfg.URL, cfg.Token, instanceID, buf, recv.Handle)
+			go rt.client.Run()
+		}
+	}
+
+	// Per-session transcript tailers feed the envelope stream (local bus + HQ).
 	go rt.captureLoop(instanceID)
 	return rt
 }
@@ -117,7 +115,10 @@ func (rt *Runtime) captureLoop(instanceID string) {
 			V: 1, InstanceID: instanceID, Host: host,
 			TS: time.Now().UnixMilli(), Seq: rt.seq.Next(sid), Event: e,
 		}
-		_ = rt.client.Send(env)
+		rt.d.PublishEvent(env) // local subscribers (Stream panel)
+		if rt.client != nil {
+			_ = rt.client.Send(env) // HQ, when configured
+		}
 	}
 
 	for {

@@ -9,6 +9,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/workflow-harness/claude-plus/internal/daemon"
 	"github.com/workflow-harness/claude-plus/internal/desktop"
+	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
 // App is the Wails-bound type. Its exported methods become callable from JS and
@@ -106,6 +107,7 @@ func (a *clientAdapter) SetHandlers(out func(string, []byte), onSess func([]daem
 	a.c.Out = out
 	a.c.OnSessions = onSess
 }
+func (a *clientAdapter) SetEventHandler(fn func(event.Envelope)) { a.c.OnEvent = fn }
 func (a *clientAdapter) Input(b []byte) error               { return a.c.Input(b) }
 func (a *clientAdapter) Resize(cols, rows int) error        { return a.c.Resize(cols, rows) }
 func (a *clientAdapter) Focus(sessID string) error          { return a.c.Focus(sessID) }

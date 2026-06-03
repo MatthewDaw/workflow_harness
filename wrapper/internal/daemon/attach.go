@@ -39,6 +39,7 @@ const (
 	FrameDetach  FrameType = "detach"  // client -> daemon clean detach (daemon keeps running)
 	FrameSessLs  FrameType = "sessls"  // client -> daemon list sessions
 	FrameSessAck FrameType = "sessack" // daemon -> client session list reply
+	FrameEvent   FrameType = "event"   // daemon -> client captured event envelope (JSON)
 )
 
 // Frame is a single control message on the attach channel.
@@ -53,6 +54,7 @@ type Frame struct {
 	Ticket   string     `json:"ticket,omitempty"`   // new: optional ticket link
 	Err      string     `json:"err,omitempty"`
 	List     []SessInfo `json:"list,omitempty"` // sessack payload
+	EvJSON   string     `json:"ev,omitempty"`   // event: marshaled event.Envelope
 }
 
 // SessInfo is the public view of a session for the client's sub-tab row.

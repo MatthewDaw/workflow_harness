@@ -1,5 +1,6 @@
 import Terminal from "./Terminal";
 import Sessions from "./Sessions";
+import Stream from "./Stream";
 
 function App() {
   return (
@@ -8,6 +9,7 @@ function App() {
       <main style={{ flex: 1, minWidth: 0, background: "#1e1e1e" }}>
         <Terminal />
       </main>
+      <Stream />
     </div>
   );
 }

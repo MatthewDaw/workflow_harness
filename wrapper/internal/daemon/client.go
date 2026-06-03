@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
 // genID returns a short unique id for an attach client connection.
@@ -27,6 +29,9 @@ type Client struct {
 	Out func(sessID string, b []byte)
 	// OnSessions receives session-list updates for the sub-tab row.
 	OnSessions func([]SessInfo)
+	// OnEvent receives captured event envelopes (the Stream panel). Optional —
+	// the terminal client leaves it nil and ignores event frames.
+	OnEvent func(env event.Envelope)
 
 	// Sessions is the session list from the attach ack (consumed during the
 	// handshake, before Run starts), so the caller can seed the sub-tab row.
@@ -127,6 +132,13 @@ func (c *Client) Run() error {
 		case FrameAck, FrameSessAck:
 			if c.OnSessions != nil && f.List != nil {
 				c.OnSessions(f.List)
+			}
+		case FrameEvent:
+			if c.OnEvent != nil {
+				var env event.Envelope
+				if json.Unmarshal([]byte(f.EvJSON), &env) == nil {
+					c.OnEvent(env)
+				}
 			}
 		}
 	}
