@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/capture"
+	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/event"
 	"github.com/workflow-harness/claude-plus/internal/transport"
 )
@@ -116,7 +117,55 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 
 	// Per-session transcript tailers feed the envelope stream (local bus + HQ).
 	go rt.captureLoop(instanceID)
+
+	// Agents/skills drift meter (U19): poll HQ's effective registry and fold the
+	// drift count into the status snapshot. Only runs when an HQ REST base is
+	// configured; otherwise the meter stays at 0 (no remote to compare against).
+	if base, ok := loadAPIBase(); ok {
+		if cfg, ok := loadHQConfig(); ok {
+			src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(d.repoRoot))
+			go rt.configSyncLoop(src)
+		}
+	}
 	return rt
+}
+
+// configSyncLoop refreshes the drift meter on a slow tick (agents/skills change
+// rarely, and the fetch is a network round-trip). Fetch errors are swallowed so
+// a transient HQ blip never crashes the daemon or blanks the meter.
+func (rt *Runtime) configSyncLoop(src config.RemoteSource) {
+	tk := time.NewTicker(30 * time.Second)
+	defer tk.Stop()
+	_ = rt.d.SyncConfigOnce(src) // prime immediately on start
+	for {
+		select {
+		case <-rt.stop:
+			return
+		case <-tk.C:
+			_ = rt.d.SyncConfigOnce(src)
+		}
+	}
+}
+
+// loadAPIBase resolves HQ's REST base URL (distinct from the WebSocket URL):
+// the CLAUDE_PLUS_API_URL env var, or the third line of the credentials file.
+func loadAPIBase() (string, bool) {
+	if base := os.Getenv("CLAUDE_PLUS_API_URL"); base != "" {
+		return base, true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".claude-plus", "credentials"))
+	if err != nil {
+		return "", false
+	}
+	lines := splitLines(string(b))
+	if len(lines) >= 3 && lines[2] != "" {
+		return lines[2], true
+	}
+	return "", false
 }
 
 // captureLoop announces each session to HQ (session.start) and tails its

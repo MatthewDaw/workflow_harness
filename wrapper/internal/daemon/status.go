@@ -1,6 +1,9 @@
 package daemon
 
-import "github.com/workflow-harness/claude-plus/internal/event"
+import (
+	"github.com/workflow-harness/claude-plus/internal/config"
+	"github.com/workflow-harness/claude-plus/internal/event"
+)
 
 // StatusSnapshot is the daemon-wide meter rendered by the desktop status bar:
 // cumulative tokens and cost across all sessions, plus the agents/skills drift
@@ -32,6 +35,19 @@ func (d *Daemon) SetDrift(n int) {
 	d.statusMu.Lock()
 	d.sDrift = n
 	d.statusMu.Unlock()
+}
+
+// SyncConfigOnce computes agents/skills drift against HQ and folds the count into
+// the status meter (U19). It is the single tick the runtime's sync loop repeats;
+// a fetch error leaves the prior count untouched (transient HQ blips don't blank
+// the meter). Returns the error for the caller to log.
+func (d *Daemon) SyncConfigOnce(src config.RemoteSource) error {
+	report, err := config.ComputeDrift(src)
+	if err != nil {
+		return err
+	}
+	d.SetDrift(report.DriftCount())
+	return nil
 }
 
 // Status returns the current meter snapshot.

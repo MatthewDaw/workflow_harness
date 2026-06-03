@@ -7,6 +7,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -91,6 +92,32 @@ func readDir(root string, kind Kind) []Item {
 		out = append(out, it)
 	}
 	return out
+}
+
+// ApplyPulled materializes an HQ item into the local ~/.claude tree: agents land
+// at agents/<name>.md, skills at skills/<name>/SKILL.md. Parent directories are
+// created as needed. The write is additive and reversible (a pull never deletes
+// other definitions), and writing exactly `body` keeps the local hash equal to
+// the HQ hash, so a freshly pulled item reads back as in-sync (reconcile is
+// idempotent).
+func ApplyPulled(item RemoteItem, body string) error {
+	dir, err := claudeDir()
+	if err != nil {
+		return err
+	}
+	var path string
+	switch item.Kind {
+	case KindAgent:
+		path = filepath.Join(dir, "agents", item.Name+".md")
+	case KindSkill:
+		path = filepath.Join(dir, "skills", item.Name, "SKILL.md")
+	default:
+		return fmt.Errorf("unknown kind %q", item.Kind)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(body), 0o644)
 }
 
 // hashContent normalizes line endings then hashes, so CRLF/LF differences do not
