@@ -85,6 +85,19 @@ export function installFetchStub(seed: SeedData) {
     const proj = /^projects\/([^/]+)$/.exec(path);
     if (proj) return json((seed.projects ?? []).find((p) => p.id === proj[1]) ?? null);
 
+    // AgentForge optimizer (U27): echo back a deterministic optimized prompt +
+    // score so the editor's "✨ Optimize prompt" flow resolves in tests.
+    if (/^agents\/[^/]+\/optimize$/.test(path)) {
+      return json({
+        optimizedPrompt: 'OPTIMIZED PROMPT',
+        score: 87,
+        history: [
+          { round: 0, score: 50, critique: 'baseline' },
+          { round: 1, score: 87, critique: 'tighter' },
+        ],
+      });
+    }
+
     if (/^sessions\/[^/]+\/control$/.test(path)) return json({ ok: true });
 
     if (path === 'device/approve') return json({ approved: true });

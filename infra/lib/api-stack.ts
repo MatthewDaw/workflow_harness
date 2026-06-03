@@ -6,6 +6,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { StartingPosition, FilterCriteria, FilterRule } from 'aws-cdk-lib/aws-lambda';
 import { HttpNoneAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2';
@@ -151,6 +152,16 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(deviceFn);
     grantReadWrite(dodFn);
 
+    // The agents Lambda now serves POST /agents/{name}/optimize, which runs the
+    // AgentForge refine loop against Bedrock (Claude via InvokeModel). Grant it
+    // bedrock:InvokeModel so the optimizer's generate/judge calls succeed.
+    agentsFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      }),
+    );
+
     const region = cdk.Stack.of(this).region;
     const jwtIssuer = `https://cognito-idp.${region}.amazonaws.com/${props.userPool.userPoolId}`;
     const jwtAuthorizer = new HttpJwtAuthorizer('HqJwtAuthorizer', jwtIssuer, {
@@ -227,6 +238,7 @@ export class ApiStack extends cdk.Stack {
     r('/agents', [M.GET, M.POST], agentsFn, 'Agents');
     r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName');
     r('/agents/{name}/scope', [M.POST], agentsFn, 'AgentScope');
+    r('/agents/{name}/optimize', [M.POST], agentsFn, 'AgentOptimize');
 
     r('/skills', [M.GET, M.POST], skillsFn, 'Skills');
     r('/skills/{name}', [M.GET, M.PUT, M.DELETE], skillsFn, 'SkillByName');
