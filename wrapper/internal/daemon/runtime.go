@@ -17,10 +17,27 @@ import (
 // receive. It is started by the detached daemon process when HQ credentials are
 // present; without credentials the daemon still hosts sessions locally.
 type Runtime struct {
-	d      *Daemon
-	client *transport.Client
-	seq    *transport.Seq
-	stop   chan struct{}
+	d          *Daemon
+	client     *transport.Client
+	seq        *transport.Seq
+	stop       chan struct{}
+	instanceID string
+	host       string
+}
+
+// emit wraps a captured event in an envelope and fans it to local subscribers
+// (the Stream panel) plus HQ when configured. It is the single send path shared
+// by the transcript tailer and the hook receiver (U18), so hook-sourced and
+// tailer-sourced events are sequenced and delivered identically.
+func (rt *Runtime) emit(sid string, e event.Event) {
+	env := event.Envelope{
+		V: 1, InstanceID: rt.instanceID, Host: rt.host,
+		TS: time.Now().UnixMilli(), Seq: rt.seq.Next(sid), Event: e,
+	}
+	rt.d.PublishEvent(env) // local subscribers (Stream panel)
+	if rt.client != nil {
+		_ = rt.client.Send(env) // HQ, when configured
+	}
 }
 
 // hqConfig is read from ~/.claude-plus/credentials (written by `claude+ login`).
@@ -82,7 +99,11 @@ func trimCR(s string) string {
 // transport is gated on credentials. The returned Runtime is stopped on daemon
 // shutdown.
 func StartRuntime(d *Daemon, instanceID string) *Runtime {
-	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{})}
+	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{}),
+		instanceID: instanceID, host: hostName()}
+
+	// Route hook-shim events through the same emit path as the tailer (U18).
+	d.SetHookIngestor(rt.emit)
 
 	if cfg, ok := loadHQConfig(); ok {
 		home, _ := os.UserHomeDir()
@@ -107,19 +128,9 @@ func (rt *Runtime) captureLoop(instanceID string) {
 	announced := map[string]bool{}
 	tk := time.NewTicker(time.Second)
 	defer tk.Stop()
-	host := hostName()
+	host := rt.host
 	projectID := projectIDFor(rt.d.repoRoot)
-
-	emit := func(sid string, e event.Event) {
-		env := event.Envelope{
-			V: 1, InstanceID: instanceID, Host: host,
-			TS: time.Now().UnixMilli(), Seq: rt.seq.Next(sid), Event: e,
-		}
-		rt.d.PublishEvent(env) // local subscribers (Stream panel)
-		if rt.client != nil {
-			_ = rt.client.Send(env) // HQ, when configured
-		}
-	}
+	emit := rt.emit
 
 	for {
 		select {

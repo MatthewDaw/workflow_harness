@@ -89,6 +89,27 @@ func dialSock(sock string) (*Client, error) {
 	return c, nil
 }
 
+// SendHook delivers a raw Claude Code hook payload to the daemon serving
+// repoRoot as a single one-shot frame, then closes. It is best-effort: if no
+// daemon is running (or the socket is unreachable) it returns an error the
+// caller ignores, so a hook never blocks a Claude Code turn (U18).
+func SendHook(repoRoot string, raw []byte) error {
+	e, ok, err := Find(repoRoot)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return os.ErrNotExist
+	}
+	conn, err := net.DialTimeout("tcp", e.Sock, 1*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
+	return writeFrame(conn, Frame{Type: FrameHook, Hook: string(raw)})
+}
+
 // Input forwards local terminal stdin bytes to the daemon's focused PTY.
 func (c *Client) Input(b []byte) error {
 	return writeFrame(c.conn, Frame{Type: FrameInput, Data: base64.StdEncoding.EncodeToString(b)})

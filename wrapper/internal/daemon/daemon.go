@@ -3,12 +3,14 @@ package daemon
 import (
 	"bufio"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/workflow-harness/claude-plus/internal/capture"
 	"github.com/workflow-harness/claude-plus/internal/diag"
 	"github.com/workflow-harness/claude-plus/internal/event"
 	"github.com/workflow-harness/claude-plus/internal/pty"
@@ -36,6 +38,9 @@ type Daemon struct {
 	sTokens  int64   // cumulative tokens (from cost.tick)
 	sUSD     float64 // cumulative cost USD (sum of cost.tick deltas)
 	sDrift   int     // agents/skills out of sync (set by the config layer)
+
+	hookMu     sync.Mutex
+	hookIngest func(sessID string, e event.Event) // set by the Runtime; routes hook events through emit
 
 	stopCh chan struct{}
 }
@@ -151,11 +156,58 @@ func (d *Daemon) handle(conn net.Conn) {
 	case FramePing:
 		_ = writeFrame(conn, Frame{Type: FramePong, Sessions: d.mux.Count()})
 		return
+	case FrameHook:
+		// One-shot: the hook shim posts a single payload and disconnects. It must
+		// never block a Claude Code turn, so we ingest and close without a reply.
+		d.ingestHook(first.Hook)
+		return
 	case FrameHello:
 		d.attach(conn, r, first.Version)
 	default:
 		_ = writeFrame(conn, Frame{Type: FrameAck, Err: "expected hello"})
 	}
+}
+
+// SetHookIngestor registers the callback the Runtime uses to route a hook-sourced
+// event through the same emit path as the transcript tailer (local bus + HQ).
+// Until set (no Runtime), hook events fall back to a local-only publish.
+func (d *Daemon) SetHookIngestor(fn func(sessID string, e event.Event)) {
+	d.hookMu.Lock()
+	d.hookIngest = fn
+	d.hookMu.Unlock()
+}
+
+// ingestHook parses a Claude Code hook payload, maps it to a status.change event
+// (via the capture layer), and publishes it. Malformed payloads and no-op hook
+// kinds (PostToolUse) are dropped silently — the daemon stays stable and the
+// transcript tailer remains the authoritative event source.
+func (d *Daemon) ingestHook(raw string) {
+	if raw == "" {
+		return
+	}
+	var h capture.HookEvent
+	if err := json.Unmarshal([]byte(raw), &h); err != nil || h.SessionID == "" {
+		return
+	}
+	// Seed the prior status from the live session so the mapped transition starts
+	// from where the session actually is, not a guess.
+	var prev event.Status
+	if s := d.mux.Get(h.SessionID); s != nil {
+		prev = event.Status(string(s.Status()))
+	}
+	ev, ok := capture.MapHook(h, prev)
+	if !ok {
+		return
+	}
+	d.hookMu.Lock()
+	ingest := d.hookIngest
+	d.hookMu.Unlock()
+	if ingest != nil {
+		ingest(h.SessionID, ev)
+		return
+	}
+	// No Runtime wired (local-only daemon): publish to the local bus directly.
+	d.PublishEvent(event.Envelope{V: 1, TS: time.Now().UnixMilli(), Event: ev})
 }
 
 // attach proxies PTY I/O for an attached client until it detaches or drops. It

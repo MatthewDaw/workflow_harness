@@ -17,6 +17,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -144,11 +145,19 @@ func runDaemon(args []string) {
 
 // runHook forwards a Claude Code hook event (read as JSON on stdin) to the
 // repo's daemon socket. Wired by the capture layer's installed settings.json.
+// It always exits 0 so it never blocks a Claude Code turn: a missing daemon,
+// unreadable stdin, or a delivery error is swallowed (the transcript tailer
+// remains the authoritative event source).
 func runHook() {
-	// The hook shim reads the event from stdin and posts it to the daemon. The
-	// full implementation lives in internal/capture; this stub keeps the CLI
-	// surface complete. It exits 0 so it never blocks a Claude Code turn.
-	_, _ = os.Stdout.Write(nil)
+	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	if err != nil || len(raw) == 0 {
+		return
+	}
+	repo, err := resolveRepoRoot()
+	if err != nil {
+		return
+	}
+	_ = daemon.SendHook(repo, raw)
 }
 
 // resolveRepoRoot walks up from cwd to the nearest .git directory; falls back to
