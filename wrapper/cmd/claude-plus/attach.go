@@ -159,6 +159,35 @@ func runShell(c *daemon.Client, instance string) error {
 				events = nil // stdin closed; keep rendering until detach or daemon drop
 				continue
 			}
+			// The Ctrl-G prefix is authoritative and tab-independent: once it is
+			// armed, the very NEXT input event resolves the chord no matter what
+			// shape that event takes. This MUST run before the mouse and
+			// escape-sequence branches below — otherwise, on the Session tab where
+			// claude streams a constant flow of mouse/escape traffic, a multi-byte
+			// event (e.g. the terminal coalescing the chord key with an arrow, or
+			// an SGR mouse report) would short-circuit to `continue` and silently
+			// strand the pending prefix, so Ctrl-G d never reaches actDetach. That
+			// short-circuit is exactly why detach worked on non-Session tabs (no
+			// competing escape/mouse traffic) but not on the Session tab.
+			if prefix {
+				prefix = false
+				// A mouse event (or empty event) after Ctrl-G is not a valid chord;
+				// cancel the prefix cleanly without acting.
+				if ev.mouse || len(ev.bytes) == 0 {
+					continue
+				}
+				switch resolvePrefixed(comp, ev.bytes[0]) {
+				case actDetach:
+					_ = c.Detach()
+					return nil
+				case actNewSession:
+					_ = c.NewSession()
+					markDirty()
+				default:
+					markDirty()
+				}
+				continue
+			}
 			if ev.mouse {
 				if ev.press && ev.button == 0 { // plain left-click
 					changed, sess, newSess := comp.Click(ev.x, ev.y)
@@ -176,6 +205,9 @@ func runShell(c *daemon.Client, instance string) error {
 				continue
 			}
 			// Multi-byte escape sequences (arrows, etc.) forward intact to claude.
+			// (A pending prefix was already resolved above, so a leading 0x07 here
+			// can only be a literal Ctrl-G inside a longer sequence — never a
+			// stranded prefix.)
 			if len(ev.bytes) > 1 && ev.bytes[0] == 0x1b {
 				if comp.ActiveIsSession() {
 					_ = c.Input(ev.bytes)
@@ -228,22 +260,35 @@ const (
 
 const ctrlG = 0x07
 
+// resolvePrefixed maps the byte following a Ctrl-G prefix to a chrome action and
+// applies any tab navigation as a side effect on comp. It is intentionally free
+// of *daemon.Client so the chord semantics (especially Ctrl-G d -> actDetach)
+// can be unit-tested without a live daemon or terminal. Callers translate the
+// returned actDetach/actNewSession into the corresponding client calls.
+//
+// Detach is bound to BOTH `d` and a repeated Ctrl-G so it stays reachable even
+// if a terminal swallows or rewrites a literal `d`; we deliberately do not bind
+// any other always-on key, so claude keeps every keystroke it needs.
+func resolvePrefixed(comp *shell.Compositor, b byte) keyAction {
+	switch b {
+	case 'n', 0x09: // n or Tab
+		comp.NextTab()
+	case 'p':
+		comp.PrevTab()
+	case '1', '2', '3', '4', '5':
+		comp.SetTab(int(b - '1'))
+	case 'c':
+		return actNewSession
+	case 'd', ctrlG:
+		return actDetach
+	}
+	return actHandled
+}
+
 func handleKey(c *daemon.Client, comp *shell.Compositor, b byte, prefix *bool) keyAction {
 	if *prefix {
 		*prefix = false
-		switch b {
-		case 'n', 0x09: // n or Tab
-			comp.NextTab()
-		case 'p':
-			comp.PrevTab()
-		case '1', '2', '3', '4', '5':
-			comp.SetTab(int(b - '1'))
-		case 'c':
-			return actNewSession
-		case 'd', ctrlG:
-			return actDetach
-		}
-		return actHandled
+		return resolvePrefixed(comp, b)
 	}
 	if b == ctrlG {
 		*prefix = true
