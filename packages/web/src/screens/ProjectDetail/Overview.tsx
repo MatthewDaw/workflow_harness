@@ -1,13 +1,31 @@
 import { Link, useParams } from 'react-router-dom';
-import { useGetProjectQuery, useGetSessionsQuery } from '../../api/baseApi.js';
+import {
+  useGetProjectQuery,
+  useGetProjectRequirementsQuery,
+  useGetSessionsQuery,
+} from '../../api/baseApi.js';
 import { Bar, StatusDot, ScreenHeader } from '../../components/primitives.js';
 
-/** Project Overview sub-tab (U21): PRD goal, progress, and session history. */
+/** First non-empty line of the requirements markdown, stripped of `#` markers. */
+function summarize(markdown: string): string {
+  for (const raw of markdown.split('\n')) {
+    const line = raw.replace(/^#+\s*/, '').trim();
+    if (line) return line;
+  }
+  return '';
+}
+
+/**
+ * Project Overview sub-tab (U21/U12): a requirements summary plus the
+ * GitHub-sourced completion, and the session history.
+ */
 export function Overview() {
   const { projectId = '' } = useParams();
   const { data: project } = useGetProjectQuery(projectId, { skip: !projectId });
+  const { data: requirements } = useGetProjectRequirementsQuery(projectId, { skip: !projectId });
   const { data: sessions } = useGetSessionsQuery();
   const projectSessions = (sessions ?? []).filter((s) => s.projectId === projectId);
+  const summary = summarize(requirements?.markdown ?? '');
 
   return (
     <div className="hq-pad" data-testid="project-overview">
@@ -15,24 +33,22 @@ export function Overview() {
 
       <div className="flex gap-4">
         <div className="hq-box flex-1 bg-paper">
-          <div className="text-[11px] uppercase tracking-wide text-faint">
-            PRD.md — goal &amp; objectives
-          </div>
+          <div className="text-[11px] uppercase tracking-wide text-faint">Requirements</div>
           <div className="mt-1.5 text-[13px] text-mut">
-            {project?.prdGoal ?? 'No PRD goal yet.'}
+            {summary || 'No requirements yet.'}
           </div>
-          <div className="mt-2.5 text-[11px] uppercase tracking-wide text-faint">
-            Owns these Supporting Outcomes
-          </div>
-          <div className="mt-1.5 text-[11px] text-faint">
-            <Link to="/objectives" className="text-accent">
-              ↑ link up to Company Objectives
+          <div className="mt-2.5 flex gap-3 text-[11px]">
+            <Link to="requirements" className="text-accent">
+              Project Requirements →
+            </Link>
+            <Link to="detailed-requirements" className="text-accent">
+              Detailed Requirements →
             </Link>
           </div>
         </div>
         <div className="hq-box flex-1 bg-paper">
           <div className="text-[11px] uppercase tracking-wide text-faint">
-            PROGRESS.md — done so far · {project?.progressPct ?? 0}%
+            Completion (from GitHub) · {project?.progressPct ?? 0}%
           </div>
           <div className="my-2">
             <Bar pct={project?.progressPct ?? 0} />

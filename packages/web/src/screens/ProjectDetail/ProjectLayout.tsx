@@ -2,11 +2,15 @@ import { NavLink, Outlet, useParams } from 'react-router-dom';
 
 /**
  * Project hub layout (U19/U21): renders the project sub-nav promoted from the
- * wireframe's `.subnav` and an <Outlet> for the active sub-tab. Sub-tabs:
- * Overview / Weekly / Sessions / Agents.
+ * wireframe's `.subnav` and an <Outlet> for the active sub-tab. Sub-tabs (U12):
+ * Overview / Project Requirements / Detailed Requirements / Weekly / Sessions /
+ * Agents.
  */
 const SUBTABS = [
   { to: '', label: 'Overview', end: true },
+  // U12: two-tier requirements sub-tabs.
+  { to: 'requirements', label: 'Project Requirements' },
+  { to: 'detailed-requirements', label: 'Detailed Requirements' },
   { to: 'weekly', label: 'Weekly' },
   { to: 'sessions', label: 'Sessions' },
   { to: 'agents', label: 'Agents' },

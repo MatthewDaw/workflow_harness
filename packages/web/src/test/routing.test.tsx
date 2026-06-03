@@ -70,6 +70,12 @@ describe('navigation + routing', () => {
 
     // Tickets sub-tab was removed (the new model has no tickets).
     expect(within(subnav).queryByRole('link', { name: 'Tickets' })).not.toBeInTheDocument();
+    // U12: two-tier requirements sub-tabs.
+    await userEvent.click(within(subnav).getByRole('link', { name: 'Project Requirements' }));
+    expect(await screen.findByTestId('project-requirements')).toBeInTheDocument();
+
+    await userEvent.click(within(subnav).getByRole('link', { name: 'Detailed Requirements' }));
+    expect(await screen.findByTestId('detailed-requirements')).toBeInTheDocument();
 
     await userEvent.click(within(subnav).getByRole('link', { name: 'Weekly' }));
     expect(await screen.findByTestId('project-weekly')).toBeInTheDocument();

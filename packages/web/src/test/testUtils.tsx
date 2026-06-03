@@ -27,6 +27,12 @@ export interface SeedData {
   agents?: Agent[];
   skills?: Skill[];
   weekly?: Record<string, WeeklyUpdate[]>;
+  /** Detailed-requirements doc tree, keyed by projectId (U11). */
+  docs?: Record<string, { path: string; title: string; completion: number }[]>;
+  /** Doc markdown bodies, keyed by `${projectId}::${repoRelPath}` (U11). */
+  docContent?: Record<string, string>;
+  /** HQ-owned high-level requirements markdown, keyed by projectId (U10). */
+  requirements?: Record<string, string>;
 }
 
 const MATT: AuthUser = { userId: 'user-matt', username: 'matt', org: 'acme' };
@@ -48,7 +54,10 @@ export function installFetchStub(seed: SeedData) {
 
   const handler = (input: RequestInfo | URL): Response => {
     const url = typeof input === 'string' ? input : (input as { url: string }).url;
-    const path = url.replace(/^.*\/api\/?/, '').split('?')[0] ?? '';
+    const afterApi = url.replace(/^.*\/api\/?/, '');
+    const [pathPart, queryPart = ''] = afterApi.split('?');
+    const path = pathPart ?? '';
+    const query = new URLSearchParams(queryPart);
     const json = (body: unknown) =>
       new Response(JSON.stringify(body), {
         status: 200,
@@ -69,6 +78,19 @@ export function installFetchStub(seed: SeedData) {
 
     const weekly = /^projects\/([^/]+)\/weekly$/.exec(path);
     if (weekly) return json(seed.weekly?.[weekly[1]!] ?? []);
+
+    const docContent = /^projects\/([^/]+)\/docs\/content$/.exec(path);
+    if (docContent) {
+      const docPath = query.get('path') ?? '';
+      const markdown = seed.docContent?.[`${docContent[1]}::${docPath}`] ?? '';
+      return json({ path: docPath, markdown });
+    }
+
+    const docs = /^projects\/([^/]+)\/docs$/.exec(path);
+    if (docs) return json(seed.docs?.[docs[1]!] ?? []);
+
+    const requirements = /^projects\/([^/]+)\/requirements$/.exec(path);
+    if (requirements) return json({ markdown: seed.requirements?.[requirements[1]!] ?? '' });
 
     return json([]);
   };
