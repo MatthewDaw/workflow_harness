@@ -14,6 +14,17 @@ describe('LinkDevice (device-auth approval)', () => {
     expect(screen.getByRole('button', { name: 'Approve device' })).toBeInTheDocument();
   });
 
+  it('shows the claude+ install commands above the device form', async () => {
+    renderWithProviders(<LinkDevice />, { route: '/link-device' });
+    await screen.findByTestId('link-device');
+
+    // curl one-liner + npm command, each with a Copy button, plus a releases link.
+    expect(screen.getByText(/curl -fsSL .*install\.sh \| sh/)).toBeInTheDocument();
+    expect(screen.getByText('npm i -g claude-plus')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Copy' }).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole('link', { name: /claude-plus\/releases/ })).toBeInTheDocument();
+  });
+
   it('shows the success message after approving a code', async () => {
     renderWithProviders(<LinkDevice />, { route: '/link-device' });
     await screen.findByTestId('link-device');
@@ -21,6 +32,8 @@ describe('LinkDevice (device-auth approval)', () => {
     await userEvent.type(screen.getByPlaceholderText('WDJB-MJXT'), 'WDJB-MJXT');
     await userEvent.click(screen.getByRole('button', { name: 'Approve device' }));
 
-    expect(await screen.findByText('Device approved — return to your terminal.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Device approved — return to your terminal.'),
+    ).toBeInTheDocument();
   });
 });

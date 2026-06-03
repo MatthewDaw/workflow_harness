@@ -21,7 +21,13 @@ import (
 // older build than a freshly-launched client, so same-build source coupling
 // cannot catch wire drift — the handshake does: on mismatch the client is told
 // to restart the daemon rather than silently misbehaving.
-const ProtocolVersion = 1
+//
+// v2 added FrameRename (the inline session-rename control channel); a stale v1
+// daemon is auto-replaced on the next attach rather than silently lacking it.
+// v3 added FrameKill (force-close one session) and FrameShutdown (terminate all
+// sessions and stop the daemon on quit); a stale v2 daemon is auto-replaced on
+// the next attach.
+const ProtocolVersion = 3
 
 // FrameType discriminates control frames on the attach channel.
 type FrameType string
@@ -34,6 +40,9 @@ const (
 	FrameFocus   FrameType = "focus"   // client -> daemon switch focused session
 	FrameResize  FrameType = "resize"  // client -> daemon SIGWINCH dimensions
 	FrameNewSess FrameType = "new"     // client -> daemon spawn a session
+	FrameRename  FrameType = "rename"  // client -> daemon manual session rename
+	FrameKill    FrameType = "kill"     // client -> daemon force-close one session (uses SessID)
+	FrameShutdown FrameType = "shutdown" // client -> daemon terminate all sessions + stop daemon
 	FrameInput   FrameType = "input"   // client -> daemon PTY stdin bytes (base64)
 	FrameOutput  FrameType = "output"  // daemon -> client PTY stdout bytes (base64)
 	FrameDetach  FrameType = "detach"  // client -> daemon clean detach (daemon keeps running)
@@ -49,7 +58,8 @@ type Frame struct {
 	Type     FrameType  `json:"type"`
 	Version  int        `json:"v,omitempty"`        // hello/ack: ProtocolVersion
 	Sessions int        `json:"sessions,omitempty"` // pong: live session count
-	SessID   string     `json:"sessId,omitempty"`   // focus/input/output target
+	SessID   string     `json:"sessId,omitempty"`   // focus/input/output/rename target
+	Name     string     `json:"name,omitempty"`     // rename: new session name
 	Data     string     `json:"data,omitempty"`     // base64 PTY bytes
 	Cols     int        `json:"cols,omitempty"`     // resize
 	Rows     int        `json:"rows,omitempty"`     // resize

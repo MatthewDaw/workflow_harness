@@ -58,10 +58,13 @@ func main() {
 	var sessionN int
 	var showVersion bool
 	var gui bool
+	var dangerous bool
 	fs := flag.NewFlagSet("claude+", flag.ContinueOnError)
 	fs.IntVar(&sessionN, "session", -1, "attach to the daemon at registry index N")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&gui, "gui", false, "launch the desktop GUI for this repo")
+	fs.BoolVar(&dangerous, "dangerously-skip-permissions", false,
+		"start this repo's daemon in dangerous mode: every claude session it spawns runs with --dangerously-skip-permissions")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -69,6 +72,15 @@ func main() {
 	if showVersion {
 		fmt.Println("claude+", version)
 		return
+	}
+
+	// Dangerous mode is carried to the (possibly detached) daemon and the GUI via
+	// the environment: spawnDaemon and runGUI both inherit os.Environ(), and
+	// pty.DefaultSpawn honors CLAUDE_PLUS_DANGEROUS on every child. Set it before
+	// any EnsureDaemon/runGUI below. The daemon is per-repo and shared, so the
+	// mode is fixed when the daemon first starts for a repo.
+	if dangerous {
+		_ = os.Setenv("CLAUDE_PLUS_DANGEROUS", "1")
 	}
 
 	if gui {
@@ -155,6 +167,12 @@ func runDaemon(args []string) {
 // unreadable stdin, or a delivery error is swallowed (the transcript tailer
 // remains the authoritative event source).
 func runHook() {
+	// Skip hook forwarding for the internal headless title-generation call
+	// (tagged by internal/title via CLAUDE_PLUS_TITLE). That short-lived
+	// `claude -p` is not a real session and must not surface in the Stream / HQ.
+	if os.Getenv("CLAUDE_PLUS_TITLE") != "" {
+		return
+	}
 	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	if err != nil || len(raw) == 0 {
 		return

@@ -13,6 +13,7 @@ import (
 
 	"github.com/workflow-harness/claude-plus/internal/daemon"
 	"github.com/workflow-harness/claude-plus/internal/diag"
+	"github.com/workflow-harness/claude-plus/internal/event"
 	"github.com/workflow-harness/claude-plus/internal/shell"
 	"golang.org/x/term"
 )
@@ -99,14 +100,7 @@ func runShell(c *daemon.Client, instance string) error {
 		}
 	}
 
-	c.Out = func(sessID string, b []byte) {
-		comp.FeedOutput(sessID, b)
-		markDirty()
-	}
-	c.OnSessions = func(list []daemon.SessInfo) {
-		applySessions(comp, list)
-		markDirty()
-	}
+	wireClientHandlers(c, comp, markDirty)
 
 	readErr := make(chan error, 1)
 	go func() {
@@ -231,6 +225,32 @@ func runShell(c *daemon.Client, instance string) error {
 				}
 			}
 		}
+	}
+}
+
+// wireClientHandlers subscribes the compositor to every daemon push channel:
+// PTY output (the Session tab), session-list updates (the sub-tab row), captured
+// events (the Stream tab), and meter snapshots (the status line). Each handler
+// marks the frame dirty so the next tick repaints. Extracted from runShell so the
+// subscriptions are unit-testable without a live daemon or terminal — previously
+// OnEvent/OnStatus were never set, which is why the Stream tab and meter stayed
+// blank regardless of activity.
+func wireClientHandlers(c *daemon.Client, comp *shell.Compositor, markDirty func()) {
+	c.Out = func(sessID string, b []byte) {
+		comp.FeedOutput(sessID, b)
+		markDirty()
+	}
+	c.OnSessions = func(list []daemon.SessInfo) {
+		applySessions(comp, list)
+		markDirty()
+	}
+	c.OnEvent = func(env event.Envelope) {
+		comp.FeedEvent(env)
+		markDirty()
+	}
+	c.OnStatus = func(s daemon.StatusSnapshot) {
+		comp.SetStatus(int(s.Tokens), s.CostUSD)
+		markDirty()
 	}
 }
 

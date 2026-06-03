@@ -186,6 +186,21 @@ describe('control authorization', () => {
     expect(res).toMatchObject({ statusCode: 403 });
     expect(posts).toHaveLength(0);
   });
+
+  it('denies a shutdown frame from a non-owner (terminate inherits the ownership gate)', async () => {
+    await seedSession();
+    await seedConn('daemon-conn', OWNER, 'daemon', INSTANCE);
+    await seedConn('attacker-conn', OTHER, 'web');
+
+    const { posts, poster } = recordingPoster();
+    const res = await control(
+      wsEvent({ sessionId: SESSION, action: 'shutdown' }, 'attacker-conn'),
+      { repo, poster },
+    );
+    // A non-owner can no more terminate a session than inject into it.
+    expect(res).toMatchObject({ statusCode: 403 });
+    expect(posts).toHaveLength(0);
+  });
 });
 
 describe('control routing', () => {
@@ -225,6 +240,19 @@ describe('control routing', () => {
       poster,
     });
     expect(posts.map((p) => (p.body as { action: string }).action)).toEqual(['pause', 'interrupt']);
+    expect(posts.every((p) => p.connectionId === 'daemon-conn')).toBe(true);
+  });
+
+  it('routes shutdown and kill terminate frames to the owning daemon', async () => {
+    await seedSession();
+    await seedConn('daemon-conn', OWNER, 'daemon', INSTANCE);
+    await seedConn('web-conn', OWNER, 'web');
+    const { posts, poster } = recordingPoster();
+
+    await control(wsEvent({ sessionId: SESSION, action: 'shutdown' }, 'web-conn'), { repo, poster });
+    await control(wsEvent({ sessionId: SESSION, action: 'kill' }, 'web-conn'), { repo, poster });
+
+    expect(posts.map((p) => (p.body as { action: string }).action)).toEqual(['shutdown', 'kill']);
     expect(posts.every((p) => p.connectionId === 'daemon-conn')).toBe(true);
   });
 

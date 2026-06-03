@@ -13,6 +13,7 @@ import (
 	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/diag"
 	"github.com/workflow-harness/claude-plus/internal/event"
+	"github.com/workflow-harness/claude-plus/internal/title"
 	"github.com/workflow-harness/claude-plus/internal/transport"
 )
 
@@ -310,7 +311,24 @@ func (rt *Runtime) captureLoop(instanceID string) {
 						emit(sessID, event.SessionRename(sessID, name))
 					}
 				}
-				t := capture.NewTailer(sid, path, func(e event.Event) { emit(sid, e) }, onFirst)
+				// After the first full exchange, upgrade the provisional slug to a
+				// concise LLM-generated title. The headless `claude -p` call is slow
+				// and best-effort, so it runs on its own goroutine and never blocks
+				// the capture loop; a failure leaves the provisional name in place.
+				onExchange := func(sessID, userText, assistantText string) {
+					go func() {
+						defer diag.Recover("runtime.titleGen")
+						raw, ok := title.Generate(rt.d.repoRoot, userText, assistantText)
+						if !ok {
+							return
+						}
+						if renamed, name := rt.d.mux.ApplyTitle(sessID, raw); renamed {
+							emit(sessID, event.SessionRename(sessID, name))
+						}
+					}()
+				}
+				t := capture.NewTailer(sid, path, func(e event.Event) { emit(sid, e) }, onFirst).
+					OnExchange(onExchange)
 				stop := make(chan struct{})
 				tailStops[sid] = stop
 				go t.Run(500*time.Millisecond, stop)

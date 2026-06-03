@@ -94,6 +94,13 @@
   .term .status{display:flex;gap:18px;flex-wrap:wrap;padding:7px 16px;background:#23262c;border-top:1px solid #34383f;color:var(--term-dim);font-size:11.5px}
   .term .status b{color:#aeb6c0;font-weight:600}
   .kbd{border:1px solid #3a3f47;border-radius:3px;padding:0 5px;color:#aeb6c0;font-size:11px}
+  /* visible, blinking input caret in the terminal mock */
+  .term .caret{display:inline-block;width:7px;background:var(--term-ink);color:transparent;
+    border-radius:1px;animation:blink 1.05s step-end infinite}
+  @keyframes blink{0%,55%{opacity:1}56%,100%{opacity:0}}
+  /* inline tab-name edit affordance (double-click to rename) */
+  .term .tabs .t .edit{background:#0f1115;border:1px solid var(--term-acc);border-radius:3px;
+    color:#fff;padding:0 4px;outline:none;font:inherit}
 
   /* browser mock */
   .browser .chrome{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#ececea;border-bottom:1px solid var(--line);border-radius:8px 8px 0 0}
@@ -222,7 +229,7 @@
   <!-- ======================= 1. TUI SESSION ======================= -->
   <section class="screen" data-name="② claude+ — Session tab">
     <h2><span class="tag term">terminal</span> &nbsp;claude+ — Session tab</h2>
-    <p class="desc">The default view, after you attach to a repo's instance. Claude runs exactly as normal; <code>claude+</code> only adds the tab bar (top) and the status line (bottom). A second row of <b>session sub-tabs</b> runs several Claude sessions <em>within this one repo</em> and you switch between them. Each one <b>auto-generates a name</b> from what it's working on, so you never have to title them. Each is its own process, all streaming to HQ.</p>
+    <p class="desc">The default view, after you attach to a repo's instance. Claude runs exactly as normal; <code>claude+</code> only adds the tab bar (top) and the status line (bottom). A second row of <b>session sub-tabs</b> runs several Claude sessions <em>within this one repo</em> and you switch between them. Each one <b>auto-generates a title</b> — a provisional keyword slug at first, then a concise <b>LLM-written title</b> once the first exchange lands — so you never have to title them. <b>Double-click a sub-tab</b> to rename it by hand (sticky; auto-titling won't overwrite). The input shows a <b>blinking caret</b>, and you can <b>scroll up</b> through earlier output. Each session is its own process, all streaming to HQ. The session sub-tab row is shown <b>only on this Session view</b> — switching to Agents or Stream hides it.</p>
 
     <div class="term">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; command-hq (instance #0) · 3 sessions</span></div>
@@ -234,10 +241,10 @@
       </div>
       <div class="tabs" style="background:#191b20">
         <div class="t on" style="border-bottom-color:#7fc99a"><span class="ok">●</span> ⟨③⟩ live-watch-stream <span class="dim">#a91f</span></div>
-        <div class="t"><span class="warnc">●</span> steer-flow-qa</div>
+        <div class="t"><span class="warnc">●</span> <input class="edit" value="steer-flow-qa" style="width:104px" readonly> <span class="dim">⟨④⟩ double-click ↵</span></div>
         <div class="t"><span class="dim">●</span> objectives-rollup</div>
-        <div class="t acc">⟨④⟩ ＋ new</div>
-        <div class="t dim" style="margin-left:auto">⌃1–9 jump · ⌃N new · ⌃W close</div>
+        <div class="t acc">⟨⑤⟩ ＋ new</div>
+        <div class="t dim" style="margin-left:auto">dbl-click rename · ⌃1–9 jump · ⌃N new · ⌃W close</div>
       </div>
       <div class="body"><span class="dim">› the user asks claude to add the live watch view…</span>
 
@@ -245,32 +252,35 @@
   <span class="dim">⎿  Read src/state/weeklyLifecycle.ts (142 lines)</span>
 
 <span class="acc">●</span> <span class="ok">Bash</span>(yarn vitest run liveMiddleware.test.ts)
-  <span class="dim">⎿  ✓ 12 passed</span> <span class="warnc">⟨③⟩</span>
+  <span class="dim">⎿  ✓ 12 passed</span>
 
 <span class="acc">●</span> Now editing the live-watch reducer…
   <span class="dim">⎿  Updated src/ws/liveMiddleware.ts (+38 −4)</span>
 
-<span class="dim">────────────────────────────────────────────────</span>
-<span class="acc">›</span> <span style="background:#2a2e35;padding:1px 4px">_</span>  <span class="dim">type to talk to claude · this is the real session</span>
+<span class="dim">────────────── ⟨⑥⟩ scroll up for earlier output ──────────────</span>
+<span class="acc">›</span> add the live watch view<span class="caret">_</span>  <span class="dim">⟨⑦⟩ blinking caret · type to talk to claude · this is the real session</span>
 </div>
       <div class="status">
-        <span><b>⟨⑤⟩ instance</b> command-hq #0</span>
+        <span><b>⟨⑧⟩ instance</b> command-hq #0</span>
         <span><b>focused</b> live-watch-stream · 14m</span>
         <span><b>tokens</b> 48k · <b>$</b> 0.62</span>
         <span class="dim">others: 2 running · $0.41</span>
-        <span class="acc">⟨⑥⟩ ⌃T tabs · ⌃R rename · ⌃G to HQ</span>
+        <span class="acc">⌃T tabs · dbl-click / ⌃R rename · ⌃G to HQ</span>
       </div>
     </div>
 
     <ul class="anno">
-      <li><b>Top tab bar</b> is the chrome we inject. Session = native Claude. Agents / Forge / Stream are ours.</li>
+      <li><b>Top tab bar</b> is the chrome we inject. Session = native Claude. Agents / Stream are ours. <b>The session sub-tab row only appears on Session</b> — picking Agents or Stream hides it.</li>
       <li><b>HQ linked</b> indicator — confirms events are reaching the bus. Goes red if the connection drops (work continues locally, syncs on reconnect).</li>
-      <li><b>Auto-named session sub-tabs</b> — each is an independent <code>claude</code> process inside this instance, and each <b>auto-generates its own name</b> from its first turn / task (here <code>live-watch-stream</code>, <code>steer-flow-qa</code>, <code>objectives-rollup</code>). No manual titling; ⌃R to override. Switch with ⌃1–9; the dot = status (green active / amber needs-input / grey idle).</li>
-      <li><b>＋ new</b> spawns another session in this repo — optionally started as an agent. It gets an auto-name as soon as it knows what it's doing. ⌃W closes the focused one.</li>
-      <li><b>Status line</b> names the <em>instance</em> (the repo, #0) and the <em>focused</em> session by its generated name, plus a cost roll-up of the rest.</li>
-      <li><b>Keybinds</b> — ⌃1–9 jump, ⌃T cycles top tabs, ⌃R renames the session, ⌃G jumps to its HQ page.</li>
+      <li><b>Auto-titled session sub-tabs</b> — each is an independent <code>claude</code> process. A tab opens with a provisional keyword slug from its first turn, then <b>upgrades to a concise LLM-written title</b> after the first exchange (a one-shot headless <code>claude -p</code> on your own subscription summarizes the opening user message + assistant reply). Switch with ⌃1–9; the dot = status (green active / amber needs-input / grey idle).</li>
+      <li><b>Double-click to rename</b> — double-click a sub-tab's name to edit it inline (Enter commits, Esc cancels). The GUI form of ⌃R; a hand-set name is sticky and auto-titling won't overwrite it.</li>
+      <li><b>＋ new</b> spawns another session in this repo — optionally started as an agent. It gets an auto-title as soon as it knows what it's doing. ⌃W closes the focused one.</li>
+      <li><b>Scroll up</b> — the terminal keeps scrollback, so you can wheel up through a session's earlier output; typing snaps back to the live edge.</li>
+      <li><b>Blinking caret</b> — the input always shows a visible, blinking cursor so you can see where you're typing in the live session.</li>
+      <li><b>Status line</b> names the <em>instance</em> (the repo, #0) and the <em>focused</em> session by its title, plus a cost roll-up of the rest. Keybinds: ⌃1–9 jump, ⌃T cycles top tabs, dbl-click / ⌃R rename, ⌃G to HQ.</li>
     </ul>
     <div class="note"><b>Architecture:</b> tmux-style multiplexing, but scoped to one repo. The instance daemon (see <em>claude+ ls</em>) holds one PTY per session and the TUI renders only the focused one; the rest run in the background. Each is a full Claude process, so it's a handful-of-sessions feature — the cost roll-up keeps that visible.</div>
+    <div class="note"><b>Permission mode inherits.</b> Start the instance with <code>claude+ --dangerously-skip-permissions</code> (or <code>claude+ --gui --dangerously-skip-permissions</code>) and the daemon runs in <b>dangerous mode</b>: every inner <code>claude</code> session it spawns is launched with <code>--dangerously-skip-permissions</code> too, so sub-agents share the wrapper's posture. The mode is fixed when the repo's daemon first starts — restart it to change it.</div>
   </section>
 
   <!-- ======================= 2. TUI AGENTS ======================= -->
@@ -324,6 +334,7 @@
       <li><b>Drift warning</b> — local <code>~/.claude</code> config and the harness's copy can diverge; one keystroke reconciles them. This is the "stays in sync with local Claude Code setup" requirement.</li>
       <li><b>Single source</b> — this roster is literally the same data as HQ → Agents. Edit either place.</li>
     </ul>
+    <div class="note"><b>No session sub-tabs here.</b> The Agents view is instance-scoped, not per-session, so the session sub-tab row (from the Session view) is hidden while you're on this tab.</div>
   </section>
 
   <!-- ======================= 2.4 TUI AGENTFORGE ======================= -->
@@ -424,6 +435,7 @@
       <li><b>Scope + counters</b> — which sessions are in view, total events seen, and a <b>dropped</b> counter (should stay 0) that proves nothing is being lost on the way to HQ.</li>
       <li><b>Export</b> — dump the event log (the append-only record per session) for debugging or replay.</li>
     </ul>
+    <div class="note"><b>No session sub-tabs here.</b> The sub-tab row on this view scopes the <em>event feed</em> (all sessions / one session), not the live terminals — the per-session sub-tab row from the Session view is hidden on Stream.</div>
     <div class="note"><b>Product call for you:</b> Stream is the most optional of the four tabs — end users mostly want the conversation, not the wire format. Options: keep it a first-class tab (shown here), demote it to a hidden debug view behind a keybind (e.g. <code>⌃D</code>), or drop it from the terminal and only expose the raw feed on HQ. Easy to change.</div>
   </section>
 
@@ -439,8 +451,8 @@
         <a href="#">Objectives</a>
         <a class="on" href="#">Projects</a>
         <a href="#">Sessions</a>
-        <a href="#">Agents</a><a href="#">Skills</a>
-        <span class="right"><span class="dot live"></span>3 live · <span>@matt</span></span>
+        <a href="#">Agents</a><a href="#">Skills</a><a href="#">Get started</a>
+        <span class="right"><span class="dot live"></span>3 live · <span class="faint">@matt</span> <span class="btn" data-go="HQ — Sign in">Sign out</span></span>
       </div>
       <div class="pad">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1402,6 +1414,109 @@
     <div class="note"><b>Assignment behavior to decide:</b> when an agent is assigned a bundle, does it get <em>all</em> sub-skills, or can you assign individual sub-skills too? The Agent editor catalog should probably let you do both — assign the whole <code>gstack</code> bundle, or just <code>gstack › browse</code>. Flagged for you.</div>
   </section>
 
+  <!-- ======================= HQ SIGN IN ======================= -->
+  <section class="screen" data-name="HQ — Sign in">
+    <h2><span class="tag web">web</span> &nbsp;Command HQ — Sign in</h2>
+    <p class="desc">What a <b>signed-out</b> visitor sees. After sign-out the app cache is wiped, so the next person to sign in on this browser starts clean and only ever loads <em>their own</em> projects, sessions, and agents. Two different logins (e.g. <span class="mono">mattdaw7@gmail.com</span> vs <span class="mono">bill@cow.com</span>) are two separate profiles — neither sees the other's data.</p>
+
+    <div class="frame browser">
+      <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / sign-in</span></div>
+      <div class="pad" style="display:grid;place-items:center;padding:48px 16px">
+        <div class="box" style="width:340px;background:#fff;border-style:solid">
+          <div style="font-weight:700;letter-spacing:.3px;margin-bottom:4px">⌗ Command HQ</div>
+          <div class="muted" style="font-size:12px;margin-bottom:16px">Sign in to watch &amp; steer your sessions.</div>
+
+          <label class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Email</label>
+          <div class="box" style="background:#fff;padding:8px 10px;margin:4px 0 10px"><span class="muted mono">mattdaw7@gmail.com</span></div>
+
+          <label class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Password</label>
+          <div class="box" style="background:#fff;padding:8px 10px;margin:4px 0 12px"><span class="muted">••••••••</span></div>
+
+          <div class="btn pri" data-go="HQ — Projects" style="width:100%;text-align:center">Sign in</div>
+
+          <div style="display:flex;align-items:center;gap:10px;margin:14px 0;color:var(--faint);font-size:11px;text-transform:uppercase">
+            <span class="hr" style="flex:1;margin:0"></span> or <span class="hr" style="flex:1;margin:0"></span>
+          </div>
+          <div class="btn" data-go="HQ — Projects" style="width:100%;text-align:center">Continue with Google</div>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:14px">New here? <a href="#" data-go="Get started">Install claude+ &amp; get started →</a></div>
+      </div>
+    </div>
+
+    <ul class="anno">
+      <li><b>Explicit sign-out → here.</b> The nav's <span class="btn">Sign out</span> button (top-right of every signed-in screen) ends the session and returns to this form.</li>
+      <li><b>Per-user isolation.</b> On sign-out the client cache (RTK Query) is reset; the backend already scopes every query to the signed-in user (projects/sessions by owner, 404 on anything not yours), so a new login can't load the previous user's data.</li>
+      <li><b>Org-tier data</b> (objectives) is shared only among real members of the same org. In dev/demo each distinct login maps to its own org, so separate logins are fully separate profiles.</li>
+    </ul>
+  </section>
+
+  <!-- ======================= HQ GET STARTED (INSTALL + LINK) ======================= -->
+  <section class="screen" data-name="Get started">
+    <h2><span class="tag web">web</span> &nbsp;Command HQ — Get started <span class="faint" style="font-weight:400">(install claude+ &amp; link device)</span></h2>
+    <p class="desc">The onboarding screen, reached from the nav's <b>Get started</b> item. First <b>install</b> the <code>claude+</code> wrapper, then <b>link</b> this device by approving the code <code>claude+ login</code> prints in your terminal. The install commands are the real ones from <span class="mono">scripts/install.sh</span> / <span class="mono">npm/claude-plus</span>.</p>
+
+    <div class="frame browser">
+      <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / get-started</span></div>
+      <div class="appnav">
+        <span class="brand">⌗ Command HQ</span>
+        <a href="#">Objectives</a><a href="#">Projects</a><a href="#">Sessions</a><a href="#">Agents</a><a href="#">Skills</a><a class="on" href="#">Get started</a>
+        <span class="right"><span class="dot live"></span>3 live · <span class="faint">@matt</span> <span class="btn" data-go="HQ — Sign in">Sign out</span></span>
+      </div>
+      <div class="pad">
+
+        <!-- 1. INSTALL -->
+        <div style="font-weight:600;margin-bottom:2px">① Install claude+</div>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">Pick one. Installs the <code>claude-plus</code> binary (aliased <code>claude+</code>) on a host with the real <code>claude</code> CLI on PATH.</div>
+
+        <div class="box bg-paper" style="background:#fff;margin-bottom:8px">
+          <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">curl (macOS / Linux)</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <code class="mono" style="flex:1;overflow:auto;white-space:nowrap">curl -fsSL https://raw.githubusercontent.com/workflow-harness/claude-plus/main/scripts/install.sh | sh</code>
+            <span class="btn">Copy</span>
+          </div>
+        </div>
+
+        <div class="box bg-paper" style="background:#fff;margin-bottom:8px">
+          <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">npm (any platform)</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <code class="mono" style="flex:1">npm i -g claude-plus</code>
+            <span class="btn">Copy</span>
+          </div>
+        </div>
+
+        <div class="box bg-paper" style="background:#fff">
+          <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Or download a release</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <a class="mono" href="#" style="flex:1">github.com/workflow-harness/claude-plus/releases →</a>
+          </div>
+        </div>
+
+        <div class="note" style="margin:14px 0 18px"><b>Then sign in from the terminal:</b> run <code>claude+ login</code> — it prints a short user code and waits. Enter that code below to link this machine to your HQ account.</div>
+
+        <div class="hr"></div>
+
+        <!-- 2. LINK DEVICE -->
+        <div style="font-weight:600;margin:6px 0 2px">② Link a device</div>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">Approve a <code>claude+ login</code>. Enter the code shown in your terminal.</div>
+        <div class="box bg-paper" style="background:#fff;max-width:420px">
+          <label class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">User code</label>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+            <div class="box" style="background:#fff;padding:8px 12px;min-width:160px"><span class="mono" style="letter-spacing:.18em">WDJB-MJXT</span></div>
+            <span class="btn pri">Approve device</span>
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:10px"><span class="dot good"></span>Device approved — return to your terminal.</div>
+        </div>
+
+      </div>
+    </div>
+
+    <ul class="anno">
+      <li><b>Install-first onboarding.</b> A brand-new user lands here (from the Sign-in screen's "Install &amp; get started" link) and can go from zero to a linked terminal in one screen.</li>
+      <li><b>Commands are sourced, not invented.</b> The curl/npm lines mirror <span class="mono">scripts/install.sh</span> and the <span class="mono">claude-plus</span> npm package so the page can't drift from the real installer.</li>
+      <li><b>Device approval is unchanged.</b> Same user-code flow as before (approved / not-found / error states); install is added <em>above</em> it.</li>
+    </ul>
+  </section>
+
   <footer>
     Wireframe · low-fidelity · <span class="mono">wireframe.html</span> — open in a browser, use the top nav to move between screens.
     Starter agent set, skill names, and the PRD/PROGRESS file convention are all placeholders to react against, not final decisions.
@@ -1449,6 +1564,7 @@
       if(t.includes('Command HQ')||t.includes('Projects')) go('HQ — Projects');
       else if(t.includes('Objectives')) go('HQ — Objectives');
       else if(t.includes('Sessions')) go('HQ — Sessions');
+      else if(t.includes('Get started')) go('Get started');
       else if(t.includes('Agents'))   go('HQ — Agents');
       else if(t.includes('Skills'))   go('HQ — Skills');
       return;

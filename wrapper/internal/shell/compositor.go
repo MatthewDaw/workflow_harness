@@ -6,6 +6,8 @@ import (
 
 	vt "github.com/hinshun/vt10x"
 	"github.com/mattn/go-runewidth"
+
+	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
 // Chrome layout: row 0 is the tab bar, row 1 the session sub-tabs, the last row
@@ -64,7 +66,16 @@ type Compositor struct {
 	tokens   int
 	costUSD  float64
 	degraded bool
+
+	// streamEvents is the bounded live event feed rendered on the Stream tab
+	// (oldest first, newest at the bottom). Fed from the daemon's event bus via
+	// FeedEvent — the terminal counterpart to the desktop Stream panel.
+	streamEvents []event.Envelope
 }
+
+// maxStreamEvents bounds the Stream tab's in-memory feed, mirroring the desktop
+// panel's cap so a long-lived session can't grow it without bound.
+const maxStreamEvents = 300
 
 // NewCompositor builds a compositor rendering to screen.
 func NewCompositor(screen *Screen, instance string) *Compositor {
@@ -102,6 +113,17 @@ func (c *Compositor) ensurePaneLocked(sessID string) *Pane {
 		c.panes[sessID] = p
 	}
 	return p
+}
+
+// FeedEvent appends a captured event envelope to the Stream tab's bounded feed.
+// Safe to call from the attach read loop concurrently with Render.
+func (c *Compositor) FeedEvent(env event.Envelope) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.streamEvents = append(c.streamEvents, env)
+	if len(c.streamEvents) > maxStreamEvents {
+		c.streamEvents = c.streamEvents[len(c.streamEvents)-maxStreamEvents:]
+	}
 }
 
 // FeedOutput writes hosted-session output into that session's mirror terminal.
@@ -225,9 +247,12 @@ func (c *Compositor) Render() {
 	c.renderSubTabs(w)
 
 	curX, curY, curVis := 0, 0, false
-	if c.active == 0 {
+	switch {
+	case c.active == 0:
 		curX, curY, curVis = c.renderSessionBody(w, h)
-	} else {
+	case tabNames[c.active] == "Stream":
+		c.renderStreamBody(w, h)
+	default:
 		c.renderPlaceholderBody(w, h)
 	}
 
@@ -358,6 +383,62 @@ func (c *Compositor) renderSessionBody(w, h int) (curX, curY int, curVis bool) {
 		vcx += rw
 	}
 	return vcx, bodyTop + cy, vis
+}
+
+// renderStreamBody draws the live event feed (the Stream tab): the most recent
+// events that fit the body region, oldest first so the newest sits at the
+// bottom. Each line is "<kind>  <detail>", the kind tinted so the column scans.
+func (c *Compositor) renderStreamBody(w, h int) {
+	if len(c.streamEvents) == 0 {
+		c.screen.SetString(2, bodyTop, "No events yet", colDim, vt.DefaultBG, false, false)
+		return
+	}
+	rows := h - chromeRows
+	if rows < 1 {
+		rows = 1
+	}
+	start := 0
+	if len(c.streamEvents) > rows {
+		start = len(c.streamEvents) - rows
+	}
+	y := bodyTop
+	for _, env := range c.streamEvents[start:] {
+		kind := string(env.Event.Kind)
+		c.screen.SetString(2, y, kind, colGreen, vt.DefaultBG, false, false)
+		if detail := describeEvent(env.Event); detail != "" {
+			c.screen.SetString(2+len(kind)+2, y, detail, colDim, vt.DefaultBG, false, false)
+		}
+		y++
+	}
+}
+
+// describeEvent renders a one-line human summary of an event's payload, parallel
+// to the desktop Stream panel's describe(). The event kind is shown separately
+// by the caller, so this returns only the trailing detail (may be empty).
+func describeEvent(e event.Event) string {
+	switch e.Kind {
+	case event.KindSessionStart:
+		return e.Name + " started"
+	case event.KindSessionRename:
+		return "renamed → " + e.Name
+	case event.KindToolCall:
+		if e.ArgsSummary != "" {
+			return e.Tool + " " + e.ArgsSummary
+		}
+		return e.Tool
+	case event.KindToolResult:
+		return e.Summary
+	case event.KindUserMsg:
+		return "user message"
+	case event.KindAssistantMsg:
+		return "assistant message"
+	case event.KindCostTick:
+		return "cost tick"
+	case event.KindStatusChange:
+		return string(e.From) + " → " + string(e.To)
+	default:
+		return ""
+	}
 }
 
 func (c *Compositor) renderPlaceholderBody(w, h int) {

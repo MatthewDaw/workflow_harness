@@ -3,6 +3,9 @@ import {
   definitionOfDoneSchema,
   orgConfigSchema,
   DEFAULT_DEFINITION_OF_DONE,
+  CONTROL_ACTIONS,
+  controlActionSchema,
+  controlFrameSchema,
 } from '../src/dto.js';
 
 /**
@@ -36,6 +39,30 @@ describe('definitionOfDoneSchema', () => {
 
   it('DEFAULT_DEFINITION_OF_DONE matches the parsed defaults', () => {
     expect(definitionOfDoneSchema.parse({})).toEqual(DEFAULT_DEFINITION_OF_DONE);
+  });
+});
+
+/**
+ * Control actions are the shared source of truth for HQ → daemon steering: the
+ * web sender, the REST/WS control routes, and the wrapper receiver all key off
+ * this enum. `shutdown`/`kill` were added so a live session can be terminated
+ * from HQ (graceful, with a force fallback).
+ */
+describe('controlActionSchema', () => {
+  it('includes inject/pause/interrupt and the terminate actions shutdown/kill', () => {
+    expect(CONTROL_ACTIONS).toEqual(['inject', 'pause', 'interrupt', 'shutdown', 'kill']);
+    for (const a of ['shutdown', 'kill'] as const) {
+      expect(controlActionSchema.safeParse(a).success).toBe(true);
+    }
+  });
+
+  it('rejects an unknown action', () => {
+    expect(controlActionSchema.safeParse('restart').success).toBe(false);
+  });
+
+  it('parses a shutdown control frame with an empty payload default', () => {
+    const frame = controlFrameSchema.parse({ sessionId: 's1', action: 'shutdown' });
+    expect(frame).toEqual({ sessionId: 's1', action: 'shutdown', payload: {} });
   });
 });
 

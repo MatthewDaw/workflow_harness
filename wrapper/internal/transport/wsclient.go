@@ -1,14 +1,44 @@
 package transport
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/workflow-harness/claude-plus/internal/diag"
 	"github.com/workflow-harness/claude-plus/internal/event"
 )
+
+// HandshakeError is a dial failure that carries the HTTP status from the failed
+// WebSocket upgrade. A 401/403 means HQ's authorizer rejected the device token —
+// a PERMANENT failure that backoff/retry can never fix until the credentials
+// change — so it is classified distinctly from transient network errors and
+// surfaced rather than swallowed by the reconnect loop.
+type HandshakeError struct {
+	Status int
+	Err    error
+}
+
+func (e *HandshakeError) Error() string {
+	return fmt.Sprintf("websocket handshake rejected: HTTP %d (%v)", e.Status, e.Err)
+}
+
+func (e *HandshakeError) Unwrap() error { return e.Err }
+
+// IsAuthRejection reports whether err is a handshake rejection caused by a bad
+// or stale credential (HTTP 401/403). Transient errors (network, 5xx) are not
+// auth rejections — retrying those is the right behavior.
+func IsAuthRejection(err error) bool {
+	var he *HandshakeError
+	if errors.As(err, &he) {
+		return he.Status == 401 || he.Status == 403
+	}
+	return false
+}
 
 // Seq is a monotonic per-session sequence generator. The wrapper assigns a
 // strictly increasing seq to each envelope per session so HQ can detect gaps and
@@ -52,18 +82,43 @@ type Client struct {
 
 	// dial is overridable in tests to inject a fake transport.
 	dial func(url, token, instanceID string) (*websocket.Conn, error)
+
+	// onDialError is invoked on every failed dial so a connection problem is not
+	// silent. Defaults to logDialError (actionable diagnostic on auth rejection);
+	// overridable in tests. authLogged dedups the auth-rejection diagnostic so the
+	// backoff loop logs it once per outage, not every retry.
+	onDialError func(error)
+	authLogged  bool
 }
 
 // NewClient constructs a transport client. buf must be open; onCtrl receives
 // control frames routed down from HQ. instanceID identifies this daemon so HQ can
 // route steering commands back to it (the `$connect` handler indexes it).
 func NewClient(url, token, instanceID string, buf *RingBuffer, onCtrl ControlHandler) *Client {
-	return &Client{
+	c := &Client{
 		url: url, token: token, instanceID: instanceID, buf: buf, onCtrl: onCtrl,
 		sendCh: make(chan event.Envelope, 256),
 		stopCh: make(chan struct{}),
 		dial:   defaultDial,
 	}
+	c.onDialError = c.logDialError
+	return c
+}
+
+// logDialError is the default dial-error handler. A stale/invalid token (HTTP
+// 401/403) is a permanent failure retrying can't resolve, so it emits a single
+// actionable diagnostic per outage. Transient errors (offline, 5xx) stay quiet —
+// the on-disk ring buffer holds events until HQ is reachable again — so the log
+// isn't spammed during normal disconnects.
+func (c *Client) logDialError(err error) {
+	if !IsAuthRejection(err) {
+		return
+	}
+	if c.authLogged {
+		return
+	}
+	c.authLogged = true
+	diag.Logf("claude+: HQ rejected the device token (%v). Events are buffered locally; run `claude+ login` to re-authenticate.", err)
 }
 
 // defaultDial opens the WebSocket. API Gateway's `$connect` Lambda authorizer
@@ -84,8 +139,17 @@ func defaultDial(rawURL, token, instanceID string) (*websocket.Conn, error) {
 		u.RawQuery = q.Encode()
 		dialURL = u.String()
 	}
-	c, _, err := websocket.DefaultDialer.Dial(dialURL, nil)
-	return c, err
+	conn, resp, err := websocket.DefaultDialer.Dial(dialURL, nil)
+	if err != nil {
+		// A failed upgrade (e.g. websocket.ErrBadHandshake) carries the HTTP
+		// response; surface its status so the caller can tell a rejected token
+		// (401/403) apart from a transient outage.
+		if resp != nil {
+			return nil, &HandshakeError{Status: resp.StatusCode, Err: err}
+		}
+		return nil, err
+	}
+	return conn, nil
 }
 
 // Send durably enqueues an envelope (it is buffered to disk first, then pushed).
@@ -118,6 +182,7 @@ func (c *Client) Run() {
 		}
 		conn, err := c.dial(c.url, c.token, c.instanceID)
 		if err != nil {
+			c.onDialError(err) // surface (don't swallow) the failure
 			if !c.sleep(backoff) {
 				return
 			}
@@ -127,6 +192,7 @@ func (c *Client) Run() {
 			continue
 		}
 		backoff = time.Second
+		c.authLogged = false // a fresh connection clears the prior auth diagnostic
 		c.mu.Lock()
 		c.conn = conn
 		c.mu.Unlock()

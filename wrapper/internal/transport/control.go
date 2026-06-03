@@ -2,6 +2,7 @@ package transport
 
 import (
 	"fmt"
+	"time"
 )
 
 // ControlAction is an HQ-originated steering command (U7 → U15).
@@ -11,7 +12,13 @@ const (
 	ActionInject    ControlAction = "inject"    // write payload text to the session PTY stdin
 	ActionPause     ControlAction = "pause"     // signal the session to pause (SIGTSTP-style)
 	ActionInterrupt ControlAction = "interrupt" // send an interrupt (Ctrl-C) to the session
+	ActionShutdown  ControlAction = "shutdown"  // terminate gracefully (SIGTERM, force-fallback)
+	ActionKill      ControlAction = "kill"      // terminate immediately (force)
 )
+
+// shutdownGrace is how long a graceful `shutdown` waits for the child to exit
+// after SIGTERM before escalating to a force kill.
+const shutdownGrace = 5 * time.Second
 
 // ControlFrame is a control message routed down the outbound WS to this daemon.
 type ControlFrame struct {
@@ -28,9 +35,13 @@ type SessionWriter interface {
 	Get(sessID string) PTYSession
 }
 
-// PTYSession is the per-session capability for signal-style controls.
+// PTYSession is the per-session capability for signal-style and lifecycle
+// controls. *pty.Session satisfies it (Write for inject/signal bytes, Shutdown
+// for graceful terminate, Close for force terminate).
 type PTYSession interface {
 	Write(p []byte) (int, error)
+	Shutdown(timeout time.Duration) error
+	Close() error
 }
 
 // ctrlC is the byte sequence for an interrupt sent to a PTY (ETX).
@@ -82,6 +93,21 @@ func (r *Receiver) apply(f ControlFrame) error {
 		// interrupt to stop the current turn without killing the session.
 		_, err := r.mux.WriteTo(f.SessionID, []byte(ctrlC))
 		return err
+	case ActionShutdown:
+		// Graceful terminate: SIGTERM, escalating to a force kill if the child
+		// doesn't exit within the grace window (handled inside Shutdown).
+		sess := r.mux.Get(f.SessionID)
+		if sess == nil {
+			return fmt.Errorf("control: no session %q", f.SessionID)
+		}
+		return sess.Shutdown(shutdownGrace)
+	case ActionKill:
+		// Immediate force terminate.
+		sess := r.mux.Get(f.SessionID)
+		if sess == nil {
+			return fmt.Errorf("control: no session %q", f.SessionID)
+		}
+		return sess.Close()
 	default:
 		return fmt.Errorf("control: unknown action %q", f.Action)
 	}

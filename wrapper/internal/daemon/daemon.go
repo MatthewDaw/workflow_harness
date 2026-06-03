@@ -184,6 +184,21 @@ func (d *Daemon) handle(conn net.Conn) {
 	}
 }
 
+// emitSession publishes a daemon-originated session event (e.g. a manual
+// rename). It routes through the Runtime's emit path when wired — so the event
+// is sequenced and forwarded to HQ identically to tailer/hook events — and falls
+// back to a local-only publish otherwise. Mirrors ingestHook's routing.
+func (d *Daemon) emitSession(sid string, e event.Event) {
+	d.hookMu.Lock()
+	ingest := d.hookIngest
+	d.hookMu.Unlock()
+	if ingest != nil {
+		ingest(sid, e)
+		return
+	}
+	d.PublishEvent(event.Envelope{V: 1, TS: time.Now().UnixMilli(), Event: e})
+}
+
 // SetHookIngestor registers the callback the Runtime uses to route a hook-sourced
 // event through the same emit path as the transcript tailer (local bus + HQ).
 // Until set (no Runtime), hook events fall back to a local-only publish.
@@ -323,6 +338,26 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 				_ = d.mux.SetClientFocus(clientID, s.ID)
 			}
 			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
+		case FrameRename:
+			if name, ok := d.mux.Rename(f.SessID, f.Name); ok {
+				// Broadcast the rename as an event (Stream + HQ + any other client's
+				// session.rename listener), then ack this client with a fresh list so
+				// its sub-tab row updates immediately.
+				d.emitSession(f.SessID, event.SessionRename(f.SessID, name))
+			}
+			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
+		case FrameKill:
+			// Force-close one session and ack this client with a fresh list so the
+			// row disappears immediately. Killing the last session leaves the list
+			// empty (no auto-spawn on a later empty transition — only at attach).
+			d.mux.Kill(f.SessID)
+			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
+		case FrameShutdown:
+			// Quit: terminate every session and stop the daemon process, then end
+			// this attach loop. d.Stop closes sessions (mux.CloseAll), the listener,
+			// and the registry record; it is idempotent.
+			d.Stop()
+			return
 		case FrameSessLs:
 			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
 		case FramePing:

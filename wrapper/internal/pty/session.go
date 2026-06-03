@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
+	"time"
 
 	pty "github.com/aymanbagabas/go-pty"
 )
@@ -34,12 +36,14 @@ type Session struct {
 	cmd *pty.Cmd
 	pt  pty.Pty // the pseudo-terminal (master/console)
 
-	mu       sync.RWMutex
-	status   Status
-	closed   bool
-	cols     int
-	rows     int
-	firstSet bool // whether AutoName already consumed a first turn
+	mu         sync.RWMutex
+	status     Status
+	closed     bool
+	cols       int
+	rows       int
+	firstSet   bool // whether the provisional first-turn auto-name was consumed
+	titleSet   bool // whether the LLM-generated title was applied (apply once)
+	manualName bool // user set the name explicitly; auto-naming must not override
 
 	histMu sync.Mutex
 	hist   []byte // recent raw PTY output, replayed to newly-attached sinks
@@ -65,12 +69,25 @@ type CmdSpec struct {
 // substitute a fake command without a real claude install.
 type SpawnFunc func(repoRoot, sessionID string) CmdSpec
 
-// DefaultSpawn launches the real `claude` CLI in the repo root.
+// DefaultSpawn launches the real `claude` CLI in the repo root. When the daemon
+// runs in dangerous mode — CLAUDE_PLUS_DANGEROUS is set, propagated from
+// `claude+ --dangerously-skip-permissions` — every spawned child inherits
+// `--dangerously-skip-permissions` so sub-agents share the wrapper's permission
+// posture.
 func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
+	// Pin Claude Code's session id to ours so its transcript is written as
+	// <sessionID>.jsonl — the exact path the capture tailer reads. Without this,
+	// claude generates its own UUID and the tailer follows a file that never
+	// exists, so no tool/message/cost events are ever captured.
+	args := []string{"--session-id", sessionID}
+	if os.Getenv("CLAUDE_PLUS_DANGEROUS") != "" {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 	return CmdSpec{
 		Name: "claude",
+		Args: args,
 		Dir:  repoRoot,
-		// Tag the child so the capture layer can correlate its transcript.
+		// Also tag the child via the environment for any out-of-band correlation.
 		Env: append(os.Environ(), "CLAUDE_PLUS_SESSION="+sessionID),
 	}
 }
@@ -175,14 +192,14 @@ func (s *Session) Status() Status {
 	return s.status
 }
 
-// MaybeName applies an auto-name from the first user turn exactly once. It is a
-// no-op if the session already has a manual name, or once a first turn has
-// already been consumed.
+// MaybeName applies a provisional auto-name from the first user turn exactly
+// once. It is a no-op once a first turn has already been consumed, or if the
+// user has already set a manual name. The richer LLM title (ApplyTitle) later
+// upgrades this provisional slug.
 func (s *Session) MaybeName(firstTurn string, taken map[string]bool) (renamed bool, newName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.firstSet {
-		s.firstSet = true
+	if s.firstSet || s.manualName {
 		return false, s.Name
 	}
 	s.firstSet = true
@@ -198,14 +215,99 @@ func (s *Session) MaybeName(firstTurn string, taken map[string]bool) (renamed bo
 	return true, n
 }
 
-// Rename forces a manual name (⌃R), disambiguated against taken names.
+// ApplyTitle upgrades the session to an LLM-generated title derived from its
+// first exchange, overriding the provisional first-turn slug. It applies at most
+// once and never overrides a manual rename. title is raw text; it is slugged and
+// disambiguated here.
+func (s *Session) ApplyTitle(title string, taken map[string]bool) (renamed bool, newName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.manualName || s.titleSet {
+		return false, s.Name
+	}
+	s.titleSet = true
+	n := Slug(title, 5)
+	if n == "" {
+		return false, s.Name
+	}
+	n = Disambiguate(n, taken)
+	if n == s.Name {
+		return false, s.Name
+	}
+	s.Name = n
+	return true, n
+}
+
+// Rename forces a manual name (the GUI double-click / ⌃R path), disambiguated
+// against taken names. A manual name is sticky: it locks out both the
+// provisional auto-name and the LLM title so neither overrides the user's choice.
 func (s *Session) Rename(name string, taken map[string]bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := Disambiguate(Slug(name, 5), taken)
 	s.Name = n
 	s.firstSet = true
+	s.titleSet = true
+	s.manualName = true
 	return n
+}
+
+// Shutdown terminates the session gracefully: it sends SIGTERM to the child and
+// waits up to `timeout` for it to exit, escalating to a force kill if it does
+// not. On platforms where a graceful signal is not deliverable to a child (e.g.
+// Windows, where os.Process.Signal rejects everything but Kill), or when there
+// is no live child, it falls back to the force path. Like Close it is idempotent
+// and leaves the session StatusDone with its PTY closed. It returns nil on any
+// successful termination — the child's signal-induced exit code is not an error
+// here, since the termination was intentional.
+func (s *Session) Shutdown(timeout time.Duration) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.status = StatusDone
+	proc := s.cmd.Process
+	pt := s.pt
+	s.mu.Unlock()
+
+	closePTY := func() {
+		if pt != nil {
+			_ = pt.Close()
+		}
+	}
+
+	// No live child (test-constructed or never started): just close the PTY.
+	if proc == nil {
+		closePTY()
+		return nil
+	}
+
+	// Try graceful terminate. A non-nil error from Signal means SIGTERM is not
+	// deliverable here (Windows), so go straight to the force path.
+	if proc.Signal(syscall.SIGTERM) == nil {
+		done := make(chan error, 1)
+		go func() { done <- s.cmd.Wait() }()
+		select {
+		case <-done:
+			// Exited within the grace window.
+			closePTY()
+			return nil
+		case <-time.After(timeout):
+			// Ignored SIGTERM — escalate to a force kill.
+		}
+		_ = proc.Kill()
+		<-done // reap the in-flight Wait so the child is not left a zombie
+		closePTY()
+		return nil
+	}
+
+	// Force path (graceful unsupported): kill now, mirroring Close's order.
+	closePTY()
+	_ = proc.Kill()
+	_ = s.cmd.Wait()
+	return nil
 }
 
 // Close terminates the child process and closes the PTY.

@@ -93,9 +93,60 @@ desktop design spec):
   libs can't ride the pure-Go cross-compile. Linux WebKitGTK is the fussiest; smoke
   it early. v1 ships unsigned developer builds (signing/notarization deferred).
 
+## Terminal & session UX
+
+These behaviors govern how the live `claude` surface and the session sub-tabs
+feel in the desktop client. They are client-side (`xterm.js` + the desktop
+bridge) except where noted.
+
+- **Visible input cursor.** The `xterm.js` pane uses a **blinking block cursor**
+  and grabs focus on mount and on click. An unfocused xterm renders a hollow,
+  easy-to-miss caret, so we focus it explicitly — the caret is always visible
+  while typing. *Code:* `cmd/claude-plus-desktop/frontend/src/Terminal.tsx`.
+- **Scrollback.** The terminal keeps a generous scrollback buffer (10k lines) so
+  you can mouse-wheel up through a session's earlier output; typing or new output
+  snaps back to the live edge. *Code:* `Terminal.tsx` (`scrollback` xterm option).
+- **Auto-generated session titles (LLM).** A session starts with a provisional
+  keyword slug from its first user turn, then **upgrades to a concise
+  LLM-generated title** once the first full exchange (first user message + first
+  assistant reply) lands. The daemon runs a one-shot, time-boxed headless
+  `claude -p` on the user's **own subscription** to summarize the opening
+  exchange into a 2–4 word kebab title, renames the session, and emits a
+  `session.rename` event. Best-effort: if the call fails or times out, the
+  provisional slug stays. The title sub-process is tagged with
+  `CLAUDE_PLUS_TITLE=1` so the hook shim skips it (no phantom session reaches
+  HQ). A manual rename locks the name against further auto-titling. *Code:*
+  `internal/title/`, `internal/capture/jsonl.go` (first-exchange hook),
+  `internal/daemon/runtime.go`, `internal/pty/{session,mux}.go`.
+- **Rename a session by double-clicking its tab.** Double-click a session
+  sub-tab's name to edit it inline; Enter commits, Escape cancels. This is the
+  GUI surface of the existing ⌃R manual rename, and a manual name is sticky —
+  auto-titling will not overwrite it. *Code:* `Sessions.tsx` →
+  `App.Rename` → bridge → `FrameRename` → `Mux.Rename`.
+- **Session tabs hidden on Agents / Stream.** The desktop chrome has top-level
+  views — **Session · Agents · Stream**. The session sub-tab row belongs to the
+  Session view only; selecting Agents or Stream hides it, since those views are
+  instance-scoped rather than per-session. *Code:* `App.tsx` view switcher.
+- **`--dangerously-skip-permissions` propagates to every session.** Launching
+  `claude+ --dangerously-skip-permissions` (or with `--gui`) starts the repo's
+  daemon in **dangerous mode**: every inner `claude` child it spawns is launched
+  with `--dangerously-skip-permissions`, so sub-agents inherit the wrapper's
+  permission posture. The mode is carried to the detached daemon via the
+  `CLAUDE_PLUS_DANGEROUS` environment variable and honored in
+  `pty.DefaultSpawn`. Because the daemon is per-repo and shared, the mode is
+  fixed when the daemon first starts for a repo — if a daemon is already running,
+  restart it to change the mode. *Code:* `cmd/claude-plus/main.go`,
+  `cmd/claude-plus-desktop/app.go`, `internal/pty/session.go` (`DefaultSpawn`).
+
+Adding the inline-rename control channel (`FrameRename`) bumped the attach
+**`ProtocolVersion`**, so a stale pre-rename daemon is auto-replaced on the next
+attach rather than silently lacking the new frame.
+
 ## Status
 
 - **Built:** daemon + attach client, capture (hooks/jsonl), desktop bridge,
-  `--gui` discovery, npm/install scaffolding.
+  `--gui` discovery, npm/install scaffolding, terminal/session UX (visible
+  cursor, scrollback, LLM auto-titles, double-click rename, view switcher,
+  dangerous-mode propagation).
 - **Open:** full transport hardening (offline buffer edge cases), status-line and
   multiplexed-tab polish per the wireframe TUI screens.

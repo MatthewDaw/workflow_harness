@@ -272,8 +272,10 @@ export type AgentProposal = z.infer<typeof agentProposalSchema>;
  * authorizes that the requesting user owns `sessionId`, then routes the frame to
  * the owning daemon's WebSocket connection. `inject` writes `payload.text` to
  * the session's PTY stdin; `pause`/`interrupt` map to signals on the daemon side.
+ * `shutdown` terminates the session gracefully (SIGTERM, escalating to a force
+ * kill if it does not exit in time); `kill` is an immediate force terminate.
  */
-export const CONTROL_ACTIONS = ['inject', 'pause', 'interrupt'] as const;
+export const CONTROL_ACTIONS = ['inject', 'pause', 'interrupt', 'shutdown', 'kill'] as const;
 export const controlActionSchema = z.enum(CONTROL_ACTIONS);
 export type ControlAction = z.infer<typeof controlActionSchema>;
 

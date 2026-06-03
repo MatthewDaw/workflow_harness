@@ -17,7 +17,7 @@ const NAV = [
   { to: '/sessions', label: 'Sessions' },
   { to: '/agents', label: 'Agents' },
   { to: '/skills', label: 'Skills' },
-  { to: '/link-device', label: 'Link Device' },
+  { to: '/link-device', label: 'Get started' },
 ];
 
 export function AppShell() {
@@ -62,14 +62,18 @@ export function AppShell() {
             ))}
             <span className="ml-auto flex items-center gap-2.5 text-xs text-cream/70">
               <span className="hq-dot hq-dot-live" />
-              {liveCount} live ·{' '}
+              {liveCount} live
+              <span className="text-cream/60">·</span>
+              <span className="text-cream/80" title="Signed in">
+                @{user?.username ?? 'me'}
+              </span>
               <button
                 type="button"
                 onClick={() => void signOut()}
-                className="cursor-pointer text-cream/80 hover:text-cream"
+                className="hq-btn text-[11px]"
                 title="Sign out"
               >
-                @{user?.username ?? 'me'}
+                Sign out
               </button>
             </span>
           </nav>

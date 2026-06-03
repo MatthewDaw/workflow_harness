@@ -1,9 +1,19 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useDispatch } from 'react-redux';
 import type { AuthClient, AuthUser } from './authClient.js';
 import { readCognitoConfig } from './authClient.js';
 import { createMockClient } from './mockClient.js';
 import { setIdToken } from '../app/authSlice.js';
+import { baseApi } from '../api/baseApi.js';
 
 interface AuthState {
   user: AuthUser | null;
@@ -41,6 +51,24 @@ export function AuthProvider({
   const [resolvedClient, setResolvedClient] = useState<AuthClient | null>(client ?? null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  // The last identity we adopted, so we can detect an account switch (e.g. an
+  // OAuth redirect that returns a *different* user) and wipe the previous user's
+  // cached data before adopting the new one.
+  const lastUserId = useRef<string | null>(null);
+
+  // Drop every cached query/subscription when the identity changes away from a
+  // previously-known user, so one user can never render another's data in the
+  // same browser. A first sign-in (no prior identity) starts from an empty cache
+  // and needs no reset.
+  const resetCacheOnIdentityChange = useCallback(
+    (nextUserId: string | null) => {
+      if (lastUserId.current && lastUserId.current !== nextUserId) {
+        dispatch(baseApi.util.resetApiState());
+      }
+      lastUserId.current = nextUserId;
+    },
+    [dispatch],
+  );
 
   useEffect(() => {
     let active = true;
@@ -50,6 +78,7 @@ export function AuthProvider({
       setResolvedClient(c);
       const current = await c.getCurrentUser();
       if (!active) return;
+      resetCacheOnIdentityChange(current?.userId ?? null);
       setUser(current);
       // Restore the bearer token into the store so API calls are authorized
       // across reloads, not just immediately after an interactive sign-in.
@@ -60,20 +89,22 @@ export function AuthProvider({
     return () => {
       active = false;
     };
-  }, [client, dispatch]);
+  }, [client, dispatch, resetCacheOnIdentityChange]);
 
   // After a Hosted UI (Google) redirect returns, Amplify exchanges the code
   // asynchronously and fires a Hub event. Re-fetch the user + token then, so the
-  // gate flips to the app without a manual reload.
+  // gate flips to the app without a manual reload. If the redirect returns a
+  // *different* account, the cache is wiped first (account switch).
   useEffect(() => {
     if (!resolvedClient) return;
     const unsubscribe = resolvedClient.onChange(async () => {
       const current = await resolvedClient.getCurrentUser();
+      resetCacheOnIdentityChange(current?.userId ?? null);
       setUser(current);
       dispatch(setIdToken(current ? await resolvedClient.getIdToken() : null));
     });
     return unsubscribe;
-  }, [resolvedClient, dispatch]);
+  }, [resolvedClient, dispatch, resetCacheOnIdentityChange]);
 
   const value = useMemo<AuthState>(
     () => ({
@@ -82,6 +113,8 @@ export function AuthProvider({
       async signIn(username, password) {
         if (!resolvedClient) throw new Error('auth client not ready');
         const u = await resolvedClient.signIn(username, password);
+        // Wipe any residual cache if this is a different identity than before.
+        resetCacheOnIdentityChange(u.userId);
         setUser(u);
         // Capture the bearer token so RTK Query's prepareHeaders can attach it.
         dispatch(setIdToken(await resolvedClient.getIdToken()));
@@ -92,12 +125,20 @@ export function AuthProvider({
       },
       async signOut() {
         if (!resolvedClient) return;
-        await resolvedClient.signOut();
-        setUser(null);
-        dispatch(setIdToken(null));
+        try {
+          await resolvedClient.signOut();
+        } finally {
+          // Sign-out always clears local state AND the data cache, even if the
+          // client's signOut rejected — never strand a half-signed-out session
+          // showing the previous user's data.
+          setUser(null);
+          lastUserId.current = null;
+          dispatch(setIdToken(null));
+          dispatch(baseApi.util.resetApiState());
+        }
       },
     }),
-    [user, loading, resolvedClient, dispatch],
+    [user, loading, resolvedClient, dispatch, resetCacheOnIdentityChange],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

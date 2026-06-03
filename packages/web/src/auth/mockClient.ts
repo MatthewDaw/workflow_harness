@@ -1,9 +1,24 @@
 import type { AuthClient, AuthUser } from './authClient.js';
 
 /**
+ * Derive a tenant `org` from the login identity so distinct logins are distinct
+ * profiles in local/demo use (the real Cognito client uses the token's org
+ * claim instead). An email maps to its domain (`mattdaw7@gmail.com` → `gmail.com`,
+ * `bill@cow.com` → `cow.com`), so two different accounts land in two different
+ * orgs and never see each other's data; a bare username falls back to
+ * `org-<username>`.
+ */
+export function deriveOrg(username: string): string {
+  const at = username.indexOf('@');
+  if (at > 0) return username.slice(at + 1).toLowerCase();
+  return `org-${username.toLowerCase()}`;
+}
+
+/**
  * In-memory AuthClient used for local dev and tests. Starts signed-out; any
- * non-empty credentials sign in as `@matt` (the wireframe's user). Lets the
- * whole login-gate flow run with no Cognito user pool.
+ * non-empty credentials sign the user in, deriving their tenant `org` from the
+ * email/username (see {@link deriveOrg}) so separate logins are separate
+ * profiles. Lets the whole login-gate flow run with no Cognito user pool.
  */
 export function createMockClient(initialUser: AuthUser | null = null): AuthClient {
   let current: AuthUser | null = initialUser;
@@ -16,12 +31,12 @@ export function createMockClient(initialUser: AuthUser | null = null): AuthClien
       if (!username || !password) {
         throw new Error('username and password are required');
       }
-      current = { userId: `user-${username}`, username, org: 'acme' };
+      current = { userId: `user-${username}`, username, org: deriveOrg(username) };
       return current;
     },
     async signInWithGoogle() {
       // No real IdP in the mock; sign in as the wireframe user.
-      current = { userId: 'user-google', username: 'matt', org: 'acme' };
+      current = { userId: 'user-google', username: 'matt', org: deriveOrg('matt') };
     },
     async signOut() {
       current = null;

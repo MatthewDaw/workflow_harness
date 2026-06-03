@@ -182,6 +182,37 @@ func (c *Client) NewSession() error {
 	return writeFrame(c.conn, Frame{Type: FrameNewSess})
 }
 
+// Rename asks the daemon to manually rename a session (the GUI double-click /
+// ⌃R path). The daemon replies with an updated session list and broadcasts a
+// session.rename event.
+func (c *Client) Rename(sessID, name string) error {
+	return writeFrame(c.conn, Frame{Type: FrameRename, SessID: sessID, Name: name})
+}
+
+// CloseSession asks the daemon to force-kill a session (the GUI ✕). The daemon
+// replies with an updated session list so the row disappears immediately.
+func (c *Client) CloseSession(sessID string) error {
+	return writeFrame(c.conn, Frame{Type: FrameKill, SessID: sessID})
+}
+
+// Shutdown asks the daemon to terminate every session and stop its process
+// (claude+ quit). It writes the shutdown frame, then waits briefly for the
+// daemon to close the connection (a short read deadline) before returning, so
+// the desktop process does not race-exit before the frame flushes. A write or
+// read error on the dying connection is best-effort and ignored.
+func (c *Client) Shutdown() error {
+	if err := writeFrame(c.conn, Frame{Type: FrameShutdown}); err != nil {
+		c.conn.Close()
+		return err
+	}
+	// Block until the daemon closes the conn (EOF) or a short grace elapses, so
+	// the frame is flushed and acted on before the process exits.
+	_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _ = c.r.ReadByte()
+	c.conn.Close()
+	return nil
+}
+
 // Detach cleanly detaches, leaving the daemon (and its sessions) running.
 func (c *Client) Detach() error {
 	err := writeFrame(c.conn, Frame{Type: FrameDetach})

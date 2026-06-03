@@ -17,11 +17,30 @@ export default function Terminal() {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const term = new XTerm({ convertEol: false, fontFamily: "monospace", fontSize: 13 });
+    const term = new XTerm({
+      convertEol: false,
+      fontFamily: "monospace",
+      fontSize: 13,
+      // A visible, blinking block caret so you can always see where you're
+      // typing. (An unfocused xterm otherwise renders a hard-to-see hollow
+      // caret — we also focus it explicitly below.)
+      cursorBlink: true,
+      cursorStyle: "block",
+      // Keep generous scrollback so you can scroll up through a session's
+      // earlier output; typing/new output snaps back to the live edge.
+      scrollback: 10000,
+    });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(hostRef.current!);
+    const host = hostRef.current!;
+    term.open(host);
     fit.fit();
+    term.focus();
+
+    // Re-grab focus on click so the caret stays live after interacting with the
+    // surrounding chrome (tabs, panels).
+    const refocus = () => term.focus();
+    host.addEventListener("mousedown", refocus);
 
     // Keystrokes -> daemon PTY.
     term.onData((data) => {
@@ -40,11 +59,12 @@ export default function Terminal() {
     };
     sendSize();
     const ro = new ResizeObserver(sendSize);
-    ro.observe(hostRef.current!);
+    ro.observe(host);
 
     return () => {
       offOut();
       ro.disconnect();
+      host.removeEventListener("mousedown", refocus);
       term.dispose();
     };
   }, []);

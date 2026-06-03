@@ -49,7 +49,7 @@ func TestAttachRejectsVersionMismatch(t *testing.T) {
 // checking the daemon does not immediately write an error ack for a good
 // version. (Full attach I/O is covered by the !windows integration tests.)
 func TestProtocolVersionIsStable(t *testing.T) {
-	if ProtocolVersion != 1 {
+	if ProtocolVersion != 3 {
 		t.Fatalf("ProtocolVersion = %d; bump deliberately and update clients", ProtocolVersion)
 	}
 }

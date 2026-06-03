@@ -48,23 +48,38 @@ type EventSink func(event.Event)
 // FirstTurnSink is notified of a session's first user turn text (for auto-name).
 type FirstTurnSink func(sessID, text string)
 
+// FirstExchangeSink is notified once with a session's first full exchange (first
+// user turn + first assistant reply) so the caller can generate a richer title.
+type FirstExchangeSink func(sessID, userText, assistantText string)
+
 // Tailer follows a single session's transcript JSONL and emits events. It keeps
 // a monotonic byte offset so it never double-emits a previously-seen line, and
 // it tolerates a partial trailing line (it only emits complete lines).
 type Tailer struct {
-	sessID    string
-	path      string
-	offset    int64
-	leftover  []byte
-	totalUsd  float64
-	sawFirst  bool
-	emit      EventSink
-	onFirst   FirstTurnSink
+	sessID        string
+	path          string
+	offset        int64
+	leftover      []byte
+	totalUsd      float64
+	sawFirst      bool
+	firstUserText string
+	sawAssistant  bool
+	emit          EventSink
+	onFirst       FirstTurnSink
+	onExchange    FirstExchangeSink
 }
 
 // NewTailer creates a tailer for a session transcript path.
 func NewTailer(sessID, path string, emit EventSink, onFirst FirstTurnSink) *Tailer {
 	return &Tailer{sessID: sessID, path: path, emit: emit, onFirst: onFirst}
+}
+
+// OnExchange registers a callback fired once with the session's first full
+// exchange (first user turn + first assistant reply with text). Optional and
+// nil-safe; returns t for chaining at construction.
+func (t *Tailer) OnExchange(fn FirstExchangeSink) *Tailer {
+	t.onExchange = fn
+	return t
 }
 
 // Poll reads any new complete lines appended since the last Poll and emits the
@@ -139,6 +154,7 @@ func (t *Tailer) handleLine(line string) {
 		text := extractText(row.Message, row.Content)
 		if !t.sawFirst {
 			t.sawFirst = true
+			t.firstUserText = text
 			if t.onFirst != nil && text != "" {
 				t.onFirst(t.sessID, text)
 			}
@@ -148,6 +164,18 @@ func (t *Tailer) handleLine(line string) {
 		var tokens int64
 		if row.Usage != nil {
 			tokens = row.Usage.OutputTokens
+		}
+		// The first assistant reply that carries text completes the opening
+		// exchange; hand it (with the first user turn) to the title generator
+		// exactly once. Tool-only assistant turns carry no text, so we wait for a
+		// textual reply.
+		if !t.sawAssistant && t.firstUserText != "" {
+			if atext := extractText(row.Message, row.Content); atext != "" {
+				t.sawAssistant = true
+				if t.onExchange != nil {
+					t.onExchange(t.sessID, t.firstUserText, atext)
+				}
+			}
 		}
 		t.emit(event.AssistantMsg(t.sessID, tokens))
 	case "tool_use":

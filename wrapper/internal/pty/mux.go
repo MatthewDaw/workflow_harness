@@ -119,7 +119,12 @@ func (m *Mux) takenNames() map[string]bool {
 // starts pumping its output to the sinks.
 func (m *Mux) Spawn(name string) (*Session, error) {
 	m.mu.Lock()
-	id := uuid.NewString()[:8]
+	// Full UUID, not a truncated prefix: this id is passed to `claude
+	// --session-id` (see DefaultSpawn), so it becomes Claude Code's session id and
+	// thus its transcript filename (<id>.jsonl). The capture tailer keys on the
+	// same id, so the two must match exactly — a truncation here is why the tailer
+	// historically read a nonexistent file and emitted no transcript events.
+	id := uuid.NewString()
 	if name == "" {
 		name = AutoName("")
 	}
@@ -167,10 +172,15 @@ func (m *Mux) pump(s *Session) {
 	m.onSessionExit(s.ID)
 }
 
-// onSessionExit removes a finished session, re-focuses a neighbor (legacy global
-// focus), and repoints any per-client focus that pointed at the dead session.
-func (m *Mux) onSessionExit(id string) {
-	m.mu.Lock()
+// removeLocked removes the session with the given id from the sub-tab list,
+// re-focuses a neighbor (legacy global focus), and repoints any per-client focus
+// that pointed at the removed session. It is the single source of truth for the
+// removal/re-focus bookkeeping shared by onSessionExit (EOF-driven) and Kill
+// (client-driven), so the two paths cannot diverge. It returns the removed
+// session (nil if the id was not present — an idempotent no-op) and the id of
+// the session focus moved to ("" when the list is now empty). Caller holds m.mu;
+// the (off-lock) recompute on newFocus is the caller's responsibility.
+func (m *Mux) removeLocked(id string) (removed *Session, newFocus string) {
 	idx := -1
 	for i, s := range m.sessions {
 		if s.ID == id {
@@ -179,17 +189,16 @@ func (m *Mux) onSessionExit(id string) {
 		}
 	}
 	if idx < 0 {
-		m.mu.Unlock()
-		return
+		return nil, ""
 	}
+	removed = m.sessions[idx]
 	m.sessions = append(m.sessions[:idx], m.sessions[idx+1:]...)
 	if len(m.sessions) == 0 {
 		m.focusIdx = -1
 	} else if m.focusIdx >= len(m.sessions) {
 		m.focusIdx = len(m.sessions) - 1
 	}
-	// Repoint any client focused on the dead session onto a surviving neighbor.
-	newFocus := ""
+	// Repoint any client focused on the removed session onto a surviving neighbor.
 	if len(m.sessions) > 0 {
 		ni := idx
 		if ni >= len(m.sessions) {
@@ -202,10 +211,40 @@ func (m *Mux) onSessionExit(id string) {
 			c.focus = newFocus
 		}
 	}
+	return removed, newFocus
+}
+
+// onSessionExit removes a finished session (EOF-driven from the pump), re-focuses
+// a neighbor, and repoints per-client focus via the shared removeLocked helper.
+func (m *Mux) onSessionExit(id string) {
+	m.mu.Lock()
+	_, newFocus := m.removeLocked(id)
 	m.mu.Unlock()
 	if newFocus != "" {
 		m.recompute(newFocus)
 	}
+}
+
+// Kill force-closes one session: it synchronously removes the session from the
+// sub-tab list and re-focuses a neighbor (the same bookkeeping onSessionExit
+// performs, via the shared removeLocked helper), then closes the removed session
+// (kills the child, closes the PTY). Killing the last session leaves the list
+// empty — the daemon only auto-spawns at attach-handshake time, never on a later
+// empty transition. Killing an unknown id is a no-op. Idempotent against the
+// pump's own later onSessionExit(id) for the same session: by then the id is
+// already gone, so removeLocked returns nil and onSessionExit is a harmless
+// no-op (no panic, no double-remove).
+func (m *Mux) Kill(id string) {
+	m.mu.Lock()
+	removed, newFocus := m.removeLocked(id)
+	m.mu.Unlock()
+	if removed == nil {
+		return // unknown id (or already removed by onSessionExit) — no-op
+	}
+	if newFocus != "" {
+		m.recompute(newFocus)
+	}
+	_ = removed.Close()
 }
 
 // AddSink registers an output consumer keyed by id (e.g. an attach client) and
@@ -395,13 +434,45 @@ func (m *Mux) ApplyAutoName(sessID, firstTurn string) (bool, string) {
 	if target == nil {
 		return false, ""
 	}
-	taken := make(map[string]bool)
+	return target.MaybeName(firstTurn, m.takenExcept(sessID))
+}
+
+// ApplyTitle feeds an LLM-generated title (derived from a session's first
+// exchange) into the session, upgrading its provisional auto-name. Returns the
+// new name if it changed.
+func (m *Mux) ApplyTitle(sessID, title string) (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	target := m.getLocked(sessID)
+	if target == nil {
+		return false, ""
+	}
+	return target.ApplyTitle(title, m.takenExcept(sessID))
+}
+
+// Rename applies a manual name to a session (the GUI double-click / ⌃R path),
+// disambiguated against the other sessions. ok is false if no such session
+// exists. A manual name is sticky against later auto-naming/auto-titling.
+func (m *Mux) Rename(sessID, name string) (newName string, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	target := m.getLocked(sessID)
+	if target == nil {
+		return "", false
+	}
+	return target.Rename(name, m.takenExcept(sessID)), true
+}
+
+// takenExcept returns the set of session names excluding sessID, for
+// disambiguation. Caller holds m.mu.
+func (m *Mux) takenExcept(sessID string) map[string]bool {
+	taken := make(map[string]bool, len(m.sessions))
 	for _, s := range m.sessions {
 		if s.ID != sessID {
 			taken[s.Name] = true
 		}
 	}
-	return target.MaybeName(firstTurn, taken)
+	return taken
 }
 
 // --- per-client focus + sizing (concurrent attach) ---

@@ -29,6 +29,14 @@ func NewApp() *App { return &App{} }
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	// Honor --dangerously-skip-permissions when the desktop binary is launched
+	// directly with it (the `claude+ --gui` launcher otherwise propagates the env
+	// to us). The daemon ensured below inherits CLAUDE_PLUS_DANGEROUS and applies
+	// it to every claude child it spawns.
+	if hasDangerousFlag(os.Args) {
+		_ = os.Setenv("CLAUDE_PLUS_DANGEROUS", "1")
+	}
+
 	repo, err := resolveRepoRoot()
 	if err != nil {
 		a.err = fmt.Sprintf("resolve repo: %v", err)
@@ -84,6 +92,31 @@ func (a *App) NewSession() error {
 	return a.bridge.NewSession()
 }
 
+// Rename manually renames a session (double-click on a sub-tab in the UI).
+func (a *App) Rename(sessID, name string) error {
+	if a.bridge == nil {
+		return fmt.Errorf("not connected")
+	}
+	return a.bridge.Rename(sessID, name)
+}
+
+// CloseSession force-kills a session (the GUI ✕ on a sub-tab row).
+func (a *App) CloseSession(sessID string) error {
+	if a.bridge == nil {
+		return fmt.Errorf("not connected")
+	}
+	return a.bridge.CloseSession(sessID)
+}
+
+// shutdown is the Wails OnShutdown hook: quitting claude+ terminates every
+// session and stops the daemon process so nothing claude+ is left running. A nil
+// bridge (startup failed) is a no-op.
+func (a *App) shutdown(ctx context.Context) {
+	if a.bridge != nil {
+		_ = a.bridge.Shutdown()
+	}
+}
+
 // ListSessions returns the current session list.
 func (a *App) ListSessions() []daemon.SessInfo {
 	if a.bridge == nil {
@@ -113,9 +146,24 @@ func (a *clientAdapter) Input(b []byte) error               { return a.c.Input(b
 func (a *clientAdapter) Resize(cols, rows int) error        { return a.c.Resize(cols, rows) }
 func (a *clientAdapter) Focus(sessID string) error          { return a.c.Focus(sessID) }
 func (a *clientAdapter) NewSession() error     { return a.c.NewSession() }
+func (a *clientAdapter) Rename(sessID, name string) error   { return a.c.Rename(sessID, name) }
+func (a *clientAdapter) CloseSession(sessID string) error   { return a.c.CloseSession(sessID) }
+func (a *clientAdapter) Shutdown() error                    { return a.c.Shutdown() }
 func (a *clientAdapter) Detach() error                      { return a.c.Detach() }
 func (a *clientAdapter) Run() error                         { return a.c.Run() }
 func (a *clientAdapter) InitialSessions() []daemon.SessInfo { return a.c.Sessions }
+
+// hasDangerousFlag reports whether --dangerously-skip-permissions appears in the
+// process args (single- or double-dash). Used to enter dangerous mode when the
+// desktop binary is launched directly rather than via the claude+ launcher.
+func hasDangerousFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--dangerously-skip-permissions" || a == "-dangerously-skip-permissions" {
+			return true
+		}
+	}
+	return false
+}
 
 // resolveRepoRoot walks up from cwd to the nearest .git dir; falls back to cwd.
 // (Mirrors cmd/claude-plus/main.go so the desktop targets the same daemon.)

@@ -19,7 +19,10 @@ type fakeClient struct {
 	inputs   [][]byte
 	focuses  []string
 	newCount int
+	renames  [][2]string
 	resizes  [][2]int
+	closes   []string
+	shutdowns int
 	sessions []daemon.SessInfo
 }
 
@@ -37,6 +40,9 @@ func (f *fakeClient) Input(b []byte) error {
 func (f *fakeClient) Resize(c, r int) error             { f.resizes = append(f.resizes, [2]int{c, r}); return nil }
 func (f *fakeClient) Focus(id string) error             { f.focuses = append(f.focuses, id); return nil }
 func (f *fakeClient) NewSession() error           { f.newCount++; return nil }
+func (f *fakeClient) Rename(id, name string) error      { f.renames = append(f.renames, [2]string{id, name}); return nil }
+func (f *fakeClient) CloseSession(id string) error      { f.closes = append(f.closes, id); return nil }
+func (f *fakeClient) Shutdown() error                   { f.shutdowns++; return nil }
 func (f *fakeClient) Detach() error                     { return nil }
 func (f *fakeClient) Run() error                        { return nil }
 func (f *fakeClient) InitialSessions() []daemon.SessInfo { return f.sessions }
@@ -95,6 +101,28 @@ func TestBridgeSendInputDecodesToBytes(t *testing.T) {
 	}
 	if len(fc.inputs) != 1 || string(fc.inputs[0]) != "ls\n" {
 		t.Fatalf("inputs = %v", fc.inputs)
+	}
+}
+
+func TestBridgeCloseSessionDelegates(t *testing.T) {
+	fc := &fakeClient{}
+	b := New(fc, &fakeEmitter{})
+	if err := b.CloseSession("sess-9"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fc.closes) != 1 || fc.closes[0] != "sess-9" {
+		t.Fatalf("closes = %v, want [sess-9]", fc.closes)
+	}
+}
+
+func TestBridgeShutdownDelegates(t *testing.T) {
+	fc := &fakeClient{}
+	b := New(fc, &fakeEmitter{})
+	if err := b.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	if fc.shutdowns != 1 {
+		t.Fatalf("shutdowns = %d, want 1", fc.shutdowns)
 	}
 }
 

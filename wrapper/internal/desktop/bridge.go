@@ -38,6 +38,9 @@ type attachClient interface {
 	Resize(cols, rows int) error
 	Focus(sessID string) error
 	NewSession() error
+	Rename(sessID, name string) error
+	CloseSession(sessID string) error
+	Shutdown() error
 	Detach() error
 	Run() error
 	InitialSessions() []daemon.SessInfo
@@ -96,6 +99,15 @@ func (b *Bridge) Focus(sessID string) error { return b.c.Focus(sessID) }
 
 // NewSession spawns a session.
 func (b *Bridge) NewSession() error { return b.c.NewSession() }
+
+// Rename manually renames a session (the GUI double-click on a sub-tab).
+func (b *Bridge) Rename(sessID, name string) error { return b.c.Rename(sessID, name) }
+
+// CloseSession force-kills one session (the GUI ✕ on a sub-tab).
+func (b *Bridge) CloseSession(sessID string) error { return b.c.CloseSession(sessID) }
+
+// Shutdown terminates every session and stops the daemon (claude+ quit).
+func (b *Bridge) Shutdown() error { return b.c.Shutdown() }
 
 // ListSessions returns the current session list (seeded from the attach ack).
 func (b *Bridge) ListSessions() []daemon.SessInfo { return b.c.InitialSessions() }
