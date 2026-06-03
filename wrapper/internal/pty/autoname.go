@@ -1,6 +1,6 @@
 // Package pty hosts the real `claude` CLI children under creack/pty, multiplexes
 // them within a single daemon, switches focus, auto-names sessions from the
-// first user turn or linked ticket, and propagates SIGWINCH to the focused PTY.
+// first user turn, and propagates SIGWINCH to the focused PTY.
 package pty
 
 import (
