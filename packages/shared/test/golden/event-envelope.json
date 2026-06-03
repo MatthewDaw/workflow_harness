@@ -11,8 +11,7 @@
       "projectId": "weekly-compass",
       "host": "matt@mbp",
       "name": "reconcile-variance",
-      "agent": "builder",
-      "ticket": "WC-42"
+      "agent": "builder"
     }
   },
   {
