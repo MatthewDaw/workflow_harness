@@ -14,8 +14,8 @@ export function ListSessions() {
   return window['go']['main']['App']['ListSessions']();
 }
 
-export function NewSession(arg1) {
-  return window['go']['main']['App']['NewSession'](arg1);
+export function NewSession() {
+  return window['go']['main']['App']['NewSession']();
 }
 
 export function Rename(arg1, arg2) {
