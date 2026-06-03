@@ -32,6 +32,9 @@
   .hq-hr {
     @apply h-px bg-line2 my-3;
   }
+  .hq-input {
+    @apply border border-line rounded-sm px-2 py-1.5 bg-paper2 text-ink text-[13px];
+  }
 
   .hq-pill {
     @apply inline-block text-[11px] px-2 py-0.5 rounded-sm border border-line text-mut bg-paper2 uppercase tracking-wide;

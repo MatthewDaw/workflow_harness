@@ -11,6 +11,7 @@ import { ProjectAgents } from '../screens/ProjectDetail/ProjectAgents.js';
 import { Sessions } from '../screens/Sessions/Sessions.js';
 import { LiveWatch } from '../screens/LiveWatch/LiveWatch.js';
 import { Agents } from '../screens/Agents/Agents.js';
+import { AgentEditor } from '../screens/Agents/AgentEditor.js';
 import { Skills } from '../screens/Skills/Skills.js';
 import { SkillBundle } from '../screens/Skills/SkillBundle.js';
 import { Weekly } from '../screens/Weekly/Weekly.js';
@@ -40,6 +41,8 @@ export function AppRoutes() {
         <Route path="sessions/:sessionId" element={<LiveWatch />} />
 
         <Route path="agents" element={<Agents />} />
+        <Route path="agents/new" element={<AgentEditor />} />
+        <Route path="agents/:name/edit" element={<AgentEditor />} />
         <Route path="skills" element={<Skills />} />
         <Route path="skills/:bundleName" element={<SkillBundle />} />
         <Route path="weekly" element={<Weekly />} />

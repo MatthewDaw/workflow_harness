@@ -41,9 +41,16 @@ export function installFetchStub(seed: SeedData) {
   // stub below answers from `seed`.
   class StubRequest {
     url: string;
-    constructor(input: RequestInfo | URL) {
+    method: string;
+    body: unknown;
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
       this.url =
         typeof input === 'string' ? input : String((input as { url?: string }).url ?? input);
+      // Preserve method/body so mutation tests can assert what RTK Query sent
+      // (fetchBaseQuery builds `new Request(url, init)` then calls fetch(request)).
+      const fromInput = typeof input === 'object' ? (input as Partial<RequestInit>) : {};
+      this.method = (init?.method ?? fromInput.method ?? 'GET').toUpperCase();
+      this.body = init?.body ?? fromInput.body;
     }
   }
   vi.stubGlobal('Request', StubRequest);
