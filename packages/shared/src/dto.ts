@@ -217,11 +217,11 @@ export const projectFramingSchema = z.object({
 export type ProjectFraming = z.infer<typeof projectFramingSchema>;
 
 /**
- * A summarized + embedded session, the unit Forge searches over (U27). Created
- * on `session.done`: the session's transcript is summarized and embedded
- * (Bedrock), and the skills/tools it used are recorded so similar sessions can
- * be aggregated into an agent proposal. Vectors are stored in DynamoDB for the
- * brute-force cosine fallback (KTD7); OpenSearch indexing is additive.
+ * A summarized + embedded session, the unit Forge searches over (U27). The
+ * session's transcript summary + embedding and the skills/tools it used are
+ * recorded so similar sessions can be aggregated into an agent proposal. This
+ * is a stored contract shape; the vector/fuzzy-Forge read path is deferred and
+ * not wired to any deployed handler.
  */
 export const sessionVectorSchema = z.object({
   sessionId: z.string().min(1),

@@ -20,23 +20,24 @@ minimal skills it needs — registered at the author's scope. Going org-wide is 
 deliberate human action in Command HQ (the promote step), not something this
 command does.
 
-## Reuse — do not re-implement
+## Where distillation runs
 
-Reuse the existing backend distillation machinery rather than re-implementing it:
+Distillation runs **inside this claude+ session — Claude Code does it directly,
+on the developer's own subscription**. There is no server-side model call and no
+Bedrock: the backend only **stores** the resulting agent + skills via the
+registry REST. Claude Code reads the captured diff + session transcript here and
+drafts the prompt itself.
 
-- **`BedrockAgentDrafter`** (`packages/backend/src/forge/propose.ts`) — the
-  Bedrock-backed drafter; its `draft({ description, skills, tools, sessions })`
-  returns `{ name, model, prompt }`. The forge trigger changes from a fuzzy
-  similarity query to this precise start/end checkpoint, but the drafter +
-  proposal shape stay.
+Reuse the existing **contract shape** (not any server-side drafter):
+
 - **The proposal shape** `AgentProposal` (`packages/shared/src/dto.ts`):
   `{ name, model, prompt, skills[], tools[], lowConfidence[], evidence[],
   insufficientHistory }`. `/endforge` produces a proposal in this shape from the
   captured slice (the evidence here is the branch diff + this session, not
   k-NN-mined history).
-- **Aggregation helpers** `aggregateFrequencies` / `splitConfidence` (same file)
-  — to rank the skills/tools actually used in the captured session and flag
-  low-confidence ones.
+- Rank the skills/tools actually used in the captured session by frequency and
+  flag the ones seen only once as low-confidence — Claude Code computes this
+  in-session from the transcript; no backend call.
 
 v1 is **distiller-first**: the optimize/refine loop and the reusable/provenance
 split are **DEFERRED** (05-agentforge.md "Deferred"). The fuzzy read-side Forge
@@ -55,8 +56,9 @@ hidden) — only `/startforge`…`/endforge` is user-visible.
    incoherent groupings) but allow the user to override and proceed (AE3). Never
    silently block.
 4. **Distill the prompt (R9–R11).** Compute the diff and summarize the session,
-   then call the drafter (`BedrockAgentDrafter.draft`) to produce a short,
-   focused phase-specialist prompt. It encodes good working principles —
+   then — **using Claude Code in this session (the developer's subscription), not
+   any backend/Bedrock call** — produce a short, focused phase-specialist prompt.
+   It encodes good working principles —
    foundation first, correct ordering, avoid known dead-ends — drawn from
    standing guidance + the order actually followed in the session. v1 registers
    the prompt **as-is** (may contain project-specifics), labeled "not yet
@@ -114,8 +116,8 @@ Following the `/startforge` example (`skill-authoring-flow`):
 3. Coherence: all four files are one coherent "author client skills" feature →
    no warning (counter-example: had the diff also touched unrelated infra, it
    would warn "looks like 2 features: skill authoring + infra; forge anyway?").
-4. Drafter produces agent `skill-author`, model
-   `anthropic.claude-3-5-sonnet-20240620-v1:0`, a focused prompt for "author a
+4. Claude Code (in-session) drafts agent `skill-author`, model
+   `claude-sonnet-4`, a focused prompt for "author a
    well-formed Claude Code SKILL.md from a slice of work."
 5. Curate skills: references the existing doc-writing skill if one is
    registered; mints one new skill `skillmd-frontmatter` (no existing match).
