@@ -5,7 +5,6 @@ import { SCOPE_TIERS } from '@harness/shared';
 import {
   useGetAgentsQuery,
   useGetSkillsQuery,
-  useOptimizeAgentMutation,
   useSaveAgentMutation,
 } from '../../api/baseApi.js';
 import { useAuth } from '../../auth/AuthProvider.js';
@@ -37,8 +36,6 @@ export function AgentEditor() {
   const { data: agents } = useGetAgentsQuery();
   const { data: skills } = useGetSkillsQuery();
   const [saveAgent, { isLoading: saving }] = useSaveAgentMutation();
-  const [optimizeAgent, { isLoading: optimizing }] = useOptimizeAgentMutation();
-  const [optimizeScore, setOptimizeScore] = useState<number | null>(null);
 
   const existing = useMemo(
     () => (name ? (agents ?? []).find((a) => a.name === name) : undefined),
@@ -71,16 +68,6 @@ export function AgentEditor() {
     if (!agent.name.trim()) return;
     await saveAgent(agent).unwrap();
     navigate('/agents');
-  };
-
-  // Run the AgentForge refine loop on the saved prompt: fetch the optimized
-  // prompt + score, drop it into the textarea, and surface the score. We do NOT
-  // auto-save — the user reviews then clicks Save & sync.
-  const onOptimize = async () => {
-    if (!agent.name.trim()) return;
-    const res = await optimizeAgent({ name: agent.name, scope: agent.scope }).unwrap();
-    setOptimizeScore(res.score);
-    set({ prompt: res.optimizedPrompt });
   };
 
   const catalog = skills ?? [];
@@ -126,22 +113,9 @@ export function AgentEditor() {
 
         <div className="mt-3 flex items-center justify-between">
           <label className="block text-xs font-medium text-mut">Prompt</label>
-          <div className="flex items-center gap-2">
-            {optimizeScore !== null && (
-              <span className="text-[11px] text-faint" data-testid="optimize-score">
-                score: {optimizeScore}
-              </span>
-            )}
-            <button
-              type="button"
-              className="hq-btn"
-              data-testid="agent-optimize"
-              disabled={optimizing || !agent.name.trim()}
-              onClick={onOptimize}
-            >
-              {optimizing ? 'Optimizing…' : '✨ Optimize prompt'}
-            </button>
-          </div>
+          <span className="text-[11px] text-faint" data-testid="optimize-hint">
+            Run /optimize-agent in claude+ to refine this prompt.
+          </span>
         </div>
         <textarea
           className="hq-input mt-1 w-full"

@@ -66,27 +66,6 @@ describe('ApiStack', () => {
     });
   });
 
-  test('routes the agent prompt optimizer (POST /agents/{name}/optimize)', () => {
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
-      RouteKey: 'POST /agents/{name}/optimize',
-    });
-  });
-
-  test('grants the agents Lambda bedrock:InvokeModel for the optimizer', () => {
-    // POST /agents/{name}/optimize runs the AgentForge refine loop against
-    // Bedrock, so the agents Lambda role must carry bedrock:InvokeModel.
-    template.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: 'bedrock:InvokeModel',
-            Effect: 'Allow',
-          }),
-        ]),
-      }),
-    });
-  });
-
   test('throttles the HTTP API stage to bound public /device/* abuse', () => {
     template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
       DefaultRouteSettings: Match.objectLike({

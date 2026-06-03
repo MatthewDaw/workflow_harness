@@ -55,15 +55,6 @@ function lastAgentPost(): Record<string, unknown> | undefined {
   return undefined;
 }
 
-/** Whether any POST hit the /agents/{name}/optimize endpoint. */
-function optimizeCalled(): boolean {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  return calls.some((c) => {
-    const req = c[0] as StubReq;
-    return req.method === 'POST' && /\/agents\/[^/]+\/optimize$/.test(req.url.split('?')[0] ?? '');
-  });
-}
-
 describe('AgentEditor (U17)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -111,25 +102,15 @@ describe('AgentEditor (U17)', () => {
     expect(body.skills).toEqual(expect.arrayContaining(['gh', 'browse']));
   });
 
-  it('Optimize prompt calls the optimizer and fills the prompt + score', async () => {
+  it('shows a muted hint to refine the prompt via the claude+ skill', async () => {
     renderWithProviders(<AgentEditor />, {
       route: '/agents/builder/edit',
       routePath: '/agents/:name/edit',
       seed: { skills: SKILLS, agents: AGENTS },
     });
     await screen.findByTestId('agent-editor');
-    await waitFor(() =>
-      expect(screen.getByTestId('agent-prompt')).toHaveValue('Builds'),
+    expect(screen.getByTestId('optimize-hint')).toHaveTextContent(
+      'Run /optimize-agent in claude+ to refine this prompt.',
     );
-
-    await userEvent.click(screen.getByTestId('agent-optimize'));
-
-    // The mutation fired against /agents/{name}/optimize.
-    await waitFor(() => expect(optimizeCalled()).toBe(true));
-    // The returned prompt populates the textarea and the score is shown.
-    await waitFor(() =>
-      expect(screen.getByTestId('agent-prompt')).toHaveValue('OPTIMIZED PROMPT'),
-    );
-    expect(screen.getByTestId('optimize-score')).toHaveTextContent('87');
   });
 });

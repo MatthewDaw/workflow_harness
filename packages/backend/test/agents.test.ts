@@ -9,10 +9,8 @@ import {
   createAgent,
   deleteAgent,
   getAgent,
-  optimizeAgent,
   resolveAgents,
 } from '../src/rest/agents.js';
-import type { OptimizeDeps } from '../src/forge/optimize.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
@@ -240,77 +238,6 @@ describe('POST /agents/:name/scope (elevate/demote)', () => {
     expect(res).toMatchObject({ statusCode: 403 });
     // unchanged
     expect(await repo.getAgent({ tier: 'user', id: MATT }, 'builder')).toBeDefined();
-  });
-});
-
-describe('POST /agents/:name/optimize', () => {
-  // A deterministic fake optimizer: the generator appends a marker, the judge
-  // scores by length so each round strictly improves and the loop runs.
-  function fakeDeps(): OptimizeDeps {
-    return {
-      async generate(promptToImprove) {
-        return `${promptToImprove} [refined]`;
-      },
-      async judge(candidatePrompt) {
-        return { score: candidatePrompt.length, critique: 'longer is better (fake)' };
-      },
-    };
-  }
-
-  it('optimizes an owned agent prompt and returns the trajectory (no auto-save)', async () => {
-    await repo.putAgent({
-      ...agent('builder', { tier: 'user', id: MATT }),
-      prompt: 'do stuff',
-      skills: ['gh', 'browse'],
-    });
-    const res = await optimizeAgent(
-      httpEvent({
-        method: 'POST',
-        userId: MATT,
-        rawPath: '/agents/builder/optimize',
-        path: { name: 'builder' },
-        query: { tier: 'user', id: MATT },
-      }),
-      { repo, optimize: fakeDeps() },
-    );
-    expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ optimizedPrompt: string; score: number; history: unknown[] }>(
-      res as { body: string },
-    );
-    expect(body.optimizedPrompt).toContain('[refined]');
-    expect(body.score).toBeGreaterThan('do stuff'.length);
-    expect(body.history.length).toBeGreaterThan(1); // baseline + >=1 refinement round
-    // It must NOT have persisted the optimized prompt.
-    expect((await repo.getAgent({ tier: 'user', id: MATT }, 'builder'))?.prompt).toBe('do stuff');
-  });
-
-  it("404s (not 403) optimizing another user's agent (IDOR)", async () => {
-    await repo.putAgent({ ...agent('alices', { tier: 'user', id: 'alice' }), prompt: 'x' });
-    const res = await optimizeAgent(
-      httpEvent({
-        method: 'POST',
-        userId: MATT,
-        rawPath: '/agents/alices/optimize',
-        path: { name: 'alices' },
-        query: { tier: 'user', id: 'alice' },
-      }),
-      { repo, optimize: fakeDeps() },
-    );
-    expect(res).toMatchObject({ statusCode: 404 });
-  });
-
-  it('404s optimizing a missing agent at a readable scope', async () => {
-    const res = await optimizeAgent(
-      httpEvent({
-        method: 'POST',
-        userId: MATT,
-        rawPath: '/agents/ghost/optimize',
-        path: { name: 'ghost' },
-        query: { tier: 'user', id: MATT },
-      }),
-      { repo, optimize: fakeDeps() },
-    );
-    expect(res).toMatchObject({ statusCode: 404 });
   });
 });
 
