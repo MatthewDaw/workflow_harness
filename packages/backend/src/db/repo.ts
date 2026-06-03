@@ -510,6 +510,7 @@ export class Repo {
     deviceCode: string,
     userId: string,
     org: string,
+    now: number = Date.now(),
   ): Promise<{ approved: boolean }> {
     try {
       await this.doc.send(
@@ -517,13 +518,17 @@ export class Repo {
           TableName: this.table,
           Key: k.deviceAuthKey(deviceCode),
           UpdateExpression: 'SET #s = :approved, userId = :u, org = :o',
-          ConditionExpression: 'attribute_exists(PK) AND #s = :pending',
+          // Expiry is part of the guard so a stale pointer (under DynamoDB TTL
+          // lag) can't approve a timed-out record — defense in depth beneath the
+          // app-layer check in approveDeviceAuthByUserCode.
+          ConditionExpression: 'attribute_exists(PK) AND #s = :pending AND expiresAt > :now',
           ExpressionAttributeNames: { '#s': 'status' },
           ExpressionAttributeValues: {
             ':approved': 'approved',
             ':pending': 'pending',
             ':u': userId,
             ':o': org,
+            ':now': now,
           },
         }),
       );

@@ -116,10 +116,18 @@ export function normalizeUserCode(input: string): string {
 export async function approveDeviceAuthByUserCode(
   repo: Repo,
   args: { userCode: string; userId: string; org: string },
+  opts: DeviceFlowOptions = {},
 ): Promise<{ approved: boolean }> {
+  const now = opts.now ?? Date.now;
   const deviceCode = await repo.getDeviceCodeByUserCode(normalizeUserCode(args.userCode));
   if (!deviceCode) return { approved: false };
-  return repo.approveDeviceAuth(deviceCode, args.userId, args.org);
+  // Reject an expired record up front: otherwise an approval would flip a
+  // timed-out record to `approved`, and a subsequent poll (which only treated
+  // `pending` records as expired) would mint a token for it. The storage-layer
+  // condition below is the defense-in-depth backstop.
+  const record = await repo.getDeviceAuth(deviceCode);
+  if (!record || now() >= record.expiresAt) return { approved: false };
+  return repo.approveDeviceAuth(deviceCode, args.userId, args.org, now());
 }
 
 export async function pollDeviceAuth(
@@ -130,7 +138,10 @@ export async function pollDeviceAuth(
   const now = opts.now ?? Date.now;
   const record = await repo.getDeviceAuth(deviceCode);
   if (!record) return { status: 'unknown' };
-  if (now() >= record.expiresAt && record.status === 'pending') {
+  // Expired any time before the token is consumed — including an `approved`
+  // record whose window elapsed before the first poll — so expiry can't be
+  // bypassed by approving late.
+  if (now() >= record.expiresAt && record.status !== 'consumed') {
     return { status: 'expired' };
   }
   if (record.status === 'pending') return { status: 'pending' };

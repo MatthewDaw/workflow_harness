@@ -4,6 +4,11 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { Repo } from '../src/db/repo.js';
 import { deviceApprove, devicePoll, deviceStart } from '../src/rest/device.js';
+import {
+  approveDeviceAuthByUserCode,
+  pollDeviceAuth,
+  startDeviceAuth,
+} from '../src/auth/device.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
@@ -98,5 +103,23 @@ describe('device-code login', () => {
       await devicePoll(httpEvent({ method: 'POST', body: { deviceCode: start.deviceCode } }), deps),
     );
     expect(again.status).not.toBe('token');
+  });
+
+  it('refuses to approve an expired record, so no token is minted (security)', async () => {
+    // Create a record that is already past its window, then approve + poll well
+    // after expiry. Approval must be refused and poll must report expired —
+    // never mint a token (regression for the expired-credential-acceptance bug).
+    const created = await startDeviceAuth(repo, { now: () => 1_000, ttlMs: 10 }); // expires at 1010
+    const late = () => 5_000;
+
+    const approved = await approveDeviceAuthByUserCode(
+      repo,
+      { userCode: created.userCode, userId: 'matt', org: 'acme' },
+      { now: late },
+    );
+    expect(approved.approved).toBe(false);
+
+    const poll = await pollDeviceAuth(repo, created.deviceCode, { now: late });
+    expect(poll.status).toBe('expired');
   });
 });
