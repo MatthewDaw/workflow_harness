@@ -148,12 +148,18 @@ func (s *Session) History() []byte {
 	return out
 }
 
-// Resize propagates new terminal dimensions to the PTY.
+// Resize propagates new terminal dimensions to the PTY. It records the size even
+// when there is no underlying PTY (s.pt == nil), which only happens for
+// test-constructed sessions — production sessions always have a live PTY.
 func (s *Session) Resize(cols, rows int) error {
 	s.mu.Lock()
 	s.cols, s.rows = cols, rows
+	pt := s.pt
 	s.mu.Unlock()
-	return s.pt.Resize(cols, rows)
+	if pt == nil {
+		return nil
+	}
+	return pt.Resize(cols, rows)
 }
 
 // SetStatus updates the cached lifecycle status (driven by capture hooks).

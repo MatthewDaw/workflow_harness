@@ -22,6 +22,18 @@ type Mux struct {
 	sessions []*Session // insertion order == sub-tab order
 	focusIdx int
 	sinks    map[string]func(sessID string, b []byte) // output fan-out by sink id
+	clients  map[string]*clientState                  // per-attach-client focus + size
+}
+
+// clientState is one attach client's view: which session it drives (focus) and
+// the dimensions of its window. A session's PTY is sized to the smallest of the
+// clients currently focused on it (tmux semantics), so two clients on different
+// sessions each get their full size and two on the same session share the
+// smaller one.
+type clientState struct {
+	focus string // focused session id ("" = none)
+	cols  int
+	rows  int
 }
 
 // NewMux creates a mux for a repo at an initial terminal size.
@@ -38,6 +50,7 @@ func NewMux(repoRoot string, cols, rows int, spawn SpawnFunc) *Mux {
 	return &Mux{
 		repoRoot: repoRoot, cols: cols, rows: rows, spawn: spawn,
 		focusIdx: -1, sinks: map[string]func(string, []byte){},
+		clients: map[string]*clientState{},
 	}
 }
 
@@ -99,11 +112,10 @@ func (m *Mux) pump(s *Session) {
 	m.onSessionExit(s.ID)
 }
 
-// onSessionExit removes a finished session and re-focuses a neighbor if it was
-// the focused one.
+// onSessionExit removes a finished session, re-focuses a neighbor (legacy global
+// focus), and repoints any per-client focus that pointed at the dead session.
 func (m *Mux) onSessionExit(id string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	idx := -1
 	for i, s := range m.sessions {
 		if s.ID == id {
@@ -112,16 +124,32 @@ func (m *Mux) onSessionExit(id string) {
 		}
 	}
 	if idx < 0 {
+		m.mu.Unlock()
 		return
 	}
 	m.sessions = append(m.sessions[:idx], m.sessions[idx+1:]...)
 	if len(m.sessions) == 0 {
 		m.focusIdx = -1
-		return
-	}
-	// Re-focus a neighbor: prefer the previous index, clamp into range.
-	if m.focusIdx >= len(m.sessions) {
+	} else if m.focusIdx >= len(m.sessions) {
 		m.focusIdx = len(m.sessions) - 1
+	}
+	// Repoint any client focused on the dead session onto a surviving neighbor.
+	newFocus := ""
+	if len(m.sessions) > 0 {
+		ni := idx
+		if ni >= len(m.sessions) {
+			ni = len(m.sessions) - 1
+		}
+		newFocus = m.sessions[ni].ID
+	}
+	for _, c := range m.clients {
+		if c.focus == id {
+			c.focus = newFocus
+		}
+	}
+	m.mu.Unlock()
+	if newFocus != "" {
+		m.recompute(newFocus)
 	}
 }
 
@@ -298,4 +326,173 @@ func (m *Mux) ApplyAutoName(sessID, firstTurn string) (bool, string) {
 		}
 	}
 	return target.MaybeName(firstTurn, taken)
+}
+
+// --- per-client focus + sizing (concurrent attach) ---
+//
+// Each attach client has its own focused session and window size. A session's
+// PTY is sized to the smallest of the clients currently focused on it, so two
+// clients viewing different sessions each get their full size, and two viewing
+// the same session share the smaller one (tmux semantics). Input from a client
+// routes to that client's focused session, never a global one.
+
+// getLocked finds a session by id; caller holds m.mu.
+func (m *Mux) getLocked(id string) *Session {
+	for _, s := range m.sessions {
+		if s.ID == id {
+			return s
+		}
+	}
+	return nil
+}
+
+// minSizeLocked returns the smallest cols/rows across clients focused on sessID.
+// ok is false when no client currently views the session (leave its size as-is).
+// Caller holds m.mu.
+func (m *Mux) minSizeLocked(sessID string) (cols, rows int, ok bool) {
+	cols, rows = 1<<30, 1<<30
+	for _, c := range m.clients {
+		if c.focus == sessID {
+			if c.cols > 0 && c.cols < cols {
+				cols = c.cols
+			}
+			if c.rows > 0 && c.rows < rows {
+				rows = c.rows
+			}
+			ok = true
+		}
+	}
+	return cols, rows, ok
+}
+
+// recompute re-sizes each named session to the smallest of its current viewers,
+// applying the PTY resize outside the lock. Sessions with no viewer are left
+// untouched.
+func (m *Mux) recompute(sessIDs ...string) {
+	type rz struct {
+		s    *Session
+		c, r int
+	}
+	var todo []rz
+	m.mu.Lock()
+	seen := map[string]bool{}
+	for _, sid := range sessIDs {
+		if sid == "" || seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		s := m.getLocked(sid)
+		if s == nil {
+			continue
+		}
+		c, r, ok := m.minSizeLocked(sid)
+		if !ok {
+			continue
+		}
+		todo = append(todo, rz{s, c, r})
+	}
+	m.mu.Unlock()
+	for _, t := range todo {
+		_ = t.s.Resize(t.c, t.r)
+	}
+}
+
+// RegisterClient adds an attach client with its initial window size, defaulting
+// its focus to the first session (if any) and sizing that session to include it.
+func (m *Mux) RegisterClient(id string, cols, rows int) {
+	if cols <= 0 {
+		cols = m.cols
+	}
+	if rows <= 0 {
+		rows = m.rows
+	}
+	m.mu.Lock()
+	focus := ""
+	if len(m.sessions) > 0 {
+		focus = m.sessions[0].ID
+	}
+	m.clients[id] = &clientState{focus: focus, cols: cols, rows: rows}
+	m.mu.Unlock()
+	m.recompute(focus)
+}
+
+// UnregisterClient drops a client and re-sizes its formerly-focused session to
+// the remaining viewers (it may grow back if a smaller client left).
+func (m *Mux) UnregisterClient(id string) {
+	m.mu.Lock()
+	old := ""
+	if c := m.clients[id]; c != nil {
+		old = c.focus
+		delete(m.clients, id)
+	}
+	m.mu.Unlock()
+	m.recompute(old)
+}
+
+// SetClientFocus points a client at a session and re-sizes both the old and new
+// sessions (the old may grow now that this client left it; the new may shrink).
+func (m *Mux) SetClientFocus(id, sessID string) error {
+	m.mu.Lock()
+	c := m.clients[id]
+	if c == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no client %q", id)
+	}
+	if m.getLocked(sessID) == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no session %q", sessID)
+	}
+	old := c.focus
+	c.focus = sessID
+	m.mu.Unlock()
+	m.recompute(old, sessID)
+	return nil
+}
+
+// SetClientSize updates a client's window dimensions and re-sizes its focused
+// session accordingly.
+func (m *Mux) SetClientSize(id string, cols, rows int) {
+	m.mu.Lock()
+	c := m.clients[id]
+	if c == nil {
+		m.mu.Unlock()
+		return
+	}
+	c.cols, c.rows = cols, rows
+	focus := c.focus
+	m.mu.Unlock()
+	m.recompute(focus)
+}
+
+// WriteForClient routes input bytes to the client's focused session's PTY stdin.
+func (m *Mux) WriteForClient(id string, p []byte) (int, error) {
+	m.mu.RLock()
+	var s *Session
+	if c := m.clients[id]; c != nil {
+		s = m.getLocked(c.focus)
+	}
+	m.mu.RUnlock()
+	if s == nil {
+		return 0, fmt.Errorf("no focused session for client %q", id)
+	}
+	return s.Write(p)
+}
+
+// ListFor returns the session list with the Focused flag set per this client's
+// own focus (each client sees its own highlighted session).
+func (m *Mux) ListFor(id string) []SessionView {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	focus := ""
+	if c := m.clients[id]; c != nil {
+		focus = c.focus
+	}
+	out := make([]SessionView, len(m.sessions))
+	for i, s := range m.sessions {
+		out[i] = SessionView{
+			ID: s.ID, Name: s.Name, Ticket: s.Ticket,
+			Status: string(s.Status()), Focused: s.ID == focus,
+		}
+	}
+	return out
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"encoding/base64"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -140,14 +141,25 @@ func (d *Daemon) handle(conn net.Conn) {
 		_ = writeFrame(conn, Frame{Type: FramePong, Sessions: d.mux.Count()})
 		return
 	case FrameHello:
-		d.attach(conn, r)
+		d.attach(conn, r, first.Version)
 	default:
 		_ = writeFrame(conn, Frame{Type: FrameAck, Err: "expected hello"})
 	}
 }
 
-// attach proxies PTY I/O for an attached client until it detaches or drops.
-func (d *Daemon) attach(conn net.Conn, r *bufio.Reader) {
+// attach proxies PTY I/O for an attached client until it detaches or drops. It
+// first rejects a client whose protocol version does not match (the daemon may
+// be an older build than the client — restart it).
+func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
+	if clientVersion != ProtocolVersion {
+		_ = writeFrame(conn, Frame{
+			Type:    FrameAck,
+			Version: ProtocolVersion,
+			Err: fmt.Sprintf("protocol mismatch: client v%d, daemon v%d — restart the daemon",
+				clientVersion, ProtocolVersion),
+		})
+		return
+	}
 	clientID := genID()
 
 	// Serialize writes to this client (mux fan-out is concurrent).
@@ -177,19 +189,24 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader) {
 		}
 	}
 
+	// Register this client's per-client focus + size (defaults to the first
+	// session at 80x24; the client sends a resize immediately after attach).
+	d.mux.RegisterClient(clientID, 80, 24)
+
 	d.mu.Lock()
 	d.clients[clientID] = conn
 	d.mu.Unlock()
 
 	defer func() {
 		d.mux.RemoveSink(clientID)
+		d.mux.UnregisterClient(clientID)
 		d.mu.Lock()
 		delete(d.clients, clientID)
 		d.mu.Unlock()
 		// NB: sessions keep running — daemon survives client disconnect.
 	}()
 
-	send(Frame{Type: FrameAck, Sessions: d.mux.Count(), List: d.sessInfos()})
+	send(Frame{Type: FrameAck, Version: ProtocolVersion, Sessions: d.mux.Count(), List: d.sessInfosFor(clientID)})
 
 	for {
 		f, err := readFrame(r)
@@ -201,26 +218,29 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader) {
 			return
 		case FrameInput:
 			data, _ := base64.StdEncoding.DecodeString(f.Data)
-			_, _ = d.mux.WriteFocused(data)
+			_, _ = d.mux.WriteForClient(clientID, data)
 		case FrameFocus:
-			_ = d.mux.Focus(f.SessID)
-			send(Frame{Type: FrameSessAck, List: d.sessInfos()})
+			_ = d.mux.SetClientFocus(clientID, f.SessID)
+			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
 		case FrameResize:
-			d.mux.Resize(f.Cols, f.Rows)
+			d.mux.SetClientSize(clientID, f.Cols, f.Rows)
 		case FrameNewSess:
-			_, _ = d.mux.Spawn("", f.Ticket)
-			send(Frame{Type: FrameSessAck, List: d.sessInfos()})
+			if s, err := d.mux.Spawn("", f.Ticket); err == nil && s != nil {
+				_ = d.mux.SetClientFocus(clientID, s.ID)
+			}
+			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
 		case FrameSessLs:
-			send(Frame{Type: FrameSessAck, List: d.sessInfos()})
+			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
 		case FramePing:
 			send(Frame{Type: FramePong, Sessions: d.mux.Count()})
 		}
 	}
 }
 
-// sessInfos converts the mux session views into the wire SessInfo list.
-func (d *Daemon) sessInfos() []SessInfo {
-	views := d.mux.List()
+// sessInfosFor converts the mux session views (with this client's own focus
+// flag) into the wire SessInfo list.
+func (d *Daemon) sessInfosFor(clientID string) []SessInfo {
+	views := d.mux.ListFor(clientID)
 	out := make([]SessInfo, len(views))
 	for i, v := range views {
 		out[i] = SessInfo{ID: v.ID, Name: v.Name, Focused: v.Focused, Status: v.Status}

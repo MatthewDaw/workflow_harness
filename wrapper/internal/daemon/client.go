@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"time"
@@ -60,7 +61,7 @@ func dialSock(sock string) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{conn: conn, r: bufio.NewReader(conn)}
-	if err := writeFrame(conn, Frame{Type: FrameHello}); err != nil {
+	if err := writeFrame(conn, Frame{Type: FrameHello, Version: ProtocolVersion}); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -72,6 +73,10 @@ func dialSock(sock string) (*Client, error) {
 	if ack.Err != "" {
 		conn.Close()
 		return nil, errors.New(ack.Err)
+	}
+	if ack.Version != ProtocolVersion {
+		conn.Close()
+		return nil, fmt.Errorf("daemon protocol v%d, client v%d — the daemon is an older build; restart it (kill it and re-attach)", ack.Version, ProtocolVersion)
 	}
 	c.Sessions = ack.List // seed the sub-tab row before Run starts
 	return c, nil
