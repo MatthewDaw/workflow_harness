@@ -64,11 +64,13 @@ func (m *Mux) takenNames() map[string]bool {
 }
 
 // Spawn creates a new session, optionally seeded with a name, focuses it, and
-// starts pumping its output to the sinks. Sessions without a seeded name are
-// auto-named from their first user turn (see ApplyAutoName).
+// starts pumping its output to the sinks.
 func (m *Mux) Spawn(name string) (*Session, error) {
 	m.mu.Lock()
 	id := uuid.NewString()[:8]
+	if name == "" {
+		name = AutoName("")
+	}
 	if name == "" {
 		name = "session"
 	}
@@ -487,7 +489,7 @@ func (m *Mux) ListFor(id string) []SessionView {
 	out := make([]SessionView, len(m.sessions))
 	for i, s := range m.sessions {
 		out[i] = SessionView{
-			ID: s.ID, Name: s.Name, Ticket: s.Ticket,
+			ID: s.ID, Name: s.Name,
 			Status: string(s.Status()), Focused: s.ID == focus,
 		}
 	}

@@ -28,8 +28,8 @@ const (
 // pseudo-terminals on macOS/Linux — so a session hosts a real terminal on every
 // platform.
 type Session struct {
-	ID   string
-	Name string
+	ID     string
+	Name   string
 
 	cmd *pty.Cmd
 	pt  pty.Pty // the pseudo-terminal (master/console)
@@ -182,6 +182,7 @@ func (s *Session) MaybeName(firstTurn string, taken map[string]bool) (renamed bo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.firstSet {
+		s.firstSet = true
 		return false, s.Name
 	}
 	s.firstSet = true

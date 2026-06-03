@@ -29,7 +29,7 @@ export default function Sessions() {
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <strong>Sessions</strong>
-        <button onClick={() => void NewSession()} title="New session">
+        <button onClick={() => void NewSession("")} title="New session">
           +
         </button>
       </div>

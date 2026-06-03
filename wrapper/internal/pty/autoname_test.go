@@ -22,7 +22,7 @@ func TestAutoNameFromFirstTurn(t *testing.T) {
 		t.Errorf("first turn slug, got %q", got)
 	}
 	if got := AutoName(""); got != "" {
-		t.Errorf("empty first turn should yield empty name, got %q", got)
+		t.Errorf("empty input should yield empty, got %q", got)
 	}
 }
 
