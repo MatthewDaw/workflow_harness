@@ -1,6 +1,10 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import { useAuth } from '../auth/AuthProvider.js';
 import { useGetSessionsQuery } from '../api/baseApi.js';
+import { wsConnect, wsDisconnect } from '../ws/liveActions.js';
+import type { RootState } from '../app/store.js';
 import { Emblem } from './Emblem.js';
 
 /**
@@ -18,8 +22,23 @@ const NAV = [
 
 export function AppShell() {
   const { user, signOut } = useAuth();
+  const dispatch = useDispatch();
+  const token = useSelector((s: RootState) => s.auth.idToken);
   const { data: sessions } = useGetSessionsQuery({ live: true });
   const liveCount = sessions?.length ?? 0;
+
+  // Open the live WebSocket once the user is authenticated (H3). Without this the
+  // socket never opens, so live watch/steer/counters never update. The token
+  // rides the handshake query string so the WS authorizer accepts the connection.
+  useEffect(() => {
+    if (!user) return;
+    const url = import.meta.env.VITE_WS_URL;
+    if (!url) return;
+    dispatch(wsConnect({ url, token }));
+    return () => {
+      dispatch(wsDisconnect());
+    };
+  }, [user, token, dispatch]);
 
   return (
     <div className="min-h-screen bg-bg">

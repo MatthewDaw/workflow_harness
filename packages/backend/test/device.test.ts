@@ -41,6 +41,20 @@ describe('device-code login', () => {
     expect(body.interval).toBe(5);
   });
 
+  it('poll returns 400 (not 500) on a malformed JSON body', async () => {
+    const malformed = httpEvent({ method: 'POST' });
+    (malformed as { body?: string }).body = '{ not json';
+    const res = await devicePoll(malformed, deps);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('approve returns 400 (not 500) on a malformed JSON body', async () => {
+    const malformed = httpEvent({ method: 'POST', userId: 'matt', org: 'acme' });
+    (malformed as { body?: string }).body = '{ not json';
+    const res = await deviceApprove(malformed, deps);
+    expect(res.statusCode).toBe(400);
+  });
+
   it('poll requires a deviceCode (400) and reports unknown codes', async () => {
     const bad = await devicePoll(httpEvent({ method: 'POST', body: {} }), deps);
     expect(bad.statusCode).toBe(400);

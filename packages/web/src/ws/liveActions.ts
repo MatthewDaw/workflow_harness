@@ -7,7 +7,7 @@ import type { Envelope } from '@harness/shared';
  * event, dispatches `wsEvent` — which the middleware folds into the RTK Query
  * session cache so subscribers update without refetching.
  */
-export const wsConnect = createAction<{ url: string }>('ws/connect');
+export const wsConnect = createAction<{ url: string; token?: string | null }>('ws/connect');
 export const wsDisconnect = createAction('ws/disconnect');
 export const wsSubscribe = createAction<{ sessionId: string }>('ws/subscribe');
 export const wsUnsubscribe = createAction<{ sessionId: string }>('ws/unsubscribe');

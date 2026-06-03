@@ -133,6 +133,29 @@ describe('listProjectsForUser', () => {
   });
 });
 
+describe('putDeviceAuth TTL', () => {
+  it('writes a numeric epoch-seconds ttl on both the record and the userCode pointer', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    const expiresAt = 1_717_200_000_000; // epoch ms
+    await repo.putDeviceAuth({
+      deviceCode: 'dc',
+      userCode: 'WDJB-MJXT',
+      status: 'pending',
+      createdAt: expiresAt - 600_000,
+      expiresAt,
+    });
+    const items = ddbMock
+      .commandCalls(PutCommand)
+      .map((c) => c.args[0].input.Item as Record<string, unknown>);
+    expect(items).toHaveLength(2);
+    const expectedTtl = Math.floor(expiresAt / 1000); // epoch SECONDS
+    for (const item of items) {
+      expect(item.ttl).toBe(expectedTtl);
+      expect(typeof item.ttl).toBe('number');
+    }
+  });
+});
+
 describe('getProject', () => {
   it('reads by primary key', async () => {
     ddbMock.on(GetCommand).resolves({ Item: undefined });

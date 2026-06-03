@@ -13,6 +13,7 @@ const SKILLS: Skill[] = [
     description: 'GitHub CLI',
     source: 'built-in',
     members: [],
+    body: '',
   },
   {
     name: 'browse',
@@ -21,6 +22,7 @@ const SKILLS: Skill[] = [
     description: 'Headless browser',
     source: 'local',
     members: [],
+    body: '',
   },
 ];
 

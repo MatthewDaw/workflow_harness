@@ -82,6 +82,12 @@ export const skillSchema = z.object({
   source: z.enum(['built-in', 'local', 'custom']).default('local'),
   /** For bundles: names of member skills (which may themselves be bundles). */
   members: z.array(z.string()).default([]),
+  /**
+   * Full SKILL.md content. HQ stores the body so a daemon can materialize the
+   * skill locally on session-start sync (not just show metadata). Empty for
+   * bundles / metadata-only records.
+   */
+  body: z.string().default(''),
 });
 export type Skill = z.infer<typeof skillSchema>;
 

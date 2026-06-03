@@ -3,8 +3,8 @@ import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { Envelope, Event, Project, SessionProjection } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
-import { getSession, listSessions } from '../src/rest/sessions.js';
+import { Repo, type ConnectionRecord } from '../src/db/repo.js';
+import { control, getSession, listSessions } from '../src/rest/sessions.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
@@ -112,5 +112,117 @@ describe('GET /sessions/:id', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('POST /sessions/:id/control', () => {
+  const INSTANCE = 'inst-a';
+
+  function recordingPoster() {
+    const posts: Array<{ connectionId: string; body: unknown }> = [];
+    return {
+      posts,
+      poster: {
+        post: async (connectionId: string, body: unknown) => {
+          posts.push({ connectionId, body });
+          return true;
+        },
+      },
+    };
+  }
+
+  async function seedOwnedSessionWithDaemon(): Promise<void> {
+    await repo.putSessionProjection({
+      ...session('s-1', 'p1', MATT, 'active'),
+      instanceId: INSTANCE,
+    });
+    const conn: ConnectionRecord = {
+      connectionId: 'daemon-conn',
+      userId: MATT,
+      org: 'acme',
+      role: 'daemon',
+      instanceId: INSTANCE,
+      connectedAt: 1,
+    };
+    await repo.putConnection(conn);
+  }
+
+  it('routes a control frame to the owning daemon and returns 202', async () => {
+    await seedOwnedSessionWithDaemon();
+    const { posts, poster } = recordingPoster();
+    const res = await control(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        rawPath: '/sessions/s-1/control',
+        path: { id: 's-1' },
+        body: { action: 'inject', payload: { text: 'answer: 42' } },
+      }),
+      { repo, poster },
+    );
+    expect(res).toMatchObject({ statusCode: 202 });
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.connectionId).toBe('daemon-conn');
+    expect(posts[0]!.body).toMatchObject({
+      type: 'control',
+      sessionId: 's-1',
+      action: 'inject',
+      payload: { text: 'answer: 42' },
+    });
+  });
+
+  it('404s a control frame from a non-owner and routes nothing', async () => {
+    await seedOwnedSessionWithDaemon();
+    const { posts, poster } = recordingPoster();
+    const res = await control(
+      httpEvent({
+        method: 'POST',
+        userId: ALICE,
+        path: { id: 's-1' },
+        body: { action: 'inject', payload: { text: 'rm -rf /' } },
+      }),
+      { repo, poster },
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+    expect(posts).toHaveLength(0);
+  });
+
+  it('404s control for an unknown session (no enumeration)', async () => {
+    const { posts, poster } = recordingPoster();
+    const res = await control(
+      httpEvent({ method: 'POST', userId: MATT, path: { id: 'ghost' }, body: { action: 'pause' } }),
+      { repo, poster },
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+    expect(posts).toHaveLength(0);
+  });
+
+  it('rejects an invalid control body (400)', async () => {
+    await seedOwnedSessionWithDaemon();
+    const { poster } = recordingPoster();
+    const res = await control(
+      httpEvent({ method: 'POST', userId: MATT, path: { id: 's-1' }, body: { action: 'nope' } }),
+      { repo, poster },
+    );
+    expect(res).toMatchObject({ statusCode: 400 });
+  });
+
+  it('502s when the owning daemon is offline', async () => {
+    await repo.putSessionProjection({
+      ...session('s-1', 'p1', MATT, 'active'),
+      instanceId: INSTANCE,
+    });
+    const { posts, poster } = recordingPoster();
+    const res = await control(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { id: 's-1' },
+        body: { action: 'inject', payload: { text: 'hi' } },
+      }),
+      { repo, poster },
+    );
+    expect(res).toMatchObject({ statusCode: 502 });
+    expect(posts).toHaveLength(0);
   });
 });

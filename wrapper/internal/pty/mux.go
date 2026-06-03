@@ -21,8 +21,60 @@ type Mux struct {
 	mu       sync.RWMutex
 	sessions []*Session // insertion order == sub-tab order
 	focusIdx int
-	sinks    map[string]func(sessID string, b []byte) // output fan-out by sink id
-	clients  map[string]*clientState                  // per-attach-client focus + size
+	sinks    map[string]*sink        // output fan-out by sink id
+	clients  map[string]*clientState // per-attach-client focus + size
+}
+
+// sink is one output consumer (an attach client) with its own buffered delivery
+// channel and pump goroutine. Fan-out under the mux lock only does a non-blocking
+// enqueue; the actual (potentially slow) socket write happens off-lock in the
+// per-sink pump. When the buffer is full the oldest frame is dropped so a stuck
+// client can never freeze the mux or stall the other clients (HOL fix #10). A
+// dropped frame is harmless: claude is a full-screen TUI that repaints, so the
+// next frame reconstructs the screen.
+type sink struct {
+	id  string
+	fn  func(sessID string, b []byte)
+	ch  chan sinkFrame
+	done chan struct{}
+}
+
+// sinkFrame is one queued output chunk tagged with its originating session.
+type sinkFrame struct {
+	sessID string
+	b      []byte
+}
+
+// sinkBuf caps a sink's pending-frame queue. Sized to absorb a brief stall
+// (a TUI repaint is tens of frames) while bounding memory for a wedged client.
+const sinkBuf = 256
+
+// deliver enqueues a frame to the sink without blocking. On a full buffer it
+// drops the oldest queued frame to make room, so the newest output always wins
+// and the producer (mux.pump) never blocks on a slow consumer.
+func (s *sink) deliver(f sinkFrame) {
+	for {
+		select {
+		case s.ch <- f:
+			return
+		default:
+			// Full: drop oldest, then retry. The drain is also non-blocking so a
+			// concurrent pump draining the channel can't deadlock us.
+			select {
+			case <-s.ch:
+			default:
+			}
+		}
+	}
+}
+
+// run drains the sink's buffer and performs the real (blocking) write per frame.
+// It exits when the channel is closed (RemoveSink).
+func (s *sink) run() {
+	for f := range s.ch {
+		s.fn(f.sessID, f.b)
+	}
+	close(s.done)
 }
 
 // clientState is one attach client's view: which session it drives (focus) and
@@ -49,7 +101,7 @@ func NewMux(repoRoot string, cols, rows int, spawn SpawnFunc) *Mux {
 	}
 	return &Mux{
 		repoRoot: repoRoot, cols: cols, rows: rows, spawn: spawn,
-		focusIdx: -1, sinks: map[string]func(string, []byte){},
+		focusIdx: -1, sinks: map[string]*sink{},
 		clients: map[string]*clientState{},
 	}
 }
@@ -99,9 +151,12 @@ func (m *Mux) pump(s *Session) {
 			b := make([]byte, n)
 			copy(b, buf[:n])
 			s.recordHist(b)
+			// Fan out under the lock with only a non-blocking enqueue per sink; the
+			// slow socket write happens off-lock in each sink's pump. A stuck client
+			// drops frames instead of blocking the mux and the other clients (#10).
 			m.mu.RLock()
-			for _, sink := range m.sinks {
-				sink(s.ID, b)
+			for _, sk := range m.sinks {
+				sk.deliver(sinkFrame{sessID: s.ID, b: b})
 			}
 			m.mu.RUnlock()
 		}
@@ -158,22 +213,44 @@ func (m *Mux) onSessionExit(id string) {
 // renders the current screen immediately instead of staying blank until the
 // next repaint.
 func (m *Mux) AddSink(id string, fn func(sessID string, b []byte)) {
-	m.mu.Lock()
-	m.sinks[id] = fn
+	// Snapshot the current sessions, then replay their recent output SYNCHRONOUSLY
+	// — and before the sink is registered for live fan-out — so the freshly
+	// attached client renders the current screen immediately and strictly ahead of
+	// any subsequent live frame (no interleave/reorder with the async pump). This
+	// replay runs on the caller's (attach handler's) goroutine, so a slow client
+	// only blocks its own attach, never the mux.
+	m.mu.RLock()
 	sessions := append([]*Session(nil), m.sessions...)
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	for _, s := range sessions {
 		if h := s.History(); len(h) > 0 {
 			fn(s.ID, h)
 		}
 	}
+
+	sk := &sink{id: id, fn: fn, ch: make(chan sinkFrame, sinkBuf), done: make(chan struct{})}
+	go sk.run()
+	m.mu.Lock()
+	// Replace any existing sink for this id, shutting the old pump down.
+	if old := m.sinks[id]; old != nil {
+		close(old.ch)
+	}
+	m.sinks[id] = sk
+	m.mu.Unlock()
 }
 
-// RemoveSink deregisters an output consumer.
+// RemoveSink deregisters an output consumer and stops its pump goroutine (closing
+// the channel drains and exits run()). Closing under the lock makes the swap with
+// the producer's RLock fan-out safe: pump never sends on a closed channel because
+// it holds the RLock while delivering and RemoveSink takes the write lock.
 func (m *Mux) RemoveSink(id string) {
 	m.mu.Lock()
+	sk := m.sinks[id]
 	delete(m.sinks, id)
 	m.mu.Unlock()
+	if sk != nil {
+		close(sk.ch)
+	}
 }
 
 // Focused returns the currently focused session, or nil if none.

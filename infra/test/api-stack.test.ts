@@ -44,6 +44,37 @@ describe('ApiStack', () => {
     });
   });
 
+  test('enables DynamoDB TimeToLive on the `ttl` attribute (device-auth reaping)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'harness',
+      TimeToLiveSpecification: {
+        AttributeName: 'ttl',
+        Enabled: true,
+      },
+    });
+  });
+
+  test('routes the sessions control plane (POST /sessions/{id}/control)', () => {
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /sessions/{id}/control',
+    });
+  });
+
+  test('routes the skills scope endpoint (POST /skills/{name}/scope)', () => {
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /skills/{name}/scope',
+    });
+  });
+
+  test('throttles the HTTP API stage to bound public /device/* abuse', () => {
+    template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+      DefaultRouteSettings: Match.objectLike({
+        ThrottlingRateLimit: Match.anyValue(),
+        ThrottlingBurstLimit: Match.anyValue(),
+      }),
+    });
+  });
+
   test('exposes the event/subscribe/control WebSocket routes', () => {
     for (const routeKey of ['event', 'subscribe', 'control']) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', {

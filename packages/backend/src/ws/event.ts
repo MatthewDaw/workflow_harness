@@ -49,16 +49,27 @@ export async function ingest(
   // 2. Append (idempotent on duplicate seq).
   const { stored } = await deps.repo.appendEvent(envelope);
 
-  // 3. Update the projection. We fold even on a duplicate so a replayed
-  //    session.start can still establish identity; applyEvent guards the
-  //    latest-activity fields against regression by seq.
+  // 3. Update the projection atomically (U6 lost-update fix). A naive
+  //    read-modify-write loses concurrent updates when two events for the same
+  //    session interleave; instead we read, fold, and conditionally write,
+  //    retrying on a conflict by re-reading the latest state and re-folding.
+  //    applyEvent guards the latest-activity fields against regression by seq,
+  //    so a replayed/duplicate event remains a no-op.
   const sessionId = envelope.event.sessionId;
-  const existing = await deps.repo.getSessionById(sessionId);
-  const projection = applyEvent(existing, envelope, {
-    userId: conn?.userId ?? existing?.ownerUserId ?? 'unknown',
-    instanceId: conn?.instanceId ?? envelope.instanceId,
-  });
-  await deps.repo.putSessionProjection(projection);
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const existing = await deps.repo.getSessionById(sessionId);
+    const projection = applyEvent(existing, envelope, {
+      userId: conn?.userId ?? existing?.ownerUserId ?? 'unknown',
+      instanceId: conn?.instanceId ?? envelope.instanceId,
+    });
+    const { written } = await deps.repo.putSessionProjectionConditional(
+      projection,
+      existing?.maxSeq,
+    );
+    if (written) break;
+    // A concurrent writer advanced the projection; re-read and re-fold.
+  }
 
   // 4. Fan-out to subscribers (best-effort; prune dead listeners).
   const listeners = await deps.repo.listListeners(sessionId);

@@ -53,6 +53,16 @@ export async function connect(
   const role = qs?.role === 'web' ? 'web' : 'daemon';
   const instanceId = role === 'daemon' ? qs?.instanceId : undefined;
 
+  // Bind the instanceId to the authenticated principal: reject a daemon that
+  // tries to claim an instanceId currently owned by a different user, so one
+  // user cannot register another's instanceId and hijack control routing.
+  if (instanceId) {
+    const currentOwner = await deps.repo.getInstanceOwner(instanceId);
+    if (currentOwner && currentOwner !== principal.userId) {
+      return { statusCode: 403, body: 'instance owned by another user' };
+    }
+  }
+
   await deps.repo.putConnection({
     connectionId,
     userId: principal.userId,

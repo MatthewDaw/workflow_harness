@@ -60,6 +60,10 @@ export class ApiStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      // Device-auth items (DEVAUTH/DEVUC) carry an epoch-SECONDS `ttl` attribute;
+      // DynamoDB TimeToLive reaps them automatically so abandoned device-code
+      // flows cannot accumulate unbounded.
+      timeToLiveAttribute: 'ttl',
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     this.table.addGlobalSecondaryIndex({
@@ -137,6 +141,21 @@ export class ApiStack extends cdk.Stack {
       },
     });
 
+    // Rate-limit the API stage to bound abuse of the public, unauthenticated
+    // /device/start + /device/poll routes (which write to DynamoDB) — without a
+    // ceiling those endpoints allow unbounded writes. The HttpApi auto-creates
+    // its `$default` stage, so we reach through to its L1 CfnStage and set the
+    // stage-wide DefaultRouteSettings throttle.
+    const defaultStageNode = this.httpApi.defaultStage?.node.defaultChild as
+      | apigwv2.CfnStage
+      | undefined;
+    if (defaultStageNode) {
+      defaultStageNode.defaultRouteSettings = {
+        throttlingRateLimit: 20,
+        throttlingBurstLimit: 40,
+      };
+    }
+
     const M = apigwv2.HttpMethod;
     const r = (
       routePath: string,
@@ -163,6 +182,10 @@ export class ApiStack extends cdk.Stack {
 
     r('/sessions', [M.GET], sessionsFn, 'Sessions');
     r('/sessions/{id}', [M.GET], sessionsFn, 'SessionById');
+    // Control plane: the REST handler authorizes the caller owns the session,
+    // then postToConnection's the ControlAction frame to the owning daemon over
+    // the WS management API (see the WS grant + WS_CALLBACK_URL wiring below).
+    r('/sessions/{id}/control', [M.POST], sessionsFn, 'SessionControl');
 
     r('/agents', [M.GET, M.POST], agentsFn, 'Agents');
     r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName');
@@ -174,6 +197,7 @@ export class ApiStack extends cdk.Stack {
     r('/skills/{name}/members/{member}', [M.DELETE], skillsFn, 'SkillMemberDelete');
     r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve');
     r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage');
+    r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope');
 
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
@@ -245,6 +269,12 @@ export class ApiStack extends cdk.Stack {
       this.webSocketApi.grantManageConnections(fn);
       fn.addEnvironment('WS_CALLBACK_URL', wsStage.callbackUrl);
     }
+
+    // The REST sessions handler also relays ControlAction frames to the owning
+    // daemon's WS connection (POST /sessions/{id}/control), so it needs the same
+    // manage-connections grant + management endpoint as the WS handlers.
+    this.webSocketApi.grantManageConnections(sessionsFn);
+    sessionsFn.addEnvironment('WS_CALLBACK_URL', wsStage.callbackUrl);
 
     // ---- Outputs --------------------------------------------------------------
     new cdk.CfnOutput(this, 'TableName', { value: this.table.tableName });

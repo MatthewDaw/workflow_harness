@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Agent, ScopeRef } from '@harness/shared';
+import type { Agent, Project, ScopeRef } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
-import { changeScope, createAgent, deleteAgent, resolveAgents } from '../src/rest/agents.js';
+import { changeScope, createAgent, deleteAgent, getAgent, resolveAgents } from '../src/rest/agents.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
@@ -32,8 +32,13 @@ function agent(name: string, scope: ScopeRef): Agent {
   return { name, scope, model: 'opus', prompt: '', skills: [], tools: [] };
 }
 
+function project(id: string, owner: string): Project {
+  return { id, name: id, repo: `gh/acme/${id}`, ownerUserId: owner, liveSessionCount: 0 };
+}
+
 describe('POST /agents', () => {
   it('creates an agent at project scope', async () => {
+    await repo.putProject(project(PROJ, MATT));
     const res = await createAgent(
       httpEvent({
         method: 'POST',
@@ -73,6 +78,77 @@ describe('POST /agents', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 403 });
+  });
+
+  it('forbids a project-scope write to a project the caller does not own (cross-tenant)', async () => {
+    await repo.putProject(project('alices-proj', 'alice'));
+    const res = await createAgent(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        body: agent('x', { tier: 'project', id: 'alices-proj' }),
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+    expect(await repo.getAgent({ tier: 'project', id: 'alices-proj' }, 'x')).toBeUndefined();
+  });
+
+  it('forbids a project-scope write to a non-existent project', async () => {
+    const res = await createAgent(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        body: agent('x', { tier: 'project', id: 'ghost-proj' }),
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('GET /agents/:name (explicit-scope read, IDOR)', () => {
+  it('reads an agent at a scope the caller owns', async () => {
+    await repo.putAgent(agent('mine', { tier: 'user', id: MATT }));
+    const res = await getAgent(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { name: 'mine' },
+        query: { tier: 'user', id: MATT },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+  });
+
+  it("404s (not 403) a read of another user's user-scope agent", async () => {
+    await repo.putAgent(agent('alices', { tier: 'user', id: 'alice' }));
+    const res = await getAgent(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { name: 'alices' },
+        query: { tier: 'user', id: 'alice' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it("404s a read of another tenant's project-scope agent", async () => {
+    await repo.putProject(project('alices-proj', 'alice'));
+    await repo.putAgent(agent('builder', { tier: 'project', id: 'alices-proj' }));
+    const res = await getAgent(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { name: 'builder' },
+        query: { tier: 'project', id: 'alices-proj' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
   });
 });
 
@@ -123,6 +199,7 @@ describe('GET /agents (effective set)', () => {
 
 describe('POST /agents/:name/scope (elevate/demote)', () => {
   it('elevates a project agent to user scope, rewriting the key', async () => {
+    await repo.putProject(project(PROJ, MATT));
     await repo.putAgent(agent('builder', { tier: 'project', id: PROJ }));
     const res = await changeScope(
       httpEvent({

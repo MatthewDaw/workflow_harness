@@ -35,7 +35,12 @@ export async function devicePoll(
   event: APIGatewayProxyEventV2,
   deps: DeviceDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const body = parseBody(event) as { deviceCode?: string } | undefined;
+  let body: { deviceCode?: string } | undefined;
+  try {
+    body = parseBody(event) as { deviceCode?: string } | undefined;
+  } catch {
+    return badRequest('invalid JSON body');
+  }
   const deviceCode = body?.deviceCode;
   if (!deviceCode) return badRequest('deviceCode required');
   const result = await pollDeviceAuth(deps.repo, deviceCode);
@@ -48,7 +53,12 @@ export async function deviceApprove(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
-  const body = parseBody(event) as { userCode?: string } | undefined;
+  let body: { userCode?: string } | undefined;
+  try {
+    body = parseBody(event) as { userCode?: string } | undefined;
+  } catch {
+    return badRequest('invalid JSON body');
+  }
   const userCode = body?.userCode;
   if (!userCode) return badRequest('userCode required');
   const result = await approveDeviceAuthByUserCode(deps.repo, {

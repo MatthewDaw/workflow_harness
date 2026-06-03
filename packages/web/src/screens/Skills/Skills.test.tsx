@@ -13,6 +13,7 @@ const SKILLS: Skill[] = [
     description: 'Headless browser',
     source: 'local',
     members: [],
+    body: '',
   },
 ];
 

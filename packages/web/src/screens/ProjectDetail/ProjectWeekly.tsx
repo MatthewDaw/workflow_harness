@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useGetWeeklyQuery } from '../../api/baseApi.js';
 import { Bar, Pill, ScreenHeader } from '../../components/primitives.js';
@@ -9,7 +10,13 @@ import { Bar, Pill, ScreenHeader } from '../../components/primitives.js';
 export function ProjectWeekly() {
   const { projectId = '' } = useParams();
   const { data, isLoading } = useGetWeeklyQuery(projectId, { skip: !projectId });
-  const latest = (data ?? [])[0];
+  // The list is not guaranteed ordered (and arrived oldest-first); show the
+  // newest week by sorting on the lexicographically-comparable ISO week (desc).
+  const latest = useMemo(() => {
+    const weeks = [...(data ?? [])];
+    weeks.sort((a, b) => b.isoWeek.localeCompare(a.isoWeek));
+    return weeks[0];
+  }, [data]);
 
   return (
     <div className="hq-pad" data-testid="project-weekly">

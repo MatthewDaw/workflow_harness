@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/capture"
 	"github.com/workflow-harness/claude-plus/internal/config"
+	"github.com/workflow-harness/claude-plus/internal/diag"
 	"github.com/workflow-harness/claude-plus/internal/event"
 	"github.com/workflow-harness/claude-plus/internal/transport"
 )
@@ -25,6 +27,16 @@ type Runtime struct {
 	stop       chan struct{}
 	instanceID string
 	host       string
+
+	// cfgSrc is HQ's effective (org+user+project resolved) skills/agents source,
+	// set when an HQ REST base is configured. Used both for the drift meter and
+	// the per-session skills auto-sync (#1). nil when HQ REST is unconfigured.
+	cfgSrc config.RemoteSource
+
+	// syncedMu guards syncedSessions, which records which sessions have already
+	// triggered the one-shot skills auto-sync (so it runs once per NEW session).
+	syncedMu       sync.Mutex
+	syncedSessions map[string]bool
 }
 
 // emit wraps a captured event in an envelope and fans it to local subscribers
@@ -102,7 +114,8 @@ func trimCR(s string) string {
 // shutdown.
 func StartRuntime(d *Daemon, instanceID string) *Runtime {
 	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{}),
-		instanceID: instanceID, host: hostName()}
+		instanceID: instanceID, host: hostName(),
+		syncedSessions: map[string]bool{}}
 
 	// Route hook-shim events through the same emit path as the tailer (U18).
 	d.SetHookIngestor(rt.emit)
@@ -131,10 +144,71 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 	if base, ok := loadAPIBase(); ok {
 		if cfg, ok := loadHQConfig(); ok {
 			src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(d.repoRoot))
+			rt.cfgSrc = src
+			// Auto-sync skills once at startup so applicable (org+user+project)
+			// skills are present before the first session even announces (#1).
+			go rt.reconcileSkills()
 			go rt.configSyncLoop(src)
 		}
 	}
 	return rt
+}
+
+// reconcileSkills pulls HQ's effective skills/agents that are missing locally and
+// pushes local-only ones, so skills matching the user's applicable scopes appear
+// in ~/.claude. It is best-effort: every error is logged and swallowed so it can
+// never block a session (#1). Called once at startup and once per new session.
+func (rt *Runtime) reconcileSkills() {
+	defer diag.Recover("runtime.reconcileSkills")
+	src := rt.cfgSrc
+	if src == nil {
+		return
+	}
+	report, err := config.ComputeDrift(src)
+	if err != nil {
+		diag.Logf("skills auto-sync: compute drift failed: %v", err)
+		return
+	}
+	local, err := config.ReadLocal()
+	if err != nil {
+		diag.Logf("skills auto-sync: read local failed: %v", err)
+		return
+	}
+	pulled, pushed, errs := config.Reconcile(report, src, local)
+	for _, e := range errs {
+		diag.Logf("skills auto-sync: %v", e)
+	}
+	if pulled > 0 || pushed > 0 {
+		diag.Logf("skills auto-sync: pulled %d, pushed %d", pulled, pushed)
+	}
+	// Refresh the drift meter to reflect the post-reconcile state.
+	_ = rt.d.SyncConfigOnce(src)
+}
+
+// syncSkillsOnce triggers the skills auto-sync the first time a given session is
+// observed. Subsequent observations of the same session are no-ops, so the sync
+// runs once per NEW session (#1). The reconcile runs on its own goroutine so it
+// never delays the capture loop or the session.
+func (rt *Runtime) syncSkillsOnce(sessID string) {
+	if rt.cfgSrc == nil {
+		return
+	}
+	rt.syncedMu.Lock()
+	if rt.syncedSessions[sessID] {
+		rt.syncedMu.Unlock()
+		return
+	}
+	rt.syncedSessions[sessID] = true
+	rt.syncedMu.Unlock()
+	go rt.reconcileSkills()
+}
+
+// forgetSkillSync drops a session's sync marker when it ends, so a reused id
+// re-syncs on its next appearance and the map doesn't grow without bound (#11).
+func (rt *Runtime) forgetSkillSync(sessID string) {
+	rt.syncedMu.Lock()
+	delete(rt.syncedSessions, sessID)
+	rt.syncedMu.Unlock()
 }
 
 // configSyncLoop refreshes the drift meter on a slow tick (agents/skills change
@@ -180,7 +254,10 @@ func loadAPIBase() (string, bool) {
 // on the poll tick. Announcement is independent of the transcript tailer so a
 // session shows in HQ immediately, even before claude writes any transcript.
 func (rt *Runtime) captureLoop(instanceID string) {
-	tailed := map[string]*capture.Tailer{}
+	// tailStops holds a per-session stop channel so a tailer goroutine can be torn
+	// down when its session ends (leak #11) — independent of the daemon-wide
+	// rt.stop. announced records which sessions have been announced to HQ.
+	tailStops := map[string]chan struct{}{}
 	announced := map[string]bool{}
 	tk := time.NewTicker(time.Second)
 	defer tk.Stop()
@@ -188,12 +265,22 @@ func (rt *Runtime) captureLoop(instanceID string) {
 	projectID := projectIDFor(rt.d.repoRoot)
 	emit := rt.emit
 
+	// closeAllTails stops every per-session tailer (daemon shutdown).
+	closeAllTails := func() {
+		for _, ch := range tailStops {
+			close(ch)
+		}
+	}
+
 	for {
 		select {
 		case <-rt.stop:
+			closeAllTails()
 			return
 		case <-tk.C:
+			live := map[string]bool{}
 			for _, v := range rt.d.mux.List() {
+				live[v.ID] = true
 				// Announce a newly-seen session with session.start (seq 0 for this
 				// session) so HQ has its identity — project, name — from the
 				// first event, before any transcript activity.
@@ -201,7 +288,11 @@ func (rt *Runtime) captureLoop(instanceID string) {
 					announced[v.ID] = true
 					emit(v.ID, event.SessionStart(v.ID, projectID, host, v.Name, ""))
 				}
-				if _, ok := tailed[v.ID]; ok {
+				// Auto-sync HQ's effective skills/agents for this user+project on
+				// each NEW session so freshly-scoped skills appear locally (best
+				// effort; never blocks the session). Runs once per session.
+				rt.syncSkillsOnce(v.ID)
+				if _, ok := tailStops[v.ID]; ok {
 					continue
 				}
 				path, err := capture.TranscriptPath(rt.d.repoRoot, v.ID)
@@ -215,8 +306,20 @@ func (rt *Runtime) captureLoop(instanceID string) {
 					}
 				}
 				t := capture.NewTailer(sid, path, func(e event.Event) { emit(sid, e) }, onFirst)
-				tailed[sid] = t
-				go t.Run(500*time.Millisecond, rt.stop)
+				stop := make(chan struct{})
+				tailStops[sid] = stop
+				go t.Run(500*time.Millisecond, stop)
+			}
+			// Clean up state for sessions that have ended: stop their tailer
+			// goroutine and forget their announce/sync markers so the maps don't
+			// grow without bound (leak #11). A reused id (new session) re-announces.
+			for id, ch := range tailStops {
+				if !live[id] {
+					close(ch)
+					delete(tailStops, id)
+					delete(announced, id)
+					rt.forgetSkillSync(id)
+				}
 			}
 		}
 	}

@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Agent, ScopeRef, Skill } from '@harness/shared';
+import type { Agent, Project, ScopeRef, Skill } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import {
   addMember,
+  changeScope,
+  createSkill,
   deleteSkill,
   dissolveBundle,
   flattenBundle,
+  getSkill,
+  getUsage,
   removeMember,
   resolveSkills,
 } from '../src/rest/skills.js';
@@ -31,11 +35,16 @@ beforeEach(() => {
 });
 
 const MATT = 'matt';
+const ORG = 'acme';
 const PROJ = 'weekly-compass';
 const USER: ScopeRef = { tier: 'user', id: MATT };
 
-function skill(name: string, scope: ScopeRef = USER): Skill {
-  return { name, scope, kind: 'skill', description: '', source: 'local', members: [] };
+function skill(name: string, scope: ScopeRef = USER, body = ''): Skill {
+  return { name, scope, kind: 'skill', description: '', source: 'local', members: [], body };
+}
+
+function project(id: string, owner: string): Project {
+  return { id, name: id, repo: `gh/acme/${id}`, ownerUserId: owner, liveSessionCount: 0 };
 }
 function bundle(name: string, members: string[], scope: ScopeRef = USER): Skill {
   return { name, scope, kind: 'bundle', description: '', source: 'local', members };
@@ -169,5 +178,103 @@ describe('usage / blast radius', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     expect(bodyOf<{ usageCount: number }>(res as { body: string }).usageCount).toBe(2);
+  });
+});
+
+describe('skill body round-trip', () => {
+  it('persists + returns the SKILL.md body on create and read', async () => {
+    const create = await createSkill(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        body: skill('reconcile', USER, '# Reconcile\nfull markdown'),
+      }),
+      deps,
+    );
+    expect(create).toMatchObject({ statusCode: 201 });
+    expect((await repo.getSkill(USER, 'reconcile'))?.body).toBe('# Reconcile\nfull markdown');
+
+    const read = await getSkill(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        query: { tier: 'user', id: MATT },
+      }),
+      deps,
+    );
+    expect(bodyOf<{ skill: Skill }>(read as { body: string }).skill.body).toBe(
+      '# Reconcile\nfull markdown',
+    );
+  });
+});
+
+describe('GET /skills/:name (explicit-scope read, IDOR)', () => {
+  it("404s (not 403) a read of another user's user-scope skill", async () => {
+    await repo.putSkill(skill('alices', { tier: 'user', id: 'alice' }));
+    const res = await getSkill(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { name: 'alices' },
+        query: { tier: 'user', id: 'alice' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it("404s a usage read scoped to another tenant's project", async () => {
+    await repo.putProject(project('alices-proj', 'alice'));
+    const res = await getUsage(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { name: 'x' },
+        query: { tier: 'project', id: 'alices-proj' },
+        rawPath: '/skills/x/usage',
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('POST /skills/:name/scope (elevate/demote)', () => {
+  it('elevates a user skill to org scope for an admin, rewriting the key', async () => {
+    await repo.putSkill(skill('reconcile'));
+    const res = await changeScope(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        admin: true,
+        org: ORG,
+        rawPath: '/skills/reconcile/scope',
+        path: { name: 'reconcile' },
+        query: { tier: 'user', id: MATT },
+        body: { scope: { tier: 'org', id: ORG } },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(await repo.getSkill(USER, 'reconcile')).toBeUndefined();
+    expect(await repo.getSkill({ tier: 'org', id: ORG }, 'reconcile')).toBeDefined();
+  });
+
+  it('forbids elevating to org without admin', async () => {
+    await repo.putSkill(skill('reconcile'));
+    const res = await changeScope(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        org: ORG,
+        path: { name: 'reconcile' },
+        query: { tier: 'user', id: MATT },
+        body: { scope: { tier: 'org', id: ORG } },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+    expect(await repo.getSkill(USER, 'reconcile')).toBeDefined();
   });
 });

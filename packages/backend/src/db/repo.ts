@@ -245,11 +245,57 @@ export class Repo {
   }
 
   async putSessionProjection(s: SessionProjection): Promise<void> {
+    await this.writeSessionProjection(s, false);
+  }
+
+  /**
+   * Conditional projection upsert for optimistic concurrency (U6 lost-update
+   * fix). `expectedMaxSeq` is the `maxSeq` the caller folded on top of:
+   *  - `undefined` requires the projection not to exist yet (first write),
+   *  - a number requires the stored projection's `maxSeq` to still equal it.
+   * A `ConditionalCheckFailedException` (a concurrent writer advanced it) is
+   * surfaced as `{ written: false }` so the caller can re-read, re-fold, and
+   * retry instead of clobbering the concurrent update.
+   */
+  async putSessionProjectionConditional(
+    s: SessionProjection,
+    expectedMaxSeq: number | undefined,
+  ): Promise<{ written: boolean }> {
+    try {
+      await this.writeSessionProjection(s, true, expectedMaxSeq);
+      return { written: true };
+    } catch (err) {
+      if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+        return { written: false };
+      }
+      throw err;
+    }
+  }
+
+  private async writeSessionProjection(
+    s: SessionProjection,
+    conditional: boolean,
+    expectedMaxSeq?: number,
+  ): Promise<void> {
     const live = k.liveSessionIndex(s.status, s.lastEventAt, s.sessionId);
+    // Optimistic-concurrency guard, only when `conditional`:
+    //  - no prior projection (expectedMaxSeq undefined) -> require it not exist,
+    //  - otherwise require the stored maxSeq still equal what we folded on.
+    let guard: Record<string, unknown> = {};
+    if (conditional) {
+      guard =
+        expectedMaxSeq === undefined
+          ? { ConditionExpression: 'attribute_not_exists(PK)' }
+          : {
+              ConditionExpression: 'maxSeq = :expected',
+              ExpressionAttributeValues: { ':expected': expectedMaxSeq },
+            };
+    }
     await this.doc.send(
       new PutCommand({
         TableName: this.table,
         Item: { ...k.sessionKey(s.projectId, s.sessionId), ...s, ...(live ?? {}) },
+        ...guard,
       }),
     );
     // Maintain the sessionId -> projectId pointer for projectId-less lookups.
@@ -470,10 +516,14 @@ export class Repo {
 
   /** Persist a freshly-started pending device-auth record. */
   async putDeviceAuth(d: DeviceAuth): Promise<void> {
+    // DynamoDB TimeToLive reaps items by a numeric epoch-SECONDS attribute named
+    // `ttl` (infra enables TTL on this attribute). `expiresAt` is epoch ms, so
+    // convert. Written on BOTH the record and its pointer so neither lingers.
+    const ttl = Math.floor(d.expiresAt / 1000);
     await this.doc.send(
       new PutCommand({
         TableName: this.table,
-        Item: { ...k.deviceAuthKey(d.deviceCode), ...d },
+        Item: { ...k.deviceAuthKey(d.deviceCode), ...d, ttl },
       }),
     );
     // userCode -> deviceCode pointer so an approver (who only holds the short
@@ -481,7 +531,12 @@ export class Repo {
     await this.doc.send(
       new PutCommand({
         TableName: this.table,
-        Item: { ...k.deviceUserCodeKey(d.userCode), deviceCode: d.deviceCode, expiresAt: d.expiresAt },
+        Item: {
+          ...k.deviceUserCodeKey(d.userCode),
+          deviceCode: d.deviceCode,
+          expiresAt: d.expiresAt,
+          ttl,
+        },
       }),
     );
   }
@@ -609,6 +664,18 @@ export class Repo {
       new GetCommand({ TableName: this.table, Key: k.instanceConnKey(instanceId) }),
     );
     return (res.Item as { connectionId?: string } | undefined)?.connectionId;
+  }
+
+  /**
+   * The userId currently bound to an instanceId via the reverse index, if any.
+   * Used at `$connect` to reject one user claiming another user's instanceId
+   * (control-routing hijack).
+   */
+  async getInstanceOwner(instanceId: string): Promise<string | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.instanceConnKey(instanceId) }),
+    );
+    return (res.Item as { userId?: string } | undefined)?.userId;
   }
 
   /** Remove a connection record (and its instance reverse index, if any). */

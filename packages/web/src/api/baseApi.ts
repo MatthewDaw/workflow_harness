@@ -118,6 +118,27 @@ export const baseApi = createApi({
       providesTags: ['Objective'],
     }),
 
+    /**
+     * Create or update a Company Objective node (admin-gated on the backend).
+     * HQ owns the RCDO tree, so the editor posts `{id?, level, title, parentId?}`;
+     * the backend stamps the caller's org. Title edits reuse this with the
+     * node's existing id.
+     */
+    createObjective: build.mutation<
+      ObjectiveNode,
+      { id?: string; level: ObjectiveNode['level']; title: string; parentId?: string }
+    >({
+      query: (body) => ({ url: 'objectives', method: 'POST', body }),
+      transformResponse: unwrapOne<ObjectiveNode>('node'),
+      invalidatesTags: ['Objective'],
+    }),
+
+    /** Delete a Company Objective node by id (admin-gated on the backend). */
+    deleteObjective: build.mutation<{ deleted: boolean }, string>({
+      query: (id) => ({ url: `objectives/${encodeURIComponent(id)}`, method: 'DELETE' }),
+      invalidatesTags: ['Objective'],
+    }),
+
     getAgents: build.query<Agent[], { projectId?: string } | void>({
       query: (arg) => (arg && arg.projectId ? `agents?project=${arg.projectId}` : 'agents'),
       transformResponse: unwrapArray<Agent>('agents'),
@@ -304,6 +325,8 @@ export const {
   useGetSessionsQuery,
   useGetSessionQuery,
   useGetObjectivesQuery,
+  useCreateObjectiveMutation,
+  useDeleteObjectiveMutation,
   useGetAgentsQuery,
   useGetSkillsQuery,
   useGetWeeklyQuery,

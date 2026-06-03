@@ -22,7 +22,7 @@ import {
   queryParam,
   unauthorized,
 } from './runtime.js';
-import { canWriteScope, isAdmin } from './scopeauth.js';
+import { canReadScope, canWriteScope, isAdmin } from './scopeauth.js';
 
 /**
  * REST: agents (U9) — scoped CRUD + scope elevate/demote + resolution.
@@ -93,7 +93,7 @@ export async function createAgent(
   if (!parsed.success) return badRequest(parsed.error.message);
   const agent: Agent = parsed.data;
 
-  if (!canWriteScope(agent.scope, principal, isAdmin(event))) return forbidden();
+  if (!(await canWriteScope(agent.scope, principal, isAdmin(event), deps.repo))) return forbidden();
 
   await deps.repo.putAgent(agent);
   return created({ agent });
@@ -109,6 +109,10 @@ export async function getAgent(
   const scope = scopeFromQuery(event);
   if (!name || !scope) return badRequest('missing name or scope');
 
+  // Gate the explicit-scope read: a missing read authorization is reported as a
+  // 404 (not 403) so a caller cannot probe which scopes/items exist (IDOR).
+  if (!(await canReadScope(scope, principal, deps.repo))) return notFound();
+
   const agent = await deps.repo.getAgent(scope, name);
   if (!agent) return notFound();
   return ok({ agent });
@@ -123,7 +127,7 @@ export async function deleteAgent(
   const name = pathParam(event, 'name');
   const scope = scopeFromQuery(event);
   if (!name || !scope) return badRequest('missing name or scope');
-  if (!canWriteScope(scope, principal, isAdmin(event))) return forbidden();
+  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
 
   await deps.repo.deleteAgent(scope, name);
   return ok({ deleted: true });
@@ -156,7 +160,10 @@ export async function changeScope(
   const toScope = parsed.data.scope;
 
   const admin = isAdmin(event);
-  if (!canWriteScope(fromScope, principal, admin) || !canWriteScope(toScope, principal, admin)) {
+  if (
+    !(await canWriteScope(fromScope, principal, admin, deps.repo)) ||
+    !(await canWriteScope(toScope, principal, admin, deps.repo))
+  ) {
     return forbidden();
   }
 

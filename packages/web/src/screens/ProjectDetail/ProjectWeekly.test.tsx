@@ -57,4 +57,31 @@ describe('ProjectWeekly (U19)', () => {
     await screen.findByText('Shipped the login gate and wired the weekly REST endpoint.');
     expect(screen.getByText('conformity 81')).toBeInTheDocument();
   });
+
+  it('shows the LATEST week even when the list arrives oldest-first', async () => {
+    const older: WeeklyUpdate = {
+      projectId: 'weekly-compass',
+      isoWeek: '2026-W20',
+      done: 'Older week done.',
+      plan: 'Older week plan.',
+      validated: false,
+    };
+    const newer: WeeklyUpdate = {
+      projectId: 'weekly-compass',
+      isoWeek: '2026-W23',
+      done: 'Newer week done.',
+      plan: 'Newer week plan.',
+      validated: false,
+    };
+    // Seed oldest-first (data[0] is the OLDEST) — the screen must still pick W23.
+    renderWithProviders(<ProjectWeekly />, {
+      route: '/projects/weekly-compass/weekly',
+      routePath: '/projects/:projectId/weekly',
+      seed: { projects: [PROJECT], weekly: { 'weekly-compass': [older, newer] } },
+    });
+
+    expect(await screen.findByText('Week 2026-W23')).toBeInTheDocument();
+    expect(screen.getByText('Newer week done.')).toBeInTheDocument();
+    expect(screen.queryByText('Older week done.')).not.toBeInTheDocument();
+  });
 });

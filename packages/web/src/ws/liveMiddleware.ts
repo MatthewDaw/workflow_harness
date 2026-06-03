@@ -80,9 +80,13 @@ export const liveMiddleware: Middleware = (store) => {
   return (next) => (action) => {
     if (wsConnect.match(action)) {
       socket?.close();
-      socket = new WebSocket(action.payload.url);
+      // The WS authorizer reads the device/id token off the handshake query
+      // string (`?token=...`) — browsers cannot set headers on a WS upgrade.
+      socket = new WebSocket(withToken(action.payload.url, action.payload.token));
       socket.onmessage = (msg) => {
-        const parsed = safeParseEnvelope(safeJson(msg.data));
+        // The backend wraps live events as { type: 'event', envelope } (ws/event.ts);
+        // unwrap that, while still tolerating a bare envelope for safety.
+        const parsed = safeParseEnvelope(unwrapEventFrame(safeJson(msg.data)));
         if (parsed.success) store.dispatch(wsEvent(parsed.data));
       };
       socket.onopen = () => {
@@ -126,4 +130,23 @@ function safeJson(raw: unknown): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * The backend's ws/event.ts posts `{ type: 'event', envelope }` to clients.
+ * Pull the inner envelope out of that frame; pass anything else (e.g. a bare
+ * envelope) through unchanged so the parser can still validate it.
+ */
+function unwrapEventFrame(msg: unknown): unknown {
+  if (msg && typeof msg === 'object' && (msg as { type?: unknown }).type === 'event') {
+    return (msg as { envelope?: unknown }).envelope;
+  }
+  return msg;
+}
+
+/** Append the auth token to the WS URL as `?token=` (or `&token=`) for the authorizer. */
+function withToken(url: string, token?: string | null): string {
+  if (!token) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
 }

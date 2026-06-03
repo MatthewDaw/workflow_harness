@@ -1,15 +1,20 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { controlActionSchema } from '@harness/shared';
+import { z } from 'zod';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
   defaultRepo,
+  json,
   notFound,
   ok,
+  parseBody,
   pathParam,
   principalOf,
   queryParam,
   unauthorized,
 } from './runtime.js';
+import { ApiGwPoster, type ConnectionPoster } from '../ws/runtime.js';
 
 /**
  * REST: sessions (U8).
@@ -24,9 +29,21 @@ import {
 
 export interface SessionsDeps {
   repo: Repo;
+  /** Posts the routed control frame to the owning daemon's connection. */
+  poster?: ConnectionPoster;
 }
 
 const DEFAULT_EVENT_PAGE = 100;
+
+/**
+ * Body of POST /sessions/{id}/control. The sessionId is the path param; the body
+ * carries the ControlAction + payload (matching the web's `sendControl`, which
+ * posts `{ action, payload }`).
+ */
+const controlBodySchema = z.object({
+  action: controlActionSchema,
+  payload: z.object({ text: z.string() }).partial().default({}),
+});
 
 export async function listSessions(
   event: APIGatewayProxyEventV2,
@@ -85,8 +102,71 @@ export async function getSession(
   return ok({ session, events });
 }
 
+/**
+ * POST /sessions/{id}/control (H1) — steer a live session from HQ web over REST.
+ *
+ * Security mirrors the WS control gateway exactly: authorize that the caller
+ * OWNS the target session (repo.getSession by id) BEFORE any routing, then
+ * resolve the owning daemon's connectionId via the `instanceId` reverse index
+ * and post the ControlAction frame to it. A non-owner / missing session is 404
+ * (no enumeration). Returns 202 once the frame is accepted for delivery.
+ */
+export async function control(
+  event: APIGatewayProxyEventV2,
+  deps: SessionsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+  const id = pathParam(event, 'id');
+  if (!id) return badRequest('missing session id');
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const parsed = controlBodySchema.safeParse(body);
+  if (!parsed.success) return badRequest(parsed.error.message);
+
+  // Authorize ownership BEFORE any routing. Not-owner and missing are both 404.
+  const session = await deps.repo.getSessionById(id);
+  if (!session || session.ownerUserId !== principal.userId) return notFound();
+
+  // Resolve the owning daemon connection via the instance reverse index.
+  const instanceId = session.instanceId;
+  const daemonConnId = instanceId
+    ? await deps.repo.getInstanceConnectionId(instanceId)
+    : undefined;
+  if (!daemonConnId) {
+    // Owner authorized, but the daemon is not currently connected.
+    return json(502, { error: 'daemon offline' });
+  }
+
+  const poster = deps.poster ?? new ApiGwPoster(controlEndpoint());
+  const delivered = await poster.post(daemonConnId, {
+    type: 'control',
+    sessionId: id,
+    action: parsed.data.action,
+    payload: parsed.data.payload,
+  });
+  if (!delivered) return json(502, { error: 'daemon offline' });
+
+  return json(202, { delivered: true });
+}
+
+/** The WS management API endpoint for posting control frames (infra sets it). */
+function controlEndpoint(): string {
+  const url = process.env.WS_CALLBACK_URL;
+  if (!url) throw new Error('WS_CALLBACK_URL is not set');
+  return url;
+}
+
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: SessionsDeps = { repo: defaultRepo() };
+  const method = event.requestContext.http.method;
+  const path = event.requestContext.http.path;
+  if (method === 'POST' && path.endsWith('/control')) return control(event, deps);
   if (pathParam(event, 'id')) return getSession(event, deps);
   return listSessions(event, deps);
 }

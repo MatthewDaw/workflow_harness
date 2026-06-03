@@ -88,6 +88,42 @@ describe('$connect', () => {
     expect(await repo.getInstanceConnectionId(INSTANCE)).toBe('c1');
   });
 
+  it('rejects a daemon claiming an instanceId already owned by another user (hijack)', async () => {
+    // matt owns INSTANCE via his daemon connection.
+    await seedDaemonConn('matt-conn');
+    expect(await repo.getInstanceConnectionId(INSTANCE)).toBe('matt-conn');
+
+    // alice tries to register the same instanceId — must be denied, and the
+    // reverse index must still point at matt's connection.
+    const ev = {
+      requestContext: { connectionId: 'alice-conn', domainName: 'd', stage: 'prod' },
+      queryStringParameters: { token: 'tok', instanceId: INSTANCE, role: 'daemon' },
+    } as unknown as APIGatewayProxyWebsocketEventV2;
+    const res = await connect(ev, {
+      repo,
+      verify: async () => ({ userId: 'alice', org: 'acme' }),
+      now: () => 9,
+    });
+    expect(res).toMatchObject({ statusCode: 403 });
+    expect(await repo.getConnection('alice-conn')).toBeUndefined();
+    expect(await repo.getInstanceConnectionId(INSTANCE)).toBe('matt-conn');
+  });
+
+  it('allows the same user to reclaim their own instanceId (reconnect)', async () => {
+    await seedDaemonConn('old-conn');
+    const ev = {
+      requestContext: { connectionId: 'new-conn', domainName: 'd', stage: 'prod' },
+      queryStringParameters: { token: 'tok', instanceId: INSTANCE, role: 'daemon' },
+    } as unknown as APIGatewayProxyWebsocketEventV2;
+    const res = await connect(ev, {
+      repo,
+      verify: async () => ({ userId: OWNER, org: 'acme' }),
+      now: () => 9,
+    });
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(await repo.getInstanceConnectionId(INSTANCE)).toBe('new-conn');
+  });
+
   it('rejects a missing or forged token without registering a connection', async () => {
     const noToken = {
       requestContext: { connectionId: 'c2', domainName: 'd', stage: 'prod' },

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,8 +29,11 @@ type HTTPRemoteSource struct {
 	Client    *http.Client
 
 	// bodies caches the content fetched during Fetch so Body() (used by a
-	// subsequent reconcile pull) does not re-hit the network.
-	bodies map[string]string
+	// subsequent reconcile pull) does not re-hit the network. bodiesMu guards it:
+	// Fetch (writer) and Body (reader) can run on different goroutines — the drift
+	// poll loop and a per-session reconcile both share one source (#12).
+	bodiesMu sync.RWMutex
+	bodies   map[string]string
 }
 
 // NewHTTPRemoteSource builds a source with a bounded HTTP client.
@@ -52,6 +56,12 @@ type remoteSkill struct {
 	Name        string `json:"name"`
 	Scope       scope  `json:"scope"`
 	Description string `json:"description"`
+	// Body is the full SKILL.md text HQ now serves on GET /skills and
+	// GET /skills/{name}. When present it is the authoritative content to
+	// materialize locally (ApplyPulled writes it to skills/<name>/SKILL.md);
+	// older HQ responses omit it, so we fall back to Description for hashing and
+	// pulling to stay backward compatible.
+	Body string `json:"body"`
 }
 
 type scope struct {
@@ -70,7 +80,9 @@ func (s scope) String() string {
 // with content hashes. Malformed entries (missing name) are skipped rather than
 // failing the whole fetch, so one bad record never blanks the meter.
 func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
-	h.bodies = map[string]string{}
+	// Build the body cache locally, then publish it under the lock in one shot so a
+	// concurrent Body() reader never observes a half-populated map (#12).
+	bodies := map[string]string{}
 	var out []RemoteItem
 
 	var agentsResp struct {
@@ -83,7 +95,7 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		if a.Name == "" {
 			continue
 		}
-		h.bodies[string(KindAgent)+"/"+a.Name] = a.Prompt
+		bodies[string(KindAgent)+"/"+a.Name] = a.Prompt
 		out = append(out, RemoteItem{Kind: KindAgent, Name: a.Name, Scope: a.Scope.String(), Hash: hashContent([]byte(a.Prompt))})
 	}
 
@@ -97,15 +109,29 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		if s.Name == "" {
 			continue
 		}
-		h.bodies[string(KindSkill)+"/"+s.Name] = s.Description
-		out = append(out, RemoteItem{Kind: KindSkill, Name: s.Name, Scope: s.Scope.String(), Hash: hashContent([]byte(s.Description))})
+		// Prefer the full SKILL.md body when HQ serves it (the authoritative local
+		// content); fall back to the description for older HQ responses. Hash the
+		// same text we will write so a pulled skill reads back in-sync.
+		content := s.Body
+		if content == "" {
+			content = s.Description
+		}
+		bodies[string(KindSkill)+"/"+s.Name] = content
+		out = append(out, RemoteItem{Kind: KindSkill, Name: s.Name, Scope: s.Scope.String(), Hash: hashContent([]byte(content))})
 	}
+
+	h.bodiesMu.Lock()
+	h.bodies = bodies
+	h.bodiesMu.Unlock()
 	return out, nil
 }
 
 // Body returns the content captured during the most recent Fetch.
 func (h *HTTPRemoteSource) Body(item RemoteItem) (string, error) {
-	if b, ok := h.bodies[string(item.Kind)+"/"+item.Name]; ok {
+	h.bodiesMu.RLock()
+	b, ok := h.bodies[string(item.Kind)+"/"+item.Name]
+	h.bodiesMu.RUnlock()
+	if ok {
 		return b, nil
 	}
 	return "", fmt.Errorf("no cached body for %s/%s (fetch first)", item.Kind, item.Name)

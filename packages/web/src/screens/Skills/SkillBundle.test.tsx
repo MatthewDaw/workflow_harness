@@ -15,10 +15,11 @@ const SKILLS: Skill[] = [
     description: 'Review bundle',
     source: 'custom',
     members: ['gh', 'browse'],
+    body: '',
   },
-  { name: 'gh', scope: SCOPE, kind: 'skill', description: '', source: 'built-in', members: [] },
-  { name: 'browse', scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [] },
-  { name: 'qa', scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [] },
+  { name: 'gh', scope: SCOPE, kind: 'skill', description: '', source: 'built-in', members: [], body: '' },
+  { name: 'browse', scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [], body: '' },
+  { name: 'qa', scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [], body: '' },
 ];
 
 interface StubReq {

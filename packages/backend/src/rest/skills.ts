@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   resolveScoped,
+  scopeChangeSchema,
   scopeRefSchema,
   skillSchema,
   type ScopeContext,
@@ -21,7 +22,7 @@ import {
   queryParam,
   unauthorized,
 } from './runtime.js';
-import { canWriteScope, isAdmin } from './scopeauth.js';
+import { canReadScope, canWriteScope, isAdmin } from './scopeauth.js';
 
 /**
  * REST: skills + bundles (U9).
@@ -119,7 +120,7 @@ export async function createSkill(
   const parsed = skillSchema.safeParse(body);
   if (!parsed.success) return badRequest(parsed.error.message);
   const skill: Skill = parsed.data;
-  if (!canWriteScope(skill.scope, principal, isAdmin(event))) return forbidden();
+  if (!(await canWriteScope(skill.scope, principal, isAdmin(event), deps.repo))) return forbidden();
   await deps.repo.putSkill(skill);
   return created({ skill });
 }
@@ -133,6 +134,9 @@ export async function getSkill(
   const name = pathParam(event, 'name');
   const scope = scopeFromQuery(event);
   if (!name || !scope) return badRequest('missing name or scope');
+  // Gate the explicit-scope read; failure is a 404 (not 403) to avoid IDOR
+  // probing of which scopes/skills exist.
+  if (!(await canReadScope(scope, principal, deps.repo))) return notFound();
   const skill = await deps.repo.getSkill(scope, name);
   if (!skill) return notFound();
   return ok({ skill });
@@ -153,6 +157,8 @@ export async function getUsage(
   const name = pathParam(event, 'name');
   const scope = scopeFromQuery(event);
   if (!name || !scope) return badRequest('missing name or scope');
+  // Gate the explicit-scope read; failure is a 404 (not 403) to avoid IDOR.
+  if (!(await canReadScope(scope, principal, deps.repo))) return notFound();
   const count = await usageCount(deps.repo, scope, name);
   return ok({ name, count });
 }
@@ -166,7 +172,7 @@ export async function deleteSkill(
   const name = pathParam(event, 'name');
   const scope = scopeFromQuery(event);
   if (!name || !scope) return badRequest('missing name or scope');
-  if (!canWriteScope(scope, principal, isAdmin(event))) return forbidden();
+  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
 
   // Surface the blast radius: agents that would lose this skill.
   const count = await usageCount(deps.repo, scope, name);
@@ -184,7 +190,7 @@ export async function addMember(
   const name = pathParam(event, 'name');
   const scope = scopeFromQuery(event);
   if (!name || !scope) return badRequest('missing name or scope');
-  if (!canWriteScope(scope, principal, isAdmin(event))) return forbidden();
+  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
 
   let body: unknown;
   try {
@@ -220,7 +226,7 @@ export async function removeMember(
   const member = pathParam(event, 'member');
   const scope = scopeFromQuery(event);
   if (!name || !member || !scope) return badRequest('missing name, member, or scope');
-  if (!canWriteScope(scope, principal, isAdmin(event))) return forbidden();
+  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
 
   const bundle = await deps.repo.getSkill(scope, name);
   if (!bundle) return notFound();
@@ -245,7 +251,7 @@ export async function dissolveBundle(
   const name = pathParam(event, 'name');
   const scope = scopeFromQuery(event);
   if (!name || !scope) return badRequest('missing name or scope');
-  if (!canWriteScope(scope, principal, isAdmin(event))) return forbidden();
+  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
 
   const bundle = await deps.repo.getSkill(scope, name);
   if (!bundle) return notFound();
@@ -256,12 +262,61 @@ export async function dissolveBundle(
   return ok({ dissolved: true, members });
 }
 
+/**
+ * Elevate/demote a skill (or bundle) to a new scope, mirroring agents.ts
+ * changeScope exactly: the new scope arrives in the body; we re-key the skill at
+ * the destination and delete the source. Both source and destination scope must
+ * be writable by the caller (org tier is admin-gated via canWriteScope).
+ */
+export async function changeScope(
+  event: APIGatewayProxyEventV2,
+  deps: SkillsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+  const name = pathParam(event, 'name');
+  const fromScope = scopeFromQuery(event);
+  if (!name || !fromScope) return badRequest('missing name or source scope');
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const parsed = scopeChangeSchema.safeParse(body);
+  if (!parsed.success) return badRequest(parsed.error.message);
+  const toScope = parsed.data.scope;
+
+  const admin = isAdmin(event);
+  if (
+    !(await canWriteScope(fromScope, principal, admin, deps.repo)) ||
+    !(await canWriteScope(toScope, principal, admin, deps.repo))
+  ) {
+    return forbidden();
+  }
+
+  const existing = await deps.repo.getSkill(fromScope, name);
+  if (!existing) return notFound();
+
+  // Re-parse through the schema so stale PK/SK attributes read back from the
+  // table are stripped before re-keying at the new scope.
+  const moved: Skill = skillSchema.parse({ ...existing, scope: toScope });
+  await deps.repo.putSkill(moved);
+  // Avoid deleting if the key didn't change (same scope = no-op move).
+  if (!(fromScope.tier === toScope.tier && fromScope.id === toScope.id)) {
+    await deps.repo.deleteSkill(fromScope, name);
+  }
+  return ok({ skill: moved });
+}
+
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: SkillsDeps = { repo: defaultRepo() };
   const method = event.requestContext.http.method;
   const path = event.requestContext.http.path;
   const name = pathParam(event, 'name');
 
+  if (method === 'POST' && path.endsWith('/scope')) return changeScope(event, deps);
   if (method === 'POST' && path.endsWith('/members')) return addMember(event, deps);
   if (method === 'DELETE' && pathParam(event, 'member')) return removeMember(event, deps);
   if (method === 'POST' && path.endsWith('/dissolve')) return dissolveBundle(event, deps);

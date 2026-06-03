@@ -141,25 +141,56 @@ func (c *Client) Run() {
 	}
 }
 
+// frameWriter is the minimal write capability flush needs (*websocket.Conn
+// satisfies it). Abstracting it lets the over-ack regression test drive flush
+// with a fake that can fail mid-stream, deterministically, without a live socket.
+type frameWriter interface {
+	WriteJSON(v interface{}) error
+}
+
 // replay re-sends all unacknowledged envelopes in order, then acks them. This is
 // the offline → online catch-up; ordering and seq are preserved by the buffer.
-func (c *Client) replay(conn *websocket.Conn) error {
+func (c *Client) replay(conn frameWriter) error {
+	return c.flush(conn)
+}
+
+// flush writes every currently-unacknowledged envelope from the on-disk buffer
+// (in order) and acks exactly the number SENT — never more. The buffer, not the
+// in-memory sendCh, is the single source of truth for what has been delivered, so
+// an envelope is acked exactly once: replay() and the live serve() loop both
+// route through here, and sendCh is only a wake-up signal (its value is ignored).
+//
+// This closes data-loss #9: previously replay() acked len(pending) AND the live
+// loop drained the same envelopes still queued in sendCh, acking 1 each over the
+// now-compacted buffer, inflating 'acked' past the line count and permanently
+// skipping later events. Acking only the count actually drained from the buffer
+// keeps the cursor exact regardless of how many stale signals sendCh holds, and a
+// mid-stream write failure acks only what went out (the rest stay pending).
+func (c *Client) flush(conn frameWriter) error {
 	pending, err := c.buf.Pending()
 	if err != nil {
 		return err
 	}
+	sent := 0
 	for _, env := range pending {
 		if err := conn.WriteJSON(eventFrame{Action: "event", Envelope: env}); err != nil {
+			if sent > 0 {
+				_ = c.buf.Ack(sent)
+			}
 			return err
 		}
+		sent++
 	}
-	if len(pending) > 0 {
-		return c.buf.Ack(len(pending))
+	if sent > 0 {
+		return c.buf.Ack(sent)
 	}
 	return nil
 }
 
 // serve pumps live sends and reads control frames until the connection drops.
+// Each sendCh tick wakes the loop to drain whatever is newly pending in the
+// buffer; the channel value is intentionally ignored (the buffer is the source
+// of truth) so a stale signal left over from replay can never double-ack.
 func (c *Client) serve(conn *websocket.Conn) {
 	readErr := make(chan struct{})
 	go func() {
@@ -181,11 +212,10 @@ func (c *Client) serve(conn *websocket.Conn) {
 			return
 		case <-readErr:
 			return
-		case env := <-c.sendCh:
-			if err := conn.WriteJSON(eventFrame{Action: "event", Envelope: env}); err != nil {
+		case <-c.sendCh:
+			if err := c.flush(conn); err != nil {
 				return
 			}
-			_ = c.buf.Ack(1)
 		}
 	}
 }
