@@ -4,6 +4,10 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { StartingPosition, FilterCriteria, FilterRule } from 'aws-cdk-lib/aws-lambda';
 import { HttpNoneAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2';
 import {
   HttpLambdaIntegration,
@@ -73,15 +77,46 @@ export class ApiStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // ---- Device-token signing secret (AWS Secrets Manager) --------------------
+    // The device-token HMAC secret must NEVER be a literal in the synthesized
+    // template (it previously fell back to 'placeholder-dev-secret'). Instead it
+    // lives in Secrets Manager and is injected into the lambdas as a CDK dynamic
+    // reference — the template carries a `{{resolve:secretsmanager:...}}` token,
+    // and CloudFormation resolves the real value at deploy time.
+    //
+    // An existing secret can be adopted (e.g. one rotated out of band) via the
+    // DEVICE_TOKEN_SECRET_ARN env var / `deviceTokenSecretArn` context; otherwise
+    // a managed secret with a freshly generated 64-char value is created here.
+    const existingSecretArn =
+      process.env.DEVICE_TOKEN_SECRET_ARN ??
+      (this.node.tryGetContext('deviceTokenSecretArn') as string | undefined);
+
+    const deviceTokenSecret: secretsmanager.ISecret = existingSecretArn
+      ? secretsmanager.Secret.fromSecretCompleteArn(this, 'DeviceTokenSecret', existingSecretArn)
+      : new secretsmanager.Secret(this, 'DeviceTokenSecret', {
+          secretName: 'command-hq/device-token-secret',
+          description: 'HMAC signing secret for claude+ device tokens (command-hq).',
+          generateSecretString: {
+            // A long, opaque signing key. No spaces/quotes/backslashes so it is
+            // safe to carry verbatim through env + CloudFormation resolution.
+            passwordLength: 64,
+            excludePunctuation: true,
+            excludeCharacters: ' "\'\\',
+            requireEachIncludedType: false,
+          },
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+        });
+
     // ---- Lambda scaffolding ---------------------------------------------------
     const commonEnv: Record<string, string> = {
       HARNESS_TABLE: this.table.tableName,
       USER_POOL_ID: props.userPool.userPoolId,
       USER_POOL_CLIENT_ID: props.userPoolClient.userPoolClientId,
-      // Sourced from the deploy env (CI wires it from the `DEVICE_TOKEN_SECRET`
-      // GitHub secret). The literal fallback is a local-synth-only convenience
-      // and must never reach a real deploy — CI always sets the env var.
-      DEVICE_TOKEN_SECRET: process.env.DEVICE_TOKEN_SECRET ?? 'placeholder-dev-secret',
+      // A CDK dynamic reference to the Secrets Manager value: `unsafeUnwrap()`
+      // yields the `{{resolve:secretsmanager:...}}` token (NOT the plaintext), so
+      // the literal placeholder can never reach a real deploy. CloudFormation
+      // substitutes the live secret value when the lambda is created/updated.
+      DEVICE_TOKEN_SECRET: deviceTokenSecret.secretValue.unsafeUnwrap(),
     };
 
     const makeFn = (id: string, bundleKey: string): lambda.Function =>
@@ -275,6 +310,41 @@ export class ApiStack extends cdk.Stack {
     // manage-connections grant + management endpoint as the WS handlers.
     this.webSocketApi.grantManageConnections(sessionsFn);
     sessionsFn.addEnvironment('WS_CALLBACK_URL', wsStage.callbackUrl);
+
+    // ---- DynamoDB Streams consumer (projection / roll-up backstop) ------------
+    // The table's NEW_AND_OLD_IMAGES stream was enabled but unconsumed. This
+    // lambda drives the advertised "Streams drive projections/roll-ups": it
+    // re-folds event records into the session projection (idempotent backstop for
+    // the inline ingestion fold) and recomputes objective roll-ups when a
+    // project's stored progress changes. It reads + writes the table.
+    const streamConsumerFn = makeFn('StreamConsumerFn', 'ws_streamConsumer');
+    grantReadWrite(streamConsumerFn);
+
+    // A DLQ captures records that exhaust retries so a poison batch cannot block
+    // the shard indefinitely; bisectBatchOnError isolates the offending record.
+    const streamDlq = new sqs.Queue(this, 'StreamConsumerDlq', {
+      queueName: 'command-hq-stream-consumer-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+    });
+
+    streamConsumerFn.addEventSource(
+      new DynamoEventSource(this.table, {
+        startingPosition: StartingPosition.TRIM_HORIZON,
+        batchSize: 25,
+        maxBatchingWindow: cdk.Duration.seconds(2),
+        bisectBatchOnError: true,
+        retryAttempts: 3,
+        reportBatchItemFailures: true,
+        onFailure: new SqsDlq(streamDlq),
+        // Only INSERT/MODIFY carry a recompute trigger; REMOVE (TTL reaps, etc.)
+        // is pure noise to the projection/roll-up driver, so filter it out at the
+        // source to avoid waking the lambda for nothing.
+        filters: [
+          FilterCriteria.filter({ eventName: FilterRule.isEqual('INSERT') }),
+          FilterCriteria.filter({ eventName: FilterRule.isEqual('MODIFY') }),
+        ],
+      }),
+    );
 
     // ---- Outputs --------------------------------------------------------------
     new cdk.CfnOutput(this, 'TableName', { value: this.table.tableName });

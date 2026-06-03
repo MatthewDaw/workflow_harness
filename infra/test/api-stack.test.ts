@@ -190,29 +190,50 @@ describe('ApiStack', () => {
     });
   });
 
-  test('sources DEVICE_TOKEN_SECRET from env, not the literal placeholder', () => {
-    // U20: the real signing secret is wired from the deploy env (CI secret).
-    const prev = process.env.DEVICE_TOKEN_SECRET;
-    process.env.DEVICE_TOKEN_SECRET = 'from-env-secret';
-    try {
-      const t = synth();
-      t.hasResourceProperties('AWS::Lambda::Function', {
-        Environment: Match.objectLike({
-          Variables: Match.objectLike({ DEVICE_TOKEN_SECRET: 'from-env-secret' }),
-        }),
-      });
-      // The placeholder fallback must not leak into the synthesized template.
-      const fns = t.findResources('AWS::Lambda::Function');
-      for (const res of Object.values(fns)) {
-        const vars = (res as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
-          .Properties?.Environment?.Variables;
-        if (vars && 'DEVICE_TOKEN_SECRET' in vars) {
-          expect(vars.DEVICE_TOKEN_SECRET).not.toBe('placeholder-dev-secret');
-        }
+  test('provisions a Secrets Manager secret for the device-token signing key', () => {
+    // Hardening: the HMAC signing secret is a managed Secrets Manager secret with
+    // a generated value, never a literal in the template.
+    template.hasResourceProperties('AWS::SecretsManager::Secret', {
+      Name: 'command-hq/device-token-secret',
+      GenerateSecretString: Match.objectLike({
+        PasswordLength: Match.anyValue(),
+      }),
+    });
+  });
+
+  test('injects DEVICE_TOKEN_SECRET as a Secrets Manager resolve reference, never the placeholder', () => {
+    // The synthesized template must carry a `{{resolve:secretsmanager:...}}`
+    // dynamic reference (CloudFormation resolves it at deploy time), NOT the
+    // 'placeholder-dev-secret' literal that previously leaked into prod.
+    const fns = template.findResources('AWS::Lambda::Function');
+    let sawDeviceSecret = false;
+    for (const res of Object.values(fns)) {
+      const vars = (res as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+        .Properties?.Environment?.Variables;
+      if (vars && 'DEVICE_TOKEN_SECRET' in vars) {
+        sawDeviceSecret = true;
+        const value = vars.DEVICE_TOKEN_SECRET;
+        expect(value).not.toBe('placeholder-dev-secret');
+        // The dynamic reference synthesizes to a CloudFormation intrinsic (an
+        // `Fn::Join` that builds the `{{resolve:secretsmanager:...}}` token and a
+        // `Ref` to the managed secret), NOT a plaintext string.
+        const serialized = JSON.stringify(value);
+        expect(serialized).toContain('{{resolve:secretsmanager:');
+        expect(serialized).toContain('DeviceTokenSecret');
       }
-    } finally {
-      if (prev === undefined) delete process.env.DEVICE_TOKEN_SECRET;
-      else process.env.DEVICE_TOKEN_SECRET = prev;
     }
+    expect(sawDeviceSecret).toBe(true);
+  });
+
+  test('consumes the DynamoDB stream with a Lambda EventSourceMapping', () => {
+    // The table's stream (NEW_AND_OLD_IMAGES) must drive a Lambda consumer — the
+    // projection/roll-up backstop — via an event source mapping.
+    template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      StartingPosition: 'TRIM_HORIZON',
+      EventSourceArn: Match.anyValue(),
+    });
+    // At least one mapping exists.
+    const mappings = template.findResources('AWS::Lambda::EventSourceMapping');
+    expect(Object.keys(mappings).length).toBeGreaterThan(0);
   });
 });
