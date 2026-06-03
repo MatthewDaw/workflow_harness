@@ -31,6 +31,7 @@ const handlers = [
   'ws/subscribe',
   'ws/control',
   'ws/authorizer',
+  'ws/streamConsumer',
 ];
 
 rmSync(outRoot, { recursive: true, force: true });
