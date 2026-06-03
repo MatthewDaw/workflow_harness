@@ -37,6 +37,12 @@ export interface ApiStackProps extends cdk.StackProps {
 
 const BUNDLES = path.join(__dirname, '..', 'cdk.bundles');
 
+// The SPA's CloudFront origin — must match the AuthStack OAuth callback domain
+// (`d13sqkbwzqe38l.cloudfront.net`). Overridable via env for a custom domain.
+// CORS is pinned to this origin (plus the local Vite dev origin) — never `*`.
+const SITE_ORIGIN = process.env.SITE_ORIGIN ?? 'https://d13sqkbwzqe38l.cloudfront.net';
+const ALLOWED_ORIGINS = [SITE_ORIGIN, 'http://localhost:5173'];
+
 export class ApiStack extends cdk.Stack {
   readonly table: dynamodb.Table;
   readonly httpApi: apigwv2.HttpApi;
@@ -67,6 +73,9 @@ export class ApiStack extends cdk.Stack {
       HARNESS_TABLE: this.table.tableName,
       USER_POOL_ID: props.userPool.userPoolId,
       USER_POOL_CLIENT_ID: props.userPoolClient.userPoolClientId,
+      // Sourced from the deploy env (CI wires it from the `DEVICE_TOKEN_SECRET`
+      // GitHub secret). The literal fallback is a local-synth-only convenience
+      // and must never reach a real deploy — CI always sets the env var.
       DEVICE_TOKEN_SECRET: process.env.DEVICE_TOKEN_SECRET ?? 'placeholder-dev-secret',
     };
 
@@ -112,7 +121,7 @@ export class ApiStack extends cdk.Stack {
       // token, so CORS must allow it. Preflight (OPTIONS) is handled by API
       // Gateway before the authorizer runs.
       corsPreflight: {
-        allowOrigins: ['*'],
+        allowOrigins: ALLOWED_ORIGINS,
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,

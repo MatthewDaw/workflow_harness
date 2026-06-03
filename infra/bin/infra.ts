@@ -2,7 +2,6 @@
 import * as cdk from 'aws-cdk-lib/core';
 import { AuthStack } from '../lib/auth-stack';
 import { ApiStack } from '../lib/api-stack';
-import { SearchStack } from '../lib/search-stack';
 import { SiteStack } from '../lib/site-stack';
 
 const app = new cdk.App();
@@ -19,10 +18,12 @@ const env: cdk.Environment = {
 // U4 — Cognito user pool + app client for HQ web users.
 const authStack = new AuthStack(app, 'AuthStack', { env });
 
-// U27 (optional, synth-only) — Forge vector index. The default backend is the
-// brute-force cosine fallback; this provisions OpenSearch Serverless for when
-// volume justifies it. Never deploy from here.
-new SearchStack(app, 'SearchStack', { env });
+// NOTE: the OpenSearch Serverless `SearchStack` (the superseded fuzzy-Forge
+// vector index) is intentionally NOT synthesized here. Its network policy is
+// public-from-anywhere and it would otherwise deploy under `cdk deploy --all`.
+// The default Forge backend is the brute-force cosine fallback over DynamoDB;
+// `infra/lib/search-stack.ts` is kept on disk, unreferenced, for if a real
+// vector index is ever justified (U20).
 
 // U5 — backend API: DynamoDB single-table + HTTP API + WebSocket API. The HTTP
 // API's JWT authorizer trusts the AuthStack user pool, so ApiStack references it.
