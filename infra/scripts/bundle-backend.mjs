@@ -23,6 +23,7 @@ const handlers = [
   'rest/skills',
   'rest/objectives',
   'rest/weekly',
+  'rest/device',
   'ws/connect',
   'ws/disconnect',
   'ws/default',

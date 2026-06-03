@@ -96,6 +96,32 @@ export async function approveDeviceAuth(
  * Subsequent polls see a consumed record and report `pending` is over — they
  * never re-issue a token.
  */
+/**
+ * Normalize a human-entered user_code to the stored canonical form: strip
+ * spaces/dashes, uppercase, and re-insert the dash at the 4-char boundary, so
+ * `wdjbmjxt`, `wdjb-mjxt`, and `WDJB MJXT` all resolve to `WDJB-MJXT`.
+ */
+export function normalizeUserCode(input: string): string {
+  const compact = input.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  if (compact.length === 8) return `${compact.slice(0, 4)}-${compact.slice(4)}`;
+  return compact;
+}
+
+/**
+ * Approve a device-auth by its human-typed user_code (the form HQ's "link a
+ * device" screen submits). Resolves the user_code to its device_code via the
+ * pointer item, then binds the record to the approving identity. Returns
+ * `approved: false` for an unknown/expired code or an already-approved record.
+ */
+export async function approveDeviceAuthByUserCode(
+  repo: Repo,
+  args: { userCode: string; userId: string; org: string },
+): Promise<{ approved: boolean }> {
+  const deviceCode = await repo.getDeviceCodeByUserCode(normalizeUserCode(args.userCode));
+  if (!deviceCode) return { approved: false };
+  return repo.approveDeviceAuth(deviceCode, args.userId, args.org);
+}
+
 export async function pollDeviceAuth(
   repo: Repo,
   deviceCode: string,

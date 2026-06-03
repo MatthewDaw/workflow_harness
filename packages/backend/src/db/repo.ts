@@ -476,6 +476,14 @@ export class Repo {
         Item: { ...k.deviceAuthKey(d.deviceCode), ...d },
       }),
     );
+    // userCode -> deviceCode pointer so an approver (who only holds the short
+    // userCode) can resolve the opaque deviceCode the record is keyed by.
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.deviceUserCodeKey(d.userCode), deviceCode: d.deviceCode, expiresAt: d.expiresAt },
+      }),
+    );
   }
 
   async getDeviceAuth(deviceCode: string): Promise<DeviceAuth | undefined> {
@@ -483,6 +491,14 @@ export class Repo {
       new GetCommand({ TableName: this.table, Key: k.deviceAuthKey(deviceCode) }),
     );
     return res.Item as DeviceAuth | undefined;
+  }
+
+  /** Resolve a user_code to its device_code via the pointer item (or undefined). */
+  async getDeviceCodeByUserCode(userCode: string): Promise<string | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.deviceUserCodeKey(userCode) }),
+    );
+    return (res.Item as { deviceCode?: string } | undefined)?.deviceCode;
   }
 
   /**

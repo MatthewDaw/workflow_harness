@@ -280,6 +280,19 @@ export const baseApi = createApi({
         body: { action, payload: text !== undefined ? { text } : {} },
       }),
     }),
+
+    /**
+     * Approve a pending claude+ device login (device-auth flow). A signed-in HQ
+     * user submits the user code shown in their terminal; the backend matches it
+     * to a pending device request and marks it approved.
+     */
+    approveDevice: build.mutation<{ approved: boolean }, { userCode: string }>({
+      query: ({ userCode }) => ({
+        url: 'device/approve',
+        method: 'POST',
+        body: { userCode },
+      }),
+    }),
   }),
 });
 
@@ -307,4 +320,5 @@ export const {
   usePutWeeklyMutation,
   usePublishWeeklyMutation,
   useSendControlMutation,
+  useApproveDeviceMutation,
 } = baseApi;

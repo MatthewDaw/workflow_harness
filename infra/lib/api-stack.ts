@@ -4,6 +4,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
+import { HttpNoneAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2';
 import {
   HttpLambdaIntegration,
   WebSocketLambdaIntegration,
@@ -100,12 +101,14 @@ export class ApiStack extends cdk.Stack {
     const skillsFn = makeFn('RestSkillsFn', 'rest_skills');
     const objectivesFn = makeFn('RestObjectivesFn', 'rest_objectives');
     const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
+    const deviceFn = makeFn('RestDeviceFn', 'rest_device');
     grantReadWrite(projectsFn);
     grantRead(sessionsFn);
     grantReadWrite(agentsFn);
     grantReadWrite(skillsFn);
     grantReadWrite(objectivesFn);
     grantReadWrite(weeklyFn);
+    grantReadWrite(deviceFn);
 
     const region = cdk.Stack.of(this).region;
     const jwtIssuer = `https://cognito-idp.${region}.amazonaws.com/${props.userPool.userPoolId}`;
@@ -140,11 +143,15 @@ export class ApiStack extends cdk.Stack {
       methods: apigwv2.HttpMethod[],
       fn: lambda.Function,
       integrationId: string,
+      authorizer?: apigwv2.IHttpRouteAuthorizer,
     ) =>
       this.httpApi.addRoutes({
         path: routePath,
         methods,
         integration: new HttpLambdaIntegration(integrationId, fn),
+        // When omitted, the HTTP API's defaultAuthorizer (JWT) applies. Pass an
+        // HttpNoneAuthorizer to OVERRIDE the default and make a route PUBLIC.
+        ...(authorizer ? { authorizer } : {}),
       });
 
     r('/projects', [M.GET, M.POST], projectsFn, 'Projects');
@@ -174,6 +181,15 @@ export class ApiStack extends cdk.Stack {
     r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly');
     r('/projects/{pid}/weekly/{week}', [M.GET, M.PUT], weeklyFn, 'WeeklyByWeek');
     r('/projects/{pid}/weekly/{week}/publish', [M.POST], weeklyFn, 'WeeklyPublish');
+
+    // ---- Device-auth (claude+ device-code login) ------------------------------
+    // start/poll are PUBLIC: the CLI hits them before it has any token. They must
+    // OVERRIDE the HTTP API's defaultAuthorizer (JWT) via HttpNoneAuthorizer.
+    // approve REQUIRES the JWT (a signed-in browser approves the device) — it
+    // inherits the default authorizer (no override).
+    r('/device/start', [M.POST], deviceFn, 'DeviceStart', new HttpNoneAuthorizer());
+    r('/device/poll', [M.POST], deviceFn, 'DevicePoll', new HttpNoneAuthorizer());
+    r('/device/approve', [M.POST], deviceFn, 'DeviceApprove');
 
     // ---- WebSocket API (ingest + live + control) ------------------------------
     const wsAuthorizerFn = makeFn('WsAuthorizerFn', 'ws_authorizer');

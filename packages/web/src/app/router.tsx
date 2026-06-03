@@ -19,6 +19,7 @@ import { AgentEditor } from '../screens/Agents/AgentEditor.js';
 import { Skills } from '../screens/Skills/Skills.js';
 import { SkillBundle } from '../screens/Skills/SkillBundle.js';
 import { Weekly } from '../screens/Weekly/Weekly.js';
+import { LinkDevice } from '../screens/LinkDevice/LinkDevice.js';
 
 /**
  * Route table mirroring wireframe.html (U19). Objectives is the first nav item
@@ -53,6 +54,7 @@ export function AppRoutes() {
         <Route path="skills" element={<Skills />} />
         <Route path="skills/:bundleName" element={<SkillBundle />} />
         <Route path="weekly" element={<Weekly />} />
+        <Route path="link-device" element={<LinkDevice />} />
 
         <Route path="*" element={<Navigate to="/objectives" replace />} />
       </Route>

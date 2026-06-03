@@ -82,6 +82,8 @@ export function installFetchStub(seed: SeedData) {
 
     if (/^sessions\/[^/]+\/control$/.test(path)) return json({ ok: true });
 
+    if (path === 'device/approve') return json({ approved: true });
+
     const sess = /^sessions\/([^/]+)$/.exec(path);
     if (sess) return json((seed.sessions ?? []).find((s) => s.sessionId === sess[1]) ?? null);
 

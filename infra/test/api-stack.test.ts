@@ -112,6 +112,35 @@ describe('ApiStack', () => {
     }
   });
 
+  test('routes the device-auth handlers (start/poll PUBLIC, approve JWT)', () => {
+    // claude+ device-code login: start/poll are public (the CLI has no token
+    // yet); approve requires the signed-in browser's JWT.
+    for (const routeKey of [
+      'POST /device/start',
+      'POST /device/poll',
+      'POST /device/approve',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+      });
+    }
+
+    // start/poll OVERRIDE the default JWT authorizer to be PUBLIC (NONE).
+    for (const routeKey of ['POST /device/start', 'POST /device/poll']) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+        AuthorizationType: 'NONE',
+      });
+    }
+
+    // approve inherits the JWT authorizer (carries an AuthorizerId, type JWT).
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /device/approve',
+      AuthorizationType: 'JWT',
+      AuthorizerId: Match.anyValue(),
+    });
+  });
+
   test('pins HTTP API CORS to the CloudFront origin, never "*"', () => {
     // U20: CORS must be scoped to the SPA's CloudFront origin (+ local dev),
     // not the permissive wildcard.

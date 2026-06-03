@@ -13,6 +13,7 @@ const NAV = [
   { to: '/sessions', label: 'Sessions' },
   { to: '/agents', label: 'Agents' },
   { to: '/skills', label: 'Skills' },
+  { to: '/link-device', label: 'Link Device' },
 ];
 
 export function AppShell() {

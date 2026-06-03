@@ -111,6 +111,16 @@ export const deviceAuthKey = (deviceCode: string): PrimaryKey => ({
 });
 
 /**
+ * User-code → device-code pointer for the device-code login flow. The human
+ * approver only types the short `userCode`, so we persist a pointer item that
+ * resolves it to the opaque `deviceCode` used as the record's primary key.
+ */
+export const deviceUserCodeKey = (userCode: string): PrimaryKey => ({
+  PK: `DEVUC#${userCode}`,
+  SK: 'USERCODE',
+});
+
+/**
  * WebSocket connection registry (U6/U7). Two record families share the table:
  *
  *  - A daemon (or web) connection record, keyed by `connectionId`, carries the
