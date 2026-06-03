@@ -16,13 +16,6 @@ import (
 // proxies PTY bytes for the focused session. Control frames (focus, resize,
 // ping) are interleaved on the same connection using length-tagged framing.
 
-// ProtocolVersion is the attach wire-protocol version, exchanged in the
-// Hello/Ack handshake. The daemon is a detach-surviving process that may be an
-// older build than a freshly-launched client, so same-build source coupling
-// cannot catch wire drift — the handshake does: on mismatch the client is told
-// to restart the daemon rather than silently misbehaving.
-const ProtocolVersion = 1
-
 // FrameType discriminates control frames on the attach channel.
 type FrameType string
 
@@ -39,24 +32,18 @@ const (
 	FrameDetach  FrameType = "detach"  // client -> daemon clean detach (daemon keeps running)
 	FrameSessLs  FrameType = "sessls"  // client -> daemon list sessions
 	FrameSessAck FrameType = "sessack" // daemon -> client session list reply
-	FrameEvent   FrameType = "event"   // daemon -> client captured event envelope (JSON)
-	FrameStatus  FrameType = "status"  // daemon -> client meter snapshot (tokens/cost/drift)
 )
 
 // Frame is a single control message on the attach channel.
 type Frame struct {
-	Type     FrameType  `json:"type"`
-	Version  int        `json:"v,omitempty"`        // hello/ack: ProtocolVersion
-	Sessions int        `json:"sessions,omitempty"` // pong: live session count
-	SessID   string     `json:"sessId,omitempty"`   // focus/input/output target
-	Data     string     `json:"data,omitempty"`     // base64 PTY bytes
-	Cols     int        `json:"cols,omitempty"`     // resize
-	Rows     int        `json:"rows,omitempty"`     // resize
-	Ticket   string     `json:"ticket,omitempty"`   // new: optional ticket link
-	Err      string     `json:"err,omitempty"`
+	Type     FrameType `json:"type"`
+	Sessions int       `json:"sessions,omitempty"` // pong: live session count
+	SessID   string    `json:"sessId,omitempty"`   // focus/input/output target
+	Data     string    `json:"data,omitempty"`     // base64 PTY bytes
+	Cols     int       `json:"cols,omitempty"`     // resize
+	Rows     int       `json:"rows,omitempty"`     // resize
+	Err      string    `json:"err,omitempty"`
 	List     []SessInfo `json:"list,omitempty"` // sessack payload
-	EvJSON   string     `json:"ev,omitempty"`   // event: marshaled event.Envelope
-	Status   *StatusSnapshot `json:"status,omitempty"` // status: meter snapshot
 }
 
 // SessInfo is the public view of a session for the client's sub-tab row.

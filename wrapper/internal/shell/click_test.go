@@ -15,13 +15,13 @@ func TestClickSwitchesTab(t *testing.T) {
 	c.SetSubs([]SubTab{{ID: "a", Name: "sess-a", Status: "active"}}, 0)
 	c.Render() // populates the click spans
 
-	// Tab bar: " Session "(0..8) gap " Tickets "(10..18) ...
-	changed, _, _ := c.Click(12, rowTabBar) // inside "Tickets"
+	// Tab bar: " Session "(0..8) gap " Agents "(10..17) ...
+	changed, _, _ := c.Click(12, rowTabBar) // inside "Agents"
 	if !changed {
-		t.Fatal("clicking the Tickets tab should change the active tab")
+		t.Fatal("clicking the Agents tab should change the active tab")
 	}
 	if c.active != 1 {
-		t.Fatalf("active tab = %d, want 1 (Tickets)", c.active)
+		t.Fatalf("active tab = %d, want 1 (Agents)", c.active)
 	}
 
 	// Clicking a sub-tab reports its session id for the caller to focus.

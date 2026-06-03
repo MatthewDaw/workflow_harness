@@ -128,11 +128,11 @@ func (rt *Runtime) captureLoop(instanceID string) {
 		case <-tk.C:
 			for _, v := range rt.d.mux.List() {
 				// Announce a newly-seen session with session.start (seq 0 for this
-				// session) so HQ has its identity — project, name, ticket — from the
+				// session) so HQ has its identity — project, name — from the
 				// first event, before any transcript activity.
 				if !announced[v.ID] {
 					announced[v.ID] = true
-					emit(v.ID, event.SessionStart(v.ID, projectID, host, v.Name, "", v.Ticket))
+					emit(v.ID, event.SessionStart(v.ID, projectID, host, v.Name, ""))
 				}
 				if _, ok := tailed[v.ID]; ok {
 					continue

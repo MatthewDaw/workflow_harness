@@ -18,7 +18,7 @@ const (
 	chromeRows = 3 // tab bar + sub-tabs + status line
 )
 
-var tabNames = []string{"Session", "Tickets", "Agents", "Forge", "Stream"}
+var tabNames = []string{"Session", "Agents", "Forge", "Stream"}
 
 // Palette (256-color indices).
 const (

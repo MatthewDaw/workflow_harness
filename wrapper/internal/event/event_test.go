@@ -64,7 +64,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 
 func TestConstructorsValidate(t *testing.T) {
 	events := []Event{
-		SessionStart("a91f", "weekly-compass", "matt@mbp", "reconcile-variance", "builder", "WC-42"),
+		SessionStart("a91f", "weekly-compass", "matt@mbp", "reconcile-variance", "builder"),
 		SessionRename("a91f", "reconcile-variance"),
 		UserMsg("a91f", 120),
 		AssistantMsg("a91f", 84),

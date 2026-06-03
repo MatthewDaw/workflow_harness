@@ -63,19 +63,17 @@ func (m *Mux) takenNames() map[string]bool {
 	return taken
 }
 
-// Spawn creates a new session, optionally seeded with a name and ticket link,
-// focuses it, and starts pumping its output to the sinks.
-func (m *Mux) Spawn(name, ticket string) (*Session, error) {
+// Spawn creates a new session, optionally seeded with a name, focuses it, and
+// starts pumping its output to the sinks. Sessions without a seeded name are
+// auto-named from their first user turn (see ApplyAutoName).
+func (m *Mux) Spawn(name string) (*Session, error) {
 	m.mu.Lock()
 	id := uuid.NewString()[:8]
-	if name == "" {
-		name = AutoName(ticket, "")
-	}
 	if name == "" {
 		name = "session"
 	}
 	name = Disambiguate(name, m.takenNames())
-	s, err := newSession(id, name, ticket, m.repoRoot, m.cols, m.rows, m.spawn)
+	s, err := newSession(id, name, m.repoRoot, m.cols, m.rows, m.spawn)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err
@@ -276,7 +274,7 @@ func (m *Mux) List() []SessionView {
 	out := make([]SessionView, len(m.sessions))
 	for i, s := range m.sessions {
 		out[i] = SessionView{
-			ID: s.ID, Name: s.Name, Ticket: s.Ticket,
+			ID: s.ID, Name: s.Name,
 			Status: string(s.Status()), Focused: i == m.focusIdx,
 		}
 	}
@@ -287,7 +285,6 @@ func (m *Mux) List() []SessionView {
 type SessionView struct {
 	ID      string
 	Name    string
-	Ticket  string
 	Status  string
 	Focused bool
 }

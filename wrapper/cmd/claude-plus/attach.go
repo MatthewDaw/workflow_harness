@@ -164,7 +164,7 @@ func runShell(c *daemon.Client, instance string) error {
 					changed, sess, newSess := comp.Click(ev.x, ev.y)
 					switch {
 					case newSess:
-						_ = c.NewSession("")
+						_ = c.NewSession()
 						markDirty()
 					case sess != "":
 						_ = c.Focus(sess)
@@ -188,7 +188,7 @@ func runShell(c *daemon.Client, instance string) error {
 					_ = c.Detach()
 					return nil
 				case actNewSession:
-					_ = c.NewSession("")
+					_ = c.NewSession()
 					markDirty()
 				case actHandled:
 					markDirty()

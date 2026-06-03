@@ -36,7 +36,7 @@ func (f *fakeClient) Input(b []byte) error {
 }
 func (f *fakeClient) Resize(c, r int) error             { f.resizes = append(f.resizes, [2]int{c, r}); return nil }
 func (f *fakeClient) Focus(id string) error             { f.focuses = append(f.focuses, id); return nil }
-func (f *fakeClient) NewSession(string) error           { f.newCount++; return nil }
+func (f *fakeClient) NewSession() error                 { f.newCount++; return nil }
 func (f *fakeClient) Detach() error                     { return nil }
 func (f *fakeClient) Run() error                        { return nil }
 func (f *fakeClient) InitialSessions() []daemon.SessInfo { return f.sessions }

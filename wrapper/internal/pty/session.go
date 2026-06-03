@@ -28,9 +28,8 @@ const (
 // pseudo-terminals on macOS/Linux — so a session hosts a real terminal on every
 // platform.
 type Session struct {
-	ID     string
-	Name   string
-	Ticket string
+	ID   string
+	Name string
 
 	cmd *pty.Cmd
 	pt  pty.Pty // the pseudo-terminal (master/console)
@@ -77,7 +76,7 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 }
 
 // newSession starts a claude child under a PTY with the given dimensions.
-func newSession(id, name, ticket, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
+func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
 	spec := spawn(repoRoot, id)
 	// Resolve a bare command name against PATH up front. go-pty/os-exec would
 	// otherwise resolve it relative to Dir (the repo root) and fail to find a
@@ -106,7 +105,7 @@ func newSession(id, name, ticket, repoRoot string, cols, rows int, spawn SpawnFu
 	// Size the pseudo-terminal once the child is attached.
 	_ = pt.Resize(cols, rows)
 	return &Session{
-		ID: id, Name: name, Ticket: ticket,
+		ID: id, Name: name,
 		cmd: c, pt: pt, status: StatusActive, cols: cols, rows: rows,
 	}, nil
 }
@@ -177,17 +176,16 @@ func (s *Session) Status() Status {
 }
 
 // MaybeName applies an auto-name from the first user turn exactly once. It is a
-// no-op if the session already has a ticket-derived or manual name, or once a
-// first turn has already been consumed.
+// no-op if the session already has a manual name, or once a first turn has
+// already been consumed.
 func (s *Session) MaybeName(firstTurn string, taken map[string]bool) (renamed bool, newName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.firstSet || s.Ticket != "" {
-		s.firstSet = true
+	if s.firstSet {
 		return false, s.Name
 	}
 	s.firstSet = true
-	n := AutoName("", firstTurn)
+	n := AutoName(firstTurn)
 	if n == "" {
 		return false, s.Name
 	}

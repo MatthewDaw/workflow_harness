@@ -76,12 +76,12 @@ func (a *App) Focus(sessID string) error {
 	return a.bridge.Focus(sessID)
 }
 
-// NewSession spawns a session (ticket empty in Phase 1).
-func (a *App) NewSession(ticket string) error {
+// NewSession spawns a session.
+func (a *App) NewSession() error {
 	if a.bridge == nil {
 		return fmt.Errorf("not connected")
 	}
-	return a.bridge.NewSession(ticket)
+	return a.bridge.NewSession()
 }
 
 // ListSessions returns the current session list.
@@ -112,7 +112,7 @@ func (a *clientAdapter) SetStatusHandler(fn func(daemon.StatusSnapshot)) { a.c.O
 func (a *clientAdapter) Input(b []byte) error               { return a.c.Input(b) }
 func (a *clientAdapter) Resize(cols, rows int) error        { return a.c.Resize(cols, rows) }
 func (a *clientAdapter) Focus(sessID string) error          { return a.c.Focus(sessID) }
-func (a *clientAdapter) NewSession(ticket string) error     { return a.c.NewSession(ticket) }
+func (a *clientAdapter) NewSession() error                  { return a.c.NewSession() }
 func (a *clientAdapter) Detach() error                      { return a.c.Detach() }
 func (a *clientAdapter) Run() error                         { return a.c.Run() }
 func (a *clientAdapter) InitialSessions() []daemon.SessInfo { return a.c.Sessions }
