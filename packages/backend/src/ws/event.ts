@@ -48,15 +48,19 @@ export async function ingest(
 
   // 1b. Register the repo as a Project on its first session announcement. The
   //     daemon emits `session.start` carrying the projectId (a slug of the repo
-  //     folder); we create the Project so the repo shows in the Projects list.
-  //     Only for authenticated daemon connections (conn?.userId present), and
-  //     idempotent: ensureProject is a conditional create that never clobbers an
-  //     existing project's curated name/progress/framing on later sessions.
+  //     folder) and, when available, a human-readable `repo` display name (the
+  //     git "owner/repo" or repo folder name). We prefer that real name for both
+  //     the Project's name and repo, falling back to the projectId slug for
+  //     older daemons that omit it. Only for authenticated daemon connections
+  //     (conn?.userId present), and idempotent: ensureProject is a conditional
+  //     create that never clobbers an existing project's curated
+  //     name/progress/framing on later sessions.
   if (envelope.event.kind === 'session.start' && conn?.userId) {
+    const displayName = envelope.event.repo ?? envelope.event.projectId;
     await deps.repo.ensureProject({
       id: envelope.event.projectId,
-      name: envelope.event.projectId,
-      repo: envelope.event.projectId,
+      name: displayName,
+      repo: displayName,
       ownerUserId: conn.userId,
       liveSessionCount: 0,
     });

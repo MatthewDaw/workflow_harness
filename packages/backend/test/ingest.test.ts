@@ -300,7 +300,7 @@ describe('event ingestion', () => {
 describe('session.start registers the repo as a Project', () => {
   const PROJECT_ID = 'weekly-compass'; // matches startEvent.projectId
 
-  it('creates the Project, owned by the daemon connection user', async () => {
+  it('creates the Project, owned by the daemon connection user (falls back to slug when repo absent)', async () => {
     await seedDaemonConn();
     await ingest(wsEvent(env(0, startEvent)), deps());
 
@@ -315,6 +315,21 @@ describe('session.start registers the repo as a Project', () => {
     // And it shows in the user's Projects list (GET /projects via GSI1).
     const list = await repo.listProjectsForUser(OWNER);
     expect(list.map((p) => p.id)).toContain(PROJECT_ID);
+  });
+
+  it('uses the real repo display name for the Project name + repo when present', async () => {
+    await seedDaemonConn();
+    const withRepo: Event = { ...startEvent, repo: 'acme/weekly-compass' };
+    await ingest(wsEvent(env(0, withRepo)), deps());
+
+    const proj = await repo.getProject(PROJECT_ID);
+    // id stays the slug (the stable grouping key); name + repo get the real name.
+    expect(proj).toMatchObject({
+      id: PROJECT_ID,
+      name: 'acme/weekly-compass',
+      repo: 'acme/weekly-compass',
+      ownerUserId: OWNER,
+    });
   });
 
   it('does not clobber or duplicate the Project on a second session.start', async () => {

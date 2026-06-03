@@ -19,6 +19,10 @@ export const sessionStartEventSchema = z.object({
   host: z.string().min(1),
   name: z.string().min(1),
   agent: z.string().min(1).optional(),
+  // Human/repo display name for the project — e.g. the git remote "owner/repo"
+  // or the actual repo folder name. Optional for backward compatibility: older
+  // daemons omit it, in which case the backend falls back to the projectId slug.
+  repo: z.string().min(1).optional(),
 });
 
 export const sessionRenameEventSchema = z.object({

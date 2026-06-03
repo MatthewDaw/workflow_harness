@@ -64,7 +64,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 
 func TestConstructorsValidate(t *testing.T) {
 	events := []Event{
-		SessionStart("a91f", "weekly-compass", "matt@mbp", "reconcile-variance", "builder"),
+		SessionStart("a91f", "weekly-compass", "matt@mbp", "reconcile-variance", "builder", "acme/weekly-compass"),
 		SessionRename("a91f", "reconcile-variance"),
 		UserMsg("a91f", 120),
 		AssistantMsg("a91f", 84),
@@ -77,6 +77,37 @@ func TestConstructorsValidate(t *testing.T) {
 		if err := e.Validate(); err != nil {
 			t.Errorf("%s should be valid: %v", e.Kind, err)
 		}
+	}
+}
+
+// TestSessionStartRepoField verifies the optional repo field is carried on the
+// JSON wire under the "repo" key when set, and omitted when empty (so older
+// daemons that pass "" stay byte-compatible with pre-repo envelopes).
+func TestSessionStartRepoField(t *testing.T) {
+	withRepo := SessionStart("a91f", "weekly-compass", "h", "n", "", "acme/weekly-compass")
+	b, err := json.Marshal(withRepo)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := m["repo"]; got != "acme/weekly-compass" {
+		t.Errorf("repo = %v, want acme/weekly-compass", got)
+	}
+
+	withoutRepo := SessionStart("a91f", "weekly-compass", "h", "n", "", "")
+	b, err = json.Marshal(withoutRepo)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m2 map[string]any
+	if err := json.Unmarshal(b, &m2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, present := m2["repo"]; present {
+		t.Errorf("repo key should be omitted when empty, got %v", m2["repo"])
 	}
 }
 

@@ -51,6 +51,45 @@ describe('event envelope schema', () => {
     expect(roundTripped.event).toMatchObject({ kind: 'session.start', sessionId: 'a91f' });
   });
 
+  it('accepts an optional repo display name on session.start and round-trips it', () => {
+    const parsed = parseEnvelope({
+      v: 1,
+      instanceId: 'inst-0',
+      host: 'h',
+      ts: 1,
+      seq: 0,
+      event: {
+        kind: 'session.start',
+        sessionId: 'a91f',
+        projectId: 'weekly-compass',
+        host: 'h',
+        name: 'reconcile-variance',
+        repo: 'acme/weekly-compass',
+      },
+    });
+    expect(parsed.event).toMatchObject({ kind: 'session.start', repo: 'acme/weekly-compass' });
+    const roundTripped = JSON.parse(JSON.stringify(parsed));
+    expect(roundTripped.event.repo).toBe('acme/weekly-compass');
+  });
+
+  it('still validates a session.start without a repo field (older daemons)', () => {
+    const parsed = parseEnvelope({
+      v: 1,
+      instanceId: 'inst-0',
+      host: 'h',
+      ts: 1,
+      seq: 0,
+      event: {
+        kind: 'session.start',
+        sessionId: 'a91f',
+        projectId: 'weekly-compass',
+        host: 'h',
+        name: 'reconcile-variance',
+      },
+    });
+    expect(parsed.event).not.toHaveProperty('repo');
+  });
+
   it('rejects an unknown event kind', () => {
     const bad = {
       v: 1,
