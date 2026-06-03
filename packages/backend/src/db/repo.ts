@@ -71,6 +71,31 @@ export class Repo {
     );
   }
 
+  /**
+   * Create a Project only if one does not already exist (conditional PutItem).
+   * Mirrors `putProject`'s Item but guards on `attribute_not_exists(PK)`, so a
+   * later session for the same repo never clobbers a curated name/progress/
+   * framing. Called on each daemon `session.start`, so it must be idempotent: a
+   * ConditionalCheckFailedException is swallowed and reported as `created:false`.
+   */
+  async ensureProject(p: Project): Promise<{ created: boolean }> {
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: { ...k.projectKey(p.id), ...p, ...k.projectOwnerIndex(p.ownerUserId, p.id) },
+          ConditionExpression: 'attribute_not_exists(PK)',
+        }),
+      );
+      return { created: true };
+    } catch (err) {
+      if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+        return { created: false };
+      }
+      throw err;
+    }
+  }
+
   async getProject(projectId: string): Promise<Project | undefined> {
     const res = await this.doc.send(
       new GetCommand({ TableName: this.table, Key: k.projectKey(projectId) }),
