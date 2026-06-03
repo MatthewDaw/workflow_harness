@@ -101,4 +101,70 @@
   .hq-subnav a.on {
     @apply text-ink border-b-brass font-semibold;
   }
+
+  .hq-textarea {
+    @apply border border-line rounded-sm outline-none focus:border-brass;
+  }
+
+  /* rendered requirements markdown (U9) */
+  .hq-markdown {
+    @apply text-[13px] text-ink leading-relaxed;
+  }
+  .hq-markdown h1 {
+    @apply text-base font-semibold mt-4 mb-2 first:mt-0;
+  }
+  .hq-markdown h2 {
+    @apply text-[14px] font-semibold mt-4 mb-1.5;
+  }
+  .hq-markdown h3 {
+    @apply text-[13px] font-semibold mt-3 mb-1 uppercase tracking-wide text-faint;
+  }
+  .hq-markdown p {
+    @apply my-1.5 text-mut;
+  }
+  .hq-markdown ul,
+  .hq-markdown ol {
+    @apply my-1.5 pl-5;
+  }
+  .hq-markdown ul {
+    @apply list-disc;
+  }
+  .hq-markdown ol {
+    @apply list-decimal;
+  }
+  .hq-markdown li {
+    @apply my-0.5 text-mut;
+  }
+  /* GFM task-list items: drop the bullet, line up the glyph */
+  .hq-markdown li:has(> .hq-task-box) {
+    @apply list-none -ml-5;
+  }
+  .hq-task-box {
+    @apply inline-block w-4 text-brassd mr-1;
+  }
+  .hq-markdown a {
+    @apply text-accent underline;
+  }
+  .hq-markdown code {
+    @apply font-mono text-[12px] bg-paper2 border border-line rounded-sm px-1 py-0.5;
+  }
+  .hq-markdown pre {
+    @apply bg-paper2 border border-line rounded-md p-3 my-2 overflow-auto;
+  }
+  .hq-markdown pre code {
+    @apply border-0 bg-transparent p-0;
+  }
+  .hq-markdown blockquote {
+    @apply border-l-[3px] border-brass pl-3 my-2 text-mut italic;
+  }
+  .hq-markdown table {
+    @apply border-collapse my-2 text-[12.5px];
+  }
+  .hq-markdown th,
+  .hq-markdown td {
+    @apply border border-line2 px-2 py-1 text-left;
+  }
+  .hq-markdown hr {
+    @apply h-px bg-line2 my-3 border-0;
+  }
 }

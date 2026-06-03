@@ -4,6 +4,11 @@ import { Objectives } from '../screens/Objectives/Objectives.js';
 import { Projects } from '../screens/Projects/Projects.js';
 import { ProjectLayout } from '../screens/ProjectDetail/ProjectLayout.js';
 import { Overview } from '../screens/ProjectDetail/Overview.js';
+import {
+  ProjectRequirements,
+  ProjectRequirementsFull,
+} from '../screens/ProjectDetail/ProjectRequirements.js';
+import { DetailedRequirements } from '../screens/ProjectDetail/DetailedRequirements.js';
 import { ProjectTickets } from '../screens/ProjectDetail/ProjectTickets.js';
 import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
@@ -30,6 +35,10 @@ export function AppRoutes() {
         <Route path="projects" element={<Projects />} />
         <Route path="projects/:projectId" element={<ProjectLayout />}>
           <Route index element={<Overview />} />
+          {/* U12: two-tier requirements routes. */}
+          <Route path="requirements" element={<ProjectRequirements />} />
+          <Route path="requirements/full" element={<ProjectRequirementsFull />} />
+          <Route path="detailed-requirements" element={<DetailedRequirements />} />
           <Route path="tickets" element={<ProjectTickets />} />
           <Route path="weekly" element={<ProjectWeekly />} />
           <Route path="sessions" element={<ProjectSessions />} />

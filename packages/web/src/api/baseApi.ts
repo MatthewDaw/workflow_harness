@@ -31,6 +31,34 @@ import type {
 /** Where the live middleware writes session projections. */
 export const SESSIONS_CACHE_ARG = 'all' as const;
 
+/**
+ * Two-tier requirements DTOs (U10/U11). The backend serves these from the
+ * `/projects/:id/docs*` and `/projects/:id/requirements` endpoints; they are
+ * declared here (rather than in @harness/shared) because the requirements UI is
+ * the sole consumer.
+ */
+
+/** A node in the project's detailed-requirements doc tree (U11). */
+export interface ProjectDoc {
+  /** Repo-relative path, e.g. `docs/requirements/auth.md`. */
+  path: string;
+  /** Human title (heading or filename). */
+  title: string;
+  /** GitHub-sourced completion 0–100 parsed from the doc's `completion:` front-matter. */
+  completion: number;
+}
+
+/** Markdown body of a single detailed-requirements doc (U11). */
+export interface ProjectDocContent {
+  path: string;
+  markdown: string;
+}
+
+/** HQ-owned high-level requirements markdown for a project (U10). */
+export interface ProjectRequirements {
+  markdown: string;
+}
+
 function unwrapArray<T>(key: string) {
   return (resp: unknown): T[] => {
     if (Array.isArray(resp)) return resp as T[];
@@ -63,7 +91,17 @@ export const baseApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ['Project', 'Session', 'Objective', 'Agent', 'Skill', 'Ticket', 'Weekly'],
+  tagTypes: [
+    'Project',
+    'Session',
+    'Objective',
+    'Agent',
+    'Skill',
+    'Ticket',
+    'Weekly',
+    'Docs',
+    'Requirements',
+  ],
   endpoints: (build) => ({
     getProjects: build.query<Project[], void>({
       query: () => 'projects',
@@ -114,6 +152,44 @@ export const baseApi = createApi({
       query: (projectId) => `projects/${projectId}/weekly`,
       transformResponse: unwrapArray<WeeklyUpdate>('weeks'),
       providesTags: ['Weekly'],
+    }),
+
+    // ---- Two-tier requirements (U10/U11) ----
+
+    /** Detailed-requirements doc tree for a project (repo-sourced, U11). */
+    getProjectDocs: build.query<ProjectDoc[], string>({
+      query: (projectId) => `projects/${projectId}/docs`,
+      transformResponse: unwrapArray<ProjectDoc>('docs'),
+      providesTags: (_r, _e, id) => [{ type: 'Docs', id }],
+    }),
+
+    /** Markdown body of a single detailed-requirements doc (U11). */
+    getProjectDocContent: build.query<ProjectDocContent, { projectId: string; path: string }>({
+      query: ({ projectId, path }) =>
+        `projects/${projectId}/docs/content?path=${encodeURIComponent(path)}`,
+      transformResponse: unwrapOne<ProjectDocContent>('content'),
+      providesTags: (_r, _e, { path }) => [{ type: 'Docs', id: path }],
+    }),
+
+    /** HQ-owned high-level requirements markdown for a project (U10, read). */
+    getProjectRequirements: build.query<ProjectRequirements, string>({
+      query: (projectId) => `projects/${projectId}/requirements`,
+      transformResponse: unwrapOne<ProjectRequirements>('requirements'),
+      providesTags: (_r, _e, id) => [{ type: 'Requirements', id }],
+    }),
+
+    /** HQ-owned high-level requirements markdown for a project (U10, write). */
+    putProjectRequirements: build.mutation<
+      ProjectRequirements,
+      { projectId: string; markdown: string }
+    >({
+      query: ({ projectId, markdown }) => ({
+        url: `projects/${projectId}/requirements`,
+        method: 'PUT',
+        body: { markdown },
+      }),
+      transformResponse: unwrapOne<ProjectRequirements>('requirements'),
+      invalidatesTags: (_r, _e, { projectId }) => [{ type: 'Requirements', id: projectId }],
     }),
 
     // ---- Mutations (U22/U24/U25) ----
@@ -259,6 +335,10 @@ export const {
   useGetSkillsQuery,
   useGetTicketsQuery,
   useGetWeeklyQuery,
+  useGetProjectDocsQuery,
+  useGetProjectDocContentQuery,
+  useGetProjectRequirementsQuery,
+  usePutProjectRequirementsMutation,
   useTransitionTicketMutation,
   useUpdateTicketMutation,
   useChangeAgentScopeMutation,

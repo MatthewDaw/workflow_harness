@@ -68,8 +68,12 @@ describe('navigation + routing', () => {
     // Scope clicks to the project sub-nav (the top nav also has a "Sessions" link).
     const subnav = screen.getByRole('navigation', { name: 'Project sections' });
 
-    await userEvent.click(within(subnav).getByRole('link', { name: 'Tickets' }));
-    expect(await screen.findByTestId('project-tickets')).toBeInTheDocument();
+    // U12: two-tier requirements sub-tabs.
+    await userEvent.click(within(subnav).getByRole('link', { name: 'Project Requirements' }));
+    expect(await screen.findByTestId('project-requirements')).toBeInTheDocument();
+
+    await userEvent.click(within(subnav).getByRole('link', { name: 'Detailed Requirements' }));
+    expect(await screen.findByTestId('detailed-requirements')).toBeInTheDocument();
 
     await userEvent.click(within(subnav).getByRole('link', { name: 'Weekly' }));
     expect(await screen.findByTestId('project-weekly')).toBeInTheDocument();
