@@ -620,7 +620,7 @@
           <div class="col box" style="background:#fff">
             <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨③⟩ Progress &nbsp;·&nbsp; 58% &nbsp;<span class="faint">· <span class="mono">completion:</span> from the top docs/plans doc</span></div>
             <div class="bar" style="margin:8px 0"><i style="width:58%"></i></div>
-            <div class="muted" style="font-size:12px">Whole-project %, read from the top docs/plans <span class="mono">completion:</span> on GitHub. <span class="mono">/update-progress</span> (client-side) computes &amp; pushes it; HQ never writes.</div>
+            <div class="muted" style="font-size:12px">Whole-project %, verified &amp; written by <span class="mono">/update-progress</span> — not self-reported.</div>
             <div class="muted" style="font-size:12px;margin-top:6px">✓ Daemon + PTY ✓ Objectives roll-up ✓ Event capture&nbsp; · &nbsp;◦ Live watch view <span class="pill live">in&nbsp;progress</span>&nbsp; ◦ Forge</div>
           </div>
         </div>
@@ -683,7 +683,7 @@
     <ul class="anno">
       <li><b>Live app URL</b> — a clickable link to the deployed build being worked on, shown in the header next to the repo.</li>
       <li><b>Project Requirements panel</b> — the HQ-owned high-level goals (a single <code>.md</code>, source of truth = HQ). Click to open/edit; owned Supporting Outcomes link ↑ to Company Objectives.</li>
-      <li><b>Progress</b> — the whole-project completion % read from the top <code>docs/plans/</code> doc on GitHub; <code>/update-progress</code> (client-side) computes &amp; pushes it. HQ reads, never writes.</li>
+      <li><b>Progress</b> — the whole-project completion %, written by <code>/update-progress</code> (from the top <code>docs/plans/</code> doc), not self-reported.</li>
       <li><b>Design &amp; live app</b> — a preview of the repo's <code>wireframe.html</code> (when present) and the live application URL, pulled from the repo.</li>
       <li><b>Weekly Update card</b> — a summary of the latest <code>/weekly-update</code> (Reconciliation vs Plan, alignment). Click to open the full Weekly sub-tab.</li>
       <li><b>Session history</b> — active + past, live ones pinned. Watch / replay to drill in.</li>
@@ -730,7 +730,7 @@
 
           <h2 style="font-size:17px;border-bottom:1px solid var(--line2);padding-bottom:6px;margin:0">Capture &amp; transport</h2>
           <ul style="list-style:none;padding:0;font-size:14px;margin:8px 0 0">
-            <li style="padding:3px 0"><span style="color:var(--good)">☑</span> claude+ daemon hosts PTY sessions and survives the terminal closing</li>
+            <li style="padding:3px 0"><span style="color:var(--good)">☑</span> claude+ daemon hosts PTY sessions and survives SSH disconnect</li>
             <li style="padding:3px 0"><span style="color:var(--good)">☑</span> Outbound WebSocket streams every session event to the cloud</li>
             <li style="padding:3px 0"><span class="faint">☐</span> Offline buffering replays events after reconnect</li>
           </ul>
@@ -743,14 +743,14 @@
           </ul>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨③⟩ It's just a markdown file.</b> HQ renders this raw <code>.md</code> (the goals management writes); a GitHub-flavored <code>- [x]</code> shows as ☑. You never tick by hand — <code>/update-progress</code> (client-side) computes the completion % from code-vs-docs and pushes it to GitHub; HQ reads it (HQ never writes). The prod-E2E verification gate is deferred. Edit the goals with ✎ Edit.</div>
+        <div class="note" style="margin-top:14px"><b>⟨③⟩ It's just a markdown file.</b> HQ renders this raw <code>.md</code> (the goals management writes); a GitHub-flavored <code>- [x]</code> shows as ☑. You never tick by hand — <code>/update-progress</code> verifies the Definition of Done (unit + prod-E2E) and writes the tick. Edit the goals with ✎ Edit.</div>
       </div>
     </div>
 
     <ul class="anno">
       <li><b>A single markdown file</b> — the highest-level goals management writes, owned + edited in HQ (source of truth) and rendered raw. Not pulled from GitHub.</li>
       <li><b>Optional repo copy</b> — a user can download a snapshot into the repo via <code>/sync-requirements</code> (HQ → repo); HQ stays canonical.</li>
-      <li><b>Checks come from the file</b> — a GitHub-flavored <code>- [x]</code> renders as ☑; <code>/update-progress</code> (client-side) computes &amp; pushes it to GitHub; HQ reads, never writes. (Prod-E2E gate deferred.)</li>
+      <li><b>Checks come from the file</b> — a GitHub-flavored <code>- [x]</code> renders as ☑; <code>/update-progress</code> writes it only after the Definition of Done passes (unit + prod-E2E). Never self-reported.</li>
       <li><b>Detailed Requirements</b> (separate tab) renders the repo's <code>docs/plans/</code> breakdown (source of truth: GitHub).</li>
       <li><b>Full screen</b> — the same file, full-width, for reading / sharing.</li>
     </ul>
@@ -773,7 +773,7 @@
 
         <h2 style="font-size:17px;border-bottom:1px solid var(--line2);padding-bottom:6px">Capture &amp; transport <span class="faint" style="font-size:12px;font-weight:400">· 67%</span></h2>
         <ul style="list-style:none;padding:0;font-size:14px">
-          <li style="padding:4px 0"><span style="color:var(--good)">✓</span> claude+ daemon hosts PTY sessions and survives the terminal closing</li>
+          <li style="padding:4px 0"><span style="color:var(--good)">✓</span> claude+ daemon hosts PTY sessions and survives SSH disconnect</li>
           <li style="padding:4px 0"><span style="color:var(--good)">✓</span> Outbound WebSocket streams every session event to the cloud</li>
           <li style="padding:4px 0"><span class="faint">☐</span> Offline buffering replays events after reconnect</li>
         </ul>
@@ -859,13 +859,13 @@
               <div><span style="color:var(--good)">☑</span> Plan→outcome matcher</div>
               <div><span style="color:var(--good)">☑</span> Challenger prompt for unaligned items</div>
               <div><span class="faint">☐</span> Re-justification flow persists override</div>
-              <div><span class="faint">☐</span> Publish records a conformity score (never blocks)</div>
+              <div><span class="faint">☐</span> Publish blocks until all items aligned</div>
             </div>
             <div class="faint" style="font-size:11px;margin-top:10px">… rendered GitHub-flavored markdown · a <code>- [x]</code> task item shows as ☑</div>
           </div>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨④⟩ Just a renderer:</b> this tab reads the repo's <code>docs/plans/</code> from GitHub and displays it — no edits, no injected data. The only writes come from <code>/update-progress</code> (client-side) pushing completion numbers + <code>- [x]</code> ticks into those docs; HQ shows whatever the files say.</div>
+        <div class="note" style="margin-top:14px"><b>⟨④⟩ Just a renderer:</b> this tab reads the repo's <code>docs/plans/</code> from GitHub and displays it — no edits, no injected data. The only writes are <code>/update-progress</code> committing <code>- [x]</code> ticks into those docs after the Definition of Done passes; HQ shows whatever the files say.</div>
       </div>
     </div>
 
@@ -880,7 +880,7 @@
   <!-- ======================= 4.4 HQ WEEKLY UPDATE ======================= -->
   <section class="screen" data-name="HQ — Project › Weekly Update">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Weekly Update</h2>
-    <p class="desc">The output of the <code>/weekly-update</code> skill. You run it, it <b>interviews</b> you about next week's goals and scores how well they ladder up to this repo's fixed high-level goals (a <b>conformity score</b> — it nudges but never blocks), then auto-writes two halves: <b>Reconciliation</b> — last week's <b>plan vs. actual</b> read from git history (what got done, which requirement items it checked off, how much it moved progress) — and the validated <b>Plan next week</b>. It moves through a lifecycle: <code>DRAFT → LOCKED → RECONCILING → RECONCILED</code>.</p>
+    <p class="desc">The output of the <code>/weekly-update</code> skill. You run it, it <b>interviews</b> you about next week's goals and <b>pushes back</b> to check them against this repo's fixed high-level goals, then auto-writes two halves: <b>Reconciliation</b> — last week's <b>plan vs. actual</b> read from git history (what got done, which requirement items it checked off, how much it moved progress) — and the validated <b>Plan next week</b>. It moves through a lifecycle: <code>DRAFT → LOCKED → RECONCILING → RECONCILED</code>.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / weekly</span></div>
@@ -909,15 +909,15 @@
           <span class="pill" style="opacity:.5">LOCKED</span><span class="faint">→</span>
           <span class="pill" style="opacity:.5">RECONCILING</span><span class="faint">→</span>
           <span class="pill good">● RECONCILED</span>
-          <span class="faint" style="margin-left:8px">conformity scored (never blocks) · done reconciled from git</span>
+          <span class="faint" style="margin-left:8px">plan validated · done reconciled from git</span>
         </div>
 
         <!-- agent validation dialogue -->
         <div class="box" style="background:#fbfbfa;margin-bottom:14px">
-          <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨②⟩ /weekly-update — interview + conformity score (nudges, never blocks)</div>
+          <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨②⟩ /weekly-update — interview + conformity check against fixed goals</div>
           <div style="font-size:13px;margin-top:8px;display:flex;flex-direction:column;gap:8px">
             <div><span class="pill" style="padding:1px 7px">you</span> &nbsp;Next week I want to refactor the design system and tidy up our Storybook.</div>
-            <div class="muted"><span class="pill" style="padding:1px 7px;background:#efe9f6;border-color:#d3c2e6;color:#5b3f86">agent</span> &nbsp;⟨③⟩ That doesn't map to a Supporting Outcome this repo owns. Your PRD owns <b>"ship live steering"</b> and <b>"control round-trip &lt; 250ms"</b>, both under DO 1.1. A design-system refactor advances neither — so I'll log a <b>low conformity score</b> (visible to your manager). You can still proceed, but want to anchor the week on those instead?</div>
+            <div class="muted"><span class="pill" style="padding:1px 7px;background:#efe9f6;border-color:#d3c2e6;color:#5b3f86">agent</span> &nbsp;⟨③⟩ That doesn't map to a Supporting Outcome this repo owns. Your PRD owns <b>"ship live steering"</b> and <b>"control round-trip &lt; 250ms"</b>, both under DO 1.1. A design-system refactor advances neither — and live steering is only 41% with a Q3 deadline. Can we anchor the week there instead?</div>
             <div><span class="pill" style="padding:1px 7px">you</span> &nbsp;Fair. Let's finish the live-watch reducer and the session replay view.</div>
             <div class="muted"><span class="pill" style="padding:1px 7px;background:#efe9f6;border-color:#d3c2e6;color:#5b3f86">agent</span> &nbsp;✓ That maps to <b>Outcome: control round-trip &lt; 250ms</b>. Drafting the plan with alignment + targets…</div>
           </div>
@@ -945,7 +945,7 @@
           <!-- PLAN subsection -->
           <div class="col box" style="background:#fff;border-left:3px solid var(--accent)">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <b>⟨⑥⟩ Plan next week</b><span class="pill good" style="padding:1px 6px">conformity 86%</span>
+              <b>⟨⑥⟩ Plan next week</b><span class="pill good" style="padding:1px 6px">validated</span>
             </div>
             <div class="muted" style="font-size:12px;margin:6px 0 2px">5 commitments · projected <b>+18%</b> on live steering</div>
             <div class="bar" style="margin:6px 0 10px"><i style="width:18%"></i></div>
@@ -960,14 +960,14 @@
           </div>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨⑦⟩ Publish</b> writes the update to the repo (and rolls its completion up to <b>Company Objectives</b>). The "Done" half is generated, not typed — the agent reads the week's git log; you author the forward plan and a conformity score is recorded for manager visibility. Nothing blocks publish.</div>
+        <div class="note" style="margin-top:14px"><b>⟨⑦⟩ Publish</b> writes the update to the repo (and rolls its completion up to <b>Company Objectives</b>). The "Done" half is generated, not typed — the agent reads the week's git log; you only author the forward plan, and only after it passes the alignment check.</div>
       </div>
     </div>
 
     <ul class="anno">
       <li><b>Week picker</b> — one update per week, with a validated badge once the plan passes the objective check.</li>
-      <li><b>Agent-scored, with nudges</b> — you talk through the plan; the agent scores how well it ladders up to owned outcomes and nudges, but <b>never blocks</b>. The score is manager-visible.</li>
-      <li><b>Real nudge example</b> — it scores the design-system idea low (maps to no owned outcome) and steers toward the under-target, deadline-bound one; you can still proceed.</li>
+      <li><b>Agent-authored, with push-back</b> — you talk through the plan; the agent challenges anything that doesn't ladder up to an owned Supporting Outcome or the company objectives. This is the "validate compliance" step you asked for.</li>
+      <li><b>Real push-back example</b> — it rejects the design-system idea because it maps to no owned outcome, and steers toward the under-target, deadline-bound one.</li>
       <li><b>Done last week (from git)</b> — generated by reading the week's git history, each item tagged to the objective it advanced, with completion vs last week's plan.</li>
       <li><b>Alignment breakdown</b> — both halves show which objectives moved and by how much; this is the strategic-alignment + completion-% breakdown per subsection.</li>
       <li><b>Plan next week (validated)</b> — the forward commitments, each linked to an owned outcome, with projected completion deltas.</li>
@@ -1266,7 +1266,7 @@
         <div class="grid3">
           <div class="box" style="background:#fff">
             <div style="display:flex;justify-content:space-between"><span class="pill skill">/update-progress</span><span class="faint" style="font-size:11px">HQ</span></div>
-            <div class="muted" style="font-size:12px;margin:6px 0">Client-side: Claude computes the completion % from code-vs-docs and pushes it to GitHub (plus a compliance report). HQ reads it; HQ never writes.</div>
+            <div class="muted" style="font-size:12px;margin:6px 0">Audits the repo, runs the Definition-of-Done gate (unit + prod-E2E), flips verified checks &amp; the progress bar.</div>
             <div class="faint" style="font-size:11px">scope: <b>org</b> · writes to Requirements (checks + completion %)</div>
           </div>
           <div class="box" style="background:#fff">

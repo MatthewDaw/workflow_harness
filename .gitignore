@@ -31,3 +31,5 @@ infra/cdk.bundles/
 infra/cdk-outputs.json
 npm/claude-plus/bin/claude-plus
 npm/claude-plus/bin/claude-plus.exe
+
+.claude/worktrees/

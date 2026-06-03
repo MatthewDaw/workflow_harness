@@ -140,7 +140,7 @@
     <span class="tag term">▌ terminal — the <code>claude+</code> wrapper</span>
     <span class="tag web">▌ web — Command HQ dashboard</span>
     &nbsp; <span class="faint">Numbered ⟨①⟩ markers map to the annotation notes under each screen.</span>
-    <br><span class="faint" style="font-size:11px">Prototype is clickable — the top/sub-tabs, HQ nav, terminal tabs, and watch/start buttons all navigate between screens.</span>
+    <br><span class="faint" style="font-size:11px">Prototype is clickable — the top/sub-tabs, HQ nav, terminal tabs, ticket cards, and watch/start buttons all navigate between screens.</span>
   </div>
 
   <nav class="screens" id="nav"></nav>
@@ -153,7 +153,7 @@
     <div class="frame pad">
       <div class="flowmap">
         <div class="stack">
-          <div class="node"><h4>① <code>claude+</code> instance (per repo)</h4><p>One persistent <code>claude+</code> per repo, <b>named for the repo</b>, runs as a background daemon. Holds several inner <code>claude</code> sessions (sub-tabs). Your terminal <em>attaches</em> to it; closing the terminal leaves it running. <code>claude+ ls</code> lists them. Adds tabs: Session · Agents · Stream.</p></div>
+          <div class="node"><h4>① <code>claude+</code> instance (per repo)</h4><p>One persistent <code>claude+</code> per repo, <b>named for the repo</b>, runs as a background daemon. Holds several inner <code>claude</code> sessions (sub-tabs). Your terminal <em>attaches</em> to it; closing the terminal leaves it running. <code>claude+ ls</code> lists them. Adds tabs: Session · Tickets · Agents · Stream.</p></div>
           <div class="node"><h4>Local agent config</h4><p>Reads/writes <code>~/.claude/</code> (agents, skills, MCP). Stays in sync with the user's real Claude Code setup.</p></div>
         </div>
         <div class="arrowcol stack">
@@ -167,7 +167,8 @@
       </div>
       <div class="hr"></div>
       <div class="row">
-        <div class="col box"><b>④ Command HQ (web)</b><div class="muted" style="margin-top:6px">Projects · requirements · live + historical sessions · agent setups. Read model from the event store, write via the control gateway.</div></div>
+        <div class="col box"><b>④ Command HQ (web)</b><div class="muted" style="margin-top:6px">Projects · <b>tickets (source of truth)</b> · live + historical sessions · agent setups. Read model from the event store, write via the control gateway.</div></div>
+        <div class="col box"><b>⑤ Ticket store</b><div class="muted" style="margin-top:6px">Tickets live in HQ's DB (not local files). The chain ticket→session→branch→PR is tracked here; the terminal reads/writes via the HQ API so every machine sees the same backlog.</div></div>
         <div class="col box"><b>⑥ GitHub repos</b><div class="muted" style="margin-top:6px">One repo = one project. Root holds <code>PRD.md</code> (goal + the repo's objectives, which link up to company RCDO) + <code>PROGRESS.md</code> (done). Branches/PRs + weekly updates trace back to objectives.</div></div>
       </div>
     </div>
@@ -228,14 +229,16 @@
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; command-hq (instance #0) · 3 sessions</span></div>
       <div class="tabs">
         <div class="t on">⟨①⟩ Session</div>
+        <div class="t">Tickets</div>
         <div class="t">Agents</div>
+        <div class="t">Forge</div>
         <div class="t">Stream</div>
         <div class="t" style="margin-left:auto;color:#7fc99a">⟨②⟩ ● HQ linked</div>
       </div>
       <div class="tabs" style="background:#191b20">
-        <div class="t on" style="border-bottom-color:#7fc99a"><span class="ok">●</span> ⟨③⟩ live-watch-stream <span class="dim">#a91f</span></div>
-        <div class="t"><span class="warnc">●</span> steer-flow-qa</div>
-        <div class="t"><span class="dim">●</span> objectives-rollup</div>
+        <div class="t on" style="border-bottom-color:#7fc99a"><span class="ok">●</span> ⟨③⟩ live-watch-stream <span class="dim">HARNESS-42 · #a91f</span></div>
+        <div class="t"><span class="warnc">●</span> steer-flow-qa <span class="dim">HARNESS-39</span></div>
+        <div class="t"><span class="dim">●</span> objectives-rollup <span class="dim">HARNESS-45</span></div>
         <div class="t acc">⟨④⟩ ＋ new</div>
         <div class="t dim" style="margin-left:auto">⌃1–9 jump · ⌃N new · ⌃W close</div>
       </div>
@@ -263,14 +266,66 @@
     </div>
 
     <ul class="anno">
-      <li><b>Top tab bar</b> is the chrome we inject. Session = native Claude. Agents / Forge / Stream are ours.</li>
+      <li><b>Top tab bar</b> is the chrome we inject. Session = native Claude. Tickets / Agents / Forge / Stream are ours.</li>
       <li><b>HQ linked</b> indicator — confirms events are reaching the bus. Goes red if the connection drops (work continues locally, syncs on reconnect).</li>
-      <li><b>Auto-named session sub-tabs</b> — each is an independent <code>claude</code> process inside this instance, and each <b>auto-generates its own name</b> from its first turn / task (here <code>live-watch-stream</code>, <code>steer-flow-qa</code>, <code>objectives-rollup</code>). No manual titling; ⌃R to override. Switch with ⌃1–9; the dot = status (green active / amber needs-input / grey idle).</li>
-      <li><b>＋ new</b> spawns another session in this repo — optionally started as an agent. It gets an auto-name as soon as it knows what it's doing. ⌃W closes the focused one.</li>
+      <li><b>Auto-named session sub-tabs</b> — each is an independent <code>claude</code> process inside this instance, and each <b>auto-generates its own name</b> from its first turn / task (here <code>live-watch-stream</code>, <code>steer-flow-qa</code>, <code>objectives-rollup</code>), with the linked ticket shown dim. No manual titling; ⌃R to override. Switch with ⌃1–9; the dot = status (green active / amber needs-input / grey idle).</li>
+      <li><b>＋ new</b> spawns another session in this repo — optionally seeded from a ticket and/or started as an agent. It gets an auto-name as soon as it knows what it's doing. ⌃W closes the focused one.</li>
       <li><b>Status line</b> names the <em>instance</em> (the repo, #0) and the <em>focused</em> session by its generated name, plus a cost roll-up of the rest.</li>
       <li><b>Keybinds</b> — ⌃1–9 jump, ⌃T cycles top tabs, ⌃R renames the session, ⌃G jumps to its HQ page.</li>
     </ul>
     <div class="note"><b>Architecture:</b> tmux-style multiplexing, but scoped to one repo. The instance daemon (see <em>claude+ ls</em>) holds one PTY per session and the TUI renders only the focused one; the rest run in the background. Each is a full Claude process, so it's a handful-of-sessions feature — the cost roll-up keeps that visible.</div>
+  </section>
+
+  <!-- ======================= 1.5 TUI TICKETS ======================= -->
+  <section class="screen" data-name="③ claude+ — Tickets tab">
+    <h2><span class="tag term">terminal</span> &nbsp;claude+ — Tickets tab</h2>
+    <p class="desc">The repo's backlog, pulled live from HQ (not local files). Browse and filter tickets, then <b>start a session on one</b> — that links the new session to the ticket and moves it into <code>in&nbsp;progress</code>. As work lands a branch and opens a PR, the ticket advances itself. Edits here write straight back to the HQ ticket store.</p>
+
+    <div class="term">
+      <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; command-hq · backlog</span></div>
+      <div class="tabs">
+        <div class="t">Session</div>
+        <div class="t on">⟨①⟩ Tickets</div>
+        <div class="t">Agents</div>
+        <div class="t">Forge</div>
+        <div class="t">Stream</div>
+        <div class="t" style="margin-left:auto;color:#7fc99a">⟨②⟩ ● HQ synced</div>
+      </div>
+      <div class="body"><span class="dim">BACKLOG  command-hq</span>   <span class="dim">(↑↓ select · ⏎ start session · e edit · n new · / filter)</span>
+
+<span class="warnc">IN PROGRESS</span>
+<span class="acc">▌ HARNESS-42</span>  <span class="warnc">●hi</span>  live-watch reducer: event ordering   <span class="dim">⟨③⟩ #a91f · builder</span>
+  HARNESS-39  <span class="warnc">●hi</span>  drive attach→steer flow, file breakage      <span class="dim">#c2d8 · ux-tester</span>
+
+<span class="acc">IN REVIEW</span>
+  HARNESS-37  <span class="dim">●md</span>  live watch + steer panel       <span class="ok">⟨④⟩ PR #128 open</span>
+
+<span class="dim">BACKLOG</span>
+  HARNESS-45  <span class="warnc">●hi</span>  objectives roll-up: bottom-up %
+  HARNESS-46  <span class="dim">●md</span>  pagination for 2000-row team view
+  HARNESS-47  <span class="dim">●lo</span>  empty-state copy for draft week
+
+<span class="dim">▸ closed (12)   ▸ icebox (4)</span>
+<span class="dim">────────────────────────────────────────────────</span>
+<span class="ok">⟨⑤⟩ ⏎ start session on HARNESS-45</span>  <span class="dim">as:</span> ◉ builder  ○ pick agent…
+</div>
+      <div class="status">
+        <span><b>repo</b> command-hq</span>
+        <span><b>open</b> 6 · <b>in review</b> 1</span>
+        <span><b>source</b> HQ ticket store</span>
+        <span class="acc">⟨⑥⟩ n new · / filter · ⏎ start</span>
+      </div>
+    </div>
+
+    <ul class="anno">
+      <li><b>Same data as HQ.</b> This list is the HQ backlog rendered in the terminal — create/edit here and it syncs to the website (and every other machine) instantly.</li>
+      <li><b>HQ synced</b> indicator (vs. "HQ linked" on Session) — confirms the ticket store round-trips. Goes amber if offline; edits queue and replay.</li>
+      <li><b>Grouped by status</b> — in progress / in review / backlog, with closed + icebox collapsed (TerMinal's grouping). Dot = priority (hi/md/lo).</li>
+      <li><b>Linked artifacts</b> — a ticket in review shows its open PR; in-progress shows the session + agent working it. The ticket→session→branch→PR chain, made visible.</li>
+      <li><b>Start session on a ticket</b> — the core action. Spawns a session (new sub-tab) seeded with the ticket as its goal, optionally as a chosen agent, and flips the ticket to <code>in progress</code>.</li>
+      <li><b>Keybinds</b> — new, filter, and start, all without leaving the terminal.</li>
+    </ul>
+    <div class="note"><b>Difference from TerMinal:</b> TerMinal stores tickets as <code>backlog/*.md</code> in each repo. Here the terminal is a thin client over HQ's ticket store, so the backlog is identical on your laptop, a CI runner, and the website — and HQ owns status transitions as sessions/PRs report in.</div>
   </section>
 
   <!-- ======================= 2. TUI AGENTS ======================= -->
@@ -282,7 +337,9 @@
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; ~/projects/command-hq</span></div>
       <div class="tabs">
         <div class="t">Session</div>
+        <div class="t">Tickets</div>
         <div class="t on">⟨①⟩ Agents</div>
+        <div class="t">Forge</div>
         <div class="t">Stream</div>
         <div class="t" style="margin-left:auto;color:#7fc99a">● HQ linked</div>
       </div>
@@ -326,55 +383,63 @@
     </ul>
   </section>
 
-  <!-- ======================= 2.4 TUI AGENTFORGE ======================= -->
-  <section class="screen" data-name="claude+ — AgentForge (/startforge … /endforge)">
-    <h2><span class="tag term">terminal</span> &nbsp;claude+ — AgentForge (<code>/startforge</code> … <code>/endforge</code>)</h2>
-    <p class="desc"><b>Commands, not a panel.</b> <code>/startforge</code> lands your current work to main, then branches a worktree and marks the slice; you do the work (the daemon captures the session + diff); <code>/endforge</code> distills it into a reusable agent — a short prompt + the minimal skills it needs — and registers it <b>at your own scope</b>. Promoting it org-wide is a deliberate step in Command HQ. <i>(v1 is distiller-first: capture → distill → register. The prompt optimize/refine loop is the next increment.)</i></p>
+  <!-- ======================= 2.4 TUI FORGE ======================= -->
+  <section class="screen" data-name="claude+ — Forge (create agent)">
+    <h2><span class="tag term">terminal</span> &nbsp;claude+ — Forge tab (create an agent from your history)</h2>
+    <p class="desc">Describe the kind of agent you want. Forge searches your <b>past claude session histories</b> for the work most like it, sees which <b>skills and tools</b> those sessions actually used, and co-authors a new agent with you — pre-loaded with the relevant skills. It turns "what worked before" into a reusable role.</p>
 
     <div class="term">
-      <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; command-hq · session: live-watch-stream</span></div>
+      <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; command-hq · Forge</span></div>
       <div class="tabs">
-        <div class="t on">⟨①⟩ Session</div>
+        <div class="t">Session</div>
+        <div class="t">Tickets</div>
         <div class="t">Agents</div>
+        <div class="t on">⟨①⟩ Forge</div>
         <div class="t">Stream</div>
         <div class="t" style="margin-left:auto;color:#7fc99a">● HQ linked</div>
       </div>
-      <div class="body"><span class="dim">… earlier: <span class="ok">/startforge "live-watch reducer"</span> — landed current work to main, branched worktree forge/live-watch-reducer off main, start marker pinned, capture on.</span>
+      <div class="body"><span class="dim">FORGE — describe the agent you want; I'll mine your history for what fits.</span>
 
-<span class="acc">›</span> <span class="ok">/endforge</span>
+<span class="acc">›</span> <span class="ok">I want an agent that audits Flyway migrations for unsafe changes before they ship.</span>
 
-<span class="acc">●</span> ⟨②⟩ Generate a reusable agent from this slice? <span class="ok">yes</span>
-<span class="acc">●</span> ⟨③⟩ Coherence check — diff is one focused feature <span class="ok">✓</span>  <span class="dim">(would warn + let you override if not)</span>
+<span class="acc">●</span> ⟨②⟩ Searching <span class="acc">312</span> past sessions across your projects for similar work…
+  <span class="dim">⎿ matched 4 sessions by task similarity</span>
 
-<span class="acc">●</span> ⟨④⟩ Distilling a short, focused prompt from the diff + session…
-  <span class="dim">⎿ minimal skill set, curated from actual usage:</span>
-   <span style="color:#9fc0e6">test-driven-development</span>   <span style="color:#9fc0e6">systematic-debugging</span>   <span class="warnc">+ live-state-replay (new skill — minted &amp; registered)</span>
+  <span class="warnc">⟨③⟩ MOST SIMILAR SESSIONS</span>
+   <span class="ok">0.91</span>  atlas-billing · <span class="acc">migration-guard</span>     "review V12 backfill for lock risk"
+   <span class="ok">0.88</span>  command-hq · schema-audit      "check additive-only on events table"
+   <span class="ok">0.76</span>  nimbus-docs · ci-gate              "block destructive DDL in CI"
+   <span class="dim">0.71  atlas-billing · rollback-plan      "write down-migration + verify"</span>
 
-<span class="acc">●</span> ⟨⑤⟩ Proposed agent — <span class="ok">live-state-reducer-builder</span>
-   <span class="dim">model:</span> opus   <span class="dim">skills:</span> <span style="color:#9fc0e6">test-driven-development  systematic-debugging  live-state-replay</span>
-   <span class="dim">register:</span> <span class="ok">your scope · @matt</span>  <span class="dim">(not org-wide — promote later in HQ)</span>
+<span class="acc">●</span> ⟨④⟩ Skills those sessions actually used (frequency):
+   <span style="color:#9fc0e6">data-migration-review</span> ×4   <span style="color:#9fc0e6">investigate</span> ×3   <span style="color:#9fc0e6">code-review</span> ×2   <span style="color:#9fc0e6">deployment-verify</span> ×2
+
+<span class="acc">●</span> ⟨⑤⟩ Proposed agent — <span class="ok">migration-auditor</span>
+   <span class="dim">model:</span> opus   <span class="dim">tools:</span> Read Grep Bash
+   <span class="dim">skills:</span> <span style="color:#9fc0e6">data-migration-review  investigate  code-review</span>  <span class="warnc">+ deployment-verify?</span>
+   <span class="dim">prompt:</span> "Audit migrations for unsafe/destructive changes; flag lock risk;
+            require a verified rollback. Stop at findings — don't apply."
 
 <span class="dim">────────────────────────────────────────────────</span>
-<span class="ok">⟨⑥⟩ ⏎ register at your scope</span>   <span class="dim">e edit prompt · s adjust skills · q discard</span>
-<span class="dim">⟨⑦⟩ next increment: optimize/refine the prompt in a worktree before registering</span>
+<span class="ok">⟨⑥⟩ ⏎ accept &amp; edit in Agents</span>   <span class="dim">a add deployment-verify · r re-search · d view a session</span>
 </div>
       <div class="status">
-        <span><b>⟨⑧⟩ forge</b> live-watch-reducer</span>
-        <span><b>evidence</b> diff + session</span>
-        <span><b>scope</b> @matt (author)</span>
-        <span class="acc">⏎ register · promote in HQ</span>
+        <span><b>⟨⑦⟩ history</b> 312 sessions indexed</span>
+        <span><b>matched</b> 4</span>
+        <span><b>saves to</b> Agents (scoped)</span>
+        <span class="acc">⏎ accept · r re-search</span>
       </div>
     </div>
 
     <ul class="anno">
-      <li><b>Two commands, no GUI</b> — <code>/startforge</code> lands current work to main, then branches a worktree + start marker; <code>/endforge</code> distills + registers. Replaces the old fuzzy "describe an agent" Forge tab. (Aborts if current work can't land cleanly.)</li>
-      <li><b>Distiller-first v1</b> — capture → distill → register, end to end. The prompt optimize/refine loop (run candidates in a worktree, score, iterate) is the <b>next increment</b>, not v1.</li>
-      <li><b>Classify, don't block</b> — <code>/endforge</code> warns if the diff isn't a coherent feature, but you can override and forge anyway.</li>
-      <li><b>Minimal skills</b> — curated from what the session actually used; references existing skills, mints only the new ones the agent needs (registered alongside it).</li>
-      <li><b>Registers at your scope</b> — the agent + new skills land at the author's scope; usable only by you until promoted.</li>
-      <li><b>Promotion is the quality gate</b> — going org-wide is a deliberate human action in Command HQ, so a weak forge never auto-hits the whole org.</li>
+      <li><b>Describe, don't configure</b> — you state the goal in plain language; Forge does the assembly. The opposite of hand-picking skills in the editor.</li>
+      <li><b>History retrieval</b> — semantic search over the event store (every captured session, all projects). This is <em>why</em> capturing everything matters: past work becomes training data for new roles.</li>
+      <li><b>Ranked matches</b> — the closest prior sessions by task similarity, each one a real piece of work you (or a teammate) already did. <code>d</code> opens one to inspect.</li>
+      <li><b>Skills, evidence-based</b> — instead of guessing, Forge counts which skills those similar sessions actually invoked and proposes the high-frequency ones.</li>
+      <li><b>Proposed agent</b> — a complete draft (name, model, tools, skills, prompt) you accept or tweak. Uncertain additions are flagged as questions, not silently included.</li>
+      <li><b>Hand-off to Agents</b> — accepting opens the new role in the Agents tab / HQ editor, where you pick its <b>scope</b> (project → my global → org) before it's live.</li>
     </ul>
-    <div class="note"><b>The loop this closes:</b> capture a slice → distill → register at your scope → promote in HQ → config-sync drift makes it pullable org-wide → that agent runs new sessions → which can be forged again. (Backend reuses <code>packages/backend/src/forge/</code>; ground truth: <code>docs/plans/command-hq/05-agentforge.md</code>.)</div>
+    <div class="note"><b>The loop this closes:</b> sessions stream to the bus → Forge mines them → proposes an agent with proven skills → that agent runs new sessions → which stream back. The harness gets better at making agents the more it's used.</div>
   </section>
 
   <!-- ======================= 2.5 TUI STREAM ======================= -->
@@ -386,17 +451,21 @@
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; command-hq (instance #0) · event stream</span></div>
       <div class="tabs">
         <div class="t">Session</div>
+        <div class="t">Tickets</div>
         <div class="t">Agents</div>
+        <div class="t">Forge</div>
         <div class="t on">⟨①⟩ Stream</div>
         <div class="t" style="margin-left:auto;color:#7fc99a">● HQ linked</div>
       </div>
       <div class="tabs" style="background:#191b20">
         <div class="t on" style="border-bottom-color:#7fc99a">⟨②⟩ all sessions</div>
+        <div class="t">HARNESS-42 #a91f</div>
+        <div class="t">HARNESS-39 #c2d8</div>
         <div class="t dim" style="margin-left:auto">⟨③⟩ ⎵ pause · / filter · w wrap</div>
       </div>
       <div class="body"><span class="dim">ts          session  event           detail</span>
 <span class="dim">──────────────────────────────────────────────────────────────</span>
-14:02:14    <span class="acc">#a91f</span>    <span class="ok">session.start</span>   proj=command-hq agent=builder
+14:02:14    <span class="acc">#a91f</span>    <span class="ok">session.start</span>   proj=command-hq agent=builder ticket=HARNESS-42
 14:02:15    <span class="acc">#a91f</span>    user.msg        <span class="dim">"add the live watch view"</span>  120 tok
 14:02:16    <span class="acc">#a91f</span>    assistant.msg   84 tok
 14:02:16    <span class="acc">#a91f</span>    <span class="warnc">tool.call</span>       Read src/state/weeklyLifecycle.ts
@@ -563,7 +632,7 @@
           </div>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨⑤⟩ Linkage:</b> a project's <code>PRD.md</code> declares which <b>Supporting Outcomes</b> it owns; weekly plans then link to those. Roll-up percentages here are computed bottom-up from that linked work.</div>
+        <div class="note" style="margin-top:14px"><b>⟨⑤⟩ Linkage:</b> a project's <code>PRD.md</code> declares which <b>Supporting Outcomes</b> it owns; weekly plans and tickets then link to those. Roll-up percentages here are computed bottom-up from that linked work.</div>
       </div>
     </div>
 
@@ -579,7 +648,7 @@
   <!-- ======================= 4. HQ PROJECT DETAIL ======================= -->
   <section class="screen" data-name="⑥ HQ — Project detail">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Project detail</h2>
-    <p class="desc">A project is the hub everything hangs off of. Its own <b>sub-tabs</b> — Overview, Project Requirements, Detailed Requirements, Weekly, Sessions, Agents — live inside the project. This Overview shows the high-level requirements summary, progress, the live app, the latest <b>Weekly Update</b>, and session history.</p>
+    <p class="desc">A project is the hub everything hangs off of. Its own <b>sub-tabs</b> — Overview, Tickets, Weekly, Sessions, Agents — live inside the project. This Overview shows the PRD (now carrying the repo's <b>objectives</b>, which link up to Company Objectives), progress, the latest <b>Weekly Update</b>, and session history.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq</span></div>
@@ -593,14 +662,15 @@
         <a class="on" href="#">Overview</a>
         <a href="#">⟨①⟩ Project Requirements</a>
         <a href="#">Detailed Requirements</a>
+        <a href="#">⟨⑤⟩ Tickets <span class="pill" style="padding:1px 6px">6</span></a>
         <a href="#">Weekly</a>
         <a href="#">Sessions</a>
         <a href="#">Agents</a><a href="#">Skills</a>
       </div>
       <div class="pad">
         <div style="display:flex;justify-content:space-between;align-items:baseline">
-          <div><span class="faint mono" style="font-size:11px">gh/acme/command-hq</span><h3 style="margin:2px 0">Overview</h3><a href="#" class="mono" style="font-size:11px;text-decoration:none"><span class="dot good"></span>command-hq.example.dev ↗</a></div>
-          <div><span class="btn">↗ Open repo</span> <span class="btn">↗ Live app</span> <span class="btn pri">▶ Start session</span></div>
+          <div><span class="faint mono" style="font-size:11px">gh/acme/command-hq</span><h3 style="margin:2px 0">Overview</h3></div>
+          <div><span class="btn">↗ Open repo</span> <span class="btn pri">▶ Start session</span></div>
         </div>
 
         <div class="row" style="margin-top:8px">
@@ -609,7 +679,7 @@
               <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨①⟩ Project Requirements — goal &amp; objectives</div>
               <span class="faint" style="font-size:11px">edit ›</span>
             </div>
-            <div class="muted" style="font-size:13px;margin-top:6px">Watch and steer every Claude Code session from anywhere — with <b>every</b> session traced to the work it advances and every goal laddering up to a company outcome.</div>
+            <div class="muted" style="font-size:13px;margin-top:6px">Watch and steer every Claude Code session from anywhere — with <b>every</b> session traced to a ticket and every ticket to an owned company outcome.</div>
             <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:10px">⟨②⟩ Owns these Supporting Outcomes</div>
             <div style="margin-top:5px">
               <span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">SO · ship live steering ↑</span>
@@ -618,39 +688,10 @@
             <div class="faint" style="font-size:11px;margin-top:6px">edited in HQ (source of truth) · repos pull via <span class="mono">/sync-requirements</span> · ↑ links to <b>Company Objectives</b></div>
           </div>
           <div class="col box" style="background:#fff">
-            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨③⟩ Progress &nbsp;·&nbsp; 58% &nbsp;<span class="faint">· <span class="mono">completion:</span> from the top docs/plans doc</span></div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨③⟩ Progress &nbsp;·&nbsp; 58% &nbsp;<span class="faint">· last audited by <span class="mono">/update-progress</span> 2h ago</span></div>
             <div class="bar" style="margin:8px 0"><i style="width:58%"></i></div>
-            <div class="muted" style="font-size:12px">Whole-project %, read from the top docs/plans <span class="mono">completion:</span> on GitHub. <span class="mono">/update-progress</span> (client-side) computes &amp; pushes it; HQ never writes.</div>
+            <div class="muted" style="font-size:12px">7 / 12 requirement items complete — rolled up from verified tickets, not self-reported.</div>
             <div class="muted" style="font-size:12px;margin-top:6px">✓ Daemon + PTY ✓ Objectives roll-up ✓ Event capture&nbsp; · &nbsp;◦ Live watch view <span class="pill live">in&nbsp;progress</span>&nbsp; ◦ Forge</div>
-          </div>
-        </div>
-
-        <div class="box" style="background:#fff;margin-top:14px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <b>Design &amp; live app</b><span class="faint" style="font-size:12px">pulled from the repo (shown when present)</span>
-          </div>
-          <div class="row" style="margin-top:10px;gap:14px">
-            <!-- wireframe diagram preview -->
-            <div class="col">
-              <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Wireframe</div>
-              <div style="border:1px solid var(--line);border-radius:6px;height:128px;background:#fafafa;overflow:hidden;position:relative;padding:8px">
-                <div style="height:10px;background:#e7e7e3;border-radius:3px;width:40%;margin-bottom:6px"></div>
-                <div style="display:flex;gap:6px;height:90px">
-                  <div style="width:32%;background:#eef0ec;border-radius:4px"></div>
-                  <div style="flex:1;background:#eef0ec;border-radius:4px"></div>
-                  <div style="width:22%;background:#eef0ec;border-radius:4px"></div>
-                </div>
-                <span class="btn" style="position:absolute;right:8px;bottom:8px;background:#fff">↗ Open wireframe.html</span>
-              </div>
-              <div class="faint" style="font-size:11px;margin-top:5px">rendered from <span class="mono">wireframe.html</span> in the repo</div>
-            </div>
-            <!-- live app link -->
-            <div class="col">
-              <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Live application</div>
-              <div style="display:flex;align-items:center;gap:8px;font-size:13px"><span class="dot good"></span><a href="#" class="mono" style="text-decoration:none">https://command-hq.example.dev</a></div>
-              <div style="margin-top:10px"><span class="btn pri">↗ Open live app</span></div>
-              <div class="faint" style="font-size:11px;margin-top:8px">the deployed build being worked on · health ✓ · URL set per project</div>
-            </div>
           </div>
         </div>
 
@@ -681,11 +722,10 @@
     </div>
 
     <ul class="anno">
-      <li><b>Live app URL</b> — a clickable link to the deployed build being worked on, shown in the header next to the repo.</li>
-      <li><b>Project Requirements panel</b> — the HQ-owned high-level goals (a single <code>.md</code>, source of truth = HQ). Click to open/edit; owned Supporting Outcomes link ↑ to Company Objectives.</li>
-      <li><b>Progress</b> — the whole-project completion % read from the top <code>docs/plans/</code> doc on GitHub; <code>/update-progress</code> (client-side) computes &amp; pushes it. HQ reads, never writes.</li>
-      <li><b>Design &amp; live app</b> — a preview of the repo's <code>wireframe.html</code> (when present) and the live application URL, pulled from the repo.</li>
-      <li><b>Weekly Update card</b> — a summary of the latest <code>/weekly-update</code> (Reconciliation vs Plan, alignment). Click to open the full Weekly sub-tab.</li>
+      <li><b>PRD panel</b> renders the repo's <code>PRD.md</code> — now including the repo's high-level <b>objectives</b> as a set of Supporting Outcomes it owns.</li>
+      <li><b>Owned Supporting Outcomes</b> — the link from this repo up into Company Objectives. The ↑ jumps to that node on the Objectives page.</li>
+      <li><b>PROGRESS.md</b> panel — checklist + %; "what's completed relative to the PRD".</li>
+      <li><b>Weekly Update card</b> — a summary of the latest agent-drafted weekly update (Done vs Plan, alignment, completion). Click to open the full Weekly sub-tab.</li>
       <li><b>Session history</b> — active + past, live ones pinned. Watch / replay to drill in.</li>
     </ul>
   </section>
@@ -693,7 +733,7 @@
   <!-- ======================= 4.2 HQ PROJECT REQUIREMENTS ======================= -->
   <section class="screen" data-name="HQ — Project › Project Requirements">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Project Requirements</h2>
-    <p class="desc">The <b>highest-level project details</b> — the simple, high-level goals <b>management writes</b> (the equivalent of an <code>st6_prd.md</code>). <b>Command HQ owns these — HQ is the source of truth</b> and they're editable here; a user can optionally download a copy into the repo via <code>/sync-requirements</code>, but HQ stays canonical. A green check appears when <code>/update-progress</code> verifies an item meets the Definition of Done. The long-form breakdown lives in <b>Detailed Requirements</b>, which is sourced from the repo's <code>docs/plans/</code> on GitHub.</p>
+    <p class="desc">The <b>high-level</b> requirements — the "absolute highest level" framing, <b>owned and edited here in HQ</b> (the source of truth — not pulled from GitHub; repos optionally pull a copy via the <code>/sync-requirements</code> skill). Editable markdown that changes <b>slowly and deliberately</b>. Each item earns a green check the moment <code>/update-progress</code> verifies it meets the project's Definition of Done. The long-form expansion of every point lives in the <b>Detailed Requirements</b> tab.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / requirements</span></div>
@@ -707,73 +747,92 @@
         <a href="#">Overview</a>
         <a class="on" href="#">Project Requirements</a>
         <a href="#">Detailed Requirements</a>
+        <a href="#">Tickets</a>
         <a href="#">Weekly</a>
         <a href="#">Sessions</a>
         <a href="#">Agents</a><a href="#">Skills</a>
       </div>
       <div class="pad">
-        <!-- header: actions + progress -->
+        <!-- header: progress + actions -->
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
           <div>
-            <div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">Project Requirements</b><span class="pill good" style="font-size:10px">HQ-owned</span><span class="pill mono" style="font-size:10px">requirements.md</span></div>
-            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ a single markdown file, owned + edited in HQ · rendered raw · Definition of Done set in Company Objectives</div>
+            <div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">Project Requirements</b><span class="pill">v7 · edited 2d ago</span></div>
+            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ Definition of Done: <b>unit tests passing</b> + <b>prod E2E verified</b> · <span style="text-decoration:underline">set in Company Objectives</span></div>
           </div>
-          <div><span class="btn">✎ Edit</span> <span class="btn" data-go="Requirements (full screen)">⛶ Full screen</span></div>
+          <div><span class="btn">✎ Edit markdown</span> <span class="btn" data-go="Requirements (full screen)">⛶ Full screen</span></div>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:11px;margin:10px 0 4px" class="muted"><span>⟨②⟩ progress · <span class="mono">completion:</span> from the top docs/plans doc</span><span><b>58%</b></span></div>
-        <div class="bar" style="margin-bottom:12px"><i style="width:58%"></i></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin:10px 0 4px" class="muted"><span>⟨②⟩ overall progress · rolled up from verified tickets</span><span><b>58%</b> · 7/12 items</span></div>
+        <div class="bar"><i style="width:58%"></i></div>
 
-        <!-- the raw .md file, rendered -->
-        <div style="border:1px solid var(--line2);border-radius:6px;background:#fff;padding:16px 20px;max-width:760px">
-          <h1 style="font-size:22px;margin:0 0 4px">command-hq</h1>
-          <p class="muted" style="margin:0 0 16px">Watch and steer every Claude Code session from anywhere — with every session traced to the work it advances and every goal laddering up to a company outcome.</p>
+        <!-- ===== section: Capture & transport ===== -->
+        <div style="margin-top:18px">
+          <div style="display:flex;align-items:center;gap:8px"><h3 style="margin:0;font-size:14px">Capture &amp; transport</h3><span class="faint" style="font-size:11px">## section · 3 items · 67%</span></div>
+          <div class="hr" style="margin:8px 0"></div>
 
-          <h2 style="font-size:17px;border-bottom:1px solid var(--line2);padding-bottom:6px;margin:0">Capture &amp; transport</h2>
-          <ul style="list-style:none;padding:0;font-size:14px;margin:8px 0 0">
-            <li style="padding:3px 0"><span style="color:var(--good)">☑</span> claude+ daemon hosts PTY sessions and survives the terminal closing</li>
-            <li style="padding:3px 0"><span style="color:var(--good)">☑</span> Outbound WebSocket streams every session event to the cloud</li>
-            <li style="padding:3px 0"><span class="faint">☐</span> Offline buffering replays events after reconnect</li>
-          </ul>
-
-          <h2 style="font-size:17px;border-bottom:1px solid var(--line2);padding-bottom:6px;margin:18px 0 0">Strategy alignment</h2>
-          <ul style="list-style:none;padding:0;font-size:14px;margin:8px 0 0">
-            <li style="padding:3px 0"><span style="color:var(--good)">☑</span> Objectives roll-up computed bottom-up from linked work</li>
-            <li style="padding:3px 0"><span style="color:var(--warn)">◐</span> Weekly update agent validates plan against owned outcomes</li>
-            <li style="padding:3px 0"><span class="faint">☐</span> Live watch + steer ships</li>
-          </ul>
+          <div style="display:flex;justify-content:space-between;padding:5px 0">
+            <span><span class="marker" style="background:var(--good)">✓</span> &nbsp;claude+ daemon hosts PTY sessions and survives SSH disconnect</span>
+            <span class="faint" style="font-size:11px;cursor:pointer" data-go="Detailed Requirements">detail ›</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0">
+            <span><span class="marker" style="background:var(--good)">✓</span> &nbsp;Outbound WebSocket streams every session event to the cloud</span>
+            <span class="faint" style="font-size:11px;cursor:pointer" data-go="Detailed Requirements">detail ›</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0">
+            <span><span class="marker" style="background:#ededed;color:var(--faint)">◦</span> &nbsp;Offline buffering replays events after reconnect</span>
+            <span class="faint" style="font-size:11px;cursor:pointer" data-go="Detailed Requirements">detail ›</span>
+          </div>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨③⟩ It's just a markdown file.</b> HQ renders this raw <code>.md</code> (the goals management writes); a GitHub-flavored <code>- [x]</code> shows as ☑. You never tick by hand — <code>/update-progress</code> (client-side) computes the completion % from code-vs-docs and pushes it to GitHub; HQ reads it (HQ never writes). The prod-E2E verification gate is deferred. Edit the goals with ✎ Edit.</div>
+        <!-- ===== section: Strategy alignment ===== -->
+        <div style="margin-top:18px">
+          <div style="display:flex;align-items:center;gap:8px"><h3 style="margin:0;font-size:14px">Strategy alignment</h3><span class="faint" style="font-size:11px">## section · 3 items · 50%</span></div>
+          <div class="hr" style="margin:8px 0"></div>
+
+          <div style="display:flex;justify-content:space-between;padding:5px 0">
+            <span><span class="marker" style="background:var(--good)">✓</span> &nbsp;Objectives roll-up computed bottom-up from linked work</span>
+            <span class="faint" style="font-size:11px;cursor:pointer" data-go="Detailed Requirements">detail ›</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0">
+            <span><span class="marker" style="background:var(--warn)">~</span> &nbsp;Weekly update agent validates plan against owned outcomes</span>
+            <span class="faint" style="font-size:11px;cursor:pointer" data-go="Detailed Requirements">detail ›</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:5px 0">
+            <span><span class="marker" style="background:#ededed;color:var(--faint)">◦</span> &nbsp;Live watch + steer ships <span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">SO · control round-trip &lt;250ms</span></span>
+            <span class="faint" style="font-size:11px;cursor:pointer" data-go="Detailed Requirements">detail ›</span>
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:16px"><b>⟨③⟩ Who flips the checks:</b> you never tick these by hand. <code>/update-progress</code> (a registered HQ skill) audits the repo, runs the Definition-of-Done gate — unit tests <i>and</i> a real production E2E check — then marks the underlying tickets done. An item ✓ = all its detailed sub-tasks pass; section % and the overall bar roll up from there.</div>
       </div>
     </div>
 
     <ul class="anno">
-      <li><b>A single markdown file</b> — the highest-level goals management writes, owned + edited in HQ (source of truth) and rendered raw. Not pulled from GitHub.</li>
-      <li><b>Optional repo copy</b> — a user can download a snapshot into the repo via <code>/sync-requirements</code> (HQ → repo); HQ stays canonical.</li>
-      <li><b>Checks come from the file</b> — a GitHub-flavored <code>- [x]</code> renders as ☑; <code>/update-progress</code> (client-side) computes &amp; pushes it to GitHub; HQ reads, never writes. (Prod-E2E gate deferred.)</li>
-      <li><b>Detailed Requirements</b> (separate tab) renders the repo's <code>docs/plans/</code> breakdown (source of truth: GitHub).</li>
-      <li><b>Full screen</b> — the same file, full-width, for reading / sharing.</li>
+      <li><b>HQ-owned, editable</b> — requirements live in HQ and are edited here (markdown). GitHub is not the source of truth; a repo can pull a snapshot with <code>/sync-requirements</code>.</li>
+      <li><b>High level &amp; slow</b> — sections + items only; the "absolute highest level" framing. Changes deliberately.</li>
+      <li><b>Green check = verified done</b> — driven by the Definition of Done (default: unit tests pass; here also prod-E2E), never self-reported.</li>
+      <li><b>detail ›</b> — jumps to the long-form <b>Detailed Requirements</b> tab where each point expands into sub-tasks mapped 1:1 to tickets.</li>
+      <li><b>Full screen</b> — a clean, read-only markdown view of these high-level requirements for sharing / reading.</li>
     </ul>
   </section>
 
   <!-- ======================= 4.3 HQ REQUIREMENTS FULL SCREEN ======================= -->
   <section class="screen" data-name="HQ — Requirements (full screen)">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Requirements (full-screen reader)</h2>
-    <p class="desc">The full-screen reader for the highest-level project details (<b>HQ-owned</b>): clean, rendered markdown with completion checks inline — for reading and sharing. Editable in HQ.</p>
+    <p class="desc">The full-screen view of Tier-1 requirements: clean, rendered markdown with completion checks inline — for reading and sharing. Toggle to an edit mode that shows the raw markdown side-by-side.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / requirements?view=full</span></div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line2)">
-        <div><b>command-hq</b> <span class="faint">— Project Requirements</span> <span class="pill good" style="font-size:10px">HQ-owned</span></div>
+        <div><b>command-hq</b> <span class="faint">— Project Requirements</span> <span class="pill">v7</span></div>
         <div><span class="btn">✎ Edit</span> <span class="btn" data-go="Project Requirements">✕ Exit full screen</span></div>
       </div>
       <div class="pad" style="max-width:720px;margin:0 auto">
         <h1 style="font-size:22px;margin:8px 0 4px">Project Requirements</h1>
-        <p class="muted" style="margin:0 0 18px">Watch and steer every Claude Code session from anywhere — with every session traced to the work it advances and every goal laddering up to a company outcome.</p>
+        <p class="muted" style="margin:0 0 18px">Watch and steer every Claude Code session from anywhere — with every session traced to a ticket and every ticket to an owned company outcome.</p>
 
         <h2 style="font-size:17px;border-bottom:1px solid var(--line2);padding-bottom:6px">Capture &amp; transport <span class="faint" style="font-size:12px;font-weight:400">· 67%</span></h2>
         <ul style="list-style:none;padding:0;font-size:14px">
-          <li style="padding:4px 0"><span style="color:var(--good)">✓</span> claude+ daemon hosts PTY sessions and survives the terminal closing</li>
+          <li style="padding:4px 0"><span style="color:var(--good)">✓</span> claude+ daemon hosts PTY sessions and survives SSH disconnect</li>
           <li style="padding:4px 0"><span style="color:var(--good)">✓</span> Outbound WebSocket streams every session event to the cloud</li>
           <li style="padding:4px 0"><span class="faint">☐</span> Offline buffering replays events after reconnect</li>
         </ul>
@@ -788,15 +847,15 @@
     </div>
 
     <ul class="anno">
-      <li><b>Reader mode</b> — the HQ-owned high-level goals rendered as clean markdown, no breakdown clutter.</li>
-      <li><b>Checks inline</b> — completion shown read-only here; editing the goals happens in HQ's editor.</li>
+      <li><b>Reader mode</b> — the same Tier-1 content, rendered as clean markdown, no breakdown clutter.</li>
+      <li><b>Checks inline</b> — completion shown but read-only here; editing happens in the markdown editor.</li>
     </ul>
   </section>
 
   <!-- ======================= 4.35 HQ DETAILED REQUIREMENTS ======================= -->
   <section class="screen" data-name="HQ — Project › Detailed Requirements">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Detailed Requirements</h2>
-    <p class="desc">The <b>long form</b> — the breakdown that expands on the high-level goals, rendered straight from the repo's <code>docs/plans/</code>: a top-level document plus lower-level documents. <b>GitHub is the source of truth; HQ just renders it well</b> — read-only, in sync, no edits and no added data. Checkboxes inside those docs (which <code>/update-progress</code> commits to the repo) show as completion.</p>
+    <p class="desc">The <b>long form</b>. It carries the <b>same sections and the same items</b> as Project Requirements, but each high-level point is <b>expanded</b> — a fuller description plus the concrete sub-tasks that deliver it. Every sub-task maps <b>1:1 to a ticket</b>. This view is <b>auto-maintained</b>: <code>/update-progress</code> creates/updates sub-tasks, ticks them when the Definition of Done is verified, and rolls the result back up to the matching high-level item and the overall progress bar.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / requirements/detail</span></div>
@@ -810,6 +869,7 @@
         <a href="#">Overview</a>
         <a href="#">Project Requirements</a>
         <a class="on" href="#">Detailed Requirements</a>
+        <a href="#">Tickets</a>
         <a href="#">Weekly</a>
         <a href="#">Sessions</a>
         <a href="#">Agents</a><a href="#">Skills</a>
@@ -817,70 +877,94 @@
       <div class="pad">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
           <div>
-            <div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">Detailed Requirements</b><span class="pill mono" style="font-size:10px">docs/plans/</span><span class="pill">synced from GitHub · 2h ago</span></div>
-            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ rendered straight from the repo — read-only · checkboxes maintained by <span class="mono">/update-progress</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">Detailed Requirements</b><span class="pill">auto-maintained</span></div>
+            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ mirrors Project Requirements · last synced by <span class="mono">/update-progress</span> 2h ago · <b>12 sub-tasks</b> ↔ 12 tickets</div>
           </div>
-          <div><span class="btn">↗ Open in GitHub</span></div>
+          <div><span class="btn">↻ Run /update-progress</span> <span class="btn" data-go="Project Requirements">↑ Project Requirements</span></div>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:11px;margin:10px 0 4px" class="muted"><span>⟨②⟩ progress · the top doc's <span class="mono">completion:</span> frontmatter (whole project)</span><span><b>58%</b></span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin:10px 0 4px" class="muted"><span>overall · rolls up to the same bar shown on Project Requirements</span><span><b>58%</b></span></div>
         <div class="bar"><i style="width:58%"></i></div>
 
-        <!-- doc browser: docs/plans tree + rendered markdown -->
-        <div style="display:flex;gap:16px;margin-top:16px">
-          <!-- left: docs/plans file tree -->
-          <div style="width:235px;flex:none;font-size:12.5px">
-            <div class="faint" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">⟨③⟩ docs/plans/ &nbsp;<span class="faint">(from GitHub · each doc's <span class="mono">completion:</span>)</span></div>
-            <div style="display:flex;flex-direction:column;gap:1px">
-              <div style="display:flex;justify-content:space-between;padding:4px 8px;border-radius:5px"><span>📄 command-hq-overview.md</span><span class="faint">58%</span></div>
-              <div class="faint" style="padding:2px 8px">▾ command-hq/</div>
-              <div style="display:flex;justify-content:space-between;padding:4px 8px;border-radius:5px;background:#eef4fb;font-weight:600;margin-left:10px"><span>📄 01-plan-mapping.md</span><span class="faint">35%</span></div>
-              <div style="display:flex;justify-content:space-between;padding:4px 8px;margin-left:10px"><span>📄 02-weekly-update.md</span><span class="faint">45%</span></div>
-              <div style="display:flex;justify-content:space-between;padding:4px 8px;margin-left:10px"><span>📄 03-claude-code-integration.md</span><span class="faint">80%</span></div>
-              <div style="display:flex;justify-content:space-between;padding:4px 8px;margin-left:10px"><span>📄 04-claude-cli-wrapper.md</span><span class="faint">75%</span></div>
-              <div style="display:flex;justify-content:space-between;padding:4px 8px;margin-left:10px"><span>📄 05-agentforge.md</span><span class="faint">20%</span></div>
-              <div style="display:flex;justify-content:space-between;padding:4px 8px;margin-left:10px"><span>📄 06-platform-architecture.md</span><span class="faint">85%</span></div>
-            </div>
+        <!-- ===== section: Capture & transport ===== -->
+        <h3 style="margin:18px 0 0;font-size:14px">Capture &amp; transport <span class="faint" style="font-size:11px;font-weight:400">· 67%</span></h3>
+        <div class="hr" style="margin:8px 0"></div>
+
+        <!-- item, expanded -->
+        <div class="box" style="background:#fff;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">
+            <span style="font-size:13.5px"><span class="marker" style="background:var(--good)">✓</span> &nbsp;<b>claude+ daemon hosts PTY sessions and survives SSH disconnect</b></span>
+            <span class="faint" style="font-size:11px">▾ 2/2 done</span>
           </div>
-          <!-- right: rendered markdown of the selected doc -->
-          <div style="flex:1;min-width:0;border-left:1px solid var(--line2);padding-left:16px">
-            <div style="display:flex;justify-content:space-between;align-items:center"><div class="faint mono" style="font-size:11px">docs/plans/command-hq/01-plan-mapping.md</div><span class="pill mono" style="font-size:10px">completion: 35</span></div>
-            <h3 style="margin:4px 0 2px;font-size:16px">Plan Mapping</h3>
-            <p class="muted" style="font-size:12.5px;margin:0 0 10px">How a company goal narrows to a repo goal, then a detailed breakdown — kept honest by <code>/update-progress</code>.</p>
-
-            <div style="font-weight:700;font-size:13px;margin:10px 0 4px">## Capture &amp; transport</div>
-            <div style="font-size:12.5px;display:flex;flex-direction:column;gap:3px;margin-left:2px">
-              <div><span style="color:var(--good)">☑</span> Daemon owns PTY + tmux-style detach/attach</div>
-              <div><span style="color:var(--good)">☑</span> Re-attach restores scrollback + live status</div>
-              <div><span class="faint">☐</span> Offline buffering replays events after reconnect</div>
+          <div class="muted" style="font-size:12.5px;margin:8px 0 10px 26px">The wrapper runs the real <code>claude</code> CLI inside a detached PTY owned by a per-repo daemon, so a session keeps running when the SSH connection drops and can be re-attached from another terminal. Capture (transcripts + hooks) continues uninterrupted across reconnects.</div>
+          <div style="margin-left:26px;display:flex;flex-direction:column;gap:5px">
+            <div style="display:flex;justify-content:space-between;font-size:12.5px">
+              <span><span class="marker" style="background:var(--good);width:15px;height:15px;line-height:15px">✓</span> &nbsp;Daemon owns PTY + tmux-style detach/attach <span class="pill" style="padding:1px 6px">done</span></span>
+              <span class="faint mono">HARNESS-4 · prod-E2E ✓</span>
             </div>
-
-            <div style="font-weight:700;font-size:13px;margin:12px 0 4px">## Strategy alignment</div>
-            <div style="font-size:12.5px;display:flex;flex-direction:column;gap:3px;margin-left:2px">
-              <div><span style="color:var(--good)">☑</span> Plan→outcome matcher</div>
-              <div><span style="color:var(--good)">☑</span> Challenger prompt for unaligned items</div>
-              <div><span class="faint">☐</span> Re-justification flow persists override</div>
-              <div><span class="faint">☐</span> Publish records a conformity score (never blocks)</div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px">
+              <span><span class="marker" style="background:var(--good);width:15px;height:15px;line-height:15px">✓</span> &nbsp;Re-attach restores scrollback + live status <span class="pill" style="padding:1px 6px">done</span></span>
+              <span class="faint mono">HARNESS-9 · prod-E2E ✓</span>
             </div>
-            <div class="faint" style="font-size:11px;margin-top:10px">… rendered GitHub-flavored markdown · a <code>- [x]</code> task item shows as ☑</div>
+            <div class="faint" style="font-size:11px;margin-top:2px;cursor:pointer">＋ add sub-task → creates a ticket</div>
           </div>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨④⟩ Just a renderer:</b> this tab reads the repo's <code>docs/plans/</code> from GitHub and displays it — no edits, no injected data. The only writes come from <code>/update-progress</code> (client-side) pushing completion numbers + <code>- [x]</code> ticks into those docs; HQ shows whatever the files say.</div>
+        <!-- item, collapsed -->
+        <div class="box" style="background:#fff;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">
+            <span style="font-size:13.5px"><span class="marker" style="background:#ededed;color:var(--faint)">◦</span> &nbsp;<b>Offline buffering replays events after reconnect</b></span>
+            <span class="faint" style="font-size:11px">▸ 0/1 done</span>
+          </div>
+        </div>
+
+        <!-- ===== section: Strategy alignment ===== -->
+        <h3 style="margin:18px 0 0;font-size:14px">Strategy alignment <span class="faint" style="font-size:11px;font-weight:400">· 50%</span></h3>
+        <div class="hr" style="margin:8px 0"></div>
+
+        <!-- item, expanded, partial -->
+        <div class="box" style="background:#fff;margin-bottom:10px;border-left:3px solid var(--warn)">
+          <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">
+            <span style="font-size:13.5px"><span class="marker" style="background:var(--warn)">~</span> &nbsp;<b>Weekly update agent validates plan against owned outcomes</b></span>
+            <span class="faint" style="font-size:11px">▾ 2/4 done</span>
+          </div>
+          <div class="muted" style="font-size:12.5px;margin:8px 0 10px 26px">When a user drafts a weekly plan, the agent checks each item against the Supporting Outcomes this repo owns and pushes back on anything unaligned, requiring a justification or a re-anchor before the plan can be published.</div>
+          <div style="margin-left:26px;display:flex;flex-direction:column;gap:5px">
+            <div style="display:flex;justify-content:space-between;font-size:12.5px">
+              <span><span class="marker" style="background:var(--good);width:15px;height:15px;line-height:15px">✓</span> &nbsp;Plan→outcome matcher <span class="pill" style="padding:1px 6px">done</span></span>
+              <span class="faint mono">HARNESS-30 · prod-E2E ✓</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px">
+              <span><span class="marker" style="background:var(--good);width:15px;height:15px;line-height:15px">✓</span> &nbsp;Challenger prompt for unaligned items <span class="pill" style="padding:1px 6px">done</span></span>
+              <span class="faint mono">HARNESS-31 · prod-E2E ✓</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px">
+              <span><span class="marker" style="background:#ededed;color:var(--faint);width:15px;height:15px;line-height:15px">◦</span> &nbsp;Re-justification flow persists override <span class="pill live" style="padding:1px 6px">in&nbsp;review</span></span>
+              <span class="faint mono">HARNESS-32 · prod-E2E pending</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:12.5px">
+              <span><span class="marker" style="background:#ededed;color:var(--faint);width:15px;height:15px;line-height:15px">◦</span> &nbsp;Publish blocks until all items aligned <span class="pill" style="padding:1px 6px">backlog</span></span>
+              <span class="faint mono">HARNESS-33</span>
+            </div>
+            <div class="faint" style="font-size:11px;margin-top:2px;cursor:pointer">＋ add sub-task → creates a ticket</div>
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:6px"><b>⟨②⟩ One-to-one with tickets:</b> every sub-task here <i>is</i> a ticket — open it on the Tickets board, attach a session, link a branch/PR. Completion is never typed in; <code>/update-progress</code> verifies the Definition of Done and ticks it, which lifts the parent item's check on the Project Requirements tab.</div>
       </div>
     </div>
 
     <ul class="anno">
-      <li><b>GitHub is the source of truth</b> — this is the repo's <code>docs/plans/</code> tree (a top-level doc + lower-level docs), rendered read-only and kept in sync.</li>
-      <li><b>A doc browser</b> — pick a doc on the left, read its rendered markdown on the right. No editing, no data added on the page.</li>
-      <li><b>Checks live in the docs</b> — GitHub-flavored <code>- [x]</code> task items render as ☑; <code>/update-progress</code> is the only thing that commits those ticks, after the Definition of Done passes.</li>
-      <li><b>Progress</b> — counted from the checkboxes across these docs; editing the breakdown happens in GitHub.</li>
+      <li><b>Same skeleton, more depth</b> — identical sections and items to Project Requirements, each expanded with a description and its delivering sub-tasks.</li>
+      <li><b>Sub-task = ticket (1:1)</b> — adding a sub-task creates a ticket; the ticket's status drives the sub-task's check.</li>
+      <li><b>Auto-maintained</b> — <code>/update-progress</code> keeps this view, the high-level checks, and the progress bar all in sync from one repo audit.</li>
+      <li><b>Roll-up</b> — sub-task → item → section → overall %, the single bar shared with Project Requirements.</li>
     </ul>
   </section>
 
   <!-- ======================= 4.4 HQ WEEKLY UPDATE ======================= -->
   <section class="screen" data-name="HQ — Project › Weekly Update">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Weekly Update</h2>
-    <p class="desc">The output of the <code>/weekly-update</code> skill. You run it, it <b>interviews</b> you about next week's goals and scores how well they ladder up to this repo's fixed high-level goals (a <b>conformity score</b> — it nudges but never blocks), then auto-writes two halves: <b>Reconciliation</b> — last week's <b>plan vs. actual</b> read from git history (what got done, which requirement items it checked off, how much it moved progress) — and the validated <b>Plan next week</b>. It moves through a lifecycle: <code>DRAFT → LOCKED → RECONCILING → RECONCILED</code>.</p>
+    <p class="desc">A weekly update authored <b>with a Claude agent</b>. You invoke it, talk through what you want to do next week, and the agent <b>pushes back</b> to check your plan against company-wide objectives and this repo's PRD. The finished update has two halves — <b>Done last week</b> (pulled from git history) and <b>Plan next week</b> (the validated plan) — each broken down by strategic alignment and completion.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / weekly</span></div>
@@ -892,32 +976,23 @@
       <div class="subnav">
         <span class="crumb">Projects › command-hq ›&nbsp;</span>
         <a href="#">Overview</a>
-        <a href="#">Project Requirements</a>
-        <a href="#">Detailed Requirements</a>
+        <a href="#">Tickets</a>
         <a class="on" href="#">Weekly</a>
         <a href="#">Sessions</a>
         <a href="#">Agents</a><a href="#">Skills</a>
       </div>
       <div class="pad">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <div class="muted">⟨①⟩ Week of <b>Jun 1, 2026</b> ▾</div>
-          <div><span class="btn">‹ prev week</span> <span class="btn pri">▶ Run /weekly-update</span></div>
-        </div>
-        <!-- lifecycle state machine -->
-        <div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:14px">
-          <span class="pill" style="opacity:.5">DRAFT</span><span class="faint">→</span>
-          <span class="pill" style="opacity:.5">LOCKED</span><span class="faint">→</span>
-          <span class="pill" style="opacity:.5">RECONCILING</span><span class="faint">→</span>
-          <span class="pill good">● RECONCILED</span>
-          <span class="faint" style="margin-left:8px">conformity scored (never blocks) · done reconciled from git</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="muted">⟨①⟩ Week of <b>Jun 1, 2026</b> ▾ &nbsp; <span class="pill good">plan validated</span></div>
+          <div><span class="btn">‹ prev week</span> <span class="btn pri">▶ Draft with agent</span></div>
         </div>
 
         <!-- agent validation dialogue -->
         <div class="box" style="background:#fbfbfa;margin-bottom:14px">
-          <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨②⟩ /weekly-update — interview + conformity score (nudges, never blocks)</div>
+          <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨②⟩ Planning session — agent validates against objectives</div>
           <div style="font-size:13px;margin-top:8px;display:flex;flex-direction:column;gap:8px">
             <div><span class="pill" style="padding:1px 7px">you</span> &nbsp;Next week I want to refactor the design system and tidy up our Storybook.</div>
-            <div class="muted"><span class="pill" style="padding:1px 7px;background:#efe9f6;border-color:#d3c2e6;color:#5b3f86">agent</span> &nbsp;⟨③⟩ That doesn't map to a Supporting Outcome this repo owns. Your PRD owns <b>"ship live steering"</b> and <b>"control round-trip &lt; 250ms"</b>, both under DO 1.1. A design-system refactor advances neither — so I'll log a <b>low conformity score</b> (visible to your manager). You can still proceed, but want to anchor the week on those instead?</div>
+            <div class="muted"><span class="pill" style="padding:1px 7px;background:#efe9f6;border-color:#d3c2e6;color:#5b3f86">agent</span> &nbsp;⟨③⟩ That doesn't map to a Supporting Outcome this repo owns. Your PRD owns <b>"ship live steering"</b> and <b>"control round-trip &lt; 250ms"</b>, both under DO 1.1. A design-system refactor advances neither — and live steering is only 41% with a Q3 deadline. Can we anchor the week there instead?</div>
             <div><span class="pill" style="padding:1px 7px">you</span> &nbsp;Fair. Let's finish the live-watch reducer and the session replay view.</div>
             <div class="muted"><span class="pill" style="padding:1px 7px;background:#efe9f6;border-color:#d3c2e6;color:#5b3f86">agent</span> &nbsp;✓ That maps to <b>Outcome: control round-trip &lt; 250ms</b>. Drafting the plan with alignment + targets…</div>
           </div>
@@ -927,11 +1002,10 @@
           <!-- DONE subsection -->
           <div class="col box" style="background:#fff">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <b>⟨④⟩ Reconciliation — done vs plan</b><span class="faint" style="font-size:11px">actual, from git history</span>
+              <b>⟨④⟩ Done last week</b><span class="faint" style="font-size:11px">from git history</span>
             </div>
-            <div class="muted" style="font-size:12px;margin:6px 0 2px">14 commits · 3 PRs merged · <b>71%</b> of last week's plan delivered</div>
-            <div class="bar" style="margin:6px 0 6px"><i style="width:71%;background:var(--good)"></i></div>
-            <div class="muted" style="font-size:12px;margin-bottom:8px">✓ checked off <b>2</b> requirement items this week — <span class="faint">Live watch panel · State-machine transitions</span> (verified by <span class="mono">/update-progress</span>)</div>
+            <div class="muted" style="font-size:12px;margin:6px 0 2px">14 commits · 3 PRs merged · <b>71%</b> of last week's plan</div>
+            <div class="bar" style="margin:6px 0 10px"><i style="width:71%;background:var(--good)"></i></div>
             <div style="font-size:12.5px;display:flex;flex-direction:column;gap:6px">
               <div style="display:flex;justify-content:space-between"><span>✓ Live watch panel shipped <span class="faint mono">#128</span></span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">ship live steering</span></div>
               <div style="display:flex;justify-content:space-between"><span>✓ State-machine transitions <span class="faint mono">#121</span></span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">DO 1.1</span></div>
@@ -945,14 +1019,14 @@
           <!-- PLAN subsection -->
           <div class="col box" style="background:#fff;border-left:3px solid var(--accent)">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <b>⟨⑥⟩ Plan next week</b><span class="pill good" style="padding:1px 6px">conformity 86%</span>
+              <b>⟨⑥⟩ Plan next week</b><span class="pill good" style="padding:1px 6px">validated</span>
             </div>
             <div class="muted" style="font-size:12px;margin:6px 0 2px">5 commitments · projected <b>+18%</b> on live steering</div>
             <div class="bar" style="margin:6px 0 10px"><i style="width:18%"></i></div>
             <div style="font-size:12.5px;display:flex;flex-direction:column;gap:6px">
-              <div style="display:flex;justify-content:space-between"><span>① Finish live-watch reducer</span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">control round-trip &lt;250ms</span></div>
+              <div style="display:flex;justify-content:space-between"><span>① Finish live-watch reducer <span class="faint mono">HARNESS-42</span></span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">control round-trip &lt;250ms</span></div>
               <div style="display:flex;justify-content:space-between"><span>② Session replay view (scrub history)</span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">control round-trip &lt;250ms</span></div>
-              <div style="display:flex;justify-content:space-between"><span>③ Live control round-trip spike</span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">DO 1.1</span></div>
+              <div style="display:flex;justify-content:space-between"><span>③ Live control round-trip spike <span class="faint mono">HARNESS-45</span></span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">DO 1.1</span></div>
             </div>
             <div class="hr"></div>
             <div class="faint" style="font-size:11px;text-transform:uppercase">Strategic alignment</div>
@@ -960,18 +1034,175 @@
           </div>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨⑦⟩ Publish</b> writes the update to the repo (and rolls its completion up to <b>Company Objectives</b>). The "Done" half is generated, not typed — the agent reads the week's git log; you author the forward plan and a conformity score is recorded for manager visibility. Nothing blocks publish.</div>
+        <div class="note" style="margin-top:14px"><b>⟨⑦⟩ Publish</b> writes the update to the repo (and rolls its completion up to <b>Company Objectives</b>). The "Done" half is generated, not typed — the agent reads the week's git log; you only author the forward plan, and only after it passes the alignment check.</div>
       </div>
     </div>
 
     <ul class="anno">
       <li><b>Week picker</b> — one update per week, with a validated badge once the plan passes the objective check.</li>
-      <li><b>Agent-scored, with nudges</b> — you talk through the plan; the agent scores how well it ladders up to owned outcomes and nudges, but <b>never blocks</b>. The score is manager-visible.</li>
-      <li><b>Real nudge example</b> — it scores the design-system idea low (maps to no owned outcome) and steers toward the under-target, deadline-bound one; you can still proceed.</li>
+      <li><b>Agent-authored, with push-back</b> — you talk through the plan; the agent challenges anything that doesn't ladder up to an owned Supporting Outcome or the company objectives. This is the "validate compliance" step you asked for.</li>
+      <li><b>Real push-back example</b> — it rejects the design-system idea because it maps to no owned outcome, and steers toward the under-target, deadline-bound one.</li>
       <li><b>Done last week (from git)</b> — generated by reading the week's git history, each item tagged to the objective it advanced, with completion vs last week's plan.</li>
       <li><b>Alignment breakdown</b> — both halves show which objectives moved and by how much; this is the strategic-alignment + completion-% breakdown per subsection.</li>
       <li><b>Plan next week (validated)</b> — the forward commitments, each linked to an owned outcome, with projected completion deltas.</li>
       <li><b>Publish + roll-up</b> — feeds the bottom-up percentages on the company Objectives page.</li>
+    </ul>
+  </section>
+
+  <!-- ======================= 4.5 HQ TICKETS BOARD ======================= -->
+  <section class="screen" data-name="HQ — Project › Tickets">
+    <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Tickets (source of truth)</h2>
+    <p class="desc">The Tickets sub-tab of a project — where ticket management actually lives, scoped to this repo. Grouped by the same lifecycle the terminal shows. This is the system of record; the terminal's Tickets tab is just a client over it. Create, prioritize, and triage here; agents pick work up from it.</p>
+
+    <div class="frame browser">
+      <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / tickets</span></div>
+      <div class="appnav">
+        <span class="brand">⌗ Command HQ</span>
+        <a href="#">Objectives</a><a class="on" href="#">Projects</a><a href="#">Sessions</a><a href="#">Agents</a><a href="#">Skills</a>
+        <span class="right"><span class="dot live"></span>3 live</span>
+      </div>
+      <div class="subnav">
+        <span class="crumb">Projects › command-hq ›&nbsp;</span>
+        <a href="#">Overview</a>
+        <a class="on" href="#">Tickets <span class="pill" style="padding:1px 6px">6</span></a>
+        <a href="#">Weekly</a>
+        <a href="#">Sessions</a>
+        <a href="#">Agents</a><a href="#">Skills</a>
+      </div>
+      <div class="pad">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="muted">⟨①⟩ scoped to <b>command-hq</b> &nbsp;·&nbsp; 6 open · 1 in review</div>
+          <div><span class="btn">board ▾</span> <span class="btn">filter ▾</span> <span class="btn pri">+ New ticket</span></div>
+        </div>
+        <div class="grid3" style="align-items:start">
+          <!-- column: backlog -->
+          <div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">⟨②⟩ Backlog · 3</div>
+            <div class="box" style="background:#fff;margin-bottom:8px">
+              <div style="display:flex;justify-content:space-between"><span class="faint mono" style="font-size:11px">HARNESS-45</span><span class="pill" style="border-color:#d8b48a;color:#9a6b1f">● high</span></div>
+              <div style="font-size:13px;margin-top:4px">Objectives roll-up: bottom-up %</div>
+              <div class="faint" style="font-size:11px;margin-top:6px">⟨③⟩ unassigned · <span class="btn" style="padding:2px 7px">▶ start</span></div>
+            </div>
+            <div class="box" style="background:#fff;margin-bottom:8px">
+              <div style="display:flex;justify-content:space-between"><span class="faint mono" style="font-size:11px">HARNESS-46</span><span class="pill">● med</span></div>
+              <div style="font-size:13px;margin-top:4px">Pagination for 2000-row team view</div>
+              <div class="faint" style="font-size:11px;margin-top:6px">unassigned · <span class="btn" style="padding:2px 7px">▶ start</span></div>
+            </div>
+            <div class="box" style="background:#fff">
+              <div style="display:flex;justify-content:space-between"><span class="faint mono" style="font-size:11px">HARNESS-47</span><span class="pill idle">● low</span></div>
+              <div style="font-size:13px;margin-top:4px">Empty-state copy for draft week</div>
+            </div>
+          </div>
+          <!-- column: in progress -->
+          <div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">In progress · 2</div>
+            <div class="box" data-go="Ticket detail" style="background:#fff;margin-bottom:8px;border-left:3px solid var(--live)">
+              <div style="display:flex;justify-content:space-between"><span class="faint mono" style="font-size:11px">HARNESS-42</span><span class="pill" style="border-color:#d8b48a;color:#9a6b1f">● high</span></div>
+              <div style="font-size:13px;margin-top:4px">Live-watch reducer: event ordering</div>
+              <div style="font-size:11px;margin-top:6px" class="muted"><span class="dot live"></span>⟨④⟩ builder · #a91f · 14m <span class="faint">· open ›</span></div>
+            </div>
+            <div class="box" style="background:#fff;border-left:3px solid var(--live)">
+              <div style="display:flex;justify-content:space-between"><span class="faint mono" style="font-size:11px">HARNESS-39</span><span class="pill" style="border-color:#d8b48a;color:#9a6b1f">● high</span></div>
+              <div style="font-size:13px;margin-top:4px">Drive attach→steer flow, file breakage</div>
+              <div style="font-size:11px;margin-top:6px" class="muted"><span class="dot live"></span>ux-tester · #c2d8 · 3m</div>
+            </div>
+          </div>
+          <!-- column: in review / done -->
+          <div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">In review · 1</div>
+            <div class="box" style="background:#fff;margin-bottom:8px;border-left:3px solid var(--accent)">
+              <div style="display:flex;justify-content:space-between"><span class="faint mono" style="font-size:11px">HARNESS-37</span><span class="pill">● med</span></div>
+              <div style="font-size:13px;margin-top:4px">live watch + steer panel</div>
+              <div style="font-size:11px;margin-top:6px" class="muted">⟨⑤⟩ <span class="pill good">PR #128</span> awaiting human merge</div>
+            </div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:12px 0 6px">Done · 12</div>
+            <div class="box" style="background:#fbfbfa">
+              <div style="font-size:12px" class="muted">HARNESS-31 · Event capture ✓<br>HARNESS-28 · Objectives roll-up ✓<br><span class="faint">▸ 10 more</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <ul class="anno">
+      <li><b>Project-scoped</b> — this board belongs to command-hq; you reach it from the project's Tickets sub-tab, not a global nav item. Tickets never span projects.</li>
+
+      <li><b>Lifecycle columns</b> — backlog → in progress → in review → done, mirroring TerMinal's status grouping and the terminal Tickets tab.</li>
+      <li><b>Start from HQ</b> — the same "start a session on this ticket" action as the terminal, triggerable from the web; it dispatches a session on a connected host.</li>
+      <li><b>Live linkage</b> — an in-progress ticket shows the session + agent on it, pulled from the event bus; the card goes live as work happens.</li>
+      <li><b>Human merge gate</b> — agents take a ticket to "PR open" and stop. The merge to main is always yours (the TerMinal rule), surfaced here as "awaiting human merge".</li>
+    </ul>
+    <div class="note"><b>This is the only place tickets are stored.</b> No <code>backlog/*.md</code> in the repo — HQ's DB holds them, exposes a read/write API, and owns the status transitions as sessions and PRs report in.</div>
+  </section>
+
+  <!-- ======================= 4.6 HQ TICKET DETAIL ======================= -->
+  <section class="screen" data-name="HQ — Project › Ticket detail">
+    <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Ticket detail</h2>
+    <p class="desc">One ticket: the spec, its place in the chain, and everything that has acted on it. The hub that connects a unit of work to the sessions, branch, and PR that deliver it. Reached by drilling in from the project's Tickets board.</p>
+
+    <div class="frame browser">
+      <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / tickets / HARNESS-42</span></div>
+      <div class="appnav">
+        <span class="brand">⌗ Command HQ</span>
+        <a href="#">Objectives</a><a class="on" href="#">Projects</a><a href="#">Sessions</a><a href="#">Agents</a><a href="#">Skills</a>
+        <span class="right"><span class="dot live"></span>3 live</span>
+      </div>
+      <div class="subnav">
+        <span class="crumb">Projects › command-hq ›&nbsp;</span>
+        <a href="#">Overview</a>
+        <a class="on" href="#">Tickets</a>
+        <a href="#">Weekly</a>
+        <a href="#">Sessions</a>
+        <a href="#">Agents</a><a href="#">Skills</a>
+        <span class="crumb">&nbsp;&nbsp;›&nbsp; HARNESS-42</span>
+      </div>
+      <div class="row" style="padding:14px;gap:14px">
+        <div class="col" style="flex:2">
+          <div class="box" style="background:#fff">
+            <div style="display:flex;justify-content:space-between;align-items:baseline">
+              <div><span class="faint mono" style="font-size:11px">HARNESS-42 · command-hq</span><h3 style="margin:2px 0">Live-watch reducer: event ordering</h3></div>
+              <div><span class="pill" style="border-color:#d8b48a;color:#9a6b1f">● high</span> <span class="pill live">in progress</span></div>
+            </div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:10px">⟨①⟩ Description</div>
+            <div class="muted" style="font-size:13px;margin-top:6px">Build the live-watch reducer that orders incoming session events deterministically and dedupes on reconnect. Must preserve causal order across buffered replays. Acceptance: vitest green, no dropped or duplicated events.</div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:14px">⟨②⟩ Activity</div>
+            <table style="margin-top:4px">
+              <tr><td style="width:90px" class="faint">14m ago</td><td class="muted"><span class="dot live"></span>session <span class="mono">#a91f</span> started as <b>builder</b></td></tr>
+              <tr><td class="faint">11m ago</td><td class="muted">branch <span class="mono">harness-42-livewatch</span> pushed</td></tr>
+              <tr><td class="faint">2m ago</td><td class="muted">12 tests passing · reducer drafted</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="col" style="flex:1">
+          <div class="box" style="background:#fff;margin-bottom:12px">
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨③⟩ The chain</div>
+            <div style="font-size:13px;margin-top:8px" class="muted">
+              ticket <b>HARNESS-42</b><br><span class="faint">↓</span><br>
+              session <span class="mono">#a91f</span> <span class="pill live" style="font-size:10px">live</span> <span class="btn" style="padding:1px 6px">watch</span><br><span class="faint">↓</span><br>
+              branch <span class="mono">harness-42-livewatch</span><br><span class="faint">↓</span><br>
+              <span class="faint">PR — not opened yet</span>
+            </div>
+          </div>
+          <div class="box" style="background:#fff">
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨④⟩ Actions</div>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+              <span class="btn pri">▶ Start / attach a session</span>
+              <span class="btn">Change priority ▾</span>
+              <span class="btn">Move status ▾</span>
+              <span class="btn">Reassign agent ▾</span>
+            </div>
+            <div class="hr"></div>
+            <div class="faint" style="font-size:11px">edits write to the HQ ticket store · reflected in the terminal instantly</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <ul class="anno">
+      <li><b>Spec</b> — the ticket body + acceptance criteria. This is what seeds the session's goal when you start work on it.</li>
+      <li><b>Activity log</b> — every event that touched the ticket, stitched from the bus: session start, branch push, test runs, PR open.</li>
+      <li><b>The chain visualized</b> — ticket → session → branch → PR, the spine of the whole workflow. Each node links to its live view.</li>
+      <li><b>Actions</b> — start/attach a session, re-prioritize, move status, reassign. All write to the HQ store and round-trip to the terminal.</li>
     </ul>
   </section>
 
@@ -1258,34 +1489,6 @@
           </div>
         </div>
 
-        <!-- ORG: HQ workflow commands -->
-        <div style="display:flex;align-items:center;gap:8px;margin:16px 0 6px">
-          <span class="pill" style="background:#efe9f6;border-color:#d3c2e6;color:#5b3f86">⟨②⟩ ◆ Org · Command HQ workflow commands</span>
-          <span class="faint" style="font-size:12px">the skills that drive plan-mapping, weekly &amp; forge · ship with HQ</span>
-        </div>
-        <div class="grid3">
-          <div class="box" style="background:#fff">
-            <div style="display:flex;justify-content:space-between"><span class="pill skill">/update-progress</span><span class="faint" style="font-size:11px">HQ</span></div>
-            <div class="muted" style="font-size:12px;margin:6px 0">Client-side: Claude computes the completion % from code-vs-docs and pushes it to GitHub (plus a compliance report). HQ reads it; HQ never writes.</div>
-            <div class="faint" style="font-size:11px">scope: <b>org</b> · writes to Requirements (checks + completion %)</div>
-          </div>
-          <div class="box" style="background:#fff">
-            <div style="display:flex;justify-content:space-between"><span class="pill skill">/weekly-update</span><span class="faint" style="font-size:11px">HQ</span></div>
-            <div class="muted" style="font-size:12px;margin:6px 0">Interviews on next-week goals, conformity-checks them, reconciles last week from git.</div>
-            <div class="faint" style="font-size:11px">scope: <b>org</b> · writes the Weekly update</div>
-          </div>
-          <div class="box" style="background:#fff">
-            <div style="display:flex;justify-content:space-between"><span class="pill skill">/sync-requirements</span><span class="faint" style="font-size:11px">HQ</span></div>
-            <div class="muted" style="font-size:12px;margin:6px 0">Pulls a read-only snapshot of HQ-owned requirements down into the repo (HQ → repo).</div>
-            <div class="faint" style="font-size:11px">scope: <b>org</b> · read-only mirror</div>
-          </div>
-          <div class="box" style="background:#fff">
-            <div style="display:flex;justify-content:space-between"><span class="pill skill">▤ forge</span> <span class="faint" style="font-size:11px">bundle · HQ</span></div>
-            <div class="muted" style="font-size:12px;margin:6px 0"><span class="pill skill" style="padding:1px 6px">/startforge</span> <span class="pill skill" style="padding:1px 6px">/endforge</span> — capture a slice → distill a reusable agent.</div>
-            <div class="faint" style="font-size:11px">scope: <b>org</b> · registers forged agents org-wide</div>
-          </div>
-        </div>
-
         <!-- USER SCOPE -->
         <div style="display:flex;align-items:center;gap:8px;margin:16px 0 6px">
           <span class="pill" style="background:#e8f1ec;border-color:#bcd9c2;color:#3f7d4e">⟨③⟩ ● My global · all my repos</span>
@@ -1439,7 +1642,7 @@
 
   // delegated in-mock navigation: makes tabs/nav/buttons behave like a real app
   document.addEventListener('click', e=>{
-    // explicit targets (e.g. cards)
+    // explicit targets (e.g. ticket cards)
     const dg = e.target.closest('[data-go]');
     if(dg){ e.preventDefault(); go(dg.getAttribute('data-go')); return; }
 
@@ -1459,6 +1662,7 @@
       if(t.includes('Overview'))      go('Project detail');
       else if(t.includes('Detailed Requirements')) go('Detailed Requirements');
       else if(t.includes('Requirements')) go('Project Requirements');
+      else if(t.includes('Tickets'))  go('Project › Tickets');
       else if(t.includes('Weekly'))   go('Weekly Update');
       else if(t.includes('Sessions')) go('Project detail');
       else if(t.includes('Skills'))   go('HQ — Skills');
@@ -1470,10 +1674,11 @@
     if(tt){ const t=txt(tt);
       if(t.includes('HQ ')) return;                 // "HQ linked/synced" status pill
       if(t.includes('Session')){ e.preventDefault(); go('— Session tab'); return; }
+      if(t.includes('Tickets')){ e.preventDefault(); go('— Tickets tab'); return; }
       if(t.includes('Agents')){  e.preventDefault(); go('— Agents tab');  return; }
-      if(t.includes('Forge')){   e.preventDefault(); go('AgentForge'); return; }
+      if(t.includes('Forge')){   e.preventDefault(); go('Forge (create'); return; }
       if(t.includes('Stream')){  e.preventDefault(); go('— Stream tab');  return; }
-      // sub-tabs (session ids / "all sessions") and "+ new" just no-op
+      // sub-tabs (HARNESS-xx / "all sessions") and "+ new" just no-op
       return;
     }
     // a few high-value action buttons so flows feel real
@@ -1481,6 +1686,7 @@
     if(btn){ const t=txt(btn).toLowerCase();
       if(t.includes('watch')||t.includes('reply')||t.includes('replay')){ go('Live watch'); return; }
       if(t.includes('start session')||t==='▶ start'||t==='start'){ go('— Session tab'); return; }
+      if(t.includes('new ticket')){ go('Project › Tickets'); return; }
       if(t.includes('new agent')){ go('Agent editor'); return; }
     }
   });
