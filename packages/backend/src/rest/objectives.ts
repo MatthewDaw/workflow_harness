@@ -20,7 +20,7 @@ import { isAdmin } from './scopeauth.js';
  * REST: objectives (U10) — the org-global RCDO tree with cached roll-ups.
  *
  *   GET    /objectives        — the full tree (nested) with cached %
- *   GET    /objectives/:id    — one node + its linked tickets/weekly items
+ *   GET    /objectives/:id    — one node (with its cached roll-up %)
  *   POST   /objectives        — create/update a node (admin only; org-global)
  *   DELETE /objectives/:id    — delete a node (admin only)
  *
@@ -56,14 +56,9 @@ export async function getObjective(
   const node = await deps.repo.getObjective(principal.org, id);
   if (!node) return notFound();
 
-  // Linked work for the node is gathered by the caller's projects (the work the
-  // caller can see). The roll-up projection computes % org-wide; this view is the
-  // owner's slice of the linked tickets/weekly items.
-  const projects = await deps.repo.listProjectsForUser(principal.userId);
-  const ticketsPerProject = await Promise.all(projects.map((p) => deps.repo.listTickets(p.id)));
-  const linkedTickets = ticketsPerProject.flat().filter((t) => t.objectiveId === id);
-
-  return ok({ node, linkedTickets });
+  // The roll-up projection computes the node's cached % org-wide; this view just
+  // serves the node. Completion now derives from project progress, not tickets.
+  return ok({ node });
 }
 
 export async function createObjective(

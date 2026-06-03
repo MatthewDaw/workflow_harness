@@ -68,11 +68,6 @@ export const eventPrefix = (sessionId: string): { PK: string; skPrefix: string }
   skPrefix: 'EVT#',
 });
 
-export const ticketKey = (projectId: string, ticketId: string): PrimaryKey => ({
-  PK: `PROJ#${projectId}`,
-  SK: `TICK#${ticketId}`,
-});
-
 export const agentKey = (scope: ScopeRef, name: string): PrimaryKey => ({
   PK: `SCOPE#${scopeId(scope)}`,
   SK: `AGENT#${name}`,
@@ -158,9 +153,9 @@ export const sessionVectorPrefix = (userId: string): { PK: string; skPrefix: str
 
 /**
  * A `owner/repo` -> projectId pointer (U26). GitHub webhooks identify a repo by
- * its full name, not the harness project id; this record lets the webhook
- * handler resolve the project (and thus its tickets) without a scan. Written
- * when a project connects a repo.
+ * its full name, not the harness project id; this record lets a GitHub-sourced
+ * read resolve the project without a scan. Written when a project connects a
+ * repo.
  */
 export const repoProjectKey = (repoFullName: string): PrimaryKey => ({
   PK: `REPO#${repoFullName}`,

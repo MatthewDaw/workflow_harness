@@ -15,17 +15,20 @@ import {
 } from './runtime.js';
 
 /**
- * REST: weekly updates (U11) — store + publish, scoped to the project owner.
+ * REST: weekly updates (U11, store/serve in U4) — store + publish, scoped to
+ * the project owner.
  *
  *   GET  /projects/:pid/weekly             — all weeks for the project
  *   GET  /projects/:pid/weekly/:week       — one week (e.g. 2026-W23)
- *   PUT  /projects/:pid/weekly/:week       — store a draft (done[]/plan[])
- *   POST /projects/:pid/weekly/:week/publish — mark validated + feed the roll-up
+ *   PUT  /projects/:pid/weekly/:week       — store a posted report (draft)
+ *   POST /projects/:pid/weekly/:week/publish — mark validated + recompute roll-up
  *
- * Each weekly item carries the objective (Supporting Outcome) it advances and a
- * completion %, which are the alignment/completion breakdowns. Publishing flips
- * `validated` true and re-runs the org roll-up so the linked objectives' cached
- * % move (only published weeks contribute — see projections/rollup).
+ * The weekly report is generated client-side by the `/weekly-update` skill and
+ * POSTed here (KTD4): a free-form `done` summary, a `plan` summary, and a
+ * never-blocking `conformityScore`. HQ stores and serves it — it never generates
+ * the content. Publishing flips `validated` true and re-runs the org roll-up
+ * (which now derives objective completion from project progress, not the weekly
+ * report itself). Conformity is a stored number, never a gate.
  */
 
 export interface WeeklyDeps {
@@ -66,8 +69,9 @@ export async function getWeekly(
 }
 
 /**
- * Store a draft for the week. Re-storing overwrites it (idempotent per week).
- * A stored draft is `validated: false`; only publish flips it.
+ * Store a posted report for the week (`done` summary, `plan`, optional
+ * `conformityScore`). Re-storing overwrites it (idempotent per week). A stored
+ * report is `validated: false`; only publish flips it.
  */
 export async function putWeekly(
   event: APIGatewayProxyEventV2,
@@ -99,8 +103,8 @@ export async function putWeekly(
 }
 
 /**
- * Publish the week: mark it validated and re-run the org roll-up so the linked
- * objectives' cached % reflect this week's completion deltas. Re-publishing
+ * Publish the week: mark it validated and re-run the org roll-up so the
+ * objectives' cached % reflect current project progress. Re-publishing
  * overwrites the week (idempotent).
  */
 export async function publishWeekly(
@@ -121,7 +125,7 @@ export async function publishWeekly(
   await deps.repo.putWeekly(published);
 
   // Feed the roll-up (U10). The org is the caller's org; the project set is the
-  // caller's projects so the recompute sees all linked work it can.
+  // caller's projects so the recompute sees all their stored progress.
   const projects = await deps.repo.listProjectsForUser(principal.userId);
   await recomputeOrgRollup(
     deps.repo,
