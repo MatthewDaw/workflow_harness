@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
-import { useGetSessionQuery } from '../../api/baseApi.js';
+import { useGetSessionQuery, useSendControlMutation } from '../../api/baseApi.js';
 import { wsSubscribe, wsUnsubscribe } from '../../ws/liveActions.js';
+import { useAuth } from '../../auth/AuthProvider.js';
 import { Bar, Pill, StatusDot, ScreenHeader } from '../../components/primitives.js';
 
 /**
@@ -14,7 +15,9 @@ import { Bar, Pill, StatusDot, ScreenHeader } from '../../components/primitives.
 export function LiveWatch() {
   const { sessionId = '' } = useParams();
   const dispatch = useDispatch();
+  const { user } = useAuth();
   const { data: session, isLoading } = useGetSessionQuery(sessionId, { skip: !sessionId });
+  const [sendControl] = useSendControlMutation();
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState<string | null>(null);
 
@@ -25,6 +28,11 @@ export function LiveWatch() {
       dispatch(wsUnsubscribe({ sessionId }));
     };
   }, [dispatch, sessionId]);
+
+  // The control gateway authorizes that the requester owns the session (the
+  // server returns 403 otherwise). When the projection carries an owner that
+  // isn't the current user, disable the steer controls up front.
+  const canSteer = !session?.ownerUserId || session.ownerUserId === user?.userId;
 
   return (
     <div className="hq-pad" data-testid="livewatch-screen">
@@ -68,23 +76,41 @@ export function LiveWatch() {
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder="type a message to inject into the live session…"
-                className="my-2 min-h-[54px] w-full rounded-md border border-line p-2 text-xs"
+                disabled={!canSteer}
+                className="my-2 min-h-[54px] w-full rounded-md border border-line p-2 text-xs disabled:opacity-50"
               />
               <div className="flex gap-1.5">
                 <button
                   type="button"
                   className="hq-btn hq-btn-pri"
+                  disabled={!canSteer || message.trim() === ''}
                   onClick={() => {
-                    setSent(message);
+                    const text = message;
+                    void sendControl({ sessionId, action: 'inject', text });
+                    setSent(text);
                     setMessage('');
                   }}
                 >
                   send
                 </button>
-                <button type="button" className="hq-btn">
+                <button
+                  type="button"
+                  className="hq-btn"
+                  disabled={!canSteer}
+                  onClick={() => {
+                    void sendControl({ sessionId, action: 'pause' });
+                  }}
+                >
                   ⏸ pause
                 </button>
-                <button type="button" className="hq-btn">
+                <button
+                  type="button"
+                  className="hq-btn"
+                  disabled={!canSteer}
+                  onClick={() => {
+                    void sendControl({ sessionId, action: 'interrupt' });
+                  }}
+                >
                   ⤓ interrupt
                 </button>
               </div>

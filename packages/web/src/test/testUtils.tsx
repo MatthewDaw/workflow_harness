@@ -80,6 +80,8 @@ export function installFetchStub(seed: SeedData) {
     const proj = /^projects\/([^/]+)$/.exec(path);
     if (proj) return json((seed.projects ?? []).find((p) => p.id === proj[1]) ?? null);
 
+    if (/^sessions\/[^/]+\/control$/.test(path)) return json({ ok: true });
+
     const sess = /^sessions\/([^/]+)$/.exec(path);
     if (sess) return json((seed.sessions ?? []).find((s) => s.sessionId === sess[1]) ?? null);
 

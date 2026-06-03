@@ -1,10 +1,24 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { Envelope, SessionProjection } from '@harness/shared';
 import { LiveWatch } from '../screens/LiveWatch/LiveWatch.js';
 import { wsEvent } from '../ws/liveActions.js';
 import { applyEventToProjection } from '../ws/liveMiddleware.js';
 import { renderWithProviders } from './testUtils.js';
+
+/** Pull the control-frame POSTs the component issued out of the fetch stub. */
+function controlCalls() {
+  const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[][] } };
+  return fetchMock.mock.calls
+    .map((c) => c[0] as { url: string; method?: string; body?: string })
+    .filter((req) => /\/sessions\/[^/]+\/control$/.test(req.url))
+    .map((req) => ({
+      url: req.url,
+      method: req.method,
+      body: typeof req.body === 'string' ? JSON.parse(req.body) : req.body,
+    }));
+}
 
 const SESSION: SessionProjection = {
   sessionId: 'a91f',
@@ -59,5 +73,69 @@ describe('live WS middleware', () => {
     store.dispatch(wsEvent(statusEnvelope(6, 'needs_input')));
 
     await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('needs_input'));
+  });
+});
+
+describe('LiveWatch steer → sendControl', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('dispatches control{inject} with the session id + text on send', async () => {
+    renderWithProviders(<LiveWatch />, {
+      route: '/sessions/a91f',
+      routePath: '/sessions/:sessionId',
+      seed: { sessions: [SESSION] },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('active'));
+
+    const box = screen.getByLabelText('Inject a message into the live session');
+    await userEvent.type(box, 'ship it');
+    await userEvent.click(screen.getByRole('button', { name: 'send' }));
+
+    await waitFor(() => expect(controlCalls()).toHaveLength(1));
+    const call = controlCalls()[0]!;
+    expect(call.method).toBe('POST');
+    expect(call.url).toMatch(/\/sessions\/a91f\/control$/);
+    // sendControl maps `text` into `payload.text` with action 'inject'.
+    expect(call.body).toEqual({ action: 'inject', payload: { text: 'ship it' } });
+  });
+
+  it('dispatches control{pause} and control{interrupt}', async () => {
+    renderWithProviders(<LiveWatch />, {
+      route: '/sessions/a91f',
+      routePath: '/sessions/:sessionId',
+      seed: { sessions: [SESSION] },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('active'));
+
+    await userEvent.click(screen.getByRole('button', { name: /pause/ }));
+    await userEvent.click(screen.getByRole('button', { name: /interrupt/ }));
+
+    await waitFor(() => expect(controlCalls()).toHaveLength(2));
+    const actions = controlCalls().map((c) => c.body.action);
+    expect(actions).toEqual(['pause', 'interrupt']);
+    // pause/interrupt carry no text payload.
+    expect(controlCalls()[0]!.body).toEqual({ action: 'pause', payload: {} });
+    expect(controlCalls()[1]!.body).toEqual({ action: 'interrupt', payload: {} });
+  });
+
+  it('disables steer controls for a session the user does not own (403 path)', async () => {
+    // Mock auth user is `user-matt`; this session is owned by someone else.
+    renderWithProviders(<LiveWatch />, {
+      route: '/sessions/a91f',
+      routePath: '/sessions/:sessionId',
+      seed: { sessions: [{ ...SESSION, ownerUserId: 'user-other' }] },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('active'));
+
+    expect(screen.getByLabelText('Inject a message into the live session')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /pause/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /interrupt/ })).toBeDisabled();
+
+    // Clicking a disabled control fires nothing.
+    await userEvent.click(screen.getByRole('button', { name: /pause/ }));
+    expect(controlCalls()).toHaveLength(0);
   });
 });
