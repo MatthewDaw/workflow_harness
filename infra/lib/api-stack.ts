@@ -141,6 +141,7 @@ export class ApiStack extends cdk.Stack {
     const objectivesFn = makeFn('RestObjectivesFn', 'rest_objectives');
     const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
     const deviceFn = makeFn('RestDeviceFn', 'rest_device');
+    const dodFn = makeFn('RestDodFn', 'rest_dod');
     grantReadWrite(projectsFn);
     grantRead(sessionsFn);
     grantReadWrite(agentsFn);
@@ -148,6 +149,7 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(objectivesFn);
     grantReadWrite(weeklyFn);
     grantReadWrite(deviceFn);
+    grantReadWrite(dodFn);
 
     const region = cdk.Stack.of(this).region;
     const jwtIssuer = `https://cognito-idp.${region}.amazonaws.com/${props.userPool.userPoolId}`;
@@ -235,6 +237,7 @@ export class ApiStack extends cdk.Stack {
     r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope');
 
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
+    r('/dod', [M.GET, M.PUT], dodFn, 'Dod');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
 
     r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly');
