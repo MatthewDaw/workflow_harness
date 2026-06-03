@@ -92,9 +92,9 @@ func (c *Client) Focus(sessID string) error {
 	return writeFrame(c.conn, Frame{Type: FrameFocus, SessID: sessID})
 }
 
-// NewSession asks the daemon to spawn a session, optionally linked to a ticket.
-func (c *Client) NewSession(ticket string) error {
-	return writeFrame(c.conn, Frame{Type: FrameNewSess, Ticket: ticket})
+// NewSession asks the daemon to spawn a session.
+func (c *Client) NewSession() error {
+	return writeFrame(c.conn, Frame{Type: FrameNewSess})
 }
 
 // Detach cleanly detaches, leaving the daemon (and its sessions) running.

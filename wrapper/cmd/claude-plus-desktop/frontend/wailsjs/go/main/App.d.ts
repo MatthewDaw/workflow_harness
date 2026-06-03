@@ -6,7 +6,7 @@ export function Focus(arg1:string):Promise<void>;
 
 export function ListSessions():Promise<Array<daemon.SessInfo>>;
 
-export function NewSession(arg1:string):Promise<void>;
+export function NewSession():Promise<void>;
 
 export function Resize(arg1:number,arg2:number):Promise<void>;
 

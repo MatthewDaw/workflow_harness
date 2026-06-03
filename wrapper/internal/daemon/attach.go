@@ -42,7 +42,6 @@ type Frame struct {
 	Data     string    `json:"data,omitempty"`     // base64 PTY bytes
 	Cols     int       `json:"cols,omitempty"`     // resize
 	Rows     int       `json:"rows,omitempty"`     // resize
-	Ticket   string    `json:"ticket,omitempty"`   // new: optional ticket link
 	Err      string    `json:"err,omitempty"`
 	List     []SessInfo `json:"list,omitempty"` // sessack payload
 }

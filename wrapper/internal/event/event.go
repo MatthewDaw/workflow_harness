@@ -66,7 +66,6 @@ type Event struct {
 	Host      string `json:"host,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Agent     string `json:"agent,omitempty"`
-	Ticket    string `json:"ticket,omitempty"`
 
 	// tool.call
 	Tool        string `json:"tool,omitempty"`
@@ -107,10 +106,10 @@ func f64Ptr(f float64) *float64   { return &f }
 // ----- Event constructors (kept parallel to the TS schemas) -----
 
 // SessionStart builds a session.start event.
-func SessionStart(sessionID, projectID, host, name string, agent, ticket string) Event {
+func SessionStart(sessionID, projectID, host, name string, agent string) Event {
 	return Event{
 		Kind: KindSessionStart, SessionID: sessionID, ProjectID: projectID,
-		Host: host, Name: name, Agent: agent, Ticket: ticket,
+		Host: host, Name: name, Agent: agent,
 	}
 }
 

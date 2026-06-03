@@ -1,6 +1,6 @@
 // Package pty hosts the real `claude` CLI children under creack/pty, multiplexes
 // them within a single daemon, switches focus, auto-names sessions from the
-// first user turn or linked ticket, and propagates SIGWINCH to the focused PTY.
+// first user turn, and propagates SIGWINCH to the focused PTY.
 package pty
 
 import (
@@ -55,13 +55,9 @@ func Slug(text string, maxWords int) string {
 	return strings.Join(out, "-")
 }
 
-// AutoName derives a session name. A linked ticket takes precedence over the
-// first turn (e.g. "WC-42" -> "wc-42"); otherwise the first user turn is
-// slugged. Empty input yields "" so the caller can fall back to a placeholder.
-func AutoName(ticket, firstTurn string) string {
-	if ticket != "" {
-		return Slug(ticket, 4)
-	}
+// AutoName derives a session name by slugging the first user turn. Empty input
+// yields "" so the caller can fall back to a placeholder.
+func AutoName(firstTurn string) string {
 	return Slug(firstTurn, 4)
 }
 

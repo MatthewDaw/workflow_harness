@@ -170,7 +170,7 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader) {
 
 	// Ensure at least one session exists when a client first attaches.
 	if d.mux.Count() == 0 {
-		if _, err := d.mux.Spawn("", ""); err != nil {
+		if _, err := d.mux.Spawn(""); err != nil {
 			d.mux.RemoveSink(clientID)
 			_ = writeFrame(conn, Frame{Type: FrameAck, Err: err.Error()})
 			return
@@ -208,7 +208,7 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader) {
 		case FrameResize:
 			d.mux.Resize(f.Cols, f.Rows)
 		case FrameNewSess:
-			_, _ = d.mux.Spawn("", f.Ticket)
+			_, _ = d.mux.Spawn("")
 			send(Frame{Type: FrameSessAck, List: d.sessInfos()})
 		case FrameSessLs:
 			send(Frame{Type: FrameSessAck, List: d.sessInfos()})

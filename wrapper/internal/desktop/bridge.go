@@ -32,7 +32,7 @@ type attachClient interface {
 	Input(b []byte) error
 	Resize(cols, rows int) error
 	Focus(sessID string) error
-	NewSession(ticket string) error
+	NewSession() error
 	Detach() error
 	Run() error
 	InitialSessions() []daemon.SessInfo
@@ -83,8 +83,8 @@ func (b *Bridge) Resize(cols, rows int) error { return b.c.Resize(cols, rows) }
 // Focus switches the daemon's focused session.
 func (b *Bridge) Focus(sessID string) error { return b.c.Focus(sessID) }
 
-// NewSession spawns a session (optionally linked to a ticket; empty in Phase 1).
-func (b *Bridge) NewSession(ticket string) error { return b.c.NewSession(ticket) }
+// NewSession spawns a session.
+func (b *Bridge) NewSession() error { return b.c.NewSession() }
 
 // ListSessions returns the current session list (seeded from the attach ack).
 func (b *Bridge) ListSessions() []daemon.SessInfo { return b.c.InitialSessions() }

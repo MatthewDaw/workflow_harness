@@ -17,12 +17,12 @@ func TestSlug(t *testing.T) {
 	}
 }
 
-func TestAutoNamePrefersTicket(t *testing.T) {
-	if got := AutoName("WC-42", "add reconciliation view"); got != "wc-42" {
-		t.Errorf("ticket should win, got %q", got)
-	}
-	if got := AutoName("", "add reconciliation view"); got != "reconciliation-view" {
+func TestAutoNameFromFirstTurn(t *testing.T) {
+	if got := AutoName("add reconciliation view"); got != "reconciliation-view" {
 		t.Errorf("first turn slug, got %q", got)
+	}
+	if got := AutoName(""); got != "" {
+		t.Errorf("empty first turn should yield empty name, got %q", got)
 	}
 }
 
