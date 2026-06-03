@@ -1,38 +1,56 @@
 import type { Config } from 'tailwindcss';
 
 /**
- * Design tokens promoted from wireframe.html's `:root` block so the SPA matches
- * the prototype's look. Names mirror the wireframe variables (ink/mut/faint/...).
+ * Design tokens for the Command HQ "Field Command" brand kit: an olive-drab +
+ * brass + parchment palette on stencil/condensed type. Token NAMES are kept
+ * stable (ink/mut/faint/line/bg/paper/accent/good/warn/live/term) so every
+ * screen adopts the brand without per-component changes; only the values change.
+ * Brand-specific names (od/brass/cream/...) are also exposed for accents.
  */
 const config: Config = {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        ink: '#1c1c1c',
-        mut: '#6b6b6b',
-        faint: '#9a9a9a',
-        line: '#cfcfcf',
-        line2: '#e3e3e3',
-        bg: '#f4f4f2',
-        paper: '#ffffff',
-        accent: '#3a6ea5',
-        good: '#3f7d4e',
-        warn: '#9a6b1f',
-        live: '#b5402f',
+        // Core text + surfaces (parchment field).
+        ink: '#2a271d', // dark field ink
+        mut: '#6c6149',
+        faint: '#998b69',
+        line: '#b6a47a',
+        line2: '#d2c29a',
+        bg: '#d7c7a0', // page field
+        paper: '#f7efda', // cards
+        paper2: '#efe4c8', // inset / darker parchment
+
+        // Semantic accents, remapped to the brand.
+        accent: '#b1842f', // brass — links, bars, notes
+        good: '#5b6235', // olive drab — success / online
+        warn: '#8f6921', // dark brass — caution
+        live: '#b5402f', // signal red — live/alert (reads as military)
+
+        // Brand-named tokens for explicit use (wordmark, nav, chips).
+        od: '#5b6235',
+        odd: '#444a26',
+        brass: '#b1842f',
+        brassd: '#8f6921',
+        cream: '#f4eed7',
+
+        // Terminal / live-watch panes: olive-tinted dark.
         term: {
-          bg: '#1b1d22',
-          ink: '#d7dbe0',
-          dim: '#7e8794',
-          acc: '#7fb2e6',
+          bg: '#23271a',
+          ink: '#cdd6b0',
+          dim: '#717a55',
+          acc: '#d8b25a',
         },
       },
       fontFamily: {
-        sans: ['ui-sans-serif', 'system-ui', '"Segoe UI"', 'Roboto', 'Arial', 'sans-serif'],
-        mono: ['ui-monospace', '"SF Mono"', '"Cascadia Code"', 'Consolas', 'monospace'],
+        // Body: condensed humanist; Mono: typewriter; Stencil: stamped headers.
+        sans: ['"Barlow Semi Condensed"', 'system-ui', '"Segoe UI"', 'Roboto', 'Arial', 'sans-serif'],
+        mono: ['"Courier Prime"', 'ui-monospace', 'Consolas', 'monospace'],
+        stencil: ['"Stardos Stencil"', '"Barlow Semi Condensed"', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
-        frame: '0 1px 0 rgba(0,0,0,.03)',
+        frame: '0 2px 0 rgba(42,39,29,.18)',
       },
     },
   },

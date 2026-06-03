@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from './AuthProvider.js';
+import { Wordmark } from '../components/Emblem.js';
 
 /**
  * Auth gate (U19): renders the login form when unauthenticated and the app
@@ -42,7 +43,9 @@ export function LoginGate({ children }: { children: ReactNode }) {
         aria-label="Sign in to Command HQ"
         className="hq-frame w-[340px] p-6"
       >
-        <div className="mb-1 text-lg font-bold tracking-wide">⌗ Command HQ</div>
+        <div className="mb-2">
+          <Wordmark size={34} />
+        </div>
         <div className="mb-5 text-xs text-mut">Sign in to watch &amp; steer your sessions.</div>
 
         <label
