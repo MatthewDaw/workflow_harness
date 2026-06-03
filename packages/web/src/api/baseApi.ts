@@ -57,6 +57,17 @@ export interface ProjectRequirements {
   markdown: string;
 }
 
+/**
+ * One round of the AgentForge optimizer trajectory (U27). Mirrors the backend's
+ * `OptimizeRound`; declared here since the prompt-optimize UI is the sole web
+ * consumer.
+ */
+export interface OptimizeRound {
+  round: number;
+  score: number;
+  critique: string;
+}
+
 function unwrapArray<T>(key: string) {
   return (resp: unknown): T[] => {
     if (Array.isArray(resp)) return resp as T[];
@@ -236,6 +247,22 @@ export const baseApi = createApi({
       invalidatesTags: ['Agent'],
     }),
 
+    /**
+     * Optimize an agent's prompt (AgentForge refine loop, U27). POSTs to
+     * `/agents/{name}/optimize?tier=&id=` (the explicit scope of the agent to
+     * read) and returns the optimized prompt plus the score trajectory. It does
+     * NOT persist — the editor fills the prompt field and the user Saves.
+     */
+    optimizeAgent: build.mutation<
+      { optimizedPrompt: string; score: number; history: OptimizeRound[] },
+      { name: string; scope: ScopeRef }
+    >({
+      query: ({ name, scope }) => ({
+        url: `agents/${encodeURIComponent(name)}/optimize?${scopeQuery(scope)}`,
+        method: 'POST',
+      }),
+    }),
+
     /** Create or update an agent (the editor's Save & sync). */
     saveAgent: build.mutation<Agent, Agent>({
       query: (agent) => ({ url: 'agents', method: 'POST', body: agent }),
@@ -366,6 +393,7 @@ export const {
   useGetProjectRequirementsQuery,
   usePutProjectRequirementsMutation,
   useChangeAgentScopeMutation,
+  useOptimizeAgentMutation,
   useSaveAgentMutation,
   useChangeSkillScopeMutation,
   useAddBundleMemberMutation,

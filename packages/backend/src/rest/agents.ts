@@ -1,3 +1,4 @@
+import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   agentSchema,
@@ -9,6 +10,12 @@ import {
   type ScopeRef,
 } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
+import {
+  bedrockOptimizeDeps,
+  optimizeAgentPrompt,
+  type OptimizeDeps,
+  type OptimizeInput,
+} from '../forge/optimize.js';
 import {
   badRequest,
   created,
@@ -42,6 +49,12 @@ import { canReadScope, canWriteScope, isAdmin } from './scopeauth.js';
 
 export interface AgentsDeps {
   repo: Repo;
+  /**
+   * Injectable optimizer seam for POST /agents/{name}/optimize. Tests pass a
+   * deterministic fake generate/judge; production omits it and the handler falls
+   * back to `bedrockOptimizeDeps` with a live BedrockRuntimeClient.
+   */
+  optimize?: OptimizeDeps;
 }
 
 /** The org/user/project scopes visible to a (caller, project) context. */
@@ -118,6 +131,53 @@ export async function getAgent(
   return ok({ agent });
 }
 
+/**
+ * Optimize a saved agent's prompt (U27 / AgentForge refine loop).
+ *
+ * Loads the agent at an explicit `?tier=&id=` scope (gated by `canReadScope`,
+ * 404 on an unreadable scope to avoid IDOR enumeration), runs the injected
+ * optimizer loop, and returns `{ optimizedPrompt, score, history }`. It does NOT
+ * persist — the user reviews the result in the editor and saves via `saveAgent`.
+ *
+ * The optimizer deps are injectable (`deps.optimize`) so tests pass deterministic
+ * fake generate/judge; the Lambda entry wires `bedrockOptimizeDeps` with a live
+ * BedrockRuntimeClient (which is why the agents Lambda needs bedrock:InvokeModel).
+ */
+export async function optimizeAgent(
+  event: APIGatewayProxyEventV2,
+  deps: AgentsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+  const name = pathParam(event, 'name');
+  const scope = scopeFromQuery(event);
+  if (!name || !scope) return badRequest('missing name or scope');
+
+  if (!(await canReadScope(scope, principal, deps.repo))) return notFound();
+
+  const agent = await deps.repo.getAgent(scope, name);
+  if (!agent) return notFound();
+
+  const input: OptimizeInput = {
+    prompt: agent.prompt,
+    // A short description grounding the judge: the agent's name plus its skills.
+    description: agent.skills.length
+      ? `${agent.name} (skills: ${agent.skills.join(', ')})`
+      : agent.name,
+    skills: agent.skills,
+    evidence: [],
+  };
+
+  const optimizeDeps = deps.optimize ?? bedrockOptimizeDeps(new BedrockRuntimeClient({}));
+  const result = await optimizeAgentPrompt(input, optimizeDeps);
+
+  return ok({
+    optimizedPrompt: result.prompt,
+    score: result.score,
+    history: result.history,
+  });
+}
+
 export async function deleteAgent(
   event: APIGatewayProxyEventV2,
   deps: AgentsDeps,
@@ -185,8 +245,11 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const deps: AgentsDeps = { repo: defaultRepo() };
   const method = event.requestContext.http.method;
   const name = pathParam(event, 'name');
-  const isScopeRoute = event.requestContext.http.path.endsWith('/scope');
+  const path = event.requestContext.http.path;
+  const isScopeRoute = path.endsWith('/scope');
+  const isOptimizeRoute = path.endsWith('/optimize');
 
+  if (method === 'POST' && isOptimizeRoute) return optimizeAgent(event, deps);
   if (method === 'POST' && isScopeRoute) return changeScope(event, deps);
   if (method === 'POST') return createAgent(event, deps);
   if (method === 'PUT') return createAgent(event, deps); // upsert
