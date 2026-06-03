@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 45
+completion: 85
 feature: weekly-update
 ---
 

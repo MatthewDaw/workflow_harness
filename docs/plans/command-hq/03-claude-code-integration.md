@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 80
+completion: 93
 feature: claude-code-integration
 ---
 

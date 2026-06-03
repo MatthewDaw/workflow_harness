@@ -2,7 +2,7 @@
 status: active
 type: overview
 created: 2026-06-02
-completion: 58
+completion: 83
 ---
 
 > **completion: 58%** — this top-of-`docs/plans/` file represents the requirements

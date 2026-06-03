@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 20
+completion: 93
 feature: agentforge
 ground-truth: this doc (folds in the former docs/brainstorms/2026-06-02-forge-commands-requirements.md)
 origin: ../../ideation/2026-06-02-forge-agent-distillation.md

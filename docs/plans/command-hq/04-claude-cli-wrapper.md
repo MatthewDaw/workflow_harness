@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 75
+completion: 82
 feature: claude-cli-wrapper
 ---
 
