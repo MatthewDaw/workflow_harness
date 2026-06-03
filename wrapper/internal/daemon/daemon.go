@@ -24,8 +24,8 @@ type Daemon struct {
 	sock     string
 	started  time.Time
 
-	ln   net.Listener
-	mux  *pty.Mux
+	ln  net.Listener
+	mux *pty.Mux
 
 	mu      sync.Mutex
 	clients map[string]net.Conn // attach client connections by id

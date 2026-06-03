@@ -11,25 +11,25 @@ import (
 
 // fakeClient implements attachClient for tests.
 type fakeClient struct {
-	mu       sync.Mutex
-	out      func(sessID string, b []byte)
-	onSess   func([]daemon.SessInfo)
-	onEvent  func(event.Envelope)
-	onStatus func(daemon.StatusSnapshot)
-	inputs   [][]byte
-	focuses  []string
-	newCount int
-	renames  [][2]string
-	resizes  [][2]int
-	closes   []string
+	mu        sync.Mutex
+	out       func(sessID string, b []byte)
+	onSess    func([]daemon.SessInfo)
+	onEvent   func(event.Envelope)
+	onStatus  func(daemon.StatusSnapshot)
+	inputs    [][]byte
+	focuses   []string
+	newCount  int
+	renames   [][2]string
+	resizes   [][2]int
+	closes    []string
 	shutdowns int
-	sessions []daemon.SessInfo
+	sessions  []daemon.SessInfo
 }
 
 func (f *fakeClient) SetHandlers(out func(string, []byte), onSess func([]daemon.SessInfo)) {
 	f.out, f.onSess = out, onSess
 }
-func (f *fakeClient) SetEventHandler(fn func(event.Envelope))           { f.onEvent = fn }
+func (f *fakeClient) SetEventHandler(fn func(event.Envelope))         { f.onEvent = fn }
 func (f *fakeClient) SetStatusHandler(fn func(daemon.StatusSnapshot)) { f.onStatus = fn }
 func (f *fakeClient) Input(b []byte) error {
 	f.mu.Lock()
@@ -37,14 +37,17 @@ func (f *fakeClient) Input(b []byte) error {
 	f.inputs = append(f.inputs, append([]byte(nil), b...))
 	return nil
 }
-func (f *fakeClient) Resize(c, r int) error             { f.resizes = append(f.resizes, [2]int{c, r}); return nil }
-func (f *fakeClient) Focus(id string) error             { f.focuses = append(f.focuses, id); return nil }
-func (f *fakeClient) NewSession() error           { f.newCount++; return nil }
-func (f *fakeClient) Rename(id, name string) error      { f.renames = append(f.renames, [2]string{id, name}); return nil }
-func (f *fakeClient) CloseSession(id string) error      { f.closes = append(f.closes, id); return nil }
-func (f *fakeClient) Shutdown() error                   { f.shutdowns++; return nil }
-func (f *fakeClient) Detach() error                     { return nil }
-func (f *fakeClient) Run() error                        { return nil }
+func (f *fakeClient) Resize(c, r int) error { f.resizes = append(f.resizes, [2]int{c, r}); return nil }
+func (f *fakeClient) Focus(id string) error { f.focuses = append(f.focuses, id); return nil }
+func (f *fakeClient) NewSession() error     { f.newCount++; return nil }
+func (f *fakeClient) Rename(id, name string) error {
+	f.renames = append(f.renames, [2]string{id, name})
+	return nil
+}
+func (f *fakeClient) CloseSession(id string) error       { f.closes = append(f.closes, id); return nil }
+func (f *fakeClient) Shutdown() error                    { f.shutdowns++; return nil }
+func (f *fakeClient) Detach() error                      { return nil }
+func (f *fakeClient) Run() error                         { return nil }
 func (f *fakeClient) InitialSessions() []daemon.SessInfo { return f.sessions }
 
 // fakeEmitter records events emitted to the webview.

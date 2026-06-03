@@ -33,41 +33,41 @@ const ProtocolVersion = 3
 type FrameType string
 
 const (
-	FramePing    FrameType = "ping"    // client -> daemon liveness probe
-	FramePong    FrameType = "pong"    // daemon -> client liveness reply (carries session count + protocol version)
-	FrameHello   FrameType = "hello"   // client -> daemon attach handshake
-	FrameAck     FrameType = "ack"     // daemon -> client handshake reply
-	FrameFocus   FrameType = "focus"   // client -> daemon switch focused session
-	FrameResize  FrameType = "resize"  // client -> daemon SIGWINCH dimensions
-	FrameNewSess FrameType = "new"     // client -> daemon spawn a session
-	FrameRename  FrameType = "rename"  // client -> daemon manual session rename
-	FrameKill    FrameType = "kill"     // client -> daemon force-close one session (uses SessID)
+	FramePing     FrameType = "ping"     // client -> daemon liveness probe
+	FramePong     FrameType = "pong"     // daemon -> client liveness reply (carries session count + protocol version)
+	FrameHello    FrameType = "hello"    // client -> daemon attach handshake
+	FrameAck      FrameType = "ack"      // daemon -> client handshake reply
+	FrameFocus    FrameType = "focus"    // client -> daemon switch focused session
+	FrameResize   FrameType = "resize"   // client -> daemon SIGWINCH dimensions
+	FrameNewSess  FrameType = "new"      // client -> daemon spawn a session
+	FrameRename   FrameType = "rename"   // client -> daemon manual session rename
+	FrameKill     FrameType = "kill"     // client -> daemon force-close one session (uses SessID)
 	FrameShutdown FrameType = "shutdown" // client -> daemon terminate all sessions + stop daemon
-	FrameInput   FrameType = "input"   // client -> daemon PTY stdin bytes (base64)
-	FrameOutput  FrameType = "output"  // daemon -> client PTY stdout bytes (base64)
-	FrameDetach  FrameType = "detach"  // client -> daemon clean detach (daemon keeps running)
-	FrameSessLs  FrameType = "sessls"  // client -> daemon list sessions
-	FrameSessAck FrameType = "sessack" // daemon -> client session list reply
-	FrameEvent   FrameType = "event"   // daemon -> client captured event envelope (JSON)
-	FrameStatus  FrameType = "status"  // daemon -> client meter snapshot (tokens/cost/drift)
-	FrameHook    FrameType = "hook"    // hook shim -> daemon Claude Code hook payload (JSON)
+	FrameInput    FrameType = "input"    // client -> daemon PTY stdin bytes (base64)
+	FrameOutput   FrameType = "output"   // daemon -> client PTY stdout bytes (base64)
+	FrameDetach   FrameType = "detach"   // client -> daemon clean detach (daemon keeps running)
+	FrameSessLs   FrameType = "sessls"   // client -> daemon list sessions
+	FrameSessAck  FrameType = "sessack"  // daemon -> client session list reply
+	FrameEvent    FrameType = "event"    // daemon -> client captured event envelope (JSON)
+	FrameStatus   FrameType = "status"   // daemon -> client meter snapshot (tokens/cost/drift)
+	FrameHook     FrameType = "hook"     // hook shim -> daemon Claude Code hook payload (JSON)
 )
 
 // Frame is a single control message on the attach channel.
 type Frame struct {
-	Type     FrameType  `json:"type"`
-	Version  int        `json:"v,omitempty"`        // hello/ack: ProtocolVersion
-	Sessions int        `json:"sessions,omitempty"` // pong: live session count
-	SessID   string     `json:"sessId,omitempty"`   // focus/input/output/rename target
-	Name     string     `json:"name,omitempty"`     // rename: new session name
-	Data     string     `json:"data,omitempty"`     // base64 PTY bytes
-	Cols     int        `json:"cols,omitempty"`     // resize
-	Rows     int        `json:"rows,omitempty"`     // resize
-	Err      string     `json:"err,omitempty"`
-	List     []SessInfo `json:"list,omitempty"` // sessack payload
-	EvJSON   string     `json:"ev,omitempty"`   // event: marshaled event.Envelope
+	Type     FrameType       `json:"type"`
+	Version  int             `json:"v,omitempty"`        // hello/ack: ProtocolVersion
+	Sessions int             `json:"sessions,omitempty"` // pong: live session count
+	SessID   string          `json:"sessId,omitempty"`   // focus/input/output/rename target
+	Name     string          `json:"name,omitempty"`     // rename: new session name
+	Data     string          `json:"data,omitempty"`     // base64 PTY bytes
+	Cols     int             `json:"cols,omitempty"`     // resize
+	Rows     int             `json:"rows,omitempty"`     // resize
+	Err      string          `json:"err,omitempty"`
+	List     []SessInfo      `json:"list,omitempty"`   // sessack payload
+	EvJSON   string          `json:"ev,omitempty"`     // event: marshaled event.Envelope
 	Status   *StatusSnapshot `json:"status,omitempty"` // status: meter snapshot
-	Hook     string     `json:"hook,omitempty"` // hook: raw Claude Code hook payload (JSON)
+	Hook     string          `json:"hook,omitempty"`   // hook: raw Claude Code hook payload (JSON)
 }
 
 // SessInfo is the public view of a session for the client's sub-tab row.

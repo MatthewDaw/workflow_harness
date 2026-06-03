@@ -140,18 +140,18 @@ func (a *clientAdapter) SetHandlers(out func(string, []byte), onSess func([]daem
 	a.c.Out = out
 	a.c.OnSessions = onSess
 }
-func (a *clientAdapter) SetEventHandler(fn func(event.Envelope))          { a.c.OnEvent = fn }
+func (a *clientAdapter) SetEventHandler(fn func(event.Envelope))         { a.c.OnEvent = fn }
 func (a *clientAdapter) SetStatusHandler(fn func(daemon.StatusSnapshot)) { a.c.OnStatus = fn }
-func (a *clientAdapter) Input(b []byte) error               { return a.c.Input(b) }
-func (a *clientAdapter) Resize(cols, rows int) error        { return a.c.Resize(cols, rows) }
-func (a *clientAdapter) Focus(sessID string) error          { return a.c.Focus(sessID) }
-func (a *clientAdapter) NewSession() error     { return a.c.NewSession() }
-func (a *clientAdapter) Rename(sessID, name string) error   { return a.c.Rename(sessID, name) }
-func (a *clientAdapter) CloseSession(sessID string) error   { return a.c.CloseSession(sessID) }
-func (a *clientAdapter) Shutdown() error                    { return a.c.Shutdown() }
-func (a *clientAdapter) Detach() error                      { return a.c.Detach() }
-func (a *clientAdapter) Run() error                         { return a.c.Run() }
-func (a *clientAdapter) InitialSessions() []daemon.SessInfo { return a.c.Sessions }
+func (a *clientAdapter) Input(b []byte) error                            { return a.c.Input(b) }
+func (a *clientAdapter) Resize(cols, rows int) error                     { return a.c.Resize(cols, rows) }
+func (a *clientAdapter) Focus(sessID string) error                       { return a.c.Focus(sessID) }
+func (a *clientAdapter) NewSession() error                               { return a.c.NewSession() }
+func (a *clientAdapter) Rename(sessID, name string) error                { return a.c.Rename(sessID, name) }
+func (a *clientAdapter) CloseSession(sessID string) error                { return a.c.CloseSession(sessID) }
+func (a *clientAdapter) Shutdown() error                                 { return a.c.Shutdown() }
+func (a *clientAdapter) Detach() error                                   { return a.c.Detach() }
+func (a *clientAdapter) Run() error                                      { return a.c.Run() }
+func (a *clientAdapter) InitialSessions() []daemon.SessInfo              { return a.c.Sessions }
 
 // hasDangerousFlag reports whether --dangerously-skip-permissions appears in the
 // process args (single- or double-dash). Used to enter dangerous mode when the

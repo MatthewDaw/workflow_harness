@@ -33,9 +33,9 @@ type Mux struct {
 // dropped frame is harmless: claude is a full-screen TUI that repaints, so the
 // next frame reconstructs the screen.
 type sink struct {
-	id  string
-	fn  func(sessID string, b []byte)
-	ch  chan sinkFrame
+	id   string
+	fn   func(sessID string, b []byte)
+	ch   chan sinkFrame
 	done chan struct{}
 }
 

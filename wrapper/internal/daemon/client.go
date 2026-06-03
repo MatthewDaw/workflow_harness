@@ -24,6 +24,12 @@ type Client struct {
 	conn net.Conn
 	r    *bufio.Reader
 
+	// done is closed by Run when its read loop returns (the daemon closed the
+	// conn). Shutdown selects on it to wait for the daemon to acknowledge the
+	// shutdown frame by closing the conn, WITHOUT issuing a second concurrent
+	// read on c.r — only Run owns the reader. See Shutdown.
+	done chan struct{}
+
 	// Out receives decoded PTY output bytes (tagged with the session id) for
 	// rendering. Every session streams, so the client routes by id.
 	Out func(sessID string, b []byte)
@@ -113,7 +119,7 @@ func dialSock(sock string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{conn: conn, r: bufio.NewReader(conn)}
+	c := &Client{conn: conn, r: bufio.NewReader(conn), done: make(chan struct{})}
 	if err := writeFrame(conn, Frame{Type: FrameHello, Version: ProtocolVersion}); err != nil {
 		conn.Close()
 		return nil, err
@@ -197,18 +203,29 @@ func (c *Client) CloseSession(sessID string) error {
 
 // Shutdown asks the daemon to terminate every session and stop its process
 // (claude+ quit). It writes the shutdown frame, then waits briefly for the
-// daemon to close the connection (a short read deadline) before returning, so
-// the desktop process does not race-exit before the frame flushes. A write or
-// read error on the dying connection is best-effort and ignored.
+// daemon to close the connection before returning, so the desktop process does
+// not race-exit before the frame flushes. A write error on the dying connection
+// is best-effort and ignored.
+//
+// On the desktop quit path Run is concurrently blocked reading the same
+// connection (app.go starts `go bridge.Run()` for the app's lifetime). Shutdown
+// must therefore NOT touch c.r itself — bufio.Reader is not safe for concurrent
+// use. Instead it waits on c.done, which Run closes when its read loop returns
+// after the daemon (which sends no reply to FrameShutdown) closes the conn. That
+// keeps a single reader on c.r while still flushing/acting on the frame before
+// exit. If no Run goroutine is active, the wait falls through on the timeout.
 func (c *Client) Shutdown() error {
 	if err := writeFrame(c.conn, Frame{Type: FrameShutdown}); err != nil {
 		c.conn.Close()
 		return err
 	}
-	// Block until the daemon closes the conn (EOF) or a short grace elapses, so
-	// the frame is flushed and acted on before the process exits.
-	_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, _ = c.r.ReadByte()
+	// Block until Run observes the daemon closing the conn (c.done) or a short
+	// grace elapses, so the frame is flushed and acted on before the process
+	// exits. We do not read c.r here — Run owns it.
+	select {
+	case <-c.done:
+	case <-time.After(2 * time.Second):
+	}
 	c.conn.Close()
 	return nil
 }
@@ -224,6 +241,12 @@ func (c *Client) Detach() error {
 // the connection closes. Call Out/OnSessions before Run. Returns ErrDetached on
 // a clean local detach (the caller decides; Run itself returns on conn close).
 func (c *Client) Run() error {
+	// Signal Shutdown (which must not read c.r concurrently) that the reader has
+	// returned — i.e. the daemon closed the conn. Guard the nil case for Clients
+	// built without dialSock.
+	if c.done != nil {
+		defer close(c.done)
+	}
 	for {
 		f, err := readFrame(c.r)
 		if err != nil {
