@@ -32,6 +32,11 @@ type Daemon struct {
 	eventSinks map[string]func(event.Envelope) // local event subscribers by id
 	recent     []event.Envelope                // bounded replay buffer for new subscribers
 
+	statusMu sync.Mutex
+	sTokens  int64   // cumulative tokens (from cost.tick)
+	sUSD     float64 // cumulative cost USD (sum of cost.tick deltas)
+	sDrift   int     // agents/skills out of sync (set by the config layer)
+
 	stopCh chan struct{}
 }
 
@@ -192,6 +197,10 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 		if b, err := env.Marshal(); err == nil {
 			send(Frame{Type: FrameEvent, EvJSON: string(b)})
 		}
+		// Status changes are driven by events, so push a fresh meter snapshot
+		// alongside each forwarded event.
+		st := d.Status()
+		send(Frame{Type: FrameStatus, Status: &st})
 	})
 
 	// Ensure at least one session exists when a client first attaches.
@@ -222,6 +231,8 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 	}()
 
 	send(Frame{Type: FrameAck, Version: ProtocolVersion, Sessions: d.mux.Count(), List: d.sessInfosFor(clientID)})
+	initStatus := d.Status()
+	send(Frame{Type: FrameStatus, Status: &initStatus})
 
 	for {
 		f, err := readFrame(r)

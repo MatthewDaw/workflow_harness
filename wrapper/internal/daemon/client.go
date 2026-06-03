@@ -32,6 +32,8 @@ type Client struct {
 	// OnEvent receives captured event envelopes (the Stream panel). Optional —
 	// the terminal client leaves it nil and ignores event frames.
 	OnEvent func(env event.Envelope)
+	// OnStatus receives meter snapshots (tokens/cost/drift). Optional.
+	OnStatus func(StatusSnapshot)
 
 	// Sessions is the session list from the attach ack (consumed during the
 	// handshake, before Run starts), so the caller can seed the sub-tab row.
@@ -139,6 +141,10 @@ func (c *Client) Run() error {
 				if json.Unmarshal([]byte(f.EvJSON), &env) == nil {
 					c.OnEvent(env)
 				}
+			}
+		case FrameStatus:
+			if c.OnStatus != nil && f.Status != nil {
+				c.OnStatus(*f.Status)
 			}
 		}
 	}

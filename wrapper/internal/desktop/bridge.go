@@ -16,6 +16,7 @@ const (
 	EventOutput   = "pty:output"
 	EventSessions = "sessions:update"
 	EventStream   = "stream:event"
+	EventStatus   = "status:update"
 )
 
 // OutputEvent carries a chunk of a session's PTY output to the webview. Bytes
@@ -32,6 +33,7 @@ type OutputEvent struct {
 type attachClient interface {
 	SetHandlers(out func(sessID string, b []byte), onSessions func([]daemon.SessInfo))
 	SetEventHandler(fn func(env event.Envelope))
+	SetStatusHandler(fn func(s daemon.StatusSnapshot))
 	Input(b []byte) error
 	Resize(cols, rows int) error
 	Focus(sessID string) error
@@ -72,6 +74,9 @@ func (b *Bridge) Start() {
 	)
 	b.c.SetEventHandler(func(env event.Envelope) {
 		b.em.Emit(EventStream, env)
+	})
+	b.c.SetStatusHandler(func(s daemon.StatusSnapshot) {
+		b.em.Emit(EventStatus, s)
 	})
 }
 

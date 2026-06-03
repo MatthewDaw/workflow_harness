@@ -107,7 +107,8 @@ func (a *clientAdapter) SetHandlers(out func(string, []byte), onSess func([]daem
 	a.c.Out = out
 	a.c.OnSessions = onSess
 }
-func (a *clientAdapter) SetEventHandler(fn func(event.Envelope)) { a.c.OnEvent = fn }
+func (a *clientAdapter) SetEventHandler(fn func(event.Envelope))          { a.c.OnEvent = fn }
+func (a *clientAdapter) SetStatusHandler(fn func(daemon.StatusSnapshot)) { a.c.OnStatus = fn }
 func (a *clientAdapter) Input(b []byte) error               { return a.c.Input(b) }
 func (a *clientAdapter) Resize(cols, rows int) error        { return a.c.Resize(cols, rows) }
 func (a *clientAdapter) Focus(sessID string) error          { return a.c.Focus(sessID) }

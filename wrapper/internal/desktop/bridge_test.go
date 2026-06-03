@@ -15,6 +15,7 @@ type fakeClient struct {
 	out      func(sessID string, b []byte)
 	onSess   func([]daemon.SessInfo)
 	onEvent  func(event.Envelope)
+	onStatus func(daemon.StatusSnapshot)
 	inputs   [][]byte
 	focuses  []string
 	newCount int
@@ -25,7 +26,8 @@ type fakeClient struct {
 func (f *fakeClient) SetHandlers(out func(string, []byte), onSess func([]daemon.SessInfo)) {
 	f.out, f.onSess = out, onSess
 }
-func (f *fakeClient) SetEventHandler(fn func(event.Envelope)) { f.onEvent = fn }
+func (f *fakeClient) SetEventHandler(fn func(event.Envelope))           { f.onEvent = fn }
+func (f *fakeClient) SetStatusHandler(fn func(daemon.StatusSnapshot)) { f.onStatus = fn }
 func (f *fakeClient) Input(b []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -129,6 +131,20 @@ func TestBridgeForwardsEventsToStream(t *testing.T) {
 	em.mu.Lock()
 	defer em.mu.Unlock()
 	if len(em.events) != 1 || em.events[0].name != EventStream {
+		t.Fatalf("events = %+v", em.events)
+	}
+}
+
+func TestBridgeForwardsStatus(t *testing.T) {
+	fc := &fakeClient{}
+	em := &fakeEmitter{}
+	b := New(fc, em)
+	b.Start()
+	fc.onStatus(daemon.StatusSnapshot{Tokens: 42, CostUSD: 1.5, Drift: 2})
+
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	if len(em.events) != 1 || em.events[0].name != EventStatus {
 		t.Fatalf("events = %+v", em.events)
 	}
 }

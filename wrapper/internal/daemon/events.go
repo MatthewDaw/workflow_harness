@@ -12,6 +12,7 @@ const maxRecentEvents = 200
 // independent of whether HQ credentials exist — local subscribers (attach
 // clients) see events even with no `claude+ login`.
 func (d *Daemon) PublishEvent(env event.Envelope) {
+	d.updateStatus(env)
 	d.evMu.Lock()
 	d.recent = append(d.recent, env)
 	if len(d.recent) > maxRecentEvents {
