@@ -7,28 +7,7 @@ import type { GitCommit, ProjectFraming } from '@harness/shared';
  * `PROGRESS.md`) and raw commit listings into the harness's framing + attributed
  * `GitCommit` shapes. The network is isolated in `app.ts`; everything here is
  * unit-testable against recorded fixtures with no I/O.
- *
- * Linking convention (plan KTD9 / R6): a commit, branch, or PR is attributed to
- * a ticket when it mentions that ticket's id. The id convention is an uppercase
- * project key plus a number, e.g. `WC-37`. We never guess: a commit with no id
- * match is left unattributed (the Weekly "done" view surfaces those separately
- * rather than mis-assigning them).
  */
-
-/** Matches ticket ids like `WC-37`, `HARNESS-1`, anchored to a word boundary. */
-export const TICKET_ID_RE = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
-
-/** Extract every distinct ticket id referenced in a blob of text (branch/PR/msg). */
-export function extractTicketIds(...texts: (string | undefined)[]): string[] {
-  const ids = new Set<string>();
-  for (const text of texts) {
-    if (!text) continue;
-    for (const m of text.matchAll(TICKET_ID_RE)) {
-      if (m[1]) ids.add(m[1]);
-    }
-  }
-  return [...ids];
-}
 
 /**
  * Parse a project's `PRD.md`. We read the first H1/`Goal:` line as the goal and
@@ -145,9 +124,8 @@ export interface RawCommit {
 }
 
 /**
- * Normalize raw GitHub commits into attributed `GitCommit`s. Ticket ids are
- * parsed from the commit message (and any provided ref). Used by the Weekly
- * "done" assembly (U28).
+ * Normalize raw GitHub commits into `GitCommit`s. Used by the Weekly "done"
+ * assembly (U28).
  */
 export function attributeCommits(raw: RawCommit[]): GitCommit[] {
   return raw.map((c) => ({

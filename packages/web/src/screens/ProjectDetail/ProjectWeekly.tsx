@@ -27,9 +27,9 @@ export function ProjectWeekly() {
             </Pill>
           )}
         </div>
-        <button type="button" className="hq-btn hq-btn-pri">
-          ▶ Draft with agent
-        </button>
+        <span className="text-mut text-[12.5px]">
+          Run <code>/weekly-update</code> in claude+ to draft this report.
+        </span>
       </div>
       {isLoading && <div className="text-mut">Loading…</div>}
       {latest && (

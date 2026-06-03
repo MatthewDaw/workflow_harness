@@ -41,6 +41,16 @@ export const instanceKey = (projectId: string, host: string): PrimaryKey => ({
   SK: `INST#${host}`,
 });
 
+/**
+ * HQ-owned high-level requirements markdown for a project (U10). HQ is the
+ * source of truth for this doc (unlike the GitHub-sourced detailed-requirements
+ * tree), so it lives in the project partition under a fixed meta SK.
+ */
+export const projectRequirementsKey = (projectId: string): PrimaryKey => ({
+  PK: `PROJ#${projectId}`,
+  SK: 'REQUIREMENTS',
+});
+
 export const sessionKey = (projectId: string, sessionId: string): PrimaryKey => ({
   PK: `PROJ#${projectId}`,
   SK: `SESS#${sessionId}`,

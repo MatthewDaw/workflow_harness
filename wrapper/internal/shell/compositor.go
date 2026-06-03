@@ -18,7 +18,9 @@ const (
 	chromeRows = 3 // tab bar + sub-tabs + status line
 )
 
-var tabNames = []string{"Session", "Agents", "Forge", "Stream"}
+// Fuzzy read-side "Forge" is hidden in the live shell per the current model
+// (Forge is driven from the /startforge–/endforge PTY flow, not a tab).
+var tabNames = []string{"Session", "Agents", "Stream"}
 
 // Palette (256-color indices).
 const (

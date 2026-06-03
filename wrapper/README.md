@@ -40,7 +40,6 @@ internal/pty/         PTY multiplexing, lifecycle, auto-name          (U13)
 internal/capture/     JSONL transcript tail + settings.json hooks     (U14)
 internal/transport/   outbound WS client, on-disk ring buffer,
                       control receiver (inject/pause/interrupt)        (U14/U15)
-internal/tui/         Bubble Tea tabs + session sub-tabs + status line (U16)
 internal/config/      ~/.claude agents+skills sync, drift detection    (U17)
 ```
 

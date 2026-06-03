@@ -73,6 +73,45 @@ describe('ApiStack', () => {
     });
   });
 
+  test('routes the project-scoped requirements/refresh/docs handlers', () => {
+    // These backend handlers (rest_projects) were implemented but unrouted; the
+    // HTTP API must expose them as project-scoped routes.
+    for (const routeKey of [
+      'GET /projects/{id}/requirements',
+      'PUT /projects/{id}/requirements',
+      'POST /projects/{id}/refresh',
+      'GET /projects/{id}/docs',
+      'GET /projects/{id}/docs/content',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+      });
+    }
+  });
+
+  test('scopes the weekly routes under /projects/{pid} (rest_weekly)', () => {
+    // The weekly handler requires a `pid` path param; the routes must be
+    // project-scoped (not the bare /weekly registrations).
+    for (const routeKey of [
+      'GET /projects/{pid}/weekly',
+      'PUT /projects/{pid}/weekly',
+      'GET /projects/{pid}/weekly/{week}',
+      'PUT /projects/{pid}/weekly/{week}',
+      'POST /projects/{pid}/weekly/{week}/publish',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+      });
+    }
+    // The old bare /weekly routes must be gone.
+    for (const routeKey of ['GET /weekly', 'POST /weekly/{week}/publish']) {
+      const routes = template.findResources('AWS::ApiGatewayV2::Route', {
+        Properties: { RouteKey: routeKey },
+      });
+      expect(Object.keys(routes)).toHaveLength(0);
+    }
+  });
+
   test('pins HTTP API CORS to the CloudFront origin, never "*"', () => {
     // U20: CORS must be scoped to the SPA's CloudFront origin (+ local dev),
     // not the permissive wildcard.

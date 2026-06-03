@@ -7,7 +7,6 @@ import { GitHubApp, type FetchLike, type FetchResponse } from '../src/github/app
 import {
   attributeCommits,
   buildFraming,
-  extractTicketIds,
   parseCompletionFrontmatter,
   parsePrd,
   parseProgress,
@@ -90,13 +89,6 @@ describe('history: completion: frontmatter (U7)', () => {
 });
 
 describe('history: commit attribution', () => {
-  it('extracts distinct ticket ids from branch/PR/message text', () => {
-    expect(extractTicketIds('feat/WC-37-recon', 'WC-37 and WC-40', undefined).sort()).toEqual([
-      'WC-37',
-      'WC-40',
-    ]);
-  });
-
   it('normalizes a week of commits (sha, message, author, date)', () => {
     const raw = JSON.parse(fixture('commits-week.json')) as RawCommit[];
     const commits = attributeCommits(raw);

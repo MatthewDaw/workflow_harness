@@ -149,6 +149,10 @@ export class ApiStack extends cdk.Stack {
 
     r('/projects', [M.GET, M.POST], projectsFn, 'Projects');
     r('/projects/{id}', [M.GET], projectsFn, 'ProjectById');
+    r('/projects/{id}/requirements', [M.GET, M.PUT], projectsFn, 'ProjectRequirements');
+    r('/projects/{id}/refresh', [M.POST], projectsFn, 'ProjectRefresh');
+    r('/projects/{id}/docs', [M.GET], projectsFn, 'ProjectDocs');
+    r('/projects/{id}/docs/content', [M.GET], projectsFn, 'ProjectDocContent');
 
     r('/sessions', [M.GET], sessionsFn, 'Sessions');
     r('/sessions/{id}', [M.GET], sessionsFn, 'SessionById');
@@ -167,9 +171,9 @@ export class ApiStack extends cdk.Stack {
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
 
-    r('/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly');
-    r('/weekly/{week}', [M.GET], weeklyFn, 'WeeklyByWeek');
-    r('/weekly/{week}/publish', [M.POST], weeklyFn, 'WeeklyPublish');
+    r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly');
+    r('/projects/{pid}/weekly/{week}', [M.GET, M.PUT], weeklyFn, 'WeeklyByWeek');
+    r('/projects/{pid}/weekly/{week}/publish', [M.POST], weeklyFn, 'WeeklyPublish');
 
     // ---- WebSocket API (ingest + live + control) ------------------------------
     const wsAuthorizerFn = makeFn('WsAuthorizerFn', 'ws_authorizer');

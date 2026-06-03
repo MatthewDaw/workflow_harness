@@ -9,7 +9,9 @@ import {
   getProject,
   getProjectDocContent,
   getProjectDocs,
+  getProjectRequirements,
   listProjects,
+  putProjectRequirements,
   refreshProject,
   type ProjectsDeps,
 } from '../src/rest/projects.js';
@@ -314,6 +316,70 @@ describe('GET /projects/:id/docs/content (U8)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 404 });
+  });
+});
+
+// --- U10: HQ-owned high-level requirements markdown ----------------------
+
+describe('GET/PUT /projects/:id/requirements (U10)', () => {
+  it('GET returns an empty markdown for a project with none authored yet', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await getProjectRequirements(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ markdown: string }>(res as { body: string }).markdown).toBe('');
+  });
+
+  it('PUT stores the markdown and echoes it back; a later GET serves it', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const md = '# Requirements\n\n- ship the thing';
+    const putRes = await putProjectRequirements(
+      httpEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { id: 'weekly-compass' },
+        body: { markdown: md },
+      }),
+      deps,
+    );
+    expect(putRes).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ markdown: string }>(putRes as { body: string }).markdown).toBe(md);
+
+    const getRes = await getProjectRequirements(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(bodyOf<{ markdown: string }>(getRes as { body: string }).markdown).toBe(md);
+  });
+
+  it('400s a PUT whose body has no markdown string', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await putProjectRequirements(
+      httpEvent({ method: 'PUT', userId: MATT, path: { id: 'weekly-compass' }, body: {} }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 400 });
+  });
+
+  it("404s another user's project requirements (no enumeration)", async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const getRes = await getProjectRequirements(
+      httpEvent({ method: 'GET', userId: ALICE, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(getRes).toMatchObject({ statusCode: 404 });
+    const putRes = await putProjectRequirements(
+      httpEvent({
+        method: 'PUT',
+        userId: ALICE,
+        path: { id: 'weekly-compass' },
+        body: { markdown: 'x' },
+      }),
+      deps,
+    );
+    expect(putRes).toMatchObject({ statusCode: 404 });
   });
 });
 

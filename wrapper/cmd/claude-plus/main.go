@@ -5,6 +5,7 @@
 //
 //	claude+              attach-or-create the daemon for the current repo
 //	claude+ ls           list running daemons (index, repo, host, sessions, state, uptime)
+//	claude+ login        device-code sign-in to Command HQ (writes credentials)
 //	claude+ --session=N  attach to the daemon at registry index N
 //	claude+ --version    print the version
 //
@@ -43,6 +44,11 @@ func main() {
 			return
 		case "ls":
 			if err := cmdLs(); err != nil {
+				fail(err)
+			}
+			return
+		case "login":
+			if err := cmdLogin(os.Args[2:]); err != nil {
 				fail(err)
 			}
 			return

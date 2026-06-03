@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,6 +106,12 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 
 	// Route hook-shim events through the same emit path as the tailer (U18).
 	d.SetHookIngestor(rt.emit)
+
+	// Install the managed hooks block in ~/.claude/settings.json so Claude Code
+	// forwards lifecycle events to `claude+ __hook` (which delivers them to this
+	// daemon's socket). Best-effort: a missing executable path or unwritable
+	// settings file must never block daemon startup, so errors are ignored.
+	installHooks()
 
 	if cfg, ok := loadHQConfig(); ok {
 		home, _ := os.UserHomeDir()
@@ -235,6 +242,20 @@ func projectIDFor(repoRoot string) string {
 		return "project"
 	}
 	return s
+}
+
+// installHooks resolves this binary's path and writes the managed hooks block
+// so Claude Code pipes lifecycle events to `"<exe>" __hook`. The hook shim then
+// forwards each event to this repo's daemon socket. Best-effort: any failure
+// (no resolvable executable, unwritable ~/.claude/settings.json) is ignored —
+// the transcript tailer remains the authoritative event source.
+func installHooks() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	hookCmd := strconv.Quote(exe) + " __hook"
+	_, _ = capture.InstallHooks(hookCmd)
 }
 
 // Stop tears down the runtime.

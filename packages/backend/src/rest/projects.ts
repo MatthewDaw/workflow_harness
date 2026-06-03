@@ -259,6 +259,52 @@ export async function getProjectDocContent(
   }
 }
 
+// --- U10: HQ-owned high-level requirements markdown ----------------------
+
+/**
+ * GET /projects/:id/requirements — the project's HQ-owned high-level
+ * requirements markdown. Returns `{ markdown }`, with an empty string when none
+ * has been authored yet. HQ is the source of truth here, so this never reads
+ * from GitHub.
+ */
+export async function getProjectRequirements(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await ownedProject(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+
+  const markdown = await deps.repo.getProjectRequirements(project.id);
+  return ok({ markdown });
+}
+
+/**
+ * PUT /projects/:id/requirements — store the project's HQ-owned high-level
+ * requirements markdown (body `{ markdown }`) and echo it back. HQ owns this
+ * doc, so it is persisted in the table and never written to GitHub.
+ */
+export async function putProjectRequirements(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await ownedProject(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const markdown = (body as { markdown?: unknown } | undefined)?.markdown;
+  if (typeof markdown !== 'string') return badRequest('missing markdown');
+
+  await deps.repo.putProjectRequirements(project.id, markdown);
+  return ok({ markdown });
+}
+
 /** Routes the verbs/sub-paths by method/path for a single Lambda integration. */
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: ProjectsDeps = { repo: defaultRepo() };
@@ -267,6 +313,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const rawPath = event.requestContext.http.path ?? event.rawPath ?? '';
 
   if (method === 'POST' && hasId && rawPath.endsWith('/refresh')) return refreshProject(event, deps);
+  if (method === 'PUT' && hasId && /\/requirements$/.test(rawPath))
+    return putProjectRequirements(event, deps);
+  if (method === 'GET' && hasId && /\/requirements$/.test(rawPath))
+    return getProjectRequirements(event, deps);
   if (method === 'GET' && hasId && /\/docs\/content$/.test(rawPath))
     return getProjectDocContent(event, deps);
   if (method === 'GET' && hasId && /\/docs$/.test(rawPath)) return getProjectDocs(event, deps);

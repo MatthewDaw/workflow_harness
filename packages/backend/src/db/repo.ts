@@ -178,6 +178,30 @@ export class Repo {
     );
   }
 
+  // --- Project requirements (HQ-owned high-level markdown, U10) ----------
+  //
+  // Unlike the GitHub-sourced detailed-requirements tree, HQ is the source of
+  // truth for this markdown — it is stored here and never read from / written to
+  // GitHub.
+
+  /** The project's HQ-owned requirements markdown, or '' when none is set. */
+  async getProjectRequirements(projectId: string): Promise<string> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.projectRequirementsKey(projectId) }),
+    );
+    return (res.Item as { markdown?: string } | undefined)?.markdown ?? '';
+  }
+
+  /** Store the project's HQ-owned requirements markdown (full overwrite). */
+  async putProjectRequirements(projectId: string, markdown: string): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.projectRequirementsKey(projectId), projectId, markdown },
+      }),
+    );
+  }
+
   // --- Events + session projections --------------------------------------
 
   /**
