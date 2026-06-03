@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { projectSchema, type Project } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
+import { GitHubApp } from '../github/app.js';
 import {
   badRequest,
   created,
@@ -10,6 +11,7 @@ import {
   parseBody,
   pathParam,
   principalOf,
+  queryParam,
   unauthorized,
 } from './runtime.js';
 
@@ -26,6 +28,43 @@ import {
 
 export interface ProjectsDeps {
   repo: Repo;
+  /**
+   * Build the read-only GitHub App client for a project (U7/U8). Injected so
+   * tests stub the client and never touch the network; the default reads App
+   * credentials from the environment. Returns undefined when the project is not
+   * GitHub-connected or credentials are absent.
+   */
+  githubFor?: (project: Project) => GitHubApp | undefined;
+}
+
+/**
+ * Translate a stored project `repo` (e.g. `gh/acme/weekly-compass` or
+ * `acme/weekly-compass`) into the `owner/repo` the GitHub App client expects.
+ */
+export function ownerRepoOf(repo: string): string {
+  return repo.replace(/^gh\//, '');
+}
+
+/**
+ * Default GitHub App factory: build a read-only client from environment App
+ * credentials. Per-project installation id falls back to a single shared
+ * `GITHUB_INSTALLATION_ID` (the v1 single-laptop model has one installation).
+ */
+export function defaultGithubFor(project: Project): GitHubApp | undefined {
+  const appId = process.env.GITHUB_APP_ID;
+  const privateKeyPem = process.env.GITHUB_APP_PRIVATE_KEY;
+  const installationId = process.env.GITHUB_INSTALLATION_ID;
+  if (!appId || !privateKeyPem || !installationId) return undefined;
+  return new GitHubApp(
+    { appId, privateKeyPem, installationId, repo: ownerRepoOf(project.repo) },
+    (url, init) =>
+      fetch(url, init).then((r) => ({
+        status: r.status,
+        ok: r.ok,
+        text: () => r.text(),
+        json: () => r.json(),
+      })),
+  );
 }
 
 /** Count the live sessions (active | needs_input) currently in a project. */
@@ -97,11 +136,140 @@ export async function createProject(
   return created({ project });
 }
 
-/** Routes the three verbs by method/path for a single Lambda integration. */
+// --- U7: GitHub framing refresh -----------------------------------------
+
+/** Resolve the project for the caller, or a 404 result. */
+async function ownedProject(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<{ project: Project } | { error: APIGatewayProxyResultV2 }> {
+  const principal = principalOf(event);
+  if (!principal) return { error: unauthorized() };
+  const id = pathParam(event, 'id');
+  if (!id) return { error: badRequest('missing project id') };
+  const project = await deps.repo.getProject(id);
+  if (!project || project.ownerUserId !== principal.userId) return { error: notFound() };
+  return { project };
+}
+
+/**
+ * POST /projects/:id/refresh — re-read the project's framing from GitHub
+ * (`completion:` frontmatter, PRD goal, owned Supporting Outcomes), store it, and
+ * return the updated project. GitHub being unreachable is NOT a 500: we mark the
+ * last-known data stale and return it, so the UI degrades to "stale" rather than
+ * erroring. The GitHub App is read-only — this endpoint never writes to GitHub.
+ */
+export async function refreshProject(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await ownedProject(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+
+  const make = deps.githubFor ?? defaultGithubFor;
+  const app = make(project);
+  if (!app) {
+    // Not GitHub-connected (or no creds): serve last-known, flagged stale.
+    return ok({ project: { ...project, framingStale: true }, stale: true });
+  }
+
+  try {
+    const framing = await app.readFramingWithCompletion();
+    const readAt = new Date().toISOString();
+    await deps.repo.putProjectFraming(project.id, {
+      progressPct: framing.progressPct ?? 0,
+      prdGoal: framing.goal,
+      supportingOutcomeIds: framing.supportingOutcomeIds,
+      readAt,
+      stale: false,
+    });
+    const updated = await deps.repo.getProject(project.id);
+    return ok({
+      project: { ...(updated ?? project), liveSessionCount: await liveCount(deps.repo, project.id) },
+      stale: false,
+    });
+  } catch {
+    // GitHub unreachable / token expired: never 500. Return last-known + staleness.
+    return ok({
+      project: {
+        ...project,
+        framingStale: true,
+        liveSessionCount: await liveCount(deps.repo, project.id),
+      },
+      stale: true,
+    });
+  }
+}
+
+// --- U8: docs/plans tree + content --------------------------------------
+
+/**
+ * GET /projects/:id/docs — the `docs/plans/` tree with per-doc `completion:`.
+ * Returns `{ docs: [{ path, title, completion }] }`. An empty/absent tree yields
+ * `{ docs: [] }`. GitHub unreachable returns an empty tree + a `stale` flag
+ * rather than a 500 (the detail screen shows a stale banner, not an error).
+ */
+export async function getProjectDocs(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await ownedProject(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+
+  const make = deps.githubFor ?? defaultGithubFor;
+  const app = make(project);
+  if (!app) return ok({ docs: [], stale: true });
+
+  try {
+    const docs = await app.listDocs();
+    return ok({ docs });
+  } catch {
+    return ok({ docs: [], stale: true });
+  }
+}
+
+/**
+ * GET /projects/:id/docs/content?path=<repo-rel> — raw markdown for one
+ * `docs/plans/` doc. Returns `{ path, markdown }`. A path that is not a known
+ * doc is a 404. GitHub unreachable surfaces as a stale empty payload, not a 500.
+ */
+export async function getProjectDocContent(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await ownedProject(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+
+  const path = queryParam(event, 'path');
+  if (!path) return badRequest('missing path');
+
+  const make = deps.githubFor ?? defaultGithubFor;
+  const app = make(project);
+  if (!app) return ok({ path, markdown: '', stale: true });
+
+  try {
+    const markdown = await app.readDocContent(path);
+    if (markdown === undefined) return notFound();
+    return ok({ path, markdown });
+  } catch {
+    return ok({ path, markdown: '', stale: true });
+  }
+}
+
+/** Routes the verbs/sub-paths by method/path for a single Lambda integration. */
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: ProjectsDeps = { repo: defaultRepo() };
   const method = event.requestContext.http.method;
   const hasId = Boolean(pathParam(event, 'id'));
+  const rawPath = event.requestContext.http.path ?? event.rawPath ?? '';
+
+  if (method === 'POST' && hasId && rawPath.endsWith('/refresh')) return refreshProject(event, deps);
+  if (method === 'GET' && hasId && /\/docs\/content$/.test(rawPath))
+    return getProjectDocContent(event, deps);
+  if (method === 'GET' && hasId && /\/docs$/.test(rawPath)) return getProjectDocs(event, deps);
   if (method === 'POST') return createProject(event, deps);
   if (method === 'GET' && hasId) return getProject(event, deps);
   return listProjects(event, deps);

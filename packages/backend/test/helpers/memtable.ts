@@ -1,4 +1,10 @@
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DeleteCommand,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { AwsStub } from 'aws-sdk-client-mock';
 
 /**
@@ -36,6 +42,42 @@ export function installInMemoryTable(
   ddbMock.on(GetCommand).callsFake((input) => {
     const key = input.Key as KeyShape;
     return { Item: store.get(keyOf(key)) };
+  });
+
+  // General `SET a = :x, b = :y` UpdateCommand support (U7 framing writers + the
+  // device-auth status guards). Honours an `attribute_exists(PK)` precondition
+  // and the `#s = :guard` conditional-status check; applies each `SET` clause by
+  // resolving `:value` placeholders (and `#name` aliases) against the item.
+  ddbMock.on(UpdateCommand).callsFake((input) => {
+    const key = input.Key as KeyShape;
+    const existing = store.get(keyOf(key));
+    const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
+    const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
+    const cond = input.ConditionExpression ?? '';
+
+    if (cond.includes('attribute_exists(PK)') && !existing) {
+      throw new ConditionalCheckFailed();
+    }
+    // Conditional status guard of the form `#s = :guard` (device-auth flows).
+    const guardMatch = cond.match(/#?(\w+)\s*=\s*(:\w+)/);
+    if (existing && guardMatch && cond.includes('#s =')) {
+      const attr = names['#s'] ?? 's';
+      const expected = values[guardMatch[2] as string];
+      if ((existing as Record<string, unknown>)[attr] !== expected) {
+        throw new ConditionalCheckFailed();
+      }
+    }
+
+    const next: Record<string, unknown> = { ...(existing ?? key) };
+    const setClause = (input.UpdateExpression ?? '').replace(/^\s*SET\s+/i, '');
+    for (const assignment of setClause.split(',')) {
+      const m = assignment.trim().match(/^(#?[\w]+)\s*=\s*(:[\w]+)\s*$/);
+      if (!m) continue;
+      const attr = m[1]!.startsWith('#') ? (names[m[1]!] ?? m[1]!.slice(1)) : m[1]!;
+      next[attr] = values[m[2]!];
+    }
+    store.set(keyOf(key), next);
+    return {};
   });
 
   ddbMock.on(DeleteCommand).callsFake((input) => {

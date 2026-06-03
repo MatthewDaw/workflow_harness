@@ -11,7 +11,13 @@ export const projectSchema = z.object({
   ownerUserId: z.string().min(1),
   prdGoal: z.string().optional(),
   progressPct: z.number().min(0).max(100).optional(),
+  /** Supporting Outcomes this project owns, parsed from PRD/framing (U7). */
+  supportingOutcomeIds: z.array(z.string()).optional(),
   liveSessionCount: z.number().int().nonnegative().default(0),
+  /** ISO timestamp of the last successful GitHub framing read (U7). */
+  framingReadAt: z.string().optional(),
+  /** True when the last refresh could not reach GitHub; served data is stale (U7). */
+  framingStale: z.boolean().optional(),
 });
 export type Project = z.infer<typeof projectSchema>;
 

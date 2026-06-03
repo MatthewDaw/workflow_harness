@@ -76,6 +76,42 @@ export function parseProgress(md: string | undefined): number | undefined {
 }
 
 /**
+ * Parse a `completion:` percentage from a `docs/plans/` document's YAML
+ * frontmatter (U7). Frontmatter is a leading `---` block; we read the
+ * `completion:` key (e.g. `completion: 58` or `completion: "58%"`) and clamp it
+ * to 0..100. Returns undefined when there is no frontmatter or no `completion:`
+ * key so callers can fall back to the legacy `PROGRESS.md %` source.
+ */
+export function parseCompletionFrontmatter(md: string | undefined): number | undefined {
+  if (!md) return undefined;
+  // Frontmatter must be the very first thing in the doc: `---\n…\n---`.
+  const fm = md.match(/^﻿?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+  if (!fm?.[1]) return undefined;
+  const line = fm[1].match(/^[ \t]*completion[ \t]*:[ \t]*["']?(\d{1,3})/im);
+  if (!line?.[1]) return undefined;
+  const pct = Number(line[1]);
+  if (!Number.isFinite(pct)) return undefined;
+  return Math.max(0, Math.min(100, pct));
+}
+
+/**
+ * Resolve a project's progress percentage from the new source of truth (U7):
+ * prefer the top `docs/plans/` doc's `completion:` frontmatter; fall back to the
+ * legacy `PROGRESS.md %`; finally default to 0. This is the single place the
+ * "GitHub is source of truth for progress" precedence is encoded.
+ */
+export function resolveProgressPct(
+  topPlanDoc: string | undefined,
+  progressMd: string | undefined,
+): number {
+  const fromFrontmatter = parseCompletionFrontmatter(topPlanDoc);
+  if (fromFrontmatter !== undefined) return fromFrontmatter;
+  const fromProgress = parseProgress(progressMd);
+  if (fromProgress !== undefined) return fromProgress;
+  return 0;
+}
+
+/**
  * Assemble the project framing from the two files. Either file being absent
  * (`undefined`) is recorded in `missingFiles` so the UI can show a clear "needs
  * files" state instead of failing.
