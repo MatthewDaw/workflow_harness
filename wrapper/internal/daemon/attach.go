@@ -28,7 +28,7 @@ type FrameType string
 
 const (
 	FramePing    FrameType = "ping"    // client -> daemon liveness probe
-	FramePong    FrameType = "pong"    // daemon -> client liveness reply (carries session count)
+	FramePong    FrameType = "pong"    // daemon -> client liveness reply (carries session count + protocol version)
 	FrameHello   FrameType = "hello"   // client -> daemon attach handshake
 	FrameAck     FrameType = "ack"     // daemon -> client handshake reply
 	FrameFocus   FrameType = "focus"   // client -> daemon switch focused session
@@ -92,45 +92,53 @@ func readFrame(r *bufio.Reader) (Frame, error) {
 	return f, nil
 }
 
-// alive reports whether a daemon socket answers a ping within a short timeout.
-// Used by the registry to distinguish running from stale daemons, and to clean
-// up orphaned sockets.
-func alive(sock string) bool {
+// probe sends a single ping and returns the daemon's pong (its ProtocolVersion
+// and session count). ok is false when the socket does not answer a well-formed
+// pong within a short timeout (dead/stale daemon, or a non-claude+ listener that
+// happens to hold the port). This is the single low-level liveness primitive;
+// alive, compatible, and pingSessions are thin wrappers over it so the wire
+// behavior (and timeouts) stay consistent.
+func probe(sock string) (pong Frame, ok bool) {
 	conn, err := net.DialTimeout("tcp", sock, 300*time.Millisecond)
 	if err != nil {
-		return false
+		return Frame{}, false
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
 	if err := writeFrame(conn, Frame{Type: FramePing}); err != nil {
-		return false
+		return Frame{}, false
 	}
-	r := bufio.NewReader(conn)
-	f, err := readFrame(r)
-	if err != nil {
-		return false
+	f, err := readFrame(bufio.NewReader(conn))
+	if err != nil || f.Type != FramePong {
+		return Frame{}, false
 	}
-	return f.Type == FramePong
+	return f, true
+}
+
+// alive reports whether a daemon socket answers a ping within a short timeout.
+// Used by the registry to distinguish running from stale daemons, and to clean
+// up orphaned sockets. It does NOT check protocol compatibility — a still-running
+// older-build daemon is "alive" but not "compatible"; use compatible for that.
+func alive(sock string) bool {
+	_, ok := probe(sock)
+	return ok
+}
+
+// compatible reports whether the daemon at sock answers a ping AND speaks this
+// client's ProtocolVersion. A daemon that is alive but reports a different
+// version is an older/newer build that must be replaced before attaching — this
+// is what lets `claude+` auto-recover across rebuilds without a full attach
+// round-trip and without the user manually killing anything.
+func compatible(sock string) bool {
+	f, ok := probe(sock)
+	return ok && f.Version == ProtocolVersion
 }
 
 // pingSessions returns the live session count reported by the daemon.
 func pingSessions(sock string) (int, error) {
-	conn, err := net.DialTimeout("tcp", sock, 300*time.Millisecond)
-	if err != nil {
-		return 0, err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
-	if err := writeFrame(conn, Frame{Type: FramePing}); err != nil {
-		return 0, err
-	}
-	r := bufio.NewReader(conn)
-	f, err := readFrame(r)
-	if err != nil {
-		return 0, err
-	}
-	if f.Type != FramePong {
-		return 0, fmt.Errorf("unexpected reply %q", f.Type)
+	f, ok := probe(sock)
+	if !ok {
+		return 0, fmt.Errorf("daemon at %s did not answer a pong", sock)
 	}
 	return f.Sessions, nil
 }
