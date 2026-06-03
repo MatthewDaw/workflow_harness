@@ -9,7 +9,6 @@ import type {
   ObjectiveNode,
   Agent,
   Skill,
-  Ticket,
   WeeklyUpdate,
 } from '@harness/shared';
 import { makeStore, type AppStore } from '../app/store.js';
@@ -27,7 +26,6 @@ export interface SeedData {
   objectives?: ObjectiveNode[];
   agents?: Agent[];
   skills?: Skill[];
-  tickets?: Record<string, Ticket[]>;
   weekly?: Record<string, WeeklyUpdate[]>;
 }
 
@@ -68,9 +66,6 @@ export function installFetchStub(seed: SeedData) {
 
     const sess = /^sessions\/([^/]+)$/.exec(path);
     if (sess) return json((seed.sessions ?? []).find((s) => s.sessionId === sess[1]) ?? null);
-
-    const tickets = /^projects\/([^/]+)\/tickets$/.exec(path);
-    if (tickets) return json(seed.tickets?.[tickets[1]!] ?? []);
 
     const weekly = /^projects\/([^/]+)\/weekly$/.exec(path);
     if (weekly) return json(seed.weekly?.[weekly[1]!] ?? []);

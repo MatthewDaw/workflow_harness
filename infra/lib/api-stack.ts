@@ -90,14 +90,12 @@ export class ApiStack extends cdk.Stack {
     const agentsFn = makeFn('RestAgentsFn', 'rest_agents');
     const skillsFn = makeFn('RestSkillsFn', 'rest_skills');
     const objectivesFn = makeFn('RestObjectivesFn', 'rest_objectives');
-    const ticketsFn = makeFn('RestTicketsFn', 'rest_tickets');
     const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
     grantReadWrite(projectsFn);
     grantRead(sessionsFn);
     grantReadWrite(agentsFn);
     grantReadWrite(skillsFn);
     grantReadWrite(objectivesFn);
-    grantReadWrite(ticketsFn);
     grantReadWrite(weeklyFn);
 
     const region = cdk.Stack.of(this).region;
@@ -159,10 +157,6 @@ export class ApiStack extends cdk.Stack {
 
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
-
-    r('/tickets', [M.GET, M.POST], ticketsFn, 'Tickets');
-    r('/tickets/{tid}', [M.GET, M.PUT], ticketsFn, 'TicketById');
-    r('/tickets/{tid}/status', [M.POST], ticketsFn, 'TicketStatus');
 
     r('/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly');
     r('/weekly/{week}', [M.GET], weeklyFn, 'WeeklyByWeek');

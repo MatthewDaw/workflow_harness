@@ -22,7 +22,6 @@ const handlers = [
   'rest/agents',
   'rest/skills',
   'rest/objectives',
-  'rest/tickets',
   'rest/weekly',
   'ws/connect',
   'ws/disconnect',

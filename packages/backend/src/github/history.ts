@@ -119,6 +119,5 @@ export function attributeCommits(raw: RawCommit[]): GitCommit[] {
     message: c.commit.message,
     author: c.commit.author?.name ?? '',
     committedAt: c.commit.author?.date ?? '',
-    ticketIds: extractTicketIds(c.commit.message, c.ref),
   }));
 }

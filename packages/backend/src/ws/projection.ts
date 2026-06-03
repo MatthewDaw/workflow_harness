@@ -39,7 +39,6 @@ export function applyEvent(
           name: ev.name,
           host: env.host,
           agent: ev.agent,
-          ticket: ev.ticket,
           status: 'active',
           tokens: 0,
           costUsd: 0,
@@ -74,7 +73,6 @@ export function applyEvent(
     next.name = ev.name;
     next.host = env.host;
     next.agent = ev.agent;
-    next.ticket = ev.ticket;
     if (base.startedAt === 0 || env.ts < base.startedAt) next.startedAt = env.ts;
   }
 
