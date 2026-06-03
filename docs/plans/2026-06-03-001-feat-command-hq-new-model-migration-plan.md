@@ -56,7 +56,7 @@ This plan turns those into dependency-ordered, test-protected units.
 - **KTD3 — The skills are Claude Code `SKILL.md` files, run inside the claude+ PTY.** The wrapper does **not** gain a skill dispatcher (it observes via the transcript tailer). Skills shell out to `git`/`gh` and/or POST to the HQ REST API. Authored in-repo under `.claude/skills/<name>/SKILL.md`.
 - **KTD4 — Weekly is a client-generated report posted to HQ.** `/weekly-update` (in claude+) reads the full git diff from today back 7 days, generates the report including a **never-blocking, manager-visible conformity score**, and POSTs it to HQ. The backend weekly module becomes store/serve for the posted report — the ticket-based `assembleWeekly`/`attributeDone` assembly is deleted, not re-pointed. (Resolves the weekly-attribution fork.)
 - **KTD5 — Single laptop; no remote/SSH.** Strip remote/SSH framing from docs/comments; the daemon is already loopback-only.
-- **KTD6 — AgentForge v1: single admin = promoter, distiller-first.** Reuse only `BedrockAgentDrafter` + the proposal shape from `forge/`; hide the read-side fuzzy Forge surface. Optimizer loop and transfer-validation remain deferred.
+- **KTD6 — AgentForge v1: single admin = promoter, distiller-first.** Reuse only the agent-proposal shape from `forge/`; distillation/optimization run client-side in claude+ via Claude Code; hide the read-side fuzzy Forge surface. Optimizer loop and transfer-validation remain deferred.
 - **KTD7 — Migration keeps suites green.** Every unit updates the tests its change touches; no green test is deleted without a replacement assertion of the new behavior.
 
 ---
@@ -110,7 +110,7 @@ flowchart TD
   U11-->U12
   U7-->U13
   U4-->U14
-  forge[(reuse BedrockAgentDrafter)]-->U15
+  forge[(client-side distill in claude+)]-->U15
   A-->E
   A-->F
 ```
@@ -267,7 +267,7 @@ flowchart TD
 
 - **Goal:** Author the distiller-first forge commands and retire the read-side fuzzy Forge surface.
 - **Requirements:** AgentForge v1. **Dependencies:** none (reuses existing `forge/` drafter).
-- **Files:** create `.claude/skills/startforge/SKILL.md`, `.claude/skills/endforge/SKILL.md`; modify backend to expose only `BedrockAgentDrafter` + the proposal shape (do not wire `embed`/`search`/`propose` k-NN to any route — confirm none exists); web: hide the read-side Forge surface and add a single-admin promote affordance on `packages/web/src/screens/Agents/Agents.tsx` (reuse the existing `changeAgentScope` mutation wired in U17).
+- **Files:** create `.claude/skills/startforge/SKILL.md`, `.claude/skills/endforge/SKILL.md`; keep only the agent-proposal shape in `forge/` — distillation/optimization run in the claude+ skill via Claude Code; do not wire `embed`/`search`/`propose` to any route; web: hide the read-side Forge surface and add a single-admin promote affordance on `packages/web/src/screens/Agents/Agents.tsx` (reuse the existing `changeAgentScope` mutation wired in U17).
 - **Approach (skill spec):** `/startforge` marks the slice (land-to-main kept per 05); `/endforge` classifies coherence (warn, never block), distills a prompt, curates minimal skills, registers at the **author's scope**; a single admin promotes to org via the existing scope-elevate path. Optimizer loop + transfer-validation deferred.
 - **Test scenarios:** `Test expectation: none` for the SKILL.md authoring; backend: assert the fuzzy forge pipeline remains unrouted (no `rest/forge.ts`); web: promote control calls `changeAgentScope`.
 - **Verification:** forge commands documented + runnable; no fuzzy-Forge UI; promote works via scope elevate.

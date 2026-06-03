@@ -21,8 +21,8 @@ lifecycle, built natively and automated by the harness.
    up to the repo's **fixed high-level goals** (owned Supporting Outcomes / Project
    Requirements) and surfaces the score so a **manager can see when someone is
    drifting too far off**. It nudges the user to re-anchor but never blocks publish.
-   *Code today:* `packages/backend/src/weekly/agent.ts` (`validatePlan` + a
-   Bedrock "challenger"); `weekly/align.ts`.
+   *Now:* the conformity score is computed client-side in the `/weekly-update`
+   skill (Claude Code); the old `weekly/agent.ts` challenger + `weekly/align.ts` were removed.
 3. **Reconcile last week (auto, from git).** It reads the **git history since the
    last weekly report** and summarizes the week's commits/PRs as the "done"
    actuals (a git-history summary — no ticket linkage), and writes a checklist of:

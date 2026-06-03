@@ -111,7 +111,7 @@ the backend `forge/` code.
 - **Interface = commands, not a GUI.** No dedicated Forge panel; the "UI" is the
   `/startforge` → `/endforge` lifecycle plus the `/endforge` approval prompt.
 - **Prompt: yes gradient descent** — prompt only, **run via Claude Code on the user's
-  Claude subscription** (not Bedrock, not a third-party framework).
+  Claude subscription** (not a hosted model API, not a third-party framework).
 - **Objective = outcome + process quality**, single axis. **No token-spend
   optimization.** The prompt encodes good principles/sequencing/failure-avoidance.
 - **Keep it light** — a few-iteration Claude Code refine/run/judge loop in a worktree;
@@ -205,15 +205,14 @@ end of this section.
 ## Recommended approach — Claude Code on your subscription (keep it light)
 
 **Decision: the model doing the optimization is Claude, run through Claude Code on the
-user's own subscription — not Bedrock, not a third-party framework's API.** Rationale:
+user's own subscription — not a hosted model API, not a third-party framework's API.** Rationale:
 we're optimizing prompts *for Claude Code builds*, so the optimization (and its eval)
 should run in the same harness and on the same model the forged agent will actually use.
 Same-environment optimization = higher fidelity, and it spends the subscription rather
-than metered Bedrock/API budget.
+than a metered API budget.
 
-This rules out the heavyweight options the research surfaced as *products*: the **Bedrock
-Advanced Prompt Optimizer** (AWS-metered, wrong model account) and the Python frameworks
-(**TextGrad / DSPy / DeepEval**) that drive their own model calls via litellm/Bedrock.
+This rules out the heavyweight options the research surfaced as *products*: the **hosted prompt-optimizer products** (vendor-metered, wrong model account) and the Python frameworks
+(**TextGrad / DSPy / DeepEval**) that drive their own model calls via litellm / hosted inference APIs.
 Their *ideas* still apply — LLM-as-optimizer / textual-gradient refinement, correctness-
 first scoring, trajectory-pair generalization — but we implement them as a small loop,
 not by adopting a framework. Also *not* DSPy/MIPROv2 specifically: it needs 20+ labeled
@@ -276,7 +275,6 @@ the skills an agent points to (we already hash items in `internal/config`).
   [DSPy MIPROv2](https://dspy.ai/api/optimizers/MIPROv2/) ·
   [AdalFlow](https://github.com/SylphAI-Inc/AdalFlow) ·
   [OPRO](https://arxiv.org/abs/2309.03409) ·
-  [Bedrock Advanced Prompt Optimization (May 2026)](https://aws.amazon.com/blogs/aws/amazon-bedrock-introduces-new-advanced-prompt-optimization-and-migration-tool/) ·
   [Anthropic Prompt Improver](https://platform.claude.com/docs/en/docs/build-with-claude/prompt-engineering/prompt-improver)
 - Eval / scoring: [LLM-as-a-Judge (Zheng et al. 2023)](https://arxiv.org/html/2306.05685v4) ·
   [MOPrompt (multi-objective, 2025)](https://arxiv.org/html/2508.01541v1) ·

@@ -48,11 +48,11 @@ Migrated from the original build plan; the durable rationale for the stack.
 4. **Serverless backend.** API GW HTTP API (REST) + WebSocket API (ingest + live + control); Lambda (TS); DynamoDB single-table + GSIs; Streams drive projections.
 5. **Auth.** Cognito user pool for web; a device token (device-code flow, `claude+ login`) authorizes the daemon's outbound WS and scopes its data to that user. No inbound ports needed (the daemon dials out); the token carries a TTL + revoke + OS-keychain storage.
 6. **Control gateway over WebSocket.** HQ steers a session by routing a control frame to the daemon's stored `connectionId` on its persistent *outbound* WS; ownership re-checked on every frame.
-7. **Forge semantic search.** Embed session summaries on `session.done` (Bedrock) → OpenSearch Serverless k-NN; DynamoDB brute-force cosine fallback at low volume.
+7. **Forge semantic search (deferred).** Session-summary vector retrieval (OpenSearch k-NN / DynamoDB cosine fallback) is not built; AgentForge v1 distills from the working diff directly. No server-side embeddings.
 8. **Scope model.** Three tiers `org` / `user#uid` / `proj#pid`; resolution composes all three, narrowest wins on name collision; elevate/demote rewrites the scope key. Objectives are org-global.
 9. **GitHub via a GitHub App.** Reads requirement docs + git history (weekly "done") + branch/PR state — **read-only (`contents:read`), installed per-repo**. HQ reads from GitHub and never writes; `/update-progress` pushes completion numbers from the client side.
 10. **Distribution.** goreleaser cross-compile + an npm wrapper package (per-platform prebuilt binaries via `optionalDependencies`) + `curl | sh` (with a published `checksums.txt` + SHA-256 verification in the installer). PTY via `creack/pty`.
-11. **LLM-backed features** (Forge proposal, Weekly validation) run on Bedrock (Claude) from Lambda; the wrapper never holds model keys. (AgentForge's prompt-descent is the exception — it runs on the user's Claude subscription; see [feature 5](./05-agentforge.md).)
+11. **LLM-backed features run on the user's Claude subscription, client-side.** AgentForge distill/optimize and the Weekly conformity score run inside the claude+ PTY via Claude Code; neither the Lambda backend nor the wrapper calls a hosted model or holds model keys. See [feature 5](./05-agentforge.md).
 12. **Frontend data layer.** RTK Query against REST + a thin WebSocket middleware feeding live events into the store; Tailwind; wireframe markup promoted to components.
 
 ## Data model (single-table, directional)

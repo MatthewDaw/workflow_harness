@@ -158,7 +158,7 @@ skill selection or broad skill synthesis beyond what the forged agent needs.
   when a forged agent collides with an existing one; abandoned-forge cleanup
   (worktree/branch left when `/endforge` is never run).
 - **[Deferred — 2026-06-03 review]** Redact secrets (key/token patterns) from the
-  diff + transcript before they reach Bedrock, so secrets can't land in a registered prompt.
+  diff + transcript before Claude Code distills them, so secrets can't land in a registered prompt.
 - **Interaction states to define (design phase):** `/startforge` abort output (what
   the warning lists; partial-land handling) and the HQ promote control (what the
   admin sees before confirming).
