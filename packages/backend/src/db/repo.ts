@@ -112,6 +112,72 @@ export class Repo {
     return (res.Item as { projectId?: string } | undefined)?.projectId;
   }
 
+  // --- U7: GitHub-sourced framing (progress + PRD goal + owned outcomes) --
+  //
+  // Additive, intent-named writers kept separate from `putProject` so the merge
+  // with the de-ticket refactor stays mechanical. Both are partial updates on an
+  // existing Project; they no-op silently if the project is missing (the refresh
+  // handler 404s before calling these).
+
+  /**
+   * Store the GitHub-sourced progress percentage on a Project (U7). `progressPct`
+   * is clamped 0..100 by the caller; `framingReadAt`/`framingStale` record when
+   * the read succeeded and whether the value is the last-known (stale) one.
+   */
+  async setProjectProgress(
+    projectId: string,
+    progressPct: number,
+    opts: { readAt?: string; stale?: boolean } = {},
+  ): Promise<void> {
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.table,
+        Key: k.projectKey(projectId),
+        UpdateExpression:
+          'SET progressPct = :p, framingReadAt = :r, framingStale = :s',
+        ConditionExpression: 'attribute_exists(PK)',
+        ExpressionAttributeValues: {
+          ':p': Math.max(0, Math.min(100, progressPct)),
+          ':r': opts.readAt ?? new Date().toISOString(),
+          ':s': opts.stale ?? false,
+        },
+      }),
+    );
+  }
+
+  /**
+   * Store the full GitHub-sourced framing on a Project (U7): progress, PRD goal,
+   * and the owned Supporting Outcome ids. A partial update that leaves all other
+   * Project fields (name, repo, ownerUserId, …) untouched.
+   */
+  async putProjectFraming(
+    projectId: string,
+    framing: {
+      progressPct: number;
+      prdGoal?: string;
+      supportingOutcomeIds?: string[];
+      readAt?: string;
+      stale?: boolean;
+    },
+  ): Promise<void> {
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.table,
+        Key: k.projectKey(projectId),
+        UpdateExpression:
+          'SET progressPct = :p, prdGoal = :g, supportingOutcomeIds = :o, framingReadAt = :r, framingStale = :s',
+        ConditionExpression: 'attribute_exists(PK)',
+        ExpressionAttributeValues: {
+          ':p': Math.max(0, Math.min(100, framing.progressPct)),
+          ':g': framing.prdGoal ?? null,
+          ':o': framing.supportingOutcomeIds ?? [],
+          ':r': framing.readAt ?? new Date().toISOString(),
+          ':s': framing.stale ?? false,
+        },
+      }),
+    );
+  }
+
   // --- Events + session projections --------------------------------------
 
   /**
