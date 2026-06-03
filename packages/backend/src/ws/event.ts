@@ -46,6 +46,22 @@ export async function ingest(
 
   const conn = await deps.repo.getConnection(connectionId);
 
+  // 1b. Register the repo as a Project on its first session announcement. The
+  //     daemon emits `session.start` carrying the projectId (a slug of the repo
+  //     folder); we create the Project so the repo shows in the Projects list.
+  //     Only for authenticated daemon connections (conn?.userId present), and
+  //     idempotent: ensureProject is a conditional create that never clobbers an
+  //     existing project's curated name/progress/framing on later sessions.
+  if (envelope.event.kind === 'session.start' && conn?.userId) {
+    await deps.repo.ensureProject({
+      id: envelope.event.projectId,
+      name: envelope.event.projectId,
+      repo: envelope.event.projectId,
+      ownerUserId: conn.userId,
+      liveSessionCount: 0,
+    });
+  }
+
   // 2. Append (idempotent on duplicate seq).
   const { stored } = await deps.repo.appendEvent(envelope);
 

@@ -166,3 +166,36 @@ describe('getProject', () => {
     );
   });
 });
+
+describe('ensureProject', () => {
+  const project = {
+    id: 'weekly-compass',
+    name: 'weekly-compass',
+    repo: 'weekly-compass',
+    ownerUserId: 'matt',
+    liveSessionCount: 0,
+  };
+
+  it('conditionally creates the project with the owner GSI index', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    const res = await repo.ensureProject(project);
+    expect(res).toEqual({ created: true });
+
+    const input = ddbMock.commandCalls(PutCommand)[0]!.args[0].input;
+    expect(input.ConditionExpression).toBe('attribute_not_exists(PK)');
+    expect(input.Item).toMatchObject({
+      ...k.projectKey(project.id),
+      ...project,
+      ...k.projectOwnerIndex(project.ownerUserId, project.id),
+    });
+  });
+
+  it('is idempotent: a ConditionalCheckFailed reports created:false (no clobber)', async () => {
+    const err = Object.assign(new Error('exists'), {
+      name: 'ConditionalCheckFailedException',
+    });
+    ddbMock.on(PutCommand).rejects(err);
+    const res = await repo.ensureProject(project);
+    expect(res).toEqual({ created: false });
+  });
+});

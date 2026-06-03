@@ -297,6 +297,63 @@ describe('event ingestion', () => {
   });
 });
 
+describe('session.start registers the repo as a Project', () => {
+  const PROJECT_ID = 'weekly-compass'; // matches startEvent.projectId
+
+  it('creates the Project, owned by the daemon connection user', async () => {
+    await seedDaemonConn();
+    await ingest(wsEvent(env(0, startEvent)), deps());
+
+    const proj = await repo.getProject(PROJECT_ID);
+    expect(proj).toMatchObject({
+      id: PROJECT_ID,
+      name: PROJECT_ID,
+      repo: PROJECT_ID,
+      ownerUserId: OWNER,
+    });
+
+    // And it shows in the user's Projects list (GET /projects via GSI1).
+    const list = await repo.listProjectsForUser(OWNER);
+    expect(list.map((p) => p.id)).toContain(PROJECT_ID);
+  });
+
+  it('does not clobber or duplicate the Project on a second session.start', async () => {
+    await seedDaemonConn();
+    await ingest(wsEvent(env(0, startEvent)), deps());
+
+    // Curate the project (as the Projects UI would) before a later session.
+    await repo.putProject({
+      id: PROJECT_ID,
+      name: 'Weekly Compass',
+      repo: PROJECT_ID,
+      ownerUserId: OWNER,
+      progressPct: 42,
+      liveSessionCount: 0,
+    });
+
+    // A second session for the same repo announces session.start again.
+    const second: Event = { ...startEvent, sessionId: 's-2' };
+    await ingest(wsEvent(env(0, second), 'daemon-conn'), deps());
+
+    // The curated name/progress survive (ensureProject was a no-op create).
+    const proj = await repo.getProject(PROJECT_ID);
+    expect(proj?.name).toBe('Weekly Compass');
+    expect(proj?.progressPct).toBe(42);
+
+    // Still exactly one project for the user.
+    const list = await repo.listProjectsForUser(OWNER);
+    expect(list.filter((p) => p.id === PROJECT_ID)).toHaveLength(1);
+  });
+
+  it('does not create a Project when the connection is unknown (unauthenticated)', async () => {
+    // No seedDaemonConn(): getConnection returns undefined.
+    await ingest(wsEvent(env(0, startEvent)), deps());
+
+    expect(await repo.getProject(PROJECT_ID)).toBeUndefined();
+    expect(await repo.listProjectsForUser(OWNER)).toHaveLength(0);
+  });
+});
+
 describe('$disconnect', () => {
   it('removes the connection and clears the instance reverse index (offline)', async () => {
     await seedDaemonConn('daemon-conn');
