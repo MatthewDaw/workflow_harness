@@ -10,6 +10,7 @@ import type {
   Agent,
   Skill,
   WeeklyUpdate,
+  DefinitionOfDone,
 } from '@harness/shared';
 import { makeStore, type AppStore } from '../app/store.js';
 import { AuthProvider } from '../auth/AuthProvider.js';
@@ -33,6 +34,8 @@ export interface SeedData {
   docContent?: Record<string, string>;
   /** HQ-owned high-level requirements markdown, keyed by projectId (U10). */
   requirements?: Record<string, string>;
+  /** Org-wide Definition of Done (plan-mapping feature 1). */
+  dod?: DefinitionOfDone;
 }
 
 const MATT: AuthUser = { userId: 'user-matt', username: 'matt', org: 'acme' };
@@ -73,6 +76,8 @@ export function installFetchStub(seed: SeedData) {
 
     if (path === 'projects') return json(seed.projects ?? []);
     if (path === 'objectives') return json(seed.objectives ?? []);
+    if (path === 'dod')
+      return json({ dod: seed.dod ?? { requiresUnitTests: true, requiresProdE2E: false } });
     if (path === 'agents') return json(seed.agents ?? []);
     if (path === 'skills') return json(seed.skills ?? []);
     if (path === 'sessions') return json(seed.sessions ?? []);

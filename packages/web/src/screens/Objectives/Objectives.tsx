@@ -1,10 +1,17 @@
-import { useMemo, useState, type FormEvent } from 'react';
-import { OBJECTIVE_LEVELS, type ObjectiveLevel, type ObjectiveNode } from '@harness/shared';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  OBJECTIVE_LEVELS,
+  type DefinitionOfDone,
+  type ObjectiveLevel,
+  type ObjectiveNode,
+} from '@harness/shared';
 import { useAuth } from '../../auth/AuthProvider.js';
 import {
   useGetObjectivesQuery,
   useCreateObjectiveMutation,
   useDeleteObjectiveMutation,
+  useGetDodQuery,
+  usePutDodMutation,
 } from '../../api/baseApi.js';
 import { Bar, Pill, ScreenHeader } from '../../components/primitives.js';
 
@@ -167,6 +174,108 @@ function AddNodeForm({ all }: { all: ObjectiveNode[] }) {
   );
 }
 
+/**
+ * The org-wide Definition of Done (plan-mapping feature 1). Shows the current
+ * DoD read-only, and — for admins — an inline editor (two checkboxes + notes)
+ * that saves via `putDod`. It is ADVISORY: it declares what `/update-progress`
+ * verifies before marking work done; it never blocks a progress push.
+ */
+function DefinitionOfDoneCard({ isAdmin }: { isAdmin: boolean }) {
+  const { data: dod, isLoading } = useGetDodQuery();
+  const [putDod, { isLoading: isSaving }] = usePutDodMutation();
+
+  const [requiresUnitTests, setRequiresUnitTests] = useState(true);
+  const [requiresProdE2E, setRequiresProdE2E] = useState(false);
+  const [notes, setNotes] = useState('');
+
+  // Hydrate the editor from the served DoD once it loads (and on refetch).
+  useEffect(() => {
+    if (!dod) return;
+    setRequiresUnitTests(dod.requiresUnitTests);
+    setRequiresProdE2E(dod.requiresProdE2E);
+    setNotes(dod.notes ?? '');
+  }, [dod]);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    const next: DefinitionOfDone = {
+      requiresUnitTests,
+      requiresProdE2E,
+      ...(notes.trim() ? { notes: notes.trim() } : {}),
+    };
+    await putDod(next);
+  };
+
+  return (
+    <div className="hq-box mb-4 bg-paper" data-testid="dod-card">
+      <div className="mb-1 flex items-center gap-2">
+        <Pill>Definition of Done</Pill>
+        <span className="text-xs text-faint">advisory — never blocks a progress push</span>
+      </div>
+      {isLoading && <div className="text-mut">Loading Definition of Done…</div>}
+      {dod && (
+        <>
+          {/* Read-only summary of the current DoD. */}
+          <div className="my-2 text-sm" data-testid="dod-display">
+            <span className="text-mut">To mark work complete: </span>
+            <span data-testid="dod-summary">
+              {dod.requiresUnitTests ? 'unit tests passing' : 'no unit-test gate'}
+              {dod.requiresProdE2E ? ' + prod-E2E verified' : ''}
+            </span>
+            {dod.notes && <div className="mt-1 text-xs text-mut">{dod.notes}</div>}
+          </div>
+
+          {isAdmin && (
+            <form
+              className="mt-3 flex flex-col gap-2 border-t border-line2 pt-3"
+              data-testid="dod-form"
+              onSubmit={save}
+            >
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  data-testid="dod-unit-tests"
+                  checked={requiresUnitTests}
+                  onChange={(e) => setRequiresUnitTests(e.target.checked)}
+                />
+                Require unit tests passing (org-wide floor)
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  data-testid="dod-prod-e2e"
+                  checked={requiresProdE2E}
+                  onChange={(e) => setRequiresProdE2E(e.target.checked)}
+                />
+                Require prod-E2E verified
+              </label>
+              <label className="flex flex-col text-xs text-mut">
+                Notes (optional)
+                <textarea
+                  className="hq-input mt-1"
+                  data-testid="dod-notes"
+                  rows={2}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. how to find the prod E2E suite"
+                />
+              </label>
+              <button
+                type="submit"
+                className="hq-btn self-start"
+                data-testid="dod-save"
+                disabled={isSaving}
+              >
+                Save Definition of Done
+              </button>
+            </form>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Objectives() {
   const { user } = useAuth();
   // v1 single-admin model (mirrors Agents): the signed-in user is the admin.
@@ -197,6 +306,7 @@ export function Objectives() {
         title="Company Objectives (RCDO)"
         subtitle="Rally Cries → Defining Objectives → Outcomes → Supporting Outcomes. Roll-ups are computed bottom-up from linked work."
       />
+      <DefinitionOfDoneCard isAdmin={isAdmin} />
       {isAdmin && <AddNodeForm all={all} />}
       {isLoading && <div className="text-mut">Loading objectives…</div>}
       {isError && (

@@ -8,6 +8,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import type {
   Agent,
+  DefinitionOfDone,
   DeviceAuth,
   Envelope,
   ObjectiveNode,
@@ -18,6 +19,7 @@ import type {
   Skill,
   WeeklyUpdate,
 } from '@harness/shared';
+import { DEFAULT_DEFINITION_OF_DONE } from '@harness/shared';
 import * as k from './keys.js';
 
 /**
@@ -458,6 +460,39 @@ export class Repo {
       }),
     );
     return (res.Items ?? []) as ObjectiveNode[];
+  }
+
+  // --- Org Definition of Done (plan-mapping feature 1) -------------------
+  //
+  // A single org-scoped record declaring what `/update-progress` must verify
+  // before work is "done". Advisory — surfaced + reported on, never a gate.
+
+  /**
+   * The org's configured Definition of Done, or the org-wide default floor
+   * (unit tests required, prod-E2E optional) when none has been set. Returning
+   * the default means callers never have to special-case "unset".
+   */
+  async getOrgDod(org: string): Promise<DefinitionOfDone> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.orgDodKey(org) }),
+    );
+    const item = res.Item as (DefinitionOfDone & { org?: string }) | undefined;
+    if (!item) return { ...DEFAULT_DEFINITION_OF_DONE };
+    return {
+      requiresUnitTests: item.requiresUnitTests,
+      requiresProdE2E: item.requiresProdE2E,
+      ...(item.notes !== undefined ? { notes: item.notes } : {}),
+    };
+  }
+
+  /** Store the org's Definition of Done (full overwrite of the single record). */
+  async putOrgDod(org: string, dod: DefinitionOfDone): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.orgDodKey(org), org, ...dod },
+      }),
+    );
   }
 
   async putWeekly(w: WeeklyUpdate): Promise<void> {

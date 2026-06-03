@@ -9,6 +9,7 @@ import type {
   WeeklyUpdate,
   ScopeRef,
   ControlAction,
+  DefinitionOfDone,
 } from '@harness/shared';
 
 /**
@@ -88,7 +89,17 @@ export const baseApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ['Project', 'Session', 'Objective', 'Agent', 'Skill', 'Weekly', 'Docs', 'Requirements'],
+  tagTypes: [
+    'Project',
+    'Session',
+    'Objective',
+    'Agent',
+    'Skill',
+    'Weekly',
+    'Docs',
+    'Requirements',
+    'Dod',
+  ],
   endpoints: (build) => ({
     getProjects: build.query<Project[], void>({
       query: () => 'projects',
@@ -137,6 +148,24 @@ export const baseApi = createApi({
     deleteObjective: build.mutation<{ deleted: boolean }, string>({
       query: (id) => ({ url: `objectives/${encodeURIComponent(id)}`, method: 'DELETE' }),
       invalidatesTags: ['Objective'],
+    }),
+
+    /**
+     * The org-wide Definition of Done (plan-mapping feature 1). Advisory config
+     * declaring what `/update-progress` verifies before work is "done". The
+     * backend serves the floor default when unset, so this never errors empty.
+     */
+    getDod: build.query<DefinitionOfDone, void>({
+      query: () => 'dod',
+      transformResponse: unwrapOne<DefinitionOfDone>('dod'),
+      providesTags: ['Dod'],
+    }),
+
+    /** Set the org-wide Definition of Done (admin-gated on the backend). */
+    putDod: build.mutation<DefinitionOfDone, DefinitionOfDone>({
+      query: (dod) => ({ url: 'dod', method: 'PUT', body: dod }),
+      transformResponse: unwrapOne<DefinitionOfDone>('dod'),
+      invalidatesTags: ['Dod'],
     }),
 
     getAgents: build.query<Agent[], { projectId?: string } | void>({
@@ -327,6 +356,8 @@ export const {
   useGetObjectivesQuery,
   useCreateObjectiveMutation,
   useDeleteObjectiveMutation,
+  useGetDodQuery,
+  usePutDodMutation,
   useGetAgentsQuery,
   useGetSkillsQuery,
   useGetWeeklyQuery,
