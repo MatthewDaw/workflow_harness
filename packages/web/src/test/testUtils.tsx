@@ -41,9 +41,13 @@ export function installFetchStub(seed: SeedData) {
   // stub below answers from `seed`.
   class StubRequest {
     url: string;
-    constructor(input: RequestInfo | URL) {
+    method: string;
+    body: unknown;
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
       this.url =
         typeof input === 'string' ? input : String((input as { url?: string }).url ?? input);
+      this.method = init?.method ?? 'GET';
+      this.body = init?.body ?? null;
     }
   }
   vi.stubGlobal('Request', StubRequest);
@@ -65,6 +69,8 @@ export function installFetchStub(seed: SeedData) {
 
     const proj = /^projects\/([^/]+)$/.exec(path);
     if (proj) return json((seed.projects ?? []).find((p) => p.id === proj[1]) ?? null);
+
+    if (/^sessions\/[^/]+\/control$/.test(path)) return json({ ok: true });
 
     const sess = /^sessions\/([^/]+)$/.exec(path);
     if (sess) return json((seed.sessions ?? []).find((s) => s.sessionId === sess[1]) ?? null);
