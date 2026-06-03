@@ -1,16 +1,14 @@
-import type { ObjectiveNode, Ticket, WeeklyItem } from '@harness/shared';
+import type { ObjectiveNode } from '@harness/shared';
 
 /**
- * Objective roll-up projection (U10).
+ * Objective roll-up projection (U10, re-pointed off tickets in U3).
  *
  * RCDO nodes form a tree (Rally Cry -> Defining Objective -> Outcome ->
  * Supporting Outcome) linked by `parentId`. Completion is computed bottom-up:
  *
- *  - A LEAF node's % comes from the work linked to it:
- *      · tickets whose `objectiveId` is the node -> fraction `done`
- *      · weekly-update items whose `objectiveId` is the node -> their
- *        `completionPct` (averaged in with the tickets)
- *    A leaf with no linked work is 0%.
+ *  - A LEAF node's % is the stored `progressPct` of the project(s) that own it
+ *    (a Project field, populated from GitHub `completion:` by a later unit;
+ *    absent => 0). A leaf with no owning project is 0%.
  *  - An INTERNAL node's % is the mean of its children's rolled-up %.
  *
  * `recomputeRollup` is pure: it takes the full node set plus the linked work and
@@ -19,24 +17,28 @@ import type { ObjectiveNode, Ticket, WeeklyItem } from '@harness/shared';
  * /objectives`) just serves the cached tree.
  */
 
-export interface RollupInput {
-  nodes: ObjectiveNode[];
-  /** Tickets across the org's projects, each optionally linked via objectiveId. */
-  tickets: Ticket[];
-  /** Weekly-update items across the org, each optionally linked via objectiveId. */
-  weeklyItems: WeeklyItem[];
+/**
+ * The progress a single project contributes to the Supporting Outcomes it owns.
+ * `progressPct` is the project's stored completion (from GitHub `completion:`
+ * frontmatter; undefined until a later read populates it). `supportingOutcomeIds`
+ * are the leaf objective ids this project owns.
+ */
+export interface ProjectProgress {
+  progressPct?: number;
+  supportingOutcomeIds: string[];
 }
 
-/** Completion (0..100) for the work linked directly to a single leaf node. */
-export function leafPct(nodeId: string, tickets: Ticket[], weeklyItems: WeeklyItem[]): number {
-  const linkedTickets = tickets.filter((t) => t.objectiveId === nodeId);
-  const linkedWeekly = weeklyItems.filter((w) => w.objectiveId === nodeId);
+export interface RollupInput {
+  nodes: ObjectiveNode[];
+  /** Project progress across the org, each owning zero or more Supporting Outcomes. */
+  projects: ProjectProgress[];
+}
 
-  const samples: number[] = [];
-  for (const t of linkedTickets) samples.push(t.status === 'done' ? 100 : 0);
-  for (const w of linkedWeekly) samples.push(w.completionPct ?? 0);
-
-  if (samples.length === 0) return 0;
+/** Completion (0..100) for the project progress linked to a single leaf node. */
+export function leafPct(nodeId: string, projects: ProjectProgress[]): number {
+  const owningProjects = projects.filter((p) => p.supportingOutcomeIds.includes(nodeId));
+  if (owningProjects.length === 0) return 0;
+  const samples = owningProjects.map((p) => p.progressPct ?? 0);
   return samples.reduce((a, b) => a + b, 0) / samples.length;
 }
 
@@ -46,7 +48,7 @@ export function leafPct(nodeId: string, tickets: Ticket[], weeklyItems: WeeklyIt
  * simply ignored — they contribute to no node and are never fatal.
  */
 export function recomputeRollup(input: RollupInput): ObjectiveNode[] {
-  const { nodes, tickets, weeklyItems } = input;
+  const { nodes, projects } = input;
 
   const childrenOf = new Map<string, ObjectiveNode[]>();
   for (const n of nodes) {
@@ -70,7 +72,7 @@ export function recomputeRollup(input: RollupInput): ObjectiveNode[] {
     const children = childrenOf.get(node.id) ?? [];
     let pct: number;
     if (children.length === 0) {
-      pct = leafPct(node.id, tickets, weeklyItems);
+      pct = leafPct(node.id, projects);
     } else {
       pct = children.reduce((sum, c) => sum + pctFor(c), 0) / children.length;
     }

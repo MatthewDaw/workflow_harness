@@ -1,14 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { createHmac, generateKeyPairSync } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Project, Ticket } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { generateKeyPairSync } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
 import { GitHubApp, type FetchLike, type FetchResponse } from '../src/github/app.js';
 import {
   attributeCommits,
@@ -18,32 +12,15 @@ import {
   parseProgress,
   type RawCommit,
 } from '../src/github/history.js';
-import {
-  handlePullRequest,
-  handleWebhook,
-  targetStatusFor,
-  verifySignature,
-} from '../src/github/webhooks.js';
 
 /**
- * U26 GitHub integration. PRD/PROGRESS parsing + framing, commit attribution by
- * ticket id (Weekly "done" source), the App client's file/commit reads against
- * recorded fixtures (no network), and webhook signature verification + PR-driven
- * ticket transitions.
+ * U26 GitHub integration. PRD/PROGRESS parsing + framing, commit attribution,
+ * and the App client's file/commit reads against recorded fixtures (no network).
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string): string =>
   readFileSync(join(here, 'fixtures', 'github', name), 'utf8');
-
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 describe('history: PRD/PROGRESS parsing + framing', () => {
   it('reads the goal and owned Supporting Outcomes from PRD.md', () => {
@@ -165,131 +142,5 @@ describe('app: GitHub App client (recorded fixtures, no network)', () => {
     const commits = await makeApp(fetch).listCommits('2026-05-25T00:00:00Z');
     expect(commits).toHaveLength(4);
     expect(commits.filter((c) => c.ticketIds.includes('WC-37'))).toHaveLength(2);
-  });
-});
-
-describe('webhooks: signature verification', () => {
-  const secret = 'shhh';
-  const body = JSON.stringify({ hello: 'world' });
-  const sign = (b: string) => 'sha256=' + createHmac('sha256', secret).update(b).digest('hex');
-
-  it('accepts a correctly-signed payload', () => {
-    expect(verifySignature(body, sign(body), secret)).toBe(true);
-  });
-
-  it('rejects a tampered payload', () => {
-    expect(verifySignature(body + 'x', sign(body), secret)).toBe(false);
-  });
-
-  it('rejects a missing or malformed signature header', () => {
-    expect(verifySignature(body, undefined, secret)).toBe(false);
-    expect(verifySignature(body, 'md5=abc', secret)).toBe(false);
-  });
-});
-
-describe('webhooks: PR-driven ticket transitions', () => {
-  const secret = 'webhook-secret';
-  const REPO = 'acme/weekly-compass';
-  const PROJ = 'weekly-compass';
-
-  const project = (): Project => ({
-    id: PROJ,
-    name: PROJ,
-    repo: `gh/${REPO}`,
-    ownerUserId: 'matt',
-    liveSessionCount: 0,
-  });
-  const ticket = (status: Ticket['status']): Ticket => ({
-    id: 'WC-37',
-    projectId: PROJ,
-    title: 'Reconciliation',
-    status,
-    priority: 'high',
-  });
-
-  beforeEach(async () => {
-    await repo.putProject(project());
-    await repo.linkRepoToProject(REPO, PROJ);
-  });
-
-  it('maps PR actions to target statuses', () => {
-    expect(targetStatusFor({ action: 'opened' })).toBe('in_review');
-    expect(targetStatusFor({ action: 'closed', pull_request: { merged: true } })).toBe('done');
-    expect(targetStatusFor({ action: 'closed', pull_request: { merged: false } })).toBeUndefined();
-  });
-
-  it('moves WC-37 to in_review on PR open (linked by branch)', async () => {
-    await repo.putTicket(ticket('in_progress'));
-    const result = await handlePullRequest(
-      {
-        action: 'opened',
-        repository: { full_name: REPO },
-        pull_request: { number: 42, head: { ref: 'feat/WC-37-recon' }, html_url: 'http://pr/42' },
-      },
-      { repo, secret },
-    );
-    expect(result.moved).toEqual([{ ticketId: 'WC-37', to: 'in_review' }]);
-    const t = await repo.getTicket(PROJ, 'WC-37');
-    expect(t?.status).toBe('in_review');
-    expect(t?.pr).toBe('http://pr/42');
-  });
-
-  it('moves WC-37 to done on PR merge (linked by title)', async () => {
-    await repo.putTicket(ticket('in_review'));
-    const result = await handlePullRequest(
-      {
-        action: 'closed',
-        repository: { full_name: REPO },
-        pull_request: { number: 42, title: 'WC-37 reconciliation', merged: true },
-      },
-      { repo, secret },
-    );
-    expect(result.moved).toEqual([{ ticketId: 'WC-37', to: 'done' }]);
-    expect((await repo.getTicket(PROJ, 'WC-37'))?.status).toBe('done');
-  });
-
-  it('skips an invalid transition rather than failing', async () => {
-    await repo.putTicket(ticket('done'));
-    const result = await handlePullRequest(
-      {
-        action: 'opened',
-        repository: { full_name: REPO },
-        pull_request: { head: { ref: 'WC-37' } },
-      },
-      { repo, secret },
-    );
-    expect(result.moved).toEqual([]);
-    expect((await repo.getTicket(PROJ, 'WC-37'))?.status).toBe('done');
-  });
-
-  it('rejects an unsigned webhook before any state change', async () => {
-    await repo.putTicket(ticket('in_progress'));
-    const raw = JSON.stringify({
-      action: 'opened',
-      repository: { full_name: REPO },
-      pull_request: { head: { ref: 'WC-37' } },
-    });
-    const res = await handleWebhook(
-      { rawBody: raw, eventType: 'pull_request', signature: 'sha256=bad' },
-      { repo, secret },
-    );
-    expect(res.statusCode).toBe(401);
-    expect((await repo.getTicket(PROJ, 'WC-37'))?.status).toBe('in_progress');
-  });
-
-  it('processes a correctly-signed webhook end-to-end', async () => {
-    await repo.putTicket(ticket('in_progress'));
-    const raw = JSON.stringify({
-      action: 'opened',
-      repository: { full_name: REPO },
-      pull_request: { number: 7, head: { ref: 'feat/WC-37' }, html_url: 'http://pr/7' },
-    });
-    const sig = 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex');
-    const res = await handleWebhook(
-      { rawBody: raw, eventType: 'pull_request', signature: sig },
-      { repo, secret },
-    );
-    expect(res.statusCode).toBe(200);
-    expect((await repo.getTicket(PROJ, 'WC-37'))?.status).toBe('in_review');
   });
 });

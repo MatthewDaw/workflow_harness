@@ -98,18 +98,23 @@ export const objectiveNodeSchema = z.object({
 });
 export type ObjectiveNode = z.infer<typeof objectiveNodeSchema>;
 
-export const weeklyItemSchema = z.object({
-  text: z.string().min(1),
-  objectiveId: z.string().optional(), // the Supporting Outcome / objective it advances
-  completionPct: z.number().min(0).max(100).optional(),
-});
-export type WeeklyItem = z.infer<typeof weeklyItemSchema>;
-
+/**
+ * A weekly update is a client-generated report posted to HQ (KTD4). The
+ * `/weekly-update` skill, running in claude+, reads the week's git diff,
+ * interviews the user on next-week goals, computes a never-blocking conformity
+ * score, and POSTs this shape. HQ stores and serves it; it never generates it.
+ *
+ *  - `done` is a free-form summary of what shipped this week (prose, not items).
+ *  - `plan` is a free-form summary of next week's intended work.
+ *  - `conformityScore` is a manager-visible 0..100 measure of how well the plan
+ *    ladders up to the fixed high-level goals. It is surfaced, never a gate.
+ */
 export const weeklyUpdateSchema = z.object({
   projectId: z.string().min(1),
   isoWeek: z.string().regex(/^\d{4}-W\d{2}$/), // e.g. 2026-W23
-  done: z.array(weeklyItemSchema).default([]),
-  plan: z.array(weeklyItemSchema).default([]),
+  done: z.string().default(''),
+  plan: z.string().default(''),
+  conformityScore: z.number().min(0).max(100).optional(),
   validated: z.boolean().default(false),
 });
 export type WeeklyUpdate = z.infer<typeof weeklyUpdateSchema>;

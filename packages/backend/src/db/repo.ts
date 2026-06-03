@@ -16,7 +16,6 @@ import type {
   SessionProjection,
   SessionVector,
   Skill,
-  Ticket,
   WeeklyUpdate,
 } from '@harness/shared';
 import * as k from './keys.js';
@@ -233,32 +232,6 @@ export class Repo {
       }),
     );
     return (res.Items ?? []) as InstanceRecord[];
-  }
-
-  // --- Tickets ------------------------------------------------------------
-
-  async putTicket(t: Ticket): Promise<void> {
-    await this.doc.send(
-      new PutCommand({ TableName: this.table, Item: { ...k.ticketKey(t.projectId, t.id), ...t } }),
-    );
-  }
-
-  async getTicket(projectId: string, ticketId: string): Promise<Ticket | undefined> {
-    const res = await this.doc.send(
-      new GetCommand({ TableName: this.table, Key: k.ticketKey(projectId, ticketId) }),
-    );
-    return res.Item as Ticket | undefined;
-  }
-
-  async listTickets(projectId: string): Promise<Ticket[]> {
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.table,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: { ':pk': `PROJ#${projectId}`, ':sk': 'TICK#' },
-      }),
-    );
-    return (res.Items ?? []) as Ticket[];
   }
 
   // --- Agents + skills (scoped) ------------------------------------------

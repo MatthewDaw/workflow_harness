@@ -10,8 +10,11 @@ import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
 /**
- * U11 REST: weekly updates. Store a draft, re-store overwrites, publish marks
- * validated and feeds the roll-up; weekly scoped to the project owner.
+ * U4 REST: weekly updates are now store/serve for a client-posted report. PUT
+ * stores the report (free-form `done`/`plan` summaries + a never-blocking
+ * `conformityScore`); re-store overwrites; publish marks validated and recomputes
+ * the org roll-up (which derives completion from project progress, not the
+ * report). Weekly is scoped to the project owner.
  */
 
 const ddbMock = mockClient(DynamoDBDocumentClient);
@@ -44,6 +47,16 @@ function putEvent(userId: string, body: unknown) {
   });
 }
 
+function getEvent(userId: string) {
+  return httpEvent({
+    method: 'GET',
+    userId,
+    org: ORG,
+    rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
+    path: { pid: PROJ, week: WEEK },
+  });
+}
+
 function publishEvent(userId: string) {
   return httpEvent({
     method: 'POST',
@@ -54,50 +67,79 @@ function publishEvent(userId: string) {
   });
 }
 
-describe('store + overwrite', () => {
-  it('stores a draft (validated false) and re-store overwrites the week', async () => {
+describe('store + serve a posted report', () => {
+  it('stores a report (validated false) and serves it back via GET', async () => {
     await repo.putProject(project(MATT));
-    await putWeekly(putEvent(MATT, { done: [{ text: 'a' }], plan: [{ text: 'b' }] }), deps);
-    let stored = await repo.getWeekly(PROJ, WEEK);
-    expect(stored?.validated).toBe(false);
-    expect(stored?.done).toHaveLength(1);
+    const res = await putWeekly(
+      putEvent(MATT, {
+        done: 'Shipped reconciliation and export.',
+        plan: 'Harden the importer; start the dashboard.',
+        conformityScore: 82,
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
 
-    await putWeekly(putEvent(MATT, { done: [{ text: 'a' }, { text: 'c' }], plan: [] }), deps);
-    stored = await repo.getWeekly(PROJ, WEEK);
-    expect(stored?.done).toHaveLength(2);
-    expect(stored?.plan).toHaveLength(0);
+    const served = await getWeekly(getEvent(MATT), deps);
+    const { update } = bodyOf<{ update: WeeklyUpdate }>(served as { body: string });
+    expect(update.validated).toBe(false);
+    expect(update.done).toBe('Shipped reconciliation and export.');
+    expect(update.plan).toBe('Harden the importer; start the dashboard.');
+    expect(update.conformityScore).toBe(82); // conformity round-trips
+  });
+
+  it('re-store overwrites the week', async () => {
+    await repo.putProject(project(MATT));
+    await putWeekly(putEvent(MATT, { done: 'first', plan: 'a' }), deps);
+    await putWeekly(putEvent(MATT, { done: 'second', plan: 'b', conformityScore: 50 }), deps);
+    const stored = await repo.getWeekly(PROJ, WEEK);
+    expect(stored?.done).toBe('second');
+    expect(stored?.plan).toBe('b');
+    expect(stored?.conformityScore).toBe(50);
+  });
+
+  it('a report without a conformity score stores and serves without one', async () => {
+    await repo.putProject(project(MATT));
+    await putWeekly(putEvent(MATT, { done: 'work', plan: 'more work' }), deps);
+    const stored = await repo.getWeekly(PROJ, WEEK);
+    expect(stored?.conformityScore).toBeUndefined();
+  });
+
+  it('rejects a malformed body (out-of-range conformity score)', async () => {
+    await repo.putProject(project(MATT));
+    const res = await putWeekly(putEvent(MATT, { done: 'x', conformityScore: 150 }), deps);
+    expect(res).toMatchObject({ statusCode: 400 });
   });
 
   it('404s for a non-owner', async () => {
     await repo.putProject(project('alice'));
-    const res = await getWeekly(
-      httpEvent({ method: 'GET', userId: MATT, org: ORG, path: { pid: PROJ, week: WEEK } }),
-      deps,
-    );
+    const res = await getWeekly(getEvent(MATT), deps);
     expect(res).toMatchObject({ statusCode: 404 });
   });
 });
 
-describe('publish feeds the roll-up', () => {
-  it('flips validated and moves the linked objective %', async () => {
-    await repo.putProject(project(MATT));
+describe('publish recomputes the org roll-up', () => {
+  it('flips validated and recomputes objective % from project progress', async () => {
+    // The project owns SO-a and reports 75% complete (the GitHub-sourced number).
+    await repo.putProject({
+      ...project(MATT),
+      progressPct: 75,
+      supportingOutcomeIds: ['so-a'],
+    } as Project & { supportingOutcomeIds: string[] });
     await repo.putObjective({ id: 'so-a', org: ORG, level: 'supporting_outcome', title: 'SO A' });
+
     // Establish a baseline cached %.
     await recomputeOrgRollup(repo, ORG, [PROJ]);
-    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(0);
+    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(75);
 
-    await putWeekly(
-      putEvent(MATT, { done: [{ text: 'shipped', objectiveId: 'so-a', completionPct: 75 }] }),
-      deps,
-    );
-    // Draft alone should not move %.
-    await recomputeOrgRollup(repo, ORG, [PROJ]);
-    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(0);
+    await putWeekly(putEvent(MATT, { done: 'shipped', plan: 'next', conformityScore: 90 }), deps);
 
     const res = await publishWeekly(publishEvent(MATT), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ update: WeeklyUpdate }>(res as { body: string }).update.validated).toBe(true);
-    // Publish re-ran the roll-up: the linked SO now reflects the completion.
+    const { update } = bodyOf<{ update: WeeklyUpdate }>(res as { body: string });
+    expect(update.validated).toBe(true);
+    expect(update.conformityScore).toBe(90);
+    // Publish re-ran the roll-up: the linked SO reflects the project's progress.
     expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(75);
   });
 
