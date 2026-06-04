@@ -136,6 +136,17 @@ export const baseApi = createApi({
       invalidatesTags: (_r, _e, id) => ['Project', { type: 'Project', id }],
     }),
 
+    /**
+     * Remove a project from HQ (and everything under it: sessions, instances,
+     * weekly, framing) plus its repo pointer. The GitHub repo is untouched — this
+     * only forgets the project, so it can be reconnected. Owner-or-admin gated
+     * server-side. Invalidates the project list so the card disappears.
+     */
+    deleteProject: build.mutation<{ deleted: boolean }, string>({
+      query: (id) => ({ url: `projects/${id}`, method: 'DELETE' }),
+      invalidatesTags: (_r, _e, id) => ['Project', { type: 'Project', id }],
+    }),
+
     getSessions: build.query<SessionProjection[], { live?: boolean } | void>({
       query: (arg) => (arg && arg.live ? 'sessions?live=true' : 'sessions'),
       transformResponse: unwrapArray<SessionProjection>('sessions'),
@@ -402,6 +413,7 @@ export const {
   useGetProjectQuery,
   useCreateProjectMutation,
   useRefreshProjectMutation,
+  useDeleteProjectMutation,
   useGetSessionsQuery,
   useGetSessionQuery,
   useGetSessionEventsQuery,

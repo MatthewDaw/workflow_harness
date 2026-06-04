@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   useCreateProjectMutation,
+  useDeleteProjectMutation,
   useGetProjectsQuery,
   useRefreshProjectMutation,
 } from '../../api/baseApi.js';
@@ -34,10 +35,19 @@ export function Projects() {
   const [createProject, { isLoading: connecting, isError: connectError }] =
     useCreateProjectMutation();
   const [refreshProject] = useRefreshProjectMutation();
+  const [deleteProject] = useDeleteProjectMutation();
 
   const [showConnect, setShowConnect] = useState(false);
   const [repoInput, setRepoInput] = useState('');
   const [nameInput, setNameInput] = useState('');
+  // The project id pending a delete confirmation (two-click confirm so the whole
+  // card's Link navigation is never hijacked by an accidental single click).
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+
+  const onDelete = async (id: string) => {
+    setConfirmingDelete(null);
+    await deleteProject(id).unwrap();
+  };
 
   const slug = normalizeRepoSlug(repoInput);
   const canConnect = slug.includes('/') && !connecting;
@@ -143,15 +153,60 @@ export function Projects() {
           <Link
             key={p.id}
             to={`/projects/${p.id}`}
-            className="hq-box bg-paper no-underline text-ink"
+            className="hq-box bg-paper no-underline text-ink relative"
+            data-testid={`project-card-${p.id}`}
           >
-            <div className="flex items-center justify-between">
-              <b>{p.name}</b>
-              {p.liveSessionCount > 0 ? (
-                <Pill variant="live">{p.liveSessionCount} live</Pill>
-              ) : (
-                <Pill variant="idle">idle</Pill>
-              )}
+            <div className="flex items-center justify-between gap-2">
+              <b className="min-w-0 truncate">{p.name}</b>
+              <div className="flex shrink-0 items-center gap-2">
+                {p.liveSessionCount > 0 ? (
+                  <Pill variant="live">{p.liveSessionCount} live</Pill>
+                ) : (
+                  <Pill variant="idle">idle</Pill>
+                )}
+                {confirmingDelete === p.id ? (
+                  <span className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="hq-btn text-[11px] text-live"
+                      data-testid={`project-delete-confirm-${p.id}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void onDelete(p.id);
+                      }}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      className="hq-btn text-[11px]"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setConfirmingDelete(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="hq-btn text-[11px] text-faint"
+                    aria-label={`Remove ${p.name}`}
+                    title="Remove project"
+                    data-testid={`project-delete-${p.id}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setConfirmingDelete(p.id);
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             </div>
             <div className="my-2 font-mono text-[11px] text-faint">{p.repo}</div>
             <div className="min-h-[48px] text-xs text-mut">{p.prdGoal ?? 'No PRD goal yet.'}</div>

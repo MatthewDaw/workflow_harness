@@ -211,7 +211,7 @@ export class ApiStack extends cdk.Stack {
       });
 
     r('/projects', [M.GET, M.POST], projectsFn, 'Projects');
-    r('/projects/{id}', [M.GET], projectsFn, 'ProjectById');
+    r('/projects/{id}', [M.GET, M.DELETE], projectsFn, 'ProjectById');
     r('/projects/{id}/requirements', [M.GET, M.PUT], projectsFn, 'ProjectRequirements');
     r('/projects/{id}/refresh', [M.POST], projectsFn, 'ProjectRefresh');
     r('/projects/{id}/docs', [M.GET], projectsFn, 'ProjectDocs');

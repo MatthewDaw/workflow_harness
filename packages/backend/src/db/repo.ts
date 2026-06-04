@@ -151,6 +151,48 @@ export class Repo {
     return (res.Item as { projectId?: string } | undefined)?.projectId;
   }
 
+  /**
+   * Delete a project and everything under its partition (sessions, instances,
+   * weekly snapshots, framing), plus the `owner/repo` -> projectId pointer so the
+   * repo can be reconnected cleanly. Everything for a project lives under
+   * `PK = PROJ#<id>`, so a single partition query enumerates the rows to delete;
+   * the repo pointer lives under its own key and is removed separately. Returns
+   * `{ deleted }` — false when the project did not exist, so the caller can 404.
+   */
+  async deleteProject(projectId: string): Promise<{ deleted: boolean }> {
+    const existing = await this.getProject(projectId);
+    if (!existing) return { deleted: false };
+
+    // Enumerate every row in the project's partition (project record + sessions +
+    // instances + weekly), keyed only by PK so SK variants all come back.
+    const rows = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': `PROJ#${projectId}` },
+        ProjectionExpression: 'PK, SK',
+      }),
+    );
+    for (const item of rows.Items ?? []) {
+      await this.doc.send(
+        new DeleteCommand({
+          TableName: this.table,
+          Key: { PK: (item as { PK: string }).PK, SK: (item as { SK: string }).SK },
+        }),
+      );
+    }
+
+    // Drop the repo -> project pointer (best-effort; absent is fine).
+    if (existing.repo) {
+      const repoFullName = existing.repo.replace(/^gh\//, '');
+      await this.doc.send(
+        new DeleteCommand({ TableName: this.table, Key: k.repoProjectKey(repoFullName) }),
+      );
+    }
+
+    return { deleted: true };
+  }
+
   // --- U7: GitHub-sourced framing (progress + PRD goal + owned outcomes) --
   //
   // Additive, intent-named writers kept separate from `putProject` so the merge

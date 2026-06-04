@@ -6,6 +6,7 @@ import type { Project, SessionProjection } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import {
   createProject,
+  deleteProjectHandler,
   getProject,
   getProjectDocContent,
   getProjectDocs,
@@ -417,5 +418,59 @@ describe('POST /projects', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('DELETE /projects/:id', () => {
+  it('deletes a project and its sessions for the owner', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await repo.putSessionProjection(session('s1', 'weekly-compass', MATT, 'active'));
+    await repo.linkRepoToProject('acme/weekly-compass', 'weekly-compass');
+
+    const res = await deleteProjectHandler(
+      httpEvent({ method: 'DELETE', userId: MATT, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ deleted: boolean }>(res as { body: string }).deleted).toBe(true);
+
+    expect(await repo.getProject('weekly-compass')).toBeUndefined();
+    expect(await repo.listSessionsForProject('weekly-compass')).toEqual([]);
+    expect(await repo.getProjectIdForRepo('acme/weekly-compass')).toBeUndefined();
+  });
+
+  it("404s a non-owner (no enumeration) and leaves the project intact", async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await deleteProjectHandler(
+      httpEvent({ method: 'DELETE', userId: ALICE, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+    expect(await repo.getProject('weekly-compass')).toBeDefined();
+  });
+
+  it('404s a missing project', async () => {
+    const res = await deleteProjectHandler(
+      httpEvent({ method: 'DELETE', userId: MATT, path: { id: 'ghost' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('401s without an authenticated principal', async () => {
+    const res = await deleteProjectHandler(
+      httpEvent({ method: 'DELETE', userId: null, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 401 });
+  });
+
+  it('routes DELETE through the lambda handler', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await handler(
+      httpEvent({ method: 'DELETE', userId: MATT, path: { id: 'weekly-compass' } }),
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(await repo.getProject('weekly-compass')).toBeUndefined();
   });
 });

@@ -138,6 +138,32 @@ export async function createProject(
   return created({ project });
 }
 
+/**
+ * DELETE /projects/:id — remove a project and everything under it (sessions,
+ * instances, weekly, framing) plus its repo pointer. Gated to the project's
+ * **owner or an org admin**; a missing/not-owned project is a 404 (no
+ * enumeration). The GitHub repo itself is never touched — this only forgets the
+ * project inside HQ, so the repo can be reconnected later.
+ */
+export async function deleteProjectHandler(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+  const id = pathParam(event, 'id');
+  if (!id) return badRequest('missing project id');
+
+  const project = await deps.repo.getProject(id);
+  if (!project) return notFound();
+  // Owner or org admin may delete; anyone else gets 404 (don't reveal existence).
+  if (!isAdmin(event) && project.ownerUserId !== principal.userId) return notFound();
+
+  const { deleted } = await deps.repo.deleteProject(id);
+  if (!deleted) return notFound();
+  return ok({ deleted: true });
+}
+
 // --- U7: GitHub framing refresh -----------------------------------------
 
 /** Resolve the project for the caller, or a 404 result. */
@@ -408,6 +434,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     if (method === 'DELETE') return disableProjectAgent(event, deps);
   }
 
+  if (method === 'DELETE' && hasId) return deleteProjectHandler(event, deps);
   if (method === 'POST' && hasId && rawPath.endsWith('/refresh')) return refreshProject(event, deps);
   if (method === 'GET' && hasId && /\/requirements$/.test(rawPath))
     return getProjectRequirements(event, deps);
