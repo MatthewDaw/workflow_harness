@@ -50,10 +50,6 @@ type Session struct {
 
 	histMu sync.Mutex
 	hist   []byte // recent raw PTY output, replayed to newly-attached sinks
-
-	// cleanup tears down the per-session isolated config root (U21), if one was
-	// built for this session. nil for non-isolated (test/fake) spawns.
-	cleanup func()
 }
 
 // maxHist caps a session's replay buffer. claude is a full-screen TUI that
@@ -111,15 +107,15 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
 	spec := spawn(repoRoot, id)
 
-	// Build the isolated config root for the real claude launch (U21). A failure
+	// Point the real claude launch at the stable isolated config root ~/.claude+
+	// (U21), so bundled skills + claude+ history stay out of the user's personal
+	// ~/.claude while auth/transcripts/settings persist across restarts. A failure
 	// here must never block a session — fall back to the inherited ~/.claude.
-	var cleanup func()
 	if spec.Isolate {
-		if dir, cl, err := config.BuildSessionConfigDir(id); err == nil {
+		if dir, err := config.EnsureConfigDir(); err == nil {
 			spec.Env = append(spec.Env, "CLAUDE_CONFIG_DIR="+dir)
-			cleanup = cl
 		} else {
-			log.Printf("pty: isolated config root for session %s failed, using ~/.claude: %v", id, err)
+			log.Printf("pty: isolated config root failed, using ~/.claude: %v", err)
 		}
 	}
 
@@ -152,7 +148,6 @@ func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Se
 	return &Session{
 		ID: id, Name: name,
 		cmd: c, pt: pt, status: StatusActive, cols: cols, rows: rows,
-		cleanup: cleanup,
 	}, nil
 }
 
@@ -353,10 +348,5 @@ func (s *Session) Close() error {
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
-	err := s.cmd.Wait()
-	// Tear down the isolated per-session config root (U21), if one was built.
-	if s.cleanup != nil {
-		s.cleanup()
-	}
-	return err
+	return s.cmd.Wait()
 }

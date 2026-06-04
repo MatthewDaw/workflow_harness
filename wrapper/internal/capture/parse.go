@@ -8,18 +8,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/workflow-harness/claude-plus/internal/config"
 )
 
 // TranscriptPath resolves the JSONL transcript path for a session in a repo,
-// mirroring Claude Code's ~/.claude/projects/<hash>/<sid>.jsonl layout. The
-// project hash is derived from the absolute repo path. This is the same surface
-// ce-sessions reads (KTD3).
+// mirroring Claude Code's <config>/projects/<hash>/<sid>.jsonl layout. claude+
+// launches Claude against the isolated ~/.claude+ config root (U21), so when that
+// root is active the transcript lives under it — reading ~/.claude here would
+// miss every event and the session would never reach HQ. Falls back to ~/.claude
+// when isolation is not active. The project hash is derived from the absolute
+// repo path. This is the same surface ce-sessions reads (KTD3).
 func TranscriptPath(repoRoot, sessionID string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	base, ok := config.ConfigDir()
+	if !ok {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".claude")
 	}
-	return filepath.Join(home, ".claude", "projects", projectHash(repoRoot), sessionID+".jsonl"), nil
+	return filepath.Join(base, "projects", projectHash(repoRoot), sessionID+".jsonl"), nil
 }
 
 // projectHash derives Claude Code's per-project directory name. Claude Code

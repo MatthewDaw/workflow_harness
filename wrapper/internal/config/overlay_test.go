@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// setupHome points the home dir at a temp dir and seeds a ~/.claude with a
-// credential + settings file, returning the home path.
+// setupHome points the home dir at a temp dir and seeds a ~/.claude with auth +
+// settings files, returning the home path.
 func setupHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -24,45 +24,52 @@ func setupHome(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(claude, "settings.json"), []byte(`{"a":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"onboarded":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return home
 }
 
-func TestBuildSessionConfigDir_IsolatesFromUserClaude(t *testing.T) {
+func TestEnsureConfigDir_SeedsAuthOnceAndIsStable(t *testing.T) {
 	home := setupHome(t)
 
-	// Seed a product skill in the isolated source so the link has a target.
-	plusSkills := filepath.Join(home, ".claude+", "skills", "startforge")
-	if err := os.MkdirAll(plusSkills, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(plusSkills, "SKILL.md"), []byte("# startforge"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	dir, cleanup, err := BuildSessionConfigDir("sess-1")
+	dir, err := EnsureConfigDir()
 	if err != nil {
-		t.Fatalf("build: %v", err)
+		t.Fatalf("ensure: %v", err)
 	}
-	defer cleanup()
-
-	// The config root is under ~/.claude+/run, never ~/.claude.
-	wantPrefix := filepath.Join(home, ".claude+", "run")
-	if rel, _ := filepath.Rel(wantPrefix, dir); rel == "" || rel[:2] == ".." {
-		t.Fatalf("config dir %s is not under %s", dir, wantPrefix)
+	if dir != filepath.Join(home, ".claude+") {
+		t.Fatalf("config dir = %s, want ~/.claude+", dir)
 	}
 
-	// Settings were copied (a snapshot), so editing the snapshot can't touch the
-	// user's real file.
-	if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
-		t.Errorf("settings.json not copied into session root: %v", err)
+	// Auth + settings + onboarding seeded from ~/.claude so the first launch is
+	// already signed in.
+	for _, name := range []string{".credentials.json", "settings.json", ".claude.json"} {
+		if !pathExists(filepath.Join(dir, name)) {
+			t.Errorf("%s was not seeded into ~/.claude+", name)
+		}
 	}
 
-	// The product skill is reachable through the session root's skills link.
-	if _, err := os.Stat(filepath.Join(dir, "skills", "startforge", "SKILL.md")); err != nil {
-		t.Errorf("product skill not linked into session root: %v", err)
+	// Stable across calls: a credential refreshed by claude+ is NOT clobbered by a
+	// second EnsureConfigDir (seed only when absent), so auth persists.
+	refreshed := filepath.Join(dir, ".credentials.json")
+	if err := os.WriteFile(refreshed, []byte(`{"token":"refreshed"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := EnsureConfigDir(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(refreshed)
+	if string(b) != `{"token":"refreshed"}` {
+		t.Errorf("EnsureConfigDir clobbered claude+'s own credential: %s", b)
+	}
+}
 
-	// Nothing was written into the user's personal ~/.claude beyond what we seeded.
+func TestEnsureConfigDir_NeverWritesToUserClaude(t *testing.T) {
+	home := setupHome(t)
+	if _, err := EnsureConfigDir(); err != nil {
+		t.Fatal(err)
+	}
+	// ~/.claude keeps exactly what we seeded — nothing new is written there.
 	entries, err := os.ReadDir(filepath.Join(home, ".claude"))
 	if err != nil {
 		t.Fatal(err)
@@ -76,45 +83,26 @@ func TestBuildSessionConfigDir_IsolatesFromUserClaude(t *testing.T) {
 	}
 }
 
-func TestBuildSessionConfigDir_CleanupRemovesSessionRootOnly(t *testing.T) {
-	home := setupHome(t)
-
-	dir, cleanup, err := BuildSessionConfigDir("sess-2")
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	cleanup()
-
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Errorf("session root should be removed after cleanup, stat err = %v", err)
-	}
-	// The stable isolated skills source survives a session teardown.
-	if _, err := os.Stat(filepath.Join(home, ".claude+", "skills")); err != nil {
-		t.Errorf("isolated skills source should survive cleanup: %v", err)
-	}
-}
-
-func TestBuildSessionConfigDir_LoggedOutHasNoCredentialLink(t *testing.T) {
+func TestConfigDir_ReportsActiveOnlyAfterInit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	// No ~/.claude at all (logged out / fresh machine).
 
-	dir, cleanup, err := BuildSessionConfigDir("sess-3")
-	if err != nil {
-		t.Fatalf("build should succeed when logged out: %v", err)
+	if _, ok := ConfigDir(); ok {
+		t.Fatal("ConfigDir should be inactive before EnsureConfigDir")
 	}
-	defer cleanup()
-
-	if _, err := os.Lstat(filepath.Join(dir, ".credentials.json")); !os.IsNotExist(err) {
-		t.Errorf("expected no credential link when ~/.claude absent, got err = %v", err)
+	if _, err := EnsureConfigDir(); err != nil {
+		t.Fatal(err)
+	}
+	dir, ok := ConfigDir()
+	if !ok || dir != filepath.Join(home, ".claude+") {
+		t.Fatalf("ConfigDir active=%v dir=%s after init", ok, dir)
 	}
 }
 
 func TestReadLocal_UnionsClaudePlusWithoutPolluting(t *testing.T) {
 	home := setupHome(t)
 
-	// A user-owned skill in ~/.claude and a product skill in ~/.claude+.
 	userSkill := filepath.Join(home, ".claude", "skills", "my-skill")
 	if err := os.MkdirAll(userSkill, 0o755); err != nil {
 		t.Fatal(err)

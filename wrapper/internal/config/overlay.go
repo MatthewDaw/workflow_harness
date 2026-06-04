@@ -8,34 +8,42 @@ import (
 
 // The isolated config root for claude+ inner sessions (U21).
 //
-// claude+ launches its inner Claude with CLAUDE_CONFIG_DIR pointed at a
-// per-session directory under ~/.claude+, so the skills/agents bundled with the
-// product and the session history claude+ generates never land in the user's
-// personal ~/.claude. Because CLAUDE_CONFIG_DIR is set only on the child claude+
-// spawns, a normal `claude` (claude+ not running, or an unrelated session) reads
-// ~/.claude and never sees this root — the isolation is "in place" only for the
-// specific inner Claude claude+ launches.
+// claude+ launches its inner Claude with CLAUDE_CONFIG_DIR pointed at a STABLE
+// ~/.claude+ directory, so the skills/agents bundled with the product and the
+// session history claude+ generates live there instead of the user's personal
+// ~/.claude. Because CLAUDE_CONFIG_DIR is set only on the child claude+ spawns, a
+// normal `claude` (claude+ not running, or an unrelated session) reads ~/.claude
+// and never sees this root.
+//
+// The root is stable (not per-session) and is NEVER torn down, so everything
+// Claude keeps under its config dir — auth/credentials, onboarding state,
+// transcripts, settings, MCP — persists across claude+ restarts. On first use it
+// is seeded once from ~/.claude so the very first launch is already signed in;
+// thereafter claude+ maintains its own copies.
 //
 // Layout:
 //
 //	~/.claude+/
-//	  skills/        product-bundled skills (stable; shared across sessions)
+//	  skills/        product-bundled skills (synced from HQ via ApplyPulled)
 //	  agents/        product-bundled agents
-//	  run/<id>/      a per-session config root (ephemeral; removed on close)
-//	    skills   -> ../../skills      (link, claude+ only)
-//	    agents   -> ../../agents
-//	    .credentials.json -> ~/.claude/.credentials.json   (symlink; token refresh writes through)
-//	    settings.json     (copied snapshot — claude+ can't edit the real file)
-//	    .mcp.json         (copied snapshot)
+//	  projects/      claude+ session transcripts (capture tailer reads here)
+//	  .credentials.json, .claude.json, settings.json, .mcp.json
+//	                 seeded once from ~/.claude, then owned by claude+
 
-// sharedLinkFiles are symlinked from the user's ~/.claude so writes pass through
-// to the real shared file. The credential store must persist refreshed tokens
-// back to the user's actual login.
-var sharedLinkFiles = []string{".credentials.json"}
+// seededFile is one file copied once from the user's ~/.claude into ~/.claude+ on
+// first init, so claude+ starts authenticated/configured. src is relative to the
+// home dir (some files live at ~/.claude/<name>, .claude.json lives at ~/<name>).
+type seededFile struct {
+	homeRel string // source path relative to $HOME
+	name    string // destination file name under ~/.claude+
+}
 
-// sharedCopyFiles are snapshot-copied from ~/.claude into each session root, so
-// an in-claude+ change can't edit the user's real config: settings + MCP servers.
-var sharedCopyFiles = []string{"settings.json", ".mcp.json"}
+var seededFiles = []seededFile{
+	{homeRel: filepath.Join(".claude", ".credentials.json"), name: ".credentials.json"},
+	{homeRel: ".claude.json", name: ".claude.json"},
+	{homeRel: filepath.Join(".claude", "settings.json"), name: "settings.json"},
+	{homeRel: filepath.Join(".claude", ".mcp.json"), name: ".mcp.json"},
+}
 
 // plusDir resolves ~/.claude+.
 func plusDir() (string, error) {
@@ -46,74 +54,52 @@ func plusDir() (string, error) {
 	return filepath.Join(home, ".claude+"), nil
 }
 
-// BuildSessionConfigDir builds an isolated, session-scoped CLAUDE_CONFIG_DIR for
-// one inner claude and returns it plus a cleanup func that removes the per-session
-// directory (the stable ~/.claude+/skills + agents survive). It never writes into
-// ~/.claude. A logged-out user (no ~/.claude/.credentials.json) still gets a
-// usable root — the credential link is simply omitted.
-func BuildSessionConfigDir(sessionID string) (dir string, cleanup func(), err error) {
-	plus, err := plusDir()
+// EnsureConfigDir returns the stable claude+ config root (~/.claude+), creating
+// and seeding it on first use. Skills/agents dirs are ensured; auth + settings
+// are copied once from ~/.claude (only when absent, so claude+'s own evolving
+// state is never clobbered). It is idempotent and additive — safe to call on
+// every session start — and never deletes anything, so auth and transcripts
+// persist across restarts.
+func EnsureConfigDir() (string, error) {
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	user, err := claudeDir()
-	if err != nil {
-		return "", nil, err
+	plus := filepath.Join(home, ".claude+")
+	if err := os.MkdirAll(plus, 0o755); err != nil {
+		return "", err
 	}
-
-	dir = filepath.Join(plus, "run", sessionID)
-	// Start each session from a clean root so a crashed prior run can't leak.
-	_ = os.RemoveAll(dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", nil, err
-	}
-	cleanup = func() { _ = os.RemoveAll(dir) }
-
-	// Link the stable product skills/agents source into the session root. The
-	// source dirs are ensured so a fresh install (nothing seeded yet) still
-	// yields a valid, empty registry rather than a dangling link.
 	for _, sub := range []string{"skills", "agents"} {
-		src := filepath.Join(plus, sub)
-		if mkErr := os.MkdirAll(src, 0o755); mkErr != nil {
-			continue
-		}
-		linkDirOrCopy(filepath.Join(dir, sub), src)
+		_ = os.MkdirAll(filepath.Join(plus, sub), 0o755)
 	}
-
-	// Shared login: symlink so refreshed tokens persist to the real file.
-	for _, name := range sharedLinkFiles {
-		src := filepath.Join(user, name)
-		if !pathExists(src) {
+	// Seed auth/settings from ~/.claude once, so the first claude+ launch is
+	// already signed in. Skipped for any file claude+ already has.
+	for _, f := range seededFiles {
+		dst := filepath.Join(plus, f.name)
+		if pathExists(dst) {
 			continue
 		}
-		dst := filepath.Join(dir, name)
-		if linkErr := os.Symlink(src, dst); linkErr != nil {
-			// Windows without Developer Mode / elevation can't symlink; fall back
-			// to a copy. Degraded: a token refreshed inside claude+ won't persist
-			// back to ~/.claude, but the session still launches authenticated.
+		src := filepath.Join(home, f.homeRel)
+		if pathExists(src) {
 			_ = copyFile(src, dst)
 		}
 	}
-
-	// Shared settings + MCP: copy a read-only snapshot.
-	for _, name := range sharedCopyFiles {
-		src := filepath.Join(user, name)
-		if !pathExists(src) {
-			continue
-		}
-		_ = copyFile(src, filepath.Join(dir, name))
-	}
-
-	return dir, cleanup, nil
+	return plus, nil
 }
 
-// linkDirOrCopy symlinks dst -> src, falling back to a recursive copy when the
-// platform refuses symlinks (Windows without Developer Mode).
-func linkDirOrCopy(dst, src string) {
-	if err := os.Symlink(src, dst); err == nil {
-		return
+// ConfigDir returns the claude+ config root if it has been initialized
+// (~/.claude+ exists), reporting whether isolation is active. Callers that must
+// locate Claude's config-relative files (e.g. the transcript tailer) use this so
+// they read from the same root claude+ launches Claude against.
+func ConfigDir() (string, bool) {
+	plus, err := plusDir()
+	if err != nil {
+		return "", false
 	}
-	_ = copyTree(dst, src)
+	if _, statErr := os.Stat(plus); statErr != nil {
+		return "", false
+	}
+	return plus, true
 }
 
 func pathExists(p string) bool {
@@ -139,21 +125,4 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
-}
-
-func copyTree(dst, src string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		return copyFile(path, target)
-	})
 }
