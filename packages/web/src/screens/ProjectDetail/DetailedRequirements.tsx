@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   useGetProjectDocsQuery,
   useGetProjectDocContentQuery,
-  type ProjectDoc,
 } from '../../api/baseApi.js';
 import { Bar, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
@@ -15,12 +14,9 @@ import { buildDocTree } from '../../lib/docTree.js';
  * `docs/plans/`, see lib/docTree.ts) where each folder shows an aggregate (mean)
  * completion badge and each doc keeps its own `completion` badge.
  *
- * Instead of a single selected doc, the reading pane is a CONTINUOUS scroll of
- * every doc stacked vertically (each a `<section>` fetching its own markdown). An
- * IntersectionObserver tracks whichever section is at the top of the viewport and
- * sets it as the active doc — driving BOTH the top "Active doc · … · NN%" bar and
- * the sidebar highlight. Clicking a sidebar doc scrolls its section into view.
- * Read-only.
+ * One doc is shown at a time: clicking a doc in the sidebar selects it, and the
+ * reading pane renders just that doc's markdown. The top bar reflects the
+ * selected doc's completion. Read-only.
  */
 export function DetailedRequirements() {
   const { projectId = '' } = useParams();
@@ -28,56 +24,23 @@ export function DetailedRequirements() {
     skip: !projectId,
   });
   const docList = useMemo(() => docs ?? [], [docs]);
-
   const tree = useMemo(() => buildDocTree(docList), [docList]);
 
-  // Active doc tracked by the scroll-spy; null until the first intersection (or
-  // when there are no docs). Falls back to the first doc for the initial render.
-  const [activePath, setActivePath] = useState<string | null>(null);
-  const effectiveActive = activePath ?? docList[0]?.path ?? null;
-  const activeDoc = docList.find((d) => d.path === effectiveActive) ?? null;
+  // Selected doc; defaults to the first doc until the user clicks another.
+  const [selected, setSelected] = useState<string | null>(null);
+  const activePath = selected ?? docList[0]?.path ?? null;
+  const activeDoc = docList.find((d) => d.path === activePath) ?? null;
 
-  // Refs to each section, keyed by doc path, so the observer + click-to-scroll
-  // can reach them.
-  const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const { data: content, isFetching: contentFetching } = useGetProjectDocContentQuery(
+    { projectId, path: activePath ?? '' },
+    { skip: !projectId || !activePath },
+  );
 
-  // Overall fallback = mean of all docs (initial render, before any intersect).
-  const overallPct =
-    docList.length > 0
-      ? Math.round(docList.reduce((a, d) => a + d.completion, 0) / docList.length)
-      : 0;
-
-  // Scroll-spy: observe every section and set the top-most visible one active.
-  useEffect(() => {
-    if (docList.length === 0) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Pick the visible entry nearest the top of the viewport.
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        const top = visible[0];
-        if (top) {
-          const path = (top.target as HTMLElement).dataset.path;
-          if (path) setActivePath(path);
-        }
-      },
-      { rootMargin: '0px 0px -70% 0px', threshold: 0 },
-    );
-    for (const el of sectionRefs.current.values()) observer.observe(el);
-    return () => observer.disconnect();
-  }, [docList]);
-
-  // The bar/label reflects the active doc (or the overall fallback).
-  const activePct = activeDoc?.completion ?? overallPct;
+  // The bar reflects the selected doc's completion.
+  const activePct = activeDoc?.completion ?? 0;
   const activeLabel = activeDoc
-    ? `Active doc · ${activeDoc.title} · ${activePct}%`
-    : `Overall completion · ${overallPct}%`;
-
-  function selectDoc(path: string) {
-    setActivePath(path);
-    sectionRefs.current.get(path)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+    ? `${activeDoc.title} · ${activePct}%`
+    : 'Detailed requirements';
 
   return (
     <div className="hq-pad" data-testid="detailed-requirements">
@@ -120,13 +83,13 @@ export function DetailedRequirements() {
                   );
                 }
                 const d = node.doc;
-                const isActive = d.path === effectiveActive;
+                const isActive = d.path === activePath;
                 return (
                   <li key={d.path}>
                     <button
                       type="button"
                       style={indent}
-                      onClick={() => selectDoc(d.path)}
+                      onClick={() => setSelected(d.path)}
                       aria-current={isActive ? 'true' : undefined}
                       className={`flex w-full items-center justify-between gap-2 rounded-sm py-1.5 pr-2 text-left text-[12.5px] ${
                         isActive ? 'bg-paper2 font-semibold text-ink' : 'text-mut'
@@ -146,59 +109,16 @@ export function DetailedRequirements() {
 
         <div className="min-w-0 flex-1">
           <div className="hq-box bg-paper">
-            {docList.length === 0 ? (
-              <div className="text-mut">No requirement docs.</div>
+            {!activePath ? (
+              <div className="text-mut">Select a document.</div>
+            ) : contentFetching ? (
+              <div className="text-mut">Loading…</div>
             ) : (
-              docList.map((d) => (
-                <DocSection
-                  key={d.path}
-                  projectId={projectId}
-                  doc={d}
-                  registerRef={(el) => {
-                    if (el) sectionRefs.current.set(d.path, el);
-                    else sectionRefs.current.delete(d.path);
-                  }}
-                />
-              ))
+              <MarkdownView markdown={content?.markdown ?? ''} />
             )}
           </div>
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * One doc rendered in the continuous scroll: a `<section>` with a heading and
- * its markdown, fetched independently. The `data-path` attribute lets the
- * scroll-spy observer map an intersecting section back to its doc path.
- */
-function DocSection({
-  projectId,
-  doc,
-  registerRef,
-}: {
-  projectId: string;
-  doc: ProjectDoc;
-  registerRef: (el: HTMLElement | null) => void;
-}) {
-  const { data: content, isFetching } = useGetProjectDocContentQuery(
-    { projectId, path: doc.path },
-    { skip: !projectId || !doc.path },
-  );
-  return (
-    <section
-      ref={registerRef}
-      data-path={doc.path}
-      aria-label={doc.title}
-      className="scroll-mt-4 border-b border-paper2 pb-4 pt-2 first:pt-0 last:border-b-0 last:pb-0"
-    >
-      <h3 className="m-0 mb-2 text-[13px] font-semibold text-ink">{doc.title}</h3>
-      {isFetching ? (
-        <div className="text-mut">Loading…</div>
-      ) : (
-        <MarkdownView markdown={content?.markdown ?? ''} />
-      )}
-    </section>
   );
 }

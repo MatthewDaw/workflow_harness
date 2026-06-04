@@ -1,27 +1,8 @@
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { act, screen } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { DetailedRequirements } from './DetailedRequirements.js';
 import { renderWithProviders } from '../../test/testUtils.js';
-
-/**
- * jsdom has no IntersectionObserver. Stub it so the scroll-spy effect can wire
- * up without throwing; we also capture instances if a test wants to fire an
- * intersection manually.
- */
-class FakeIntersectionObserver {
-  static instances: FakeIntersectionObserver[] = [];
-  cb: IntersectionObserverCallback;
-  elements: Element[] = [];
-  constructor(cb: IntersectionObserverCallback) {
-    this.cb = cb;
-    FakeIntersectionObserver.instances.push(this);
-  }
-  observe(el: Element) {
-    this.elements.push(el);
-  }
-  unobserve() {}
-  disconnect() {}
-}
 
 const seed = {
   docs: {
@@ -47,18 +28,10 @@ function renderDetailed() {
 }
 
 describe('DetailedRequirements (U11)', () => {
-  beforeEach(() => {
-    FakeIntersectionObserver.instances = [];
-    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
-    Element.prototype.scrollIntoView = vi.fn();
-  });
-  afterEach(() => vi.unstubAllGlobals());
-
   it('lists docs with per-doc completion badges grouped into a folder tree', async () => {
     renderDetailed();
     await screen.findByRole('button', { name: /Overview/ });
     const sidebar = screen.getByRole('complementary', { name: 'Requirement documents' });
-    // Root doc + per-doc badges.
     expect(sidebar.textContent).toContain('Overview');
     expect(sidebar.textContent).toContain('80%');
     expect(sidebar.textContent).toContain('Plan Mapping');
@@ -68,46 +41,25 @@ describe('DetailedRequirements (U11)', () => {
     expect(sidebar.textContent).toContain('60%');
   });
 
-  it('renders every doc in a continuous scroll', async () => {
+  it('shows only the first doc initially, with the bar on its completion', async () => {
     renderDetailed();
     expect(await screen.findByText('The overview doc.')).toBeInTheDocument();
-    expect(await screen.findByText('The mapping doc.')).toBeInTheDocument();
-    expect(await screen.findByText('The weekly doc.')).toBeInTheDocument();
-  });
-
-  it('starts the bar on the first doc and updates on scroll-spy intersection', async () => {
-    renderDetailed();
-    await screen.findByText('The overview doc.');
-    // Initial active = first doc (80%).
+    // The other docs are NOT rendered until selected (one doc at a time).
+    expect(screen.queryByText('The weekly doc.')).not.toBeInTheDocument();
     const bar = screen.getByRole('progressbar');
     expect(bar).toHaveAttribute('aria-valuenow', '80');
-    expect(screen.getByText(/Active doc · Overview · 80%/)).toBeInTheDocument();
+    expect(screen.getByText(/Overview · 80%/)).toBeInTheDocument();
+  });
 
-    // Fire an intersection making the "Weekly Update" section the top-most.
-    const observer = lastObserver();
-    const weekly = observer.elements.find(
-      (el) => (el as HTMLElement).dataset.path === 'docs/plans/command-hq/02-weekly.md',
-    )!;
-    act(() => {
-      observer.cb(
-        [
-          {
-            target: weekly,
-            isIntersecting: true,
-            boundingClientRect: { top: 0 } as DOMRectReadOnly,
-          } as IntersectionObserverEntry,
-        ],
-        observer as unknown as IntersectionObserver,
-      );
-    });
+  it('switches to a doc (and updates the bar) when its sidebar link is clicked', async () => {
+    renderDetailed();
+    await screen.findByText('The overview doc.');
 
-    expect(await screen.findByText(/Active doc · Weekly Update · 30%/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Weekly Update/ }));
+
+    expect(await screen.findByText('The weekly doc.')).toBeInTheDocument();
+    expect(screen.queryByText('The overview doc.')).not.toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '30');
+    expect(screen.getByText(/Weekly Update · 30%/)).toBeInTheDocument();
   });
 });
-
-/** Grab the most recently constructed fake observer. */
-function lastObserver(): FakeIntersectionObserver {
-  const list = FakeIntersectionObserver.instances;
-  return list[list.length - 1] as FakeIntersectionObserver;
-}
