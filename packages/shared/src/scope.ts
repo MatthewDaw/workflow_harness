@@ -22,6 +22,24 @@ export const scopeRefSchema = z.object({
 });
 export type ScopeRef = z.infer<typeof scopeRefSchema>;
 
+/**
+ * Org-only scope reference. Skills and Agents collapsed to a single ORG
+ * catalog (the 3-tier model is retired for them), so their `scope.tier` is
+ * always `'org'` and `id` is the org id. Other entities still use the full
+ * `scopeRefSchema`; the 3-tier `resolveScoped`/`isVisible` helpers below stay
+ * intact for them and for the wrapper golden fixture.
+ */
+export const orgScopeRefSchema = z.object({
+  tier: z.literal('org'),
+  id: z.string().min(1),
+});
+export type OrgScopeRef = z.infer<typeof orgScopeRefSchema>;
+
+/** Construct an org scope ref for the given org id. */
+export function orgScope(org: string): OrgScopeRef {
+  return { tier: 'org', id: org };
+}
+
 /** The viewer context a resolution is performed against. */
 export interface ScopeContext {
   org: string;
