@@ -94,24 +94,13 @@ named in that project's `enabledSkills` / `enabledAgents` — see
 
 ## Status
 
-- **Built:** org-catalog model (skills/agents org-only, `createdBy` stamped) +
-  per-project opt-in (`enabledSkills`/`enabledAgents`, agent-enable skill union);
-  agents/skills/bundles registry + REST; config sync drift (over the `~/.claude` ∪
-  `~/.claude+` union); sessions list + live watch + control gateway
-  (inject/pause/interrupt/shutdown/kill); steer + project opt-in controls wired in
-  the web UI; org-scope bundled-skill seed. The scope-change endpoint is retired.
-- **Now built (shipped):** session `name` + first-prompt (`summary`) columns on the
-  Sessions tab (`screens/Sessions/SessionsTable.tsx`); live per-session activity feed
-  in the watch view carrying real turn/tool content
-  (`screens/LiveWatch/LiveWatch.tsx` `activityLine`); the Skills-tab overhaul —
-  searchable picker (`components/SkillCombobox.tsx`), author filter, hide bundle
-  members by default (`screens/Skills/Skills.tsx`), a per-project Skills subtab
-  (`screens/ProjectDetail/ProjectSkills.tsx`, routed at `projects/:id/skills`), and
-  the `/hq-create-hq-skill` skill (`.claude/skills/hq-create-hq-skill/`).
-- **Partially built:** `DELETE /skills/:name` and `DELETE /agents/:name` exist in the
-  REST (`rest/skills.ts`, `rest/agents.ts`) but are **not surfaced in the org-catalog
-  Skills/Agents screens**, and there is **no `command-hq-starter` delete-protection**
-  enforced server-side yet (the starter bundle is only a seed name in
-  `seed/skills.ts`).
-- **Polish/open:** delete UX + starter-bundle protection; org-publish governance
-  (review/approval at org scope).
+- **Built:** scope model + resolution; agents/skills/bundles registry + REST;
+  config sync drift (over the `~/.claude` ∪ `~/.claude+` union); sessions list +
+  live watch + control gateway (inject/pause/interrupt/shutdown/kill); steer +
+  scope/bundle controls wired in the web UI; org-scope bundled-skill seed.
+- **In progress (not on this branch):** session name + first-prompt columns on the
+  Sessions tab; live per-session activity feed in the watch view; a Skills-tab
+  overhaul (searchable picker, hide bundle members by default, a `create-hq-skill`
+  skill); delete agents/skills with the `command-hq-starter` bundle protected
+  server-side. See the overview's "In progress / next".
+- **Polish/open:** org-publish governance (review/approval at org scope).

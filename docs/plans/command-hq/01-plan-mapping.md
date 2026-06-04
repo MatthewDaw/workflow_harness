@@ -68,9 +68,8 @@ not recompute them.**
 ```
 
 *Code today (built):* `packages/backend/src/github/history.ts` parses the
-`completion:` frontmatter (`docs/PRD.md` for the Project Requirements bar, the top
-`docs/plans/` doc for the Detailed root, falling back to legacy `PROGRESS.md %`);
-`rest/projects.ts` stores the bar value as the project's `progressPct`
+`completion:` frontmatter of the top `docs/plans/` doc (falling back to legacy
+`PROGRESS.md %`); `rest/projects.ts` stores it as the project's `progressPct`
 (with `framingReadAt`/`framingStale` for last-known-on-failure);
 `projections/rollup.ts` (re-pointed off tickets in the migration) derives a
 Supporting-Outcome leaf % from that stored value. The web bars read the stored
@@ -130,8 +129,7 @@ prod-E2E *enforced* gate remains deferred (see Open questions).
   (with legacy `PROGRESS.md %` fallback); roll-up **re-pointed off tickets** onto
   the stored `progressPct`; the docs-tree read endpoints; the two-tier
   (Project/Detailed) requirements UI with `MarkdownView` and a full-screen reader;
-  the read-only `docs/PRD.md`-sourced Project Requirements; the advisory
-  Definition-of-Done REST;
+  the editable HQ-owned Project Requirements; the advisory Definition-of-Done REST;
   the `/update-progress` skill (`.claude/skills/update-progress/`).
 - **Deferred:** the **enforced** prod-E2E verified-completion gate (and
   `completion:` frontmatter integrity) — for v1 the pushed % is `/update-progress`'s

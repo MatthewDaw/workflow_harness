@@ -33,7 +33,7 @@ lifecycle, built natively and automated by the harness.
    - how that **compared to last week's plan** (planned vs. actual = the
      *reconciliation*).
    *Code today (built):* this reconciliation is assembled **client-side** by the
-   `/hq-weekly-update` skill from the git diff today→−7d. The old server-side
+   `/weekly-update` skill from the git diff today→−7d. The old server-side
    `weekly/align.ts` (`summarizeAlignment`/`computeDeltas`/`attributeDone`) and
    `weekly/agent.ts` were **deleted** in the migration — the whole `weekly/` module
    is gone; the backend no longer generates weekly content. `github/history.ts`
@@ -75,7 +75,7 @@ Update") renders the *output*.
 
 ## Status
 
-- **Built:** the `/hq-weekly-update` skill (`.claude/skills/hq-weekly-update/`) with the
+- **Built:** the `/weekly-update` skill (`.claude/skills/weekly-update/`) with the
   interview + client-side never-blocking conformity score; the store/serve
   `rest/weekly.ts` (draft/publish, `conformityScore` round-trip); the Weekly screen
   (`ProjectWeekly.tsx`) renders the posted report.

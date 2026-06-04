@@ -143,13 +143,12 @@ compounding.
 - **Distillation is client-side, no server pipeline.** As built, the fuzzy read-side
   `packages/backend/src/forge/` backend (`embed.ts`/`propose.ts`/`search.ts`) and
   the OpenSearch `SearchStack` were **removed** — distillation runs inside the
-  claude+ PTY on the user's own Claude subscription (`.claude/skills/hq-endforge/`),
+  claude+ PTY on the user's own Claude subscription (`.claude/skills/endforge/`),
   not against a backend embeddings/search service. Registration reuses the existing
-  org-scoped agents/skills REST (`rest/agents.ts`, `rest/skills.ts`) only.
-- **Registry + sync** `wrapper/internal/config/` — content-hashed items, push/pull
-  drift — carries registration and the per-project enable-and-pull distribution. (The
-  catalog is org-scoped now; the wrapper materializes only the linked project's
-  enabled items into `~/.claude+`.)
+  agents/skills REST + scope model only.
+- **Registry + sync** `wrapper/internal/config/` — scoped (`org | user#uid |
+  proj#pid`), content-hashed items, push/pull drift — carries registration and the
+  promote-and-pull distribution.
 - **Capture** `wrapper/internal/capture/` — already records sessions + skills used,
   so the evidence is observable for free.
 
@@ -158,7 +157,7 @@ compounding.
 - **The optimize/refine loop** — run candidate prompts in a worktree, score for
   outcome + process quality, iterate (~3–5 times on the user's Claude subscription),
   plus the **split pass** (reusable prompt vs. project-specific provenance doc).
-  *Partially landed:* an `/hq-optimize-agent` skill (`.claude/skills/hq-optimize-agent/`)
+  *Partially landed:* an `/optimize-agent` skill (`.claude/skills/optimize-agent/`)
   now runs a client-side refine → self-judge → keep-best loop against an existing
   HQ agent and writes the improved prompt back via the agents REST. The
   capture-time split pass and an automated transfer-validation gate remain deferred.
@@ -167,7 +166,7 @@ compounding.
 - The "try it out" propagation / trainset loop; agent/skill versioning, hash-pinning,
   CI-on-skill-change, `AGENTS.md` export.
 - The read-side Forge tab and its backend are **removed** (no `wrapper/internal/tui/`
-  package, no `backend/src/forge/`), so only `/hq-startforge`…`/hq-endforge` is
+  package, no `backend/src/forge/`), so only `/startforge`…`/endforge` is
   user-visible — already done, not a fast-follow.
 
 **Outside this v1's identity:** token-spend / prompt-length optimization; search-based
@@ -190,13 +189,12 @@ skill selection or broad skill synthesis beyond what the forged agent needs.
 
 ## Status
 
-- **Built:** `/hq-startforge` (land-to-main + worktree/branch + start marker) and
-  `/hq-endforge` (classify → distill → curate skills → register into the org catalog)
-  under `.claude/skills/`; the single-admin **per-project enable** path on a project's
-  Agents tab (`screens/ProjectDetail/ProjectAgents.tsx`); capture; the config-sync
-  registry + per-project drift/pull. An `/hq-optimize-agent` skill ships a client-side
-  prompt-refinement loop. The read-side fuzzy Forge backend + OpenSearch stack are
-  removed.
+- **Built:** `/startforge` (land-to-main + worktree/branch + start marker) and
+  `/endforge` (classify → distill → curate skills → register at author scope) under
+  `.claude/skills/`; the single-admin **promote** path via the existing scope-elevate
+  on the Agents screen; capture; the config-sync registry + org-wide drift/pull. An
+  `/optimize-agent` skill ships a client-side prompt-refinement loop. The read-side
+  fuzzy Forge backend + OpenSearch stack are removed.
 - **Deferred:** the capture-time optimize/refine + reusable/provenance split pass
-  inside `/hq-endforge`; an automated transfer-validation gate; secret redaction of the
+  inside `/endforge`; an automated transfer-validation gate; secret redaction of the
   diff/transcript before distillation.

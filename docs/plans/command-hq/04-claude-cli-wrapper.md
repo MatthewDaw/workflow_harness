@@ -183,14 +183,10 @@ attach rather than silently lacking the new frame.
   double-click rename, view switcher, dangerous-mode propagation), the **isolated
   `~/.claude+` config root**, and config-sync (remote half + drift over the
   `~/.claude` ∪ `~/.claude+` union).
-- **Now built (shipped):** a `UserPromptSubmit` hook that auto-renames a session
-  from the first prompt (`capture/hooks.go`, `daemon/daemon.go` `ApplyAutoName`);
-  the daemon **protocol-version bump** (now `ProtocolVersion = 4`,
-  `daemon/attach.go`) so a rebuild auto-replaces a stale daemon on the next attach;
-  and a heartbeat + read-time freshness window so power-loss/killed daemons drop off
-  HQ's live list — the runtime emits a `session.heartbeat` every ~20s
-  (`daemon/runtime.go` `heartbeatLoop`, `heartbeatInterval = 20s`) and the read side
-  retires any live session silent for >60s (`rest/sessions.ts`
-  `STALE_WINDOW_MS = 60_000`, `isSessionLive`).
+- **In progress (not on this branch):** a `UserPromptSubmit` hook that auto-renames
+  a session on the first prompt and pushes the rename to the attached CLI tab; a
+  further daemon **protocol-version bump** so rebuilds auto-replace a stale daemon;
+  a heartbeat + ~60s freshness window so power-loss/killed daemons drop off HQ's
+  live list. See the overview's "In progress / next".
 - **Open:** full transport hardening (offline buffer edge cases), status-line and
   multiplexed-tab polish per the wireframe TUI screens.
