@@ -165,25 +165,41 @@ export async function control(
   const session = await deps.repo.getSessionById(id);
   if (!session || session.ownerUserId !== principal.userId) return notFound();
 
+  const action = parsed.data.action;
+  const terminating = action === 'shutdown' || action === 'kill';
+
   // Resolve the owning daemon connection via the instance reverse index.
   const instanceId = session.instanceId;
   const daemonConnId = instanceId
     ? await deps.repo.getInstanceConnectionId(instanceId)
     : undefined;
-  if (!daemonConnId) {
-    // Owner authorized, but the daemon is not currently connected.
-    return json(502, { error: 'daemon offline' });
+
+  // Best-effort: route the control frame to the owning daemon if it's connected,
+  // so a live process actually receives inject/pause/interrupt or terminates.
+  let delivered = false;
+  if (daemonConnId) {
+    const poster = deps.poster ?? new ApiGwPoster(controlEndpoint());
+    delivered = await poster.post(daemonConnId, {
+      type: 'control',
+      sessionId: id,
+      action,
+      payload: parsed.data.payload,
+    });
   }
 
-  const poster = deps.poster ?? new ApiGwPoster(controlEndpoint());
-  const delivered = await poster.post(daemonConnId, {
-    type: 'control',
-    sessionId: id,
-    action: parsed.data.action,
-    payload: parsed.data.payload,
-  });
-  if (!delivered) return json(502, { error: 'daemon offline' });
+  if (terminating) {
+    // The owner explicitly terminated the session. Mark it done AUTHORITATIVELY
+    // regardless of whether a daemon was reachable — otherwise a session whose
+    // daemon already died (a ghost) could never be shut down from HQ and would
+    // linger as live forever. Writing status=done also drops it from the live
+    // (GSI1) index. If the daemon WAS reached it will also exit and emit its own
+    // done, which is idempotent with this write.
+    await deps.repo.putSessionProjection({ ...session, status: 'done' });
+    return json(202, { delivered, terminated: true });
+  }
 
+  // Non-terminating controls (inject/pause/interrupt) genuinely need the daemon.
+  if (!delivered) return json(502, { error: 'daemon offline' });
   return json(202, { delivered: true });
 }
 

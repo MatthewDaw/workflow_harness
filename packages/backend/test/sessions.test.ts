@@ -212,6 +212,48 @@ describe('POST /sessions/:id/control', () => {
     });
   });
 
+  it('shuts down a ghost session (no live daemon) by marking it done, returning 202', async () => {
+    // Owned session whose daemon is gone — no INSTCONN reverse-index record.
+    await repo.putSessionProjection({
+      ...session('ghost-1', 'p1', MATT, 'needs_input'),
+      instanceId: 'dead-inst',
+    });
+    const { posts, poster } = recordingPoster();
+    const res = await control(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        rawPath: '/sessions/ghost-1/control',
+        path: { id: 'ghost-1' },
+        body: { action: 'shutdown', payload: {} },
+      }),
+      { repo, poster },
+    );
+    // No daemon to route to, but the terminate is authoritative: marks done + 202.
+    expect(res).toMatchObject({ statusCode: 202 });
+    expect(posts).toHaveLength(0);
+    const after = await repo.getSessionById('ghost-1');
+    expect(after?.status).toBe('done');
+  });
+
+  it('still 502s a non-terminating control (inject) when the daemon is offline', async () => {
+    await repo.putSessionProjection({
+      ...session('s-2', 'p1', MATT, 'active'),
+      instanceId: 'dead-inst',
+    });
+    const { poster } = recordingPoster();
+    const res = await control(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { id: 's-2' },
+        body: { action: 'inject', payload: { text: 'hi' } },
+      }),
+      { repo, poster },
+    );
+    expect(res).toMatchObject({ statusCode: 502 });
+  });
+
   it('404s a control frame from a non-owner and routes nothing', async () => {
     await seedOwnedSessionWithDaemon();
     const { posts, poster } = recordingPoster();
