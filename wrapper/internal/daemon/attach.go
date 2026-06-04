@@ -27,7 +27,13 @@ import (
 // v3 added FrameKill (force-close one session) and FrameShutdown (terminate all
 // sessions and stop the daemon on quit); a stale v2 daemon is auto-replaced on
 // the next attach.
-const ProtocolVersion = 3
+// v4 changed attach behavior: the daemon now pushes a fresh FrameSessAck session
+// list to attached clients on every session.rename (manual ⌃R, first-prompt
+// auto-name, and LLM title) so the sub-tab strip updates live instead of staying
+// stale. Bumping forces a still-running v3 daemon (an old rebuild) to be detected
+// as incompatible and auto-replaced on the next `claude+` launch, so the fix
+// actually takes effect without the user manually killing the daemon.
+const ProtocolVersion = 4
 
 // FrameType discriminates control frames on the attach channel.
 type FrameType string

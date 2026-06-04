@@ -280,6 +280,14 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 		if b, err := env.Marshal(); err == nil {
 			send(Frame{Type: FrameEvent, EvJSON: string(b)})
 		}
+		// A session.rename (manual ⌃R, first-prompt auto-name, or LLM title)
+		// changes a sub-tab's display name. The Stream-panel event alone does
+		// NOT update the sub-tab row, so push a fresh session list — the same
+		// FrameSessAck the manual-rename ack uses — so the client re-runs
+		// SetSubs with the new name. Without this the tab strip stays stale.
+		if env.Event.Kind == event.KindSessionRename {
+			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
+		}
 		// Status changes are driven by events, so push a fresh meter snapshot
 		// alongside each forwarded event.
 		st := d.Status()
