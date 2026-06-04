@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 90
+completion: 91
 feature: platform-architecture
 note: Added beyond the user's five-feature list as the shared substrate. Fold/remove if undesired.
 ---
