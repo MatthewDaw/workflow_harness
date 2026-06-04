@@ -75,6 +75,17 @@ func (p *Pane) History() [][]vt.Glyph {
 	return h
 }
 
+// MouseTracking reports whether the session has enabled any xterm mouse-tracking
+// mode (DECSET 1000/1002/1003 etc.). claude turns this on for its own scroll and
+// selection, which means wheel/click events over the body belong to claude — the
+// chrome must forward them rather than consume them for its own (alt-screen-empty)
+// scrollback.
+func (p *Pane) MouseTracking() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.term.Mode()&vt.ModeMouseMask != 0
+}
+
 // Cursor returns the emulator cursor position and visibility, clamped into the
 // current grid so callers can index Cell with it safely.
 func (p *Pane) Cursor() (x, y int, visible bool) {

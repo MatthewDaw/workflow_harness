@@ -384,6 +384,36 @@ func (c *Compositor) ScrollToBottom() {
 	c.scrollOff = 0
 }
 
+// FocusedMouseTracking reports whether the focused session has enabled xterm
+// mouse tracking. When true, mouse events over the body belong to the session
+// (claude scrolls/selects itself) and the chrome forwards rather than consumes
+// them — without this, claude runs in the alternate screen where the chrome's own
+// scrollback ring is always empty, so the wheel did nothing at all.
+func (c *Compositor) FocusedMouseTracking() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.focusedPaneLocked()
+	if p == nil {
+		return false
+	}
+	return p.MouseTracking()
+}
+
+// BodyMouse maps a screen-space mouse event to 1-based, pane-relative
+// coordinates, reporting whether it landed in the body region (the live session
+// pane) rather than on the tab bar, sub-tab row, or status line. The body starts
+// at column 0 / row bodyTop and runs to the row above the status line, so the
+// column passes through unchanged and the row shifts up by bodyTop.
+func (c *Compositor) BodyMouse(x, y int) (col, row int, inBody bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, sh := c.screen.Size()
+	if y < bodyTop || y >= sh-1 { // last row is the status line
+		return 0, 0, false
+	}
+	return x + 1, y - bodyTop + 1, true
+}
+
 // focusedHistoryLenLocked returns the focused session's scrollback length.
 // Caller holds c.mu.
 func (c *Compositor) focusedHistoryLenLocked() int {

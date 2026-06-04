@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -198,6 +199,19 @@ func runShell(c *daemon.Client, instance string) error {
 						_ = c.Rename(id, name)
 					}
 					markDirty()
+				}
+				// When the focused session has enabled mouse tracking (claude does,
+				// in the alternate screen), any mouse event over the body belongs to
+				// claude — forward it verbatim so wheel-scroll and selection work
+				// exactly as they would running claude directly. The chrome's own
+				// scrollback viewport is always empty in the alt screen, so without
+				// this the wheel did nothing. Chrome rows (tabs, sub-tabs, status)
+				// fall outside the body region and stay with the chrome below.
+				if comp.ActiveIsSession() {
+					if col, row, inBody := comp.BodyMouse(ev.x, ev.y); inBody && comp.FocusedMouseTracking() {
+						_ = c.Input(encodeSGRMouse(ev.button, col, row, ev.press))
+						continue
+					}
 				}
 				if ev.press && ev.button == 0 { // plain left-click
 					res := comp.Click(ev.x, ev.y)
@@ -464,6 +478,18 @@ func parseInput(r io.Reader, out chan<- inputEvent) {
 			return
 		}
 	}
+}
+
+// encodeSGRMouse re-serializes a decoded mouse event as the SGR sequence
+// (ESC [ < button ; col ; row M|m) that the hosted session's PTY expects, the
+// inverse of parseSGRMouse. col/row are 1-based; press selects the M (press) vs
+// m (release) terminator. Wheel events (button 64/65) are press-only.
+func encodeSGRMouse(button, col, row int, press bool) []byte {
+	term := byte('m')
+	if press {
+		term = 'M'
+	}
+	return []byte(fmt.Sprintf("\x1b[<%d;%d;%d%c", button, col, row, term))
 }
 
 func parseSGRMouse(params []byte, press bool) (inputEvent, bool) {
