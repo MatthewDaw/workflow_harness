@@ -63,11 +63,14 @@ describe('navigation + routing', () => {
 
   it('deep-links into a project and routes its sub-tabs', async () => {
     renderApp('/projects/weekly-compass');
-    expect(await screen.findByTestId('project-overview')).toBeInTheDocument();
+    // Opening a project lands on Project Requirements (Overview was removed).
+    expect(await screen.findByTestId('project-requirements')).toBeInTheDocument();
 
     // Scope clicks to the project sub-nav (the top nav also has a "Sessions" link).
     const subnav = screen.getByRole('navigation', { name: 'Project sections' });
 
+    // Overview sub-tab was removed entirely.
+    expect(within(subnav).queryByRole('link', { name: 'Overview' })).not.toBeInTheDocument();
     // Tickets sub-tab was removed (the new model has no tickets).
     expect(within(subnav).queryByRole('link', { name: 'Tickets' })).not.toBeInTheDocument();
     // U12: two-tier requirements sub-tabs.
