@@ -267,7 +267,7 @@ func (c *Client) serve(conn *websocket.Conn) {
 				return
 			}
 			if msg.Type == "control" && c.onCtrl != nil {
-				c.onCtrl(ControlFrame{SessionID: msg.SessionID, Action: msg.Action, Payload: msg.Payload})
+				c.onCtrl(ControlFrame{SessionID: msg.SessionID, Action: msg.Action, Payload: msg.Payload.Text})
 			}
 		}
 	}()
@@ -320,9 +320,22 @@ type eventFrame struct {
 // inMsg is the INBOUND frame (HQ → daemon). The backend posts control frames as
 // `{ type: 'control', sessionId, action, payload }` (and event fan-out as
 // `{ type: 'event', ... }`, which daemons ignore). We dispatch on `type`.
+//
+// `payload` is an OBJECT on the wire — the backend's control schema is
+// `payload: { text?: string }` (inject carries `text`; other actions send `{}`).
+// It must be decoded as a struct, NOT a bare string: decoding `{"text":"…"}` or
+// `{}` into a Go `string` makes encoding/json return an UnmarshalTypeError, which
+// makes `conn.ReadJSON` fail and tears down the read loop — so EVERY control
+// frame (shutdown/kill/inject/…) was silently dropped and the WS bounced.
 type inMsg struct {
-	Type      string        `json:"type"`
-	SessionID string        `json:"sessionId"`
-	Action    ControlAction `json:"action"`
-	Payload   string        `json:"payload,omitempty"`
+	Type      string           `json:"type"`
+	SessionID string           `json:"sessionId"`
+	Action    ControlAction    `json:"action"`
+	Payload   inControlPayload `json:"payload,omitempty"`
+}
+
+// inControlPayload mirrors the backend control schema's `payload` object. Only
+// `inject` populates `text`; the receiver maps it to ControlFrame.Payload.
+type inControlPayload struct {
+	Text string `json:"text"`
 }

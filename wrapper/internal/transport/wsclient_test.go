@@ -17,7 +17,7 @@ import (
 // records every envelope written and can be told to fail after the Nth write
 // (failAfter), simulating a connection that drops mid-flush.
 type fakeWriter struct {
-	seqs     []int64
+	seqs      []int64
 	failAfter int // 0 = never fail
 }
 
@@ -250,5 +250,94 @@ func TestClientDeliversOverRealSocket(t *testing.T) {
 	hq.waitForDistinct(t, total, 5*time.Second)
 	if after, _ := buf.Pending(); len(after) != 0 {
 		t.Fatalf("buffer not drained after delivery: %d pending", len(after))
+	}
+}
+
+// ctrlHQ is an in-process WebSocket endpoint that, on connect, posts a single
+// inbound control frame to the daemon using the EXACT wire shape the backend
+// emits: `payload` is an OBJECT (`{ text?: string }`), never a bare string.
+type ctrlHQ struct {
+	srv   *httptest.Server
+	url   string
+	frame string
+}
+
+func newCtrlHQ(t *testing.T, frame string) *ctrlHQ {
+	t.Helper()
+	h := &ctrlHQ{frame: frame}
+	up := websocket.Upgrader{}
+	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Push the control frame down the daemon's inbound read path.
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(h.frame))
+		// Keep the connection open so the daemon's read loop stays alive.
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	h.url = "ws" + strings.TrimPrefix(h.srv.URL, "http")
+	t.Cleanup(h.srv.Close)
+	return h
+}
+
+// TestInboundControlFrameWithObjectPayload is the regression for the
+// shutdown/kill no-op bug: the backend posts control frames with `payload` as an
+// OBJECT (`{ "text": "..." }` for inject, `{}` for shutdown/kill). The daemon's
+// inMsg.Payload was typed as a bare `string`, so ReadJSON failed with an
+// UnmarshalTypeError, the read loop tore down, and NO control frame was ever
+// dispatched. With payload decoded as a struct, the handler fires and the inject
+// text round-trips through ControlFrame.Payload.
+func TestInboundControlFrameWithObjectPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		frame    string
+		wantAct  ControlAction
+		wantText string
+	}{
+		{
+			name:     "shutdown empty payload",
+			frame:    `{"type":"control","sessionId":"s1","action":"shutdown","payload":{}}`,
+			wantAct:  ActionShutdown,
+			wantText: "",
+		},
+		{
+			name:     "inject text payload",
+			frame:    `{"type":"control","sessionId":"s2","action":"inject","payload":{"text":"hello"}}`,
+			wantAct:  ActionInject,
+			wantText: "hello",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hq := newCtrlHQ(t, tc.frame)
+			buf := newBuf(t)
+
+			got := make(chan ControlFrame, 1)
+			c := NewClient(hq.url, "tok", "inst-ctrl", buf, func(f ControlFrame) {
+				select {
+				case got <- f:
+				default:
+				}
+			})
+			go c.Run()
+			defer c.Stop()
+
+			select {
+			case f := <-got:
+				if f.Action != tc.wantAct {
+					t.Fatalf("action = %q, want %q", f.Action, tc.wantAct)
+				}
+				if f.Payload != tc.wantText {
+					t.Fatalf("payload = %q, want %q", f.Payload, tc.wantText)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("inbound control frame was never dispatched (ReadJSON likely failed on object payload)")
+			}
+		})
 	}
 }
