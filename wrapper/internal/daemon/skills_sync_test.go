@@ -1,8 +1,12 @@
 package daemon
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -106,6 +110,121 @@ func TestSyncSkillsOnceRunsOncePerSession(t *testing.T) {
 	rt.syncedMu.Unlock()
 	if present {
 		t.Fatal("never-seen session should not be present")
+	}
+}
+
+// TestProjectOptInMaterializesOnlyEnabled proves the org-catalog + per-project
+// opt-in contract end-to-end against a real HTTP source: HQ serves the whole org
+// catalog (every item org-scoped, no ?project), GET /projects/{id} returns the
+// project's enabledSkills/enabledAgents, and ONLY those opted-in items
+// materialize into ~/.claude+. An org skill the project did NOT enable must not
+// land locally.
+func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	var sawProjectQuery bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("project") != "" {
+			sawProjectQuery = true
+		}
+		w.Header().Set("content-type", "application/json")
+		switch {
+		case r.URL.Path == "/projects/myproj":
+			// Project opts into one skill and one agent (not the whole catalog).
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"enabledSkills": []string{"enabled-skill"},
+				"enabledAgents": []string{"enabled-agent"},
+			})
+		case r.URL.Path == "/skills":
+			// Whole org catalog, every item org-scoped.
+			_ = json.NewEncoder(w).Encode(map[string]any{"skills": []map[string]any{
+				{"name": "enabled-skill", "scope": map[string]string{"tier": "org", "id": "acme"}, "body": "# enabled\nbody"},
+				{"name": "other-skill", "scope": map[string]string{"tier": "org", "id": "acme"}, "body": "# other\nbody"},
+			}})
+		case r.URL.Path == "/agents":
+			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []map[string]any{
+				{"name": "enabled-agent", "scope": map[string]string{"tier": "org", "id": "acme"}, "prompt": "you are enabled"},
+				{"name": "other-agent", "scope": map[string]string{"tier": "org", "id": "acme"}, "prompt": "you are other"},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	src := config.NewHTTPRemoteSource(srv.URL, "tok", "myproj")
+
+	report, err := config.ComputeDrift(src)
+	if err != nil {
+		t.Fatalf("ComputeDrift: %v", err)
+	}
+	local, err := config.ReadLocal()
+	if err != nil {
+		t.Fatalf("ReadLocal: %v", err)
+	}
+	pulled, _, errs := config.Reconcile(report, src, local)
+	if len(errs) != 0 {
+		t.Fatalf("reconcile errs: %v", errs)
+	}
+	// Only the two opted-in items pull down.
+	if pulled != 2 {
+		t.Fatalf("pulled = %d, want 2 (one enabled skill + one enabled agent)", pulled)
+	}
+	if sawProjectQuery {
+		t.Fatal("catalog GETs must not carry a ?project query param (org-wide catalog)")
+	}
+
+	plus := filepath.Join(home, ".claude+")
+	// Enabled items materialize.
+	if _, err := os.Stat(filepath.Join(plus, "skills", "enabled-skill", "SKILL.md")); err != nil {
+		t.Fatalf("enabled skill should materialize: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(plus, "agents", "enabled-agent.md")); err != nil {
+		t.Fatalf("enabled agent should materialize: %v", err)
+	}
+	// An org item NOT in the project opt-in must NOT land locally.
+	if _, err := os.Stat(filepath.Join(plus, "skills", "other-skill")); !os.IsNotExist(err) {
+		t.Fatalf("non-opted-in org skill must not materialize (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(plus, "agents", "other-agent.md")); !os.IsNotExist(err) {
+		t.Fatalf("non-opted-in org agent must not materialize (err=%v)", err)
+	}
+}
+
+// TestEmptyOptInMaterializesNothing proves the explicit-opt-in rule: a project
+// with empty enabledSkills/enabledAgents pulls NOTHING from a populated org
+// catalog on first sync.
+func TestEmptyOptInMaterializesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/projects/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{}) // no enabled arrays
+		case r.URL.Path == "/skills":
+			_ = json.NewEncoder(w).Encode(map[string]any{"skills": []map[string]any{
+				{"name": "org-skill", "scope": map[string]string{"tier": "org", "id": "acme"}, "body": "# x"},
+			}})
+		case r.URL.Path == "/agents":
+			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []map[string]any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	src := config.NewHTTPRemoteSource(srv.URL, "tok", "p1")
+	report, err := config.ComputeDrift(src)
+	if err != nil {
+		t.Fatalf("ComputeDrift: %v", err)
+	}
+	if report.NeedsPull != 0 {
+		t.Fatalf("empty opt-in must pull nothing, got NeedsPull=%d", report.NeedsPull)
 	}
 }
 

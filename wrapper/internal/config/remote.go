@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+// orgScopeFor returns the org-scoped ScopeRef the wrapper pushes with. The
+// catalog is org-only now (the 3-tier scope is retired for skills+agents), so
+// local-only pushes go up at org scope, matching the scope HQ serves back.
+func orgScopeFor(org string) map[string]string {
+	return map[string]string{"tier": "org", "id": org}
+}
+
 // HTTPRemoteSource is the production RemoteSource: it reads HQ's effective
 // agents/skills over the REST API and computes content hashes comparable to the
 // local ones. This is the "remote half" that makes the drift meter real — before
@@ -34,6 +41,12 @@ type HTTPRemoteSource struct {
 	// poll loop and a per-session reconcile both share one source (#12).
 	bodiesMu sync.RWMutex
 	bodies   map[string]string
+
+	// orgID is the catalog's org, learned from the org scope HQ stamps on every
+	// returned skill/agent during Fetch. Push uses it so a local-only item lands
+	// at the same org scope HQ serves back (org-only catalog). Guarded by
+	// bodiesMu alongside bodies since both are published by Fetch.
+	orgID string
 }
 
 // NewHTTPRemoteSource builds a source with a bounded HTTP client.
@@ -76,14 +89,48 @@ func (s scope) String() string {
 	return s.Tier + "#" + s.ID
 }
 
-// Fetch reads /agents and /skills for the project and turns them into RemoteItems
-// with content hashes. Malformed entries (missing name) are skipped rather than
-// failing the whole fetch, so one bad record never blanks the meter.
+// remoteProject is the linked project's opt-in, read from GET /projects/{id}.
+// Skills/agents are now an org-wide catalog; a project materializes ONLY the
+// names it has explicitly opted into. Old project records (lacking these
+// fields) decode as nil/empty -> nothing materializes (explicit opt-in).
+type remoteProject struct {
+	EnabledSkills []string `json:"enabledSkills"`
+	EnabledAgents []string `json:"enabledAgents"`
+}
+
+// Fetch reads the org catalog (GET /agents, GET /skills, no ?project, no
+// server-side scope resolution) and the linked project's opt-in (GET
+// /projects/{id}), then returns the EFFECTIVE set: the intersection of the org
+// catalog with project.enabledSkills / project.enabledAgents. Agents' own skills
+// are NOT re-expanded here — the backend already union-added each enabled
+// agent's skills (bundles flattened) into project.enabledSkills, so they appear
+// in the skills intersection naturally. Malformed entries (missing name) are
+// skipped rather than failing the whole fetch, so one bad record never blanks
+// the meter. A project with empty enabledSkills/enabledAgents yields nothing.
 func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
+	// Read the linked project's opt-in first so we can intersect the org catalog
+	// against it. Without a project we cannot know what to materialize, so the
+	// effective set is empty (explicit opt-in is required).
+	enabledSkills := map[string]bool{}
+	enabledAgents := map[string]bool{}
+	if h.ProjectID != "" {
+		var proj remoteProject
+		if err := h.getJSON("/projects/"+url.PathEscape(h.ProjectID), &proj); err != nil {
+			return nil, err
+		}
+		for _, n := range proj.EnabledSkills {
+			enabledSkills[n] = true
+		}
+		for _, n := range proj.EnabledAgents {
+			enabledAgents[n] = true
+		}
+	}
+
 	// Build the body cache locally, then publish it under the lock in one shot so a
 	// concurrent Body() reader never observes a half-populated map (#12).
 	bodies := map[string]string{}
 	var out []RemoteItem
+	orgID := ""
 
 	var agentsResp struct {
 		Agents []remoteAgent `json:"agents"`
@@ -93,6 +140,13 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	}
 	for _, a := range agentsResp.Agents {
 		if a.Name == "" {
+			continue
+		}
+		if a.Scope.Tier == "org" && a.Scope.ID != "" {
+			orgID = a.Scope.ID
+		}
+		// Effective set: keep only agents the project has opted into.
+		if !enabledAgents[a.Name] {
 			continue
 		}
 		bodies[string(KindAgent)+"/"+a.Name] = a.Prompt
@@ -109,6 +163,14 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		if s.Name == "" {
 			continue
 		}
+		if s.Scope.Tier == "org" && s.Scope.ID != "" {
+			orgID = s.Scope.ID
+		}
+		// Effective set: keep only skills the project has opted into. Skills brought
+		// by an enabled agent are already present here (union-added server-side).
+		if !enabledSkills[s.Name] {
+			continue
+		}
 		// Prefer the full SKILL.md body when HQ serves it (the authoritative local
 		// content); fall back to the description for older HQ responses. Hash the
 		// same text we will write so a pulled skill reads back in-sync.
@@ -122,6 +184,7 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 
 	h.bodiesMu.Lock()
 	h.bodies = bodies
+	h.orgID = orgID
 	h.bodiesMu.Unlock()
 	return out, nil
 }
@@ -137,31 +200,38 @@ func (h *HTTPRemoteSource) Body(item RemoteItem) (string, error) {
 	return "", fmt.Errorf("no cached body for %s/%s (fetch first)", item.Kind, item.Name)
 }
 
-// Push uploads a local-only item to HQ at the caller's user scope. Pushing a new
-// definition is a deliberate authoring action, so the payload is intentionally
-// minimal (name + prompt/description at user scope); richer fields are edited in
-// the HQ agent editor (U17).
+// Push uploads a local-only item to HQ at ORG scope. The catalog is org-only now
+// (the 3-tier scope is retired for skills+agents), so a local-authored item is
+// published into the org catalog. Pushing a new definition is a deliberate
+// authoring action, so the payload is intentionally minimal (name +
+// prompt/description at org scope); richer fields are edited in the HQ editor
+// (U17). The org id is learned from the catalog during Fetch.
 func (h *HTTPRemoteSource) Push(item Item, body string) error {
+	h.bodiesMu.RLock()
+	org := h.orgID
+	h.bodiesMu.RUnlock()
+	scope := orgScopeFor(org)
 	var path string
 	var payload any
 	switch item.Kind {
 	case KindAgent:
 		path = "/agents"
-		payload = map[string]any{"name": item.Name, "scope": map[string]string{"tier": "user"}, "prompt": body, "model": "inherit"}
+		payload = map[string]any{"name": item.Name, "scope": scope, "prompt": body, "model": "inherit"}
 	case KindSkill:
 		path = "/skills"
-		payload = map[string]any{"name": item.Name, "scope": map[string]string{"tier": "user"}, "kind": "skill", "description": body}
+		payload = map[string]any{"name": item.Name, "scope": scope, "kind": "skill", "description": body}
 	default:
 		return fmt.Errorf("unknown kind %q", item.Kind)
 	}
 	return h.postJSON(path, payload)
 }
 
+// getJSON issues an authenticated GET against the org catalog. It no longer
+// appends a ?project query param: the catalog is org-wide and server-side scope
+// resolution is retired; the project's opt-in is read separately via
+// GET /projects/{id} and applied client-side in Fetch.
 func (h *HTTPRemoteSource) getJSON(path string, dst any) error {
 	u := h.BaseURL + path
-	if h.ProjectID != "" {
-		u += "?project=" + url.QueryEscape(h.ProjectID)
-	}
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return err
