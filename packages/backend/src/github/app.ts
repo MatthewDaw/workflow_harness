@@ -116,13 +116,15 @@ export class GitHubApp {
     return body.token;
   }
 
-  private headers(token: string): Record<string, string> {
-    return {
-      authorization: `Bearer ${token}`,
+  protected headers(token: string): Record<string, string> {
+    const base = {
       accept: 'application/vnd.github+json',
       'x-github-api-version': '2022-11-28',
       'user-agent': 'command-hq',
     };
+    // An empty token means "unauthenticated" (public-repo reads) — omit the
+    // Authorization header entirely rather than sending `Bearer ` with no value.
+    return token ? { authorization: `Bearer ${token}`, ...base } : base;
   }
 
   /**
@@ -313,6 +315,29 @@ export class GitHubApp {
     const entry = entries.find((e) => e.path === path);
     if (!entry) return undefined;
     return this.readBlob(entry.sha);
+  }
+}
+
+/**
+ * A read-only client for **public** repos that needs no GitHub App / token. It
+ * reuses every read path on `GitHubApp` (contents, tree, blobs, docs, framing)
+ * but overrides the auth step to a no-op, so all requests hit the unauthenticated
+ * GitHub API. Used as the fallback when no App credentials are configured (see
+ * `defaultGithubFor`): a public repo's docs/requirements then populate without an
+ * App install. A private repo's unauthenticated reads simply 404/403 and degrade
+ * to the same empty result as having no client at all.
+ *
+ * Note: unauthenticated GitHub API is rate-limited to ~60 requests/hour/IP, so
+ * this is a best-effort fallback, not a substitute for a configured App at scale.
+ */
+export class PublicGitHubReader extends GitHubApp {
+  constructor(repo: string, fetchImpl: FetchLike, now: () => number = Date.now) {
+    super({ appId: '', privateKeyPem: '', installationId: '', repo }, fetchImpl, now);
+  }
+
+  /** Public reads need no installation token; the empty string disables auth. */
+  override async installationToken(): Promise<string> {
+    return '';
   }
 }
 

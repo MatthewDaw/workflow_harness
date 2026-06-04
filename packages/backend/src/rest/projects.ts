@@ -1,7 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { orgScope, projectSchema, type Project } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import { GitHubApp } from '../github/app.js';
+import { GitHubApp, PublicGitHubReader } from '../github/app.js';
 import {
   badRequest,
   created,
@@ -47,26 +47,37 @@ export function ownerRepoOf(repo: string): string {
   return repo.replace(/^gh\//, '');
 }
 
+/** Adapt the platform `fetch` to the client's minimal `FetchLike` shape. */
+const fetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) =>
+  fetch(url, init).then((r) => ({
+    status: r.status,
+    ok: r.ok,
+    text: () => r.text(),
+    json: () => r.json(),
+  }));
+
 /**
- * Default GitHub App factory: build a read-only client from environment App
- * credentials. Per-project installation id falls back to a single shared
- * `GITHUB_INSTALLATION_ID` (the v1 single-laptop model has one installation).
+ * Default GitHub client factory: build a read-only client for a project's repo.
+ * Prefers an authenticated GitHub App client when App credentials are configured
+ * in the environment (per-project installation id falls back to a single shared
+ * `GITHUB_INSTALLATION_ID`). When no App is configured, fall back to an
+ * **unauthenticated public-repo reader** so a public repo's docs/requirements
+ * still populate; a private repo's reads will just 404/403 and degrade to empty.
+ * Returns undefined only when the project has no repo at all.
  */
 export function defaultGithubFor(project: Project): GitHubApp | undefined {
+  const repo = ownerRepoOf(project.repo);
+  if (!repo) return undefined;
+
   const appId = process.env.GITHUB_APP_ID;
   const privateKeyPem = process.env.GITHUB_APP_PRIVATE_KEY;
   const installationId = process.env.GITHUB_INSTALLATION_ID;
-  if (!appId || !privateKeyPem || !installationId) return undefined;
-  return new GitHubApp(
-    { appId, privateKeyPem, installationId, repo: ownerRepoOf(project.repo) },
-    (url, init) =>
-      fetch(url, init).then((r) => ({
-        status: r.status,
-        ok: r.ok,
-        text: () => r.text(),
-        json: () => r.json(),
-      })),
-  );
+  if (appId && privateKeyPem && installationId) {
+    return new GitHubApp({ appId, privateKeyPem, installationId, repo }, fetchLike);
+  }
+
+  // No App configured → best-effort public read (works for public repos).
+  return new PublicGitHubReader(repo, fetchLike);
 }
 
 /** Count the live sessions (active | needs_input) currently in a project. */

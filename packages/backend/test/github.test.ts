@@ -3,7 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { GitHubApp, type FetchLike, type FetchResponse } from '../src/github/app.js';
+import {
+  GitHubApp,
+  PublicGitHubReader,
+  type FetchLike,
+  type FetchResponse,
+} from '../src/github/app.js';
 import {
   attributeCommits,
   buildFraming,
@@ -384,5 +389,51 @@ describe('app: docs/plans tree + content + cache (U8)', () => {
       return resp(404, {});
     };
     expect(await makeApp(fetch).readPrdDoc()).toContain('# Project Requirements');
+  });
+});
+
+describe('PublicGitHubReader (no-auth public repo fallback)', () => {
+  function recordingFetch(): { calls: { url: string; auth?: string }[]; fetch: FetchLike } {
+    const calls: { url: string; auth?: string }[] = [];
+    const fetch: FetchLike = async (url, init): Promise<FetchResponse> => {
+      calls.push({ url, auth: init?.headers?.authorization });
+      if (url.includes('/contents/docs/PRD.md')) {
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from('# Project Requirements\n\n- ship it').toString('base64'),
+        });
+      }
+      return resp(404, { message: 'Not Found' });
+    };
+    return { calls, fetch };
+  }
+
+  function resp(status: number, body: unknown): FetchResponse {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      text: async () => JSON.stringify(body),
+      json: async () => body,
+    };
+  }
+
+  it('reads docs/PRD.md without minting a token or sending Authorization', async () => {
+    const { calls, fetch } = recordingFetch();
+    const reader = new PublicGitHubReader('MatthewDaw/workflow_harness', fetch);
+
+    const md = await reader.readPrdDoc();
+    expect(md).toContain('# Project Requirements');
+
+    // Never exchanges an installation token...
+    expect(calls.some((c) => c.url.includes('/access_tokens'))).toBe(false);
+    // ...and the content request carries no Authorization header.
+    const contentCall = calls.find((c) => c.url.includes('/contents/docs/PRD.md'));
+    expect(contentCall?.auth).toBeUndefined();
+  });
+
+  it('installationToken() is a no-op empty string', async () => {
+    const { fetch } = recordingFetch();
+    const reader = new PublicGitHubReader('owner/repo', fetch);
+    expect(await reader.installationToken()).toBe('');
   });
 });
