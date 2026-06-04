@@ -68,7 +68,7 @@ describe('AgentEditor (U17)', () => {
 
     await userEvent.type(screen.getByTestId('agent-name'), 'distiller');
     await userEvent.selectOptions(screen.getByTestId('agent-scope'), 'org');
-    await userEvent.click(screen.getByTestId('catalog-skill-browse'));
+    await userEvent.click(await screen.findByTestId('catalog-skill-browse'));
     await userEvent.click(screen.getByTestId('agent-save'));
 
     await waitFor(() => expect(lastAgentPost()).toBeDefined());
@@ -92,8 +92,9 @@ describe('AgentEditor (U17)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('agent-model')).toHaveValue('claude-sonnet-4'),
     );
-    // gh is already selected; toggle on browse too.
-    await userEvent.click(screen.getByTestId('catalog-skill-browse'));
+    // gh is already selected; toggle on browse too. The catalog renders once
+    // the seeded skills resolve, so wait for the button before clicking.
+    await userEvent.click(await screen.findByTestId('catalog-skill-browse'));
     await userEvent.click(screen.getByTestId('agent-save'));
 
     await waitFor(() => expect(lastAgentPost()).toBeDefined());
@@ -111,7 +112,7 @@ describe('AgentEditor (U17)', () => {
     await screen.findByTestId('agent-editor');
 
     // Both skills visible initially.
-    expect(screen.getByTestId('catalog-skill-gh')).toBeInTheDocument();
+    expect(await screen.findByTestId('catalog-skill-gh')).toBeInTheDocument();
     expect(screen.getByTestId('catalog-skill-browse')).toBeInTheDocument();
 
     // Typing filters down to the matching skill.
