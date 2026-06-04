@@ -47,8 +47,10 @@ the diff and an authenticated HTTP POST to the HQ REST API for publish.
 ## Inputs it gathers
 
 - **Done (auto, from git).** `git log --since="7 days ago" --until=now` plus
-  `git diff` stat for the window — the week's commits/PRs summarized as the
-  actuals. No ticket linkage (tickets are gone); this is a git-history summary.
+  `git diff` stat for the window — the week's commits/PRs. No ticket linkage
+  (tickets are gone); this is a git-history summary. The `done` field is assembled
+  as **three labeled sections** (see step 2), so the published report always
+  carries a summary, a conformity report, and a list of additional things coded up.
 - **Plan (interview).** Ask the user, in plain language, what they want to do
   next week. Capture their goals as a single free-form `plan` **string** (a short
   prose summary; list the goals as lines/bullets within it). You may note inline
@@ -74,16 +76,28 @@ goals, scale to 0–100. Print the per-goal rationale so the manager sees *why*.
 
 1. **Resolve the window + ISO week.** Today back 7 days; the target week is the
    current ISO week, e.g. `2026-W23`.
-2. **Summarize done from git.** Read the diff/log for the window; produce a
-   concise `done` summary (what shipped, which high-level items moved).
+2. **Summarize done from git → a three-section `done`.** Read the diff/log for the
+   window and assemble the `done` field as Markdown with these three `##` sections,
+   in this order (the Weekly UI renders them as separate sections):
+   - `## Summary` — a 2–4 sentence prose summary of what shipped this week and
+     which high-level items moved.
+   - `## Conformity report` — the overall conformity score (the same integer as
+     `conformityScore`) followed by a short per-goal rationale: for each next-week
+     goal, how well it ladders to the fixed high-level goals (full / partial /
+     none) and why. This is the *written* form of the score.
+   - `## Additional things coded up` — a bulleted list of the notable changes from
+     the git window **beyond** the stated plan (the incidental/extra work), one
+     bullet per change with a terse description (cite commit subjects).
+   Keep it Markdown (headings + bullets) so the UI can render the sections.
 3. **Interview for the plan (REQUIRED — gate).** Ask the user what they will work
    on next week; record their goals into the `plan` **string**. **You may not
    advance to PUT/POST until the `plan` names ≥1 concrete goal.** If they decline
    or stall, re-ask and explain you can't publish a weekly without a plan. Only an
    explicit abort of the whole command ends it here (publishing nothing).
 4. **Compute the conformity score** (above). Show it; nudge if low; never block.
-5. **Assemble the report.** `done` summary text + the **non-empty** `plan` summary +
-   `conformityScore`.
+5. **Assemble the report.** The three-section `done` Markdown (Summary +
+   Conformity report + Additional things coded up) + the **non-empty** `plan`
+   summary + the `conformityScore` integer.
 6. **POST to HQ — only if the gate passed.** Re-check the `plan` string is
    non-empty; if it is blank, STOP (do not PUT, do not publish) and return to
    step 3. Otherwise PUT the draft, then POST publish (contract below). Publish
@@ -107,10 +121,10 @@ Request body (JSON) the skill sends and the backend must validate + store:
 
 ```jsonc
 {
-  // free-form prose summary of the week's done actuals (from the git diff).
-  // U4 makes `done` a free-form summary string (the old ticket-derived
-  // WeeklyItem[] shape is dropped).
-  "done": "Landed U13–U15 client skills; wired the weekly POST contract; ...",
+  // free-form Markdown string (the old ticket-derived WeeklyItem[] shape is
+  // dropped). Assembled as three `##` sections so the Weekly UI renders them
+  // separately: Summary, Conformity report, Additional things coded up.
+  "done": "## Summary\nLanded the weekly POST contract and device-token auth.\n\n## Conformity report\nOverall 50/100. Goal 1 (prod-E2E gate) ladders fully (1.0); goal 2 (side project) does not (0.0).\n\n## Additional things coded up\n- Fixed the stale docs cache (refetchOnMountOrArgChange).\n- Repaired two stale web tests.",
 
   // next-week goals as a free-form prose summary (a STRING, not an array). List
   // the goals as lines/bullets in the string; there is no structured objectiveId
@@ -146,8 +160,10 @@ them, as it does today). The response echoes the stored `update`.
 ```
 
 1. Window: 2026-05-27 → 2026-06-03; ISO week `2026-W23`.
-2. From git: "Authored the four client skills (/hq-update-progress, /hq-weekly-update,
-   /hq-startforge, /hq-endforge); began the de-ticket migration units."
+2. From git, assemble the three-section `done`: a **Summary** ("Authored the four
+   client skills; began the de-ticket migration"), a **Conformity report** (the
+   score + per-goal rationale), and **Additional things coded up** (the incidental
+   changes from the diff, bulleted).
 3. Interview → plan (a prose summary naming the goals), e.g. two goals:
    "Wire the prod-E2E Definition-of-Done gate" and "Refactor the Saturday side
    project".
@@ -155,7 +171,7 @@ them, as it does today). The response echoes the stored `update`.
    (0.0) → overall ~50. Nudge: "1 of 2 goals is off-roadmap"; still publishes.
 5. Body:
    ```jsonc
-   { "done": "Authored 4 client skills; started de-ticket migration.",
+   { "done": "## Summary\nAuthored 4 client skills; started de-ticket migration.\n\n## Conformity report\nOverall 50. Goal 1 fully ladders (1.0); goal 2 does not (0.0).\n\n## Additional things coded up\n- Tidied the seed script.\n- Fixed a flaky test.",
      "plan": "1. Wire the prod-E2E gate.\n2. Refactor the Saturday side project.",
      "conformityScore": 50 }
    ```

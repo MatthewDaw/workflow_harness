@@ -2,10 +2,14 @@ import { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useGetWeeklyQuery } from '../../api/baseApi.js';
 import { Bar, Pill, ScreenHeader } from '../../components/primitives.js';
+import { MarkdownView } from '../../components/MarkdownView.js';
 
 /**
  * Project Weekly sub-tab (U19 scaffold for U25): the latest agent-authored
- * weekly update with Done / Plan subsections.
+ * weekly update with Done / Plan subsections. `done` is Markdown with three
+ * sections (Summary, Conformity report, Additional things coded up) authored by
+ * `/hq-weekly-update`; rendering it via MarkdownView surfaces those sections as
+ * distinct headings. `plan` (a numbered list) renders the same way.
  */
 export function ProjectWeekly() {
   const { projectId = '' } = useParams();
@@ -48,15 +52,19 @@ export function ProjectWeekly() {
                 <Bar pct={latest.conformityScore} color="#3f7d4e" />
               </div>
             )}
-            <p className="whitespace-pre-wrap text-[12.5px] text-mut">
-              {latest.done || 'No summary recorded.'}
-            </p>
+            {latest.done ? (
+              <MarkdownView markdown={latest.done} />
+            ) : (
+              <p className="text-[12.5px] text-mut">No summary recorded.</p>
+            )}
           </div>
           <div className="hq-box flex-1 border-l-[3px] border-l-accent bg-paper">
             <b>Plan next week</b>
-            <p className="mt-1.5 whitespace-pre-wrap text-[12.5px] text-mut">
-              {latest.plan || 'No plan recorded.'}
-            </p>
+            {latest.plan ? (
+              <MarkdownView markdown={latest.plan} />
+            ) : (
+              <p className="mt-1.5 text-[12.5px] text-mut">No plan recorded.</p>
+            )}
           </div>
         </div>
       )}

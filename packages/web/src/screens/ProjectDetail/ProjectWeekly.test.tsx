@@ -54,6 +54,27 @@ describe('ProjectWeekly (U19)', () => {
     ).toBeInTheDocument();
   });
 
+  it('renders the three done sections as headings when done is section Markdown', async () => {
+    const sectioned: WeeklyUpdate = {
+      projectId: 'weekly-compass',
+      isoWeek: '2026-W24',
+      done: '## Summary\nShipped the thing.\n\n## Conformity report\nOverall 50. Goal 1 fully ladders.\n\n## Additional things coded up\n- Fixed a flaky test.',
+      plan: '1. Wire the gate.',
+      conformityScore: 50,
+      validated: true,
+    };
+    renderWithProviders(<ProjectWeekly />, {
+      route: '/projects/weekly-compass/weekly',
+      routePath: '/projects/:projectId/weekly',
+      seed: { projects: [PROJECT], weekly: { 'weekly-compass': [sectioned] } },
+    });
+    // The three sections render as their own headings (not a flat blob of text).
+    expect(await screen.findByRole('heading', { name: 'Summary' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Conformity report' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Additional things coded up' })).toBeInTheDocument();
+    expect(screen.getByText('Fixed a flaky test.')).toBeInTheDocument();
+  });
+
   it('shows the conformity score pill', async () => {
     renderWeekly();
     await screen.findByText('Shipped the login gate and wired the weekly REST endpoint.');
