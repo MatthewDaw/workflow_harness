@@ -6,6 +6,7 @@ import {
 import { Bar, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
 import { parseCompletion } from '../../lib/frontmatter.js';
+import { extractCompliance } from '../../lib/compliance.js';
 
 /**
  * Project Requirements sub-tab (U10): the project's HIGH-LEVEL requirements,
@@ -25,6 +26,7 @@ export function ProjectRequirements() {
   // Prefer the doc's own `completion:` frontmatter so the bar matches the body
   // immediately; fall back to the project's stored progressPct (set on refresh).
   const pct = parseCompletion(markdown) ?? project?.progressPct ?? 0;
+  const { report, body } = extractCompliance(markdown);
 
   return (
     <div className="hq-pad" data-testid="project-requirements">
@@ -49,11 +51,20 @@ export function ProjectRequirements() {
         </div>
       </div>
 
+      {report !== null && (
+        <div className="mb-3.5 hq-box bg-paper" data-testid="compliance-panel">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-faint">
+            Compliance breakdown
+          </div>
+          <MarkdownView markdown={report} />
+        </div>
+      )}
+
       <div className="hq-box bg-paper">
         {isLoading ? (
           <div className="text-mut">Loading…</div>
         ) : markdown ? (
-          <MarkdownView markdown={markdown} />
+          <MarkdownView markdown={body} />
         ) : (
           <div className="text-mut">No docs/PRD.md found.</div>
         )}
@@ -74,6 +85,7 @@ export function ProjectRequirementsFull() {
     skip: !projectId,
   });
   const markdown = requirements?.markdown ?? '';
+  const { report, body } = extractCompliance(markdown);
 
   return (
     <div className="hq-pad" data-testid="project-requirements-full">
@@ -86,11 +98,19 @@ export function ProjectRequirementsFull() {
           ← Back
         </Link>
       </div>
+      {report !== null && (
+        <div className="mb-3.5 hq-box bg-paper" data-testid="compliance-panel">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-faint">
+            Compliance breakdown
+          </div>
+          <MarkdownView markdown={report} />
+        </div>
+      )}
       <div className="hq-box bg-paper">
         {isLoading ? (
           <div className="text-mut">Loading…</div>
         ) : markdown ? (
-          <MarkdownView markdown={markdown} />
+          <MarkdownView markdown={body} />
         ) : (
           <div className="text-mut">No docs/PRD.md found.</div>
         )}

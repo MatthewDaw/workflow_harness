@@ -73,6 +73,37 @@ describe('ProjectRequirements (U10)', () => {
     expect(screen.queryByTestId('requirements-editor')).not.toBeInTheDocument();
   });
 
+  it('renders the embedded compliance block as its own panel and not in the body', async () => {
+    renderWithProviders(<ProjectRequirements />, {
+      route: '/projects/weekly-compass/requirements',
+      routePath: '/projects/:projectId/requirements',
+      seed: {
+        projects: [PROJECT], // progressPct: 62
+        requirements: {
+          'weekly-compass':
+            '<!--hq:compliance v1-->## Compliance breakdown\n| Requirement | Status | Evidence |\n|---|---|---|\n| Source Code | met | packages/** |\n<!--/hq:compliance-->\n# Goal\n\nbody',
+        },
+      },
+    });
+    await screen.findByRole('heading', { name: 'Goal' });
+    const panel = screen.getByTestId('compliance-panel');
+    expect(panel).toBeInTheDocument();
+    expect(panel.textContent).toContain('Compliance breakdown');
+    // The bar still works (falls back to stored progressPct of 62).
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '62');
+    // The body region must not contain the raw sentinel text.
+    const views = screen.getAllByTestId('markdown-view');
+    const bodyView = views[views.length - 1];
+    expect(bodyView.textContent).not.toContain('hq:compliance');
+    expect(bodyView.textContent).toContain('body');
+  });
+
+  it('renders no compliance panel when there is no block', async () => {
+    renderReq();
+    await screen.findByRole('heading', { name: 'Goal' });
+    expect(screen.queryByTestId('compliance-panel')).not.toBeInTheDocument();
+  });
+
   it('shows the GitHub-sourced empty state when docs/PRD.md is missing', async () => {
     renderWithProviders(<ProjectRequirements />, {
       route: '/projects/weekly-compass/requirements',
