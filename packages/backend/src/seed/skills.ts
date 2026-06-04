@@ -1,4 +1,4 @@
-import { skillSchema, type Skill } from '@harness/shared';
+import { orgScope, skillSchema, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 
 /**
@@ -31,7 +31,8 @@ export const STARTER_BUNDLE_NAME = 'command-hq-starter';
  * each through `skillSchema` applies defaults and guards the shape.
  */
 export function buildSeedSkills(org: string, files: SeedSkillFile[]): Skill[] {
-  const scope = { tier: 'org', id: org } as const;
+  const scope = orgScope(org);
+  const createdBy = { userId: 'system', name: 'system' } as const;
   const skills = files.map((f) =>
     skillSchema.parse({
       name: f.name,
@@ -40,6 +41,7 @@ export function buildSeedSkills(org: string, files: SeedSkillFile[]): Skill[] {
       description: f.description,
       source: 'built-in',
       body: f.body,
+      createdBy,
     }),
   );
   const bundle = skillSchema.parse({
@@ -49,6 +51,7 @@ export function buildSeedSkills(org: string, files: SeedSkillFile[]): Skill[] {
     description: 'Skills bundled with Command HQ + claude+ (forge, weekly, progress).',
     source: 'built-in',
     members: files.map((f) => f.name),
+    createdBy,
   });
   return [...skills, bundle];
 }

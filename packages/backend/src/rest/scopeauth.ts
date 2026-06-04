@@ -20,6 +20,16 @@ import type { Principal } from '../auth/verify.js';
  *             project id (cross-tenant write).
  */
 
+/**
+ * May `principal` write the org catalog (skills/agents)? In the collapsed
+ * org-only model every catalog item is org-scoped, so a write requires the
+ * caller to be an admin of their own org. The principal is implicitly of their
+ * own org, so this reduces to the admin claim.
+ */
+export function canWriteOrgCatalog(_principal: Principal, admin: boolean): boolean {
+  return admin;
+}
+
 export function isAdmin(event: APIGatewayProxyEventV2): boolean {
   const claims = (
     event.requestContext as { authorizer?: { jwt?: { claims?: Record<string, unknown> } } }

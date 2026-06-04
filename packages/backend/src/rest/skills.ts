@@ -1,71 +1,46 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import {
-  resolveScoped,
-  scopeChangeSchema,
-  scopeRefSchema,
-  skillSchema,
-  type ScopeContext,
-  type ScopeRef,
-  type Skill,
-} from '@harness/shared';
+import { orgScope, skillSchema, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
   created,
   defaultRepo,
   forbidden,
+  gone,
   notFound,
   ok,
   parseBody,
   pathParam,
   principalOf,
-  queryParam,
   unauthorized,
 } from './runtime.js';
-import { canReadScope, canWriteScope, isAdmin } from './scopeauth.js';
+import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
 
 /**
- * REST: skills + bundles (U9).
+ * REST: skills + bundles — collapsed to a single ORG catalog.
  *
- *   GET    /skills?project=<pid>          — effective set (narrowest wins)
- *   POST   /skills                        — create a skill or bundle
- *   GET    /skills/:name?tier=&id=        — one skill at an explicit scope
- *   DELETE /skills/:name?tier=&id=        — delete (returns blast radius if in use)
+ *   GET    /skills                        — the caller's org catalog
+ *   GET    /skills/:name                  — one skill from the org catalog
+ *   POST   /skills                        — create (server forces org scope + createdBy; admin)
+ *   PUT    /skills/:name                  — update (scope/createdBy immutable; admin)
+ *   DELETE /skills/:name                  — delete (admin), 204
  *   POST   /skills/:name/members          — add a member ref to a bundle
- *   DELETE /skills/:name/members/:member  — remove/eject a member (it stays standalone)
+ *   DELETE /skills/:name/members/:member  — eject a member (it stays standalone)
  *   POST   /skills/:name/dissolve         — flatten a bundle: members standalone, bundle removed
- *   GET    /skills/:name/usage?tier=&id=  — count of agents depending on the skill
+ *   GET    /skills/:name/usage            — count of agents depending on the skill
+ *   POST   /skills/:name/scope            — RETIRED (410 Gone): no tiers in the org catalog
  *
  * Bundles hold member *refs* (names). A member may itself be a bundle (nesting);
- * resolution is transitive. Ejecting a member only edits the bundle — the member
- * skill record is untouched, so it remains usable standalone.
+ * resolution is transitive. Ejecting a member only edits the bundle.
  */
 
 export interface SkillsDeps {
   repo: Repo;
 }
 
-function visibleScopes(ctx: ScopeContext): ScopeRef[] {
-  const scopes: ScopeRef[] = [
-    { tier: 'org', id: ctx.org },
-    { tier: 'user', id: ctx.userId },
-  ];
-  if (ctx.projectId) scopes.push({ tier: 'project', id: ctx.projectId });
-  return scopes;
-}
-
-function scopeFromQuery(event: APIGatewayProxyEventV2): ScopeRef | undefined {
-  const parsed = scopeRefSchema.safeParse({
-    tier: queryParam(event, 'tier'),
-    id: queryParam(event, 'id'),
-  });
-  return parsed.success ? parsed.data : undefined;
-}
-
 /**
  * Flatten a bundle's members transitively into the set of leaf-skill names.
- * Nested bundles are expanded; a cycle is guarded by a visited set. Resolution is
- * over the effective skill set for the context so members compose across tiers.
+ * Nested bundles are expanded; a cycle is guarded by a visited set.
  */
 export function flattenBundle(
   bundle: Skill,
@@ -92,14 +67,11 @@ export async function resolveSkills(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
-  const projectId = queryParam(event, 'project');
-  const ctx: ScopeContext = { org: principal.org, userId: principal.userId, projectId };
 
-  const all = await deps.repo.listSkills(visibleScopes(ctx));
-  const effective = resolveScoped(all, ctx);
-  const byName = new Map(effective.map((s) => [s.name, s]));
+  const all = await deps.repo.listSkills(principal.org);
+  const byName = new Map(all.map((s) => [s.name, s]));
   // Annotate bundles with their transitively-resolved leaf members.
-  const annotated = effective.map((s) =>
+  const annotated = all.map((s) =>
     s.kind === 'bundle' ? { ...s, resolvedMembers: flattenBundle(s, byName) } : s,
   );
   return ok({ skills: annotated });
@@ -111,18 +83,33 @@ export async function createSkill(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
+  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+
+  const name = pathParam(event, 'name');
   let body: unknown;
   try {
     body = parseBody(event);
   } catch {
     return badRequest('invalid JSON body');
   }
-  const parsed = skillSchema.safeParse(body);
+
+  // Force org scope (ignore any client-supplied scope) and parse the rest.
+  const candidate = { ...(body as Record<string, unknown>), scope: orgScope(principal.org) };
+  const parsed = skillSchema.safeParse(candidate);
   if (!parsed.success) return badRequest(parsed.error.message);
   const skill: Skill = parsed.data;
-  if (!(await canWriteScope(skill.scope, principal, isAdmin(event), deps.repo))) return forbidden();
+
+  if (name) {
+    // PUT /skills/:name — update; preserve the existing createdBy stamp.
+    const existing = await deps.repo.getSkill(orgScope(principal.org), name);
+    skill.createdBy = existing?.createdBy ?? skill.createdBy;
+  } else {
+    // POST — stamp authorship from the principal.
+    skill.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
+  }
+
   await deps.repo.putSkill(skill);
-  return created({ skill });
+  return name ? ok({ skill }) : created({ skill });
 }
 
 export async function getSkill(
@@ -132,19 +119,15 @@ export async function getSkill(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
   const name = pathParam(event, 'name');
-  const scope = scopeFromQuery(event);
-  if (!name || !scope) return badRequest('missing name or scope');
-  // Gate the explicit-scope read; failure is a 404 (not 403) to avoid IDOR
-  // probing of which scopes/skills exist.
-  if (!(await canReadScope(scope, principal, deps.repo))) return notFound();
-  const skill = await deps.repo.getSkill(scope, name);
+  if (!name) return badRequest('missing name');
+  const skill = await deps.repo.getSkill(orgScope(principal.org), name);
   if (!skill) return notFound();
   return ok({ skill });
 }
 
-/** Count the agents (in the same scope set) whose `skills[]` references a skill. */
-async function usageCount(repo: Repo, scope: ScopeRef, name: string): Promise<number> {
-  const agents = await repo.listAgents([scope]);
+/** Count the agents (in the org catalog) whose `skills[]` references a skill. */
+async function usageCount(repo: Repo, org: string, name: string): Promise<number> {
+  const agents = await repo.listAgents(org);
   return agents.filter((a) => a.skills.includes(name)).length;
 }
 
@@ -155,11 +138,8 @@ export async function getUsage(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
   const name = pathParam(event, 'name');
-  const scope = scopeFromQuery(event);
-  if (!name || !scope) return badRequest('missing name or scope');
-  // Gate the explicit-scope read; failure is a 404 (not 403) to avoid IDOR.
-  if (!(await canReadScope(scope, principal, deps.repo))) return notFound();
-  const count = await usageCount(deps.repo, scope, name);
+  if (!name) return badRequest('missing name');
+  const count = await usageCount(deps.repo, principal.org, name);
   return ok({ name, count });
 }
 
@@ -169,15 +149,11 @@ export async function deleteSkill(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
+  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
   const name = pathParam(event, 'name');
-  const scope = scopeFromQuery(event);
-  if (!name || !scope) return badRequest('missing name or scope');
-  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
-
-  // Surface the blast radius: agents that would lose this skill.
-  const count = await usageCount(deps.repo, scope, name);
-  await deps.repo.deleteSkill(scope, name);
-  return ok({ deleted: true, usageCount: count });
+  if (!name) return badRequest('missing name');
+  await deps.repo.deleteSkill(orgScope(principal.org), name);
+  return ok({ deleted: true });
 }
 
 /** Add a member ref to a bundle. The member may be a skill or another bundle. */
@@ -187,10 +163,9 @@ export async function addMember(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
+  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
   const name = pathParam(event, 'name');
-  const scope = scopeFromQuery(event);
-  if (!name || !scope) return badRequest('missing name or scope');
-  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
+  if (!name) return badRequest('missing name');
 
   let body: unknown;
   try {
@@ -201,7 +176,7 @@ export async function addMember(
   const member = (body as { member?: unknown })?.member;
   if (typeof member !== 'string' || !member) return badRequest('missing member');
 
-  const bundle = await deps.repo.getSkill(scope, name);
+  const bundle = await deps.repo.getSkill(orgScope(principal.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
@@ -222,13 +197,12 @@ export async function removeMember(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
+  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
   const name = pathParam(event, 'name');
   const member = pathParam(event, 'member');
-  const scope = scopeFromQuery(event);
-  if (!name || !member || !scope) return badRequest('missing name, member, or scope');
-  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
+  if (!name || !member) return badRequest('missing name or member');
 
-  const bundle = await deps.repo.getSkill(scope, name);
+  const bundle = await deps.repo.getSkill(orgScope(principal.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
@@ -239,8 +213,7 @@ export async function removeMember(
 
 /**
  * Dissolve a bundle: its members all remain as standalone skills (they already
- * exist as their own records), and the bundle record itself is deleted. Returns
- * the freed members.
+ * exist as their own records), and the bundle record itself is deleted.
  */
 export async function dissolveBundle(
   event: APIGatewayProxyEventV2,
@@ -248,66 +221,17 @@ export async function dissolveBundle(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
+  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
   const name = pathParam(event, 'name');
-  const scope = scopeFromQuery(event);
-  if (!name || !scope) return badRequest('missing name or scope');
-  if (!(await canWriteScope(scope, principal, isAdmin(event), deps.repo))) return forbidden();
+  if (!name) return badRequest('missing name');
 
-  const bundle = await deps.repo.getSkill(scope, name);
+  const bundle = await deps.repo.getSkill(orgScope(principal.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
   const members = bundle.members;
-  await deps.repo.deleteSkill(scope, name);
+  await deps.repo.deleteSkill(orgScope(principal.org), name);
   return ok({ dissolved: true, members });
-}
-
-/**
- * Elevate/demote a skill (or bundle) to a new scope, mirroring agents.ts
- * changeScope exactly: the new scope arrives in the body; we re-key the skill at
- * the destination and delete the source. Both source and destination scope must
- * be writable by the caller (org tier is admin-gated via canWriteScope).
- */
-export async function changeScope(
-  event: APIGatewayProxyEventV2,
-  deps: SkillsDeps,
-): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  const name = pathParam(event, 'name');
-  const fromScope = scopeFromQuery(event);
-  if (!name || !fromScope) return badRequest('missing name or source scope');
-
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
-  const parsed = scopeChangeSchema.safeParse(body);
-  if (!parsed.success) return badRequest(parsed.error.message);
-  const toScope = parsed.data.scope;
-
-  const admin = isAdmin(event);
-  if (
-    !(await canWriteScope(fromScope, principal, admin, deps.repo)) ||
-    !(await canWriteScope(toScope, principal, admin, deps.repo))
-  ) {
-    return forbidden();
-  }
-
-  const existing = await deps.repo.getSkill(fromScope, name);
-  if (!existing) return notFound();
-
-  // Re-parse through the schema so stale PK/SK attributes read back from the
-  // table are stripped before re-keying at the new scope.
-  const moved: Skill = skillSchema.parse({ ...existing, scope: toScope });
-  await deps.repo.putSkill(moved);
-  // Avoid deleting if the key didn't change (same scope = no-op move).
-  if (!(fromScope.tier === toScope.tier && fromScope.id === toScope.id)) {
-    await deps.repo.deleteSkill(fromScope, name);
-  }
-  return ok({ skill: moved });
 }
 
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
@@ -316,7 +240,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.requestContext.http.path;
   const name = pathParam(event, 'name');
 
-  if (method === 'POST' && path.endsWith('/scope')) return changeScope(event, deps);
+  // The scope-change endpoint is retired in the org-only catalog.
+  if (method === 'POST' && path.endsWith('/scope')) return gone('scope changes are retired');
   if (method === 'POST' && path.endsWith('/members')) return addMember(event, deps);
   if (method === 'DELETE' && pathParam(event, 'member')) return removeMember(event, deps);
   if (method === 'POST' && path.endsWith('/dissolve')) return dissolveBundle(event, deps);

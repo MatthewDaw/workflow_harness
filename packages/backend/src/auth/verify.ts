@@ -16,6 +16,8 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 export interface Principal {
   userId: string;
   org: string;
+  /** Display name for authorship stamps (createdBy). Optional; falls back to userId. */
+  name?: string;
 }
 
 export const DEVICE_TOKEN_AUDIENCE = 'claude-plus-wrapper';

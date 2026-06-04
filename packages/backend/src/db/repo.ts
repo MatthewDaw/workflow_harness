@@ -19,8 +19,12 @@ import type {
   Skill,
   WeeklyUpdate,
 } from '@harness/shared';
-import { DEFAULT_DEFINITION_OF_DONE } from '@harness/shared';
+import { DEFAULT_DEFINITION_OF_DONE, orgScope, projectSchema } from '@harness/shared';
+import type { z } from 'zod';
 import * as k from './keys.js';
+
+/** The pre-parse shape of a Project (enabledSkills/enabledAgents optional via defaults). */
+type ProjectInput = z.input<typeof projectSchema>;
 
 /**
  * A live WebSocket connection in the registry. Daemon connections also carry the
@@ -80,7 +84,10 @@ export class Repo {
    * framing. Called on each daemon `session.start`, so it must be idempotent: a
    * ConditionalCheckFailedException is swallowed and reported as `created:false`.
    */
-  async ensureProject(p: Project): Promise<{ created: boolean }> {
+  async ensureProject(input: ProjectInput): Promise<{ created: boolean }> {
+    // Parse so the org-catalog opt-in arrays (enabledSkills/enabledAgents) and
+    // other defaults are filled in for callers that supply only the core fields.
+    const p: Project = projectSchema.parse(input);
     try {
       await this.doc.send(
         new PutCommand({
@@ -102,7 +109,12 @@ export class Repo {
     const res = await this.doc.send(
       new GetCommand({ TableName: this.table, Key: k.projectKey(projectId) }),
     );
-    return res.Item as Project | undefined;
+    if (!res.Item) return undefined;
+    // Parse through the schema so legacy records (created before enabledSkills/
+    // enabledAgents existed) read those arrays as [] via the Zod defaults, and
+    // strip the table's PK/SK/GSI attributes.
+    const parsed = projectSchema.safeParse(res.Item);
+    return parsed.success ? parsed.data : (res.Item as Project);
   }
 
   async listProjectsForUser(userId: string): Promise<Project[]> {
@@ -433,28 +445,121 @@ export class Repo {
     await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.skillKey(scope, name) }));
   }
 
-  /** Fetch all agents across the given scopes (caller resolves narrowest-wins). */
-  async listAgents(scopes: ScopeRef[]): Promise<Agent[]> {
-    return this.listScoped<Agent>(scopes, 'AGENT#');
+  /** The org catalog of agents (org-only; the 3-tier scope is retired). */
+  async listAgents(org: string): Promise<Agent[]> {
+    return this.listScoped<Agent>(orgScope(org), 'AGENT#');
   }
 
-  async listSkills(scopes: ScopeRef[]): Promise<Skill[]> {
-    return this.listScoped<Skill>(scopes, 'SKILL#');
+  /** The org catalog of skills (org-only; the 3-tier scope is retired). */
+  async listSkills(org: string): Promise<Skill[]> {
+    return this.listScoped<Skill>(orgScope(org), 'SKILL#');
   }
 
-  private async listScoped<T>(scopes: ScopeRef[], skPrefix: string): Promise<T[]> {
-    const results = await Promise.all(
-      scopes.map((scope) =>
-        this.doc.send(
-          new QueryCommand({
-            TableName: this.table,
-            KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-            ExpressionAttributeValues: { ':pk': k.scopePartition(scope), ':sk': skPrefix },
-          }),
-        ),
-      ),
+  private async listScoped<T>(scope: ScopeRef, skPrefix: string): Promise<T[]> {
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': k.scopePartition(scope), ':sk': skPrefix },
+      }),
     );
-    return results.flatMap((r) => (r.Items ?? []) as T[]);
+    return (res.Items ?? []) as T[];
+  }
+
+  // --- Project opt-in: enabledSkills / enabledAgents (org catalog) --------
+  //
+  // Opt-in lives on the project META record so a project's effective skill+agent
+  // set is a single atomic read. All mutators load the project, edit the arrays,
+  // and re-put through `putProject` (which persists both arrays). `getProject`
+  // already returns the arrays (Zod defaults them to [] on legacy records).
+
+  /** Idempotently enable a catalog skill on a project. Returns the updated Project. */
+  async addSkillToProject(projectId: string, skillName: string): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    const enabledSkills = project.enabledSkills ?? [];
+    if (!enabledSkills.includes(skillName)) {
+      project.enabledSkills = [...enabledSkills, skillName];
+      await this.putProject(project);
+    }
+    return project;
+  }
+
+  /** Disable a skill on a project. Returns the updated Project. */
+  async removeSkillFromProject(projectId: string, skillName: string): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    project.enabledSkills = (project.enabledSkills ?? []).filter((s) => s !== skillName);
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Enable an agent on a project AND union the agent's declared skills (bundles
+   * flattened transitively to leaf skills) into `enabledSkills` (de-duped). The
+   * agent + its skills are resolved against the org catalog (`org` from the
+   * caller's principal). Returns updated Project, or undefined if project/agent
+   * is missing.
+   */
+  async addAgentToProject(
+    projectId: string,
+    agentName: string,
+    org: string,
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    const agent = await this.getAgent(orgScope(org), agentName);
+    if (!agent) return undefined;
+    const brought = await this.expandAgentSkills(org, agent);
+
+    const enabledAgents = project.enabledAgents ?? [];
+    if (!enabledAgents.includes(agentName)) {
+      project.enabledAgents = [...enabledAgents, agentName];
+    }
+    const enabledSkills = new Set(project.enabledSkills ?? []);
+    for (const s of brought) enabledSkills.add(s);
+    project.enabledSkills = [...enabledSkills];
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Disable an agent on a project. Only `enabledAgents` is pruned — `enabledSkills`
+   * is left intact, since a skill may be enabled directly or brought by another
+   * agent. Returns the updated Project.
+   */
+  async removeAgentFromProject(
+    projectId: string,
+    agentName: string,
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    project.enabledAgents = (project.enabledAgents ?? []).filter((a) => a !== agentName);
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Flatten an agent's declared `skills` to leaf-skill names, expanding any that
+   * are bundles transitively (cycle-guarded) against the project's org catalog.
+   */
+  private async expandAgentSkills(org: string, agent: Agent): Promise<string[]> {
+    const catalog = await this.listSkills(org);
+    const byName = new Map(catalog.map((s) => [s.name, s]));
+    const leaves: string[] = [];
+    const seen = new Set<string>();
+    const walk = (name: string): void => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      const s = byName.get(name);
+      if (s?.kind === 'bundle') {
+        for (const m of s.members) walk(m);
+      } else {
+        leaves.push(name);
+      }
+    };
+    for (const name of agent.skills) walk(name);
+    return [...new Set(leaves)];
   }
 
   // --- Objectives + weekly updates ---------------------------------------
