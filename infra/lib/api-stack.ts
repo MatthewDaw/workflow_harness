@@ -143,7 +143,9 @@ export class ApiStack extends cdk.Stack {
     const deviceFn = makeFn('RestDeviceFn', 'rest_device');
     const dodFn = makeFn('RestDodFn', 'rest_dod');
     grantReadWrite(projectsFn);
-    grantRead(sessionsFn);
+    // Sessions handler writes too: shutdown/kill marks a session done in the
+    // projection (authoritative terminate, incl. ghost sessions with no daemon).
+    grantReadWrite(sessionsFn);
     grantReadWrite(agentsFn);
     grantReadWrite(skillsFn);
     grantReadWrite(objectivesFn);
