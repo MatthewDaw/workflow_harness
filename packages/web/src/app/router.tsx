@@ -3,7 +3,6 @@ import { AppShell } from '../components/AppShell.js';
 import { Objectives } from '../screens/Objectives/Objectives.js';
 import { Projects } from '../screens/Projects/Projects.js';
 import { ProjectLayout } from '../screens/ProjectDetail/ProjectLayout.js';
-import { Overview } from '../screens/ProjectDetail/Overview.js';
 import {
   ProjectRequirements,
   ProjectRequirementsFull,
@@ -23,7 +22,7 @@ import { LinkDevice } from '../screens/LinkDevice/LinkDevice.js';
 
 /**
  * Route table mirroring wireframe.html (U19). Objectives is the first nav item
- * and the default landing route. Projects has the Overview/Weekly/Sessions/
+ * and the default landing route. Projects has the Requirements/Weekly/Sessions/
  * Agents sub-tabs; Sessions deep-links into the live watch surface.
  */
 export function AppRoutes() {
@@ -35,7 +34,8 @@ export function AppRoutes() {
 
         <Route path="projects" element={<Projects />} />
         <Route path="projects/:projectId" element={<ProjectLayout />}>
-          <Route index element={<Overview />} />
+          {/* Project Requirements is the default landing sub-tab. */}
+          <Route index element={<Navigate to="requirements" replace />} />
           {/* U12: two-tier requirements routes. */}
           <Route path="requirements" element={<ProjectRequirements />} />
           <Route path="requirements/full" element={<ProjectRequirementsFull />} />
