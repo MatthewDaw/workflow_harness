@@ -7,6 +7,7 @@ import {
   useDissolveBundleMutation,
 } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
+import { SkillCombobox } from '../../components/SkillCombobox.js';
 
 /**
  * Skill bundle detail (U17/U24): a bundle is a skill made of skills. Add/remove
@@ -23,17 +24,15 @@ export function SkillBundle() {
   const [addMember] = useAddBundleMemberMutation();
   const [removeMember] = useRemoveBundleMemberMutation();
   const [dissolve] = useDissolveBundleMutation();
-  const [adding, setAdding] = useState('');
 
   // Candidate members: any skill not already in the bundle and not the bundle itself.
   const candidates = skills.filter(
     (s) => s.name !== bundleName && !(bundle?.members ?? []).includes(s.name),
   );
 
-  const onAdd = () => {
-    if (!bundle || !adding) return;
-    addMember({ name: bundle.name, scope: bundle.scope, member: adding });
-    setAdding('');
+  const onAdd = (member: string) => {
+    if (!bundle || !member) return;
+    addMember({ name: bundle.name, scope: bundle.scope, member });
   };
 
   const onRemove = (member: string) => {
@@ -62,32 +61,16 @@ export function SkillBundle() {
               <span className="text-xs text-faint">· {bundle.members.length} sub-skills</span>
             </b>
             <div className="flex items-center gap-1.5">
-              <label className="sr-only" htmlFor="add-member-select">
-                Skill to add
-              </label>
-              <select
-                id="add-member-select"
-                className="hq-btn"
-                data-testid="add-member-select"
-                value={adding}
-                onChange={(e) => setAdding(e.target.value)}
-              >
-                <option value="">Select skill…</option>
-                {candidates.map((c) => (
-                  <option key={`${c.scope.tier}-${c.name}`} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="hq-btn hq-btn-pri"
-                data-testid="add-member"
-                disabled={!adding}
-                onClick={onAdd}
-              >
-                + Add skill to bundle
-              </button>
+              <SkillCombobox
+                testid="add-member"
+                placeholder="Search skills to add…"
+                buttonLabel="+ Add skill to bundle"
+                options={candidates.map((c) => ({
+                  name: c.name,
+                  hint: c.kind === 'bundle' ? 'bundle' : c.scope.tier,
+                }))}
+                onCommit={onAdd}
+              />
             </div>
           </div>
           <div className="hq-hr" />

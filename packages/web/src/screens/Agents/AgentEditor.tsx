@@ -70,7 +70,14 @@ export function AgentEditor() {
     navigate('/agents');
   };
 
-  const catalog = skills ?? [];
+  const [skillFilter, setSkillFilter] = useState('');
+  const allSkills = skills ?? [];
+  const q = skillFilter.trim().toLowerCase();
+  const catalog = q
+    ? allSkills.filter(
+        (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
+      )
+    : allSkills;
 
   return (
     <div className="hq-pad" data-testid="agent-editor">
@@ -126,8 +133,22 @@ export function AgentEditor() {
         />
 
         <div className="mt-3 text-xs font-medium text-mut">Skills (catalog)</div>
+        <input
+          className="hq-input mt-1 w-full"
+          data-testid="skill-filter"
+          placeholder="Filter skills…"
+          value={skillFilter}
+          onChange={(e) => setSkillFilter(e.target.value)}
+        />
         <div className="mt-1 flex flex-wrap gap-1.5" data-testid="skill-catalog">
-          {catalog.length === 0 && <span className="text-xs text-faint">No skills available.</span>}
+          {allSkills.length === 0 && (
+            <span className="text-xs text-faint">No skills available.</span>
+          )}
+          {allSkills.length > 0 && catalog.length === 0 && (
+            <span className="text-xs text-faint" data-testid="skill-filter-empty">
+              No skills match “{skillFilter}”.
+            </span>
+          )}
           {catalog.map((s) => {
             const on = agent.skills.includes(s.name);
             return (

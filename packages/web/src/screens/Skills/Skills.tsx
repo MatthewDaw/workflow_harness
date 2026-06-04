@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Skill, ScopeRef, ScopeTier } from '@harness/shared';
 import { SCOPE_TIERS } from '@harness/shared';
@@ -11,10 +12,27 @@ const SCOPE_LABEL: Record<ScopeTier, string> = {
   project: '▪ Project',
 };
 
+const TIER_OPTION: Record<ScopeTier, string> = {
+  org: 'Org',
+  user: 'My global',
+  project: 'Project',
+};
+
 function targetScope(tier: ScopeTier, current: ScopeRef, ctx: { org: string; userId: string }): ScopeRef {
   if (tier === 'org') return { tier: 'org', id: ctx.org };
   if (tier === 'user') return { tier: 'user', id: ctx.userId };
   return { tier: 'project', id: current.tier === 'project' ? current.id : ctx.userId };
+}
+
+/** Names that are members of any resolved bundle (transitive leaves preferred). */
+function bundleMemberNames(skills: Skill[]): Set<string> {
+  const names = new Set<string>();
+  for (const s of skills) {
+    if (s.kind !== 'bundle') continue;
+    const members = s.resolvedMembers ?? s.members;
+    for (const m of members) names.add(m);
+  }
+  return names;
 }
 
 /** Skills registry (U17/U24): scoped catalog with elevate/demote; bundles drill in. */
@@ -24,15 +42,38 @@ export function Skills() {
   const skills = data ?? [];
   const ctx = { org: user?.org ?? '', userId: user?.userId ?? '' };
 
+  // By default, skills that belong to a bundle are surfaced via the bundle card
+  // only — hide them from the top-level grid until the toggle reveals them.
+  const [showInBundles, setShowInBundles] = useState(false);
+  const memberNames = useMemo(() => bundleMemberNames(skills), [skills]);
+
+  const visible = (s: Skill): boolean => {
+    if (s.kind === 'bundle') return true;
+    if (showInBundles) return true;
+    return !memberNames.has(s.name);
+  };
+
   return (
     <div className="hq-pad" data-testid="skills-screen">
       <ScreenHeader
         title="Skills (scoped registry)"
         subtitle="The catalog agents draw from. Org → my global → project. Bundles open into their sub-skills."
       />
+      <label
+        className="mb-3 flex items-center gap-1.5 text-xs text-mut"
+        data-testid="show-in-bundles-toggle"
+      >
+        <input
+          type="checkbox"
+          checked={showInBundles}
+          onChange={(e) => setShowInBundles(e.target.checked)}
+          data-testid="show-in-bundles-checkbox"
+        />
+        Show skills that are in bundles
+      </label>
       {isLoading && <div className="text-mut">Loading skills…</div>}
       {[...SCOPE_TIERS].reverse().map((tier) => {
-        const inTier = skills.filter((s) => s.scope.tier === tier);
+        const inTier = skills.filter((s) => s.scope.tier === tier && visible(s));
         if (inTier.length === 0) return null;
         return (
           <section key={tier} className="mb-4" data-testid={`scope-group-${tier}`}>
@@ -59,7 +100,14 @@ function ScopePicker({
   const [changeScope, { isLoading }] = useChangeSkillScopeMutation();
   const tier = skill.scope.tier;
   return (
-    <span onClick={(e) => e.preventDefault()}>
+    // Stop click/navigation: a bundle card wraps this in a <Link>; without this a
+    // click on the control would navigate into the bundle instead of opening it.
+    <span
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
       <label className="sr-only" htmlFor={`skill-scope-${skill.name}`}>
         Scope for {skill.name}
       </label>
@@ -72,12 +120,16 @@ function ScopePicker({
         onChange={(e) => {
           const to = e.target.value as ScopeTier;
           if (to === tier) return;
-          changeScope({ name: skill.name, from: skill.scope, to: targetScope(to, skill.scope, ctx) });
+          changeScope({
+            name: skill.name,
+            from: skill.scope,
+            to: targetScope(to, skill.scope, ctx),
+          });
         }}
       >
         {SCOPE_TIERS.map((t) => (
           <option key={t} value={t}>
-            {t}
+            {TIER_OPTION[t]}
           </option>
         ))}
       </select>
@@ -87,6 +139,7 @@ function ScopePicker({
 
 function SkillCard({ skill, ctx }: { skill: Skill; ctx: { org: string; userId: string } }) {
   if (skill.kind === 'bundle') {
+    const memberCount = (skill.resolvedMembers ?? skill.members).length;
     return (
       <Link
         to={`/skills/${skill.name}`}
@@ -100,7 +153,7 @@ function SkillCard({ skill, ctx }: { skill: Skill; ctx: { org: string; userId: s
             </Pill>{' '}
             <Pill>bundle</Pill>
           </span>
-          <span className="text-[11px] text-faint">{skill.members.length} skills ›</span>
+          <span className="text-[11px] text-faint">{memberCount} skills ›</span>
         </div>
         <div className="my-1.5 text-xs text-mut">{skill.description}</div>
         <div className="mt-1.5 flex items-center justify-between">

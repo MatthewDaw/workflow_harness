@@ -102,6 +102,24 @@ describe('AgentEditor (U17)', () => {
     expect(body.skills).toEqual(expect.arrayContaining(['gh', 'browse']));
   });
 
+  it('filters the skill catalog as you type', async () => {
+    renderWithProviders(<AgentEditor />, {
+      route: '/agents/new',
+      routePath: '/agents/new',
+      seed: { skills: SKILLS },
+    });
+    await screen.findByTestId('agent-editor');
+
+    // Both skills visible initially.
+    expect(screen.getByTestId('catalog-skill-gh')).toBeInTheDocument();
+    expect(screen.getByTestId('catalog-skill-browse')).toBeInTheDocument();
+
+    // Typing filters down to the matching skill.
+    await userEvent.type(screen.getByTestId('skill-filter'), 'brow');
+    expect(screen.getByTestId('catalog-skill-browse')).toBeInTheDocument();
+    expect(screen.queryByTestId('catalog-skill-gh')).not.toBeInTheDocument();
+  });
+
   it('shows a muted hint to refine the prompt via the claude+ skill', async () => {
     renderWithProviders(<AgentEditor />, {
       route: '/agents/builder/edit',
