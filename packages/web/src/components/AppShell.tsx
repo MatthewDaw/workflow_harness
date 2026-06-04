@@ -25,7 +25,13 @@ export function AppShell() {
   const dispatch = useDispatch();
   const token = useSelector((s: RootState) => s.auth.idToken);
   const { data: sessions } = useGetSessionsQuery({ live: true });
-  const liveCount = sessions?.length ?? 0;
+  // Count by live status, not array length: the live-WS middleware folds a
+  // status change into the cached {live:true} list IN PLACE (it never removes a
+  // row), so a session that has since gone done/idle still sits in the array.
+  // Counting length therefore over-reports (e.g. "2 live" while only 1 is active).
+  const liveCount = (sessions ?? []).filter(
+    (s) => s.status === 'active' || s.status === 'needs_input',
+  ).length;
 
   // Open the live WebSocket once the user is authenticated (H3). Without this the
   // socket never opens, so live watch/steer/counters never update. The token
