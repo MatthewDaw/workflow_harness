@@ -1,6 +1,16 @@
 import * as cdk from 'aws-cdk-lib/core';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
+
+/**
+ * The org every brand-new account lands in. Google sign-in auto-provisions a
+ * federated user with no `custom:org`, but the API authorizes every request on
+ * that claim — so without a default a new account would sign in and then 401
+ * everywhere. The pre-token-generation Lambda below injects this value when the
+ * user has no org of their own (existing orgs are preserved).
+ */
+const DEFAULT_ORG = 'personasearch';
 
 /**
  * Auth foundation for Command HQ (Unit U4 + Google federation): a Cognito user
@@ -43,6 +53,33 @@ export class AuthStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // ---- Default-org pre-token-generation trigger -----------------------------
+    // Runs on every token issuance. New accounts (notably Google federated users,
+    // who are auto-created on first sign-in) carry no `custom:org`; this injects
+    // the default into the ID token so the API authorizer sees a valid org. Users
+    // who already have an org keep it (we only fill when absent). Inline + zero
+    // dependencies, so no bundling step is needed.
+    const orgClaimFn = new lambda.Function(this, 'DefaultOrgClaim', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      timeout: cdk.Duration.seconds(5),
+      code: lambda.Code.fromInline(
+        `const DEFAULT_ORG = ${JSON.stringify(DEFAULT_ORG)};\n` +
+          'exports.handler = async (event) => {\n' +
+          '  const attrs = (event.request && event.request.userAttributes) || {};\n' +
+          "  if (!attrs['custom:org']) {\n" +
+          '    event.response = {\n' +
+          '      claimsOverrideDetails: {\n' +
+          "        claimsToAddOrOverride: { 'custom:org': DEFAULT_ORG },\n" +
+          '      },\n' +
+          '    };\n' +
+          '  }\n' +
+          '  return event;\n' +
+          '};\n',
+      ),
+    });
+    this.userPool.addTrigger(cognito.UserPoolOperation.PRE_TOKEN_GENERATION, orgClaimFn);
+
     // ---- Hosted UI domain -----------------------------------------------------
     // Required for the social-login redirect flow. The Google IdP's redirect URI
     // is `${domain}/oauth2/idpresponse` (registered in the Google OAuth client).
@@ -69,7 +106,15 @@ export class AuthStack extends cdk.Stack {
     });
 
     // ---- App client -----------------------------------------------------------
-    const appUrls = ['https://d13sqkbwzqe38l.cloudfront.net/', 'http://localhost:5173/'];
+    // CloudFront (prod) plus the common Vite dev ports, so "Continue with Google"
+    // redirects back successfully whether running deployed or on localhost.
+    const appUrls = [
+      'https://d13sqkbwzqe38l.cloudfront.net/',
+      'http://localhost:5173/',
+      'http://localhost:5174/',
+      'http://localhost:5175/',
+      'http://localhost:5176/',
+    ];
     this.userPoolClient = this.userPool.addClient('HqWebClient', {
       userPoolClientName: 'command-hq-web',
       authFlows: { userSrp: true },

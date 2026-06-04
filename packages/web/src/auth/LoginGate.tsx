@@ -109,6 +109,10 @@ export function LoginGate({ children }: { children: ReactNode }) {
         >
           Continue with Google
         </button>
+
+        <div className="mt-4 text-center text-[11px] text-faint">
+          New to Command HQ? Continue with Google to create your account.
+        </div>
       </form>
     </div>
   );
