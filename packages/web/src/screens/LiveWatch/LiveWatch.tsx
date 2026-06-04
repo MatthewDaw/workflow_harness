@@ -51,12 +51,6 @@ export function LiveWatch() {
   const dispatch = useDispatch();
   const { user } = useAuth();
   const { data: session, isLoading } = useGetSessionQuery(sessionId, { skip: !sessionId });
-  // Backfill the stored event history so the feed shows real content on open,
-  // not "waiting for activity…". The live WS stream takes over from here.
-  const { data: backfill } = useGetSessionEventsQuery(
-    { id: sessionId, limit: 300 },
-    { skip: !sessionId },
-  );
   const [sendControl] = useSendControlMutation();
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState<string | null>(null);

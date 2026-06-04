@@ -55,17 +55,6 @@ export function Skills() {
 
   const catalog = skills.filter(visible);
 
-  // By default, skills that belong to a bundle are surfaced via the bundle card
-  // only — hide them from the top-level grid until the toggle reveals them.
-  const [showInBundles, setShowInBundles] = useState(false);
-  const memberNames = useMemo(() => bundleMemberNames(skills), [skills]);
-
-  const visible = (s: Skill): boolean => {
-    if (s.kind === 'bundle') return true;
-    if (showInBundles) return true;
-    return !memberNames.has(s.name);
-  };
-
   return (
     <div className="hq-pad" data-testid="skills-screen">
       <ScreenHeader
