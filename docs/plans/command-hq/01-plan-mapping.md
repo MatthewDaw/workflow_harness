@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 68
+completion: 88
 feature: plan-mapping
 ---
 
@@ -34,9 +34,12 @@ up to date.
    source of truth; HQ only renders it** read-only and in sync — no edits, no
    injected data. Completion shows wherever a doc has a
    ticked GitHub task item (`- [x]`).
-   *Code today:* GitHub read via `packages/backend/src/github/` (extend to fetch a
-   docs tree, not just `PRD.md`/`PROGRESS.md`). Wireframed in `wireframe.html`
-   ("HQ — Project › Detailed Requirements") as a doc-tree + markdown reader.
+   *Code today (built):* the backend reads the `docs/plans/` tree from GitHub and
+   serves it read-only (`packages/backend/src/github/app.ts`,
+   `rest/projects.ts` docs-tree + per-file endpoints); the web renders it via
+   `packages/web/src/screens/ProjectDetail/DetailedRequirements.tsx` +
+   `components/MarkdownView.tsx` (react-markdown + GFM task lists). The browser
+   never talks to GitHub directly — the backend is the only reader.
 
 ## Where completion lives
 
@@ -60,8 +63,13 @@ up to date.
    → Project Requirements bar + Detailed root.  Also emits a compliance report.
 ```
 
-*Code today:* `packages/backend/src/projections/rollup.ts`, `projections/rollupRepo.ts`
-(roll-up engine; extend to read the doc `completion:` front­matter).
+*Code today (built):* `packages/backend/src/github/history.ts` parses the
+`completion:` frontmatter of the top `docs/plans/` doc (falling back to legacy
+`PROGRESS.md %`); `rest/projects.ts` stores it as the project's `progressPct`
+(with `framingReadAt`/`framingStale` for last-known-on-failure);
+`projections/rollup.ts` (re-pointed off tickets in the migration) derives a
+Supporting-Outcome leaf % from that stored value. The web bars read the stored
+number.
 
 ## `/update-progress` — the auto-audit tool
 
@@ -91,6 +99,12 @@ A config block on the Objectives pane defines what `/update-progress` must verif
 before a check turns green. Org-wide default = **unit tests passing**; projects
 may *tighten* (e.g. add prod-E2E) but not drop below the org floor.
 
+*Code today (built, advisory):* `packages/backend/src/rest/dod.ts` exposes
+`GET /dod` (the org Definition of Done, defaulting to the floor when unset) and
+`PUT /dod` (admin-only). As built it is **advisory** — surfaced in HQ and reported
+on by the compliance report, but it does **not** hard-block a progress push. The
+prod-E2E *enforced* gate remains deferred (see Open questions).
+
 ## Open questions
 
 - Exact shape of the markdown editor + versioning for Project Requirements.
@@ -106,9 +120,12 @@ may *tighten* (e.g. add prod-E2E) but not drop below the org floor.
 
 ## Status
 
-- **Built:** objectives tree CRUD; GitHub `PRD.md`/`PROGRESS.md` parse (read-only,
-  at connect time). The existing roll-up engine is ticket-based and is superseded
-  by the manual/computed `completion:` model (no tickets) — needs rework.
-- **Not built:** HQ-owned editable requirements + full-screen reader + per-item
-  checks UI; the two-tier (Project/Detailed) split; the `/update-progress` skill;
-  the prod-E2E Definition-of-Done gate; Definition-of-Done config UI.
+- **Built:** objectives tree CRUD; GitHub `completion:` frontmatter read + store
+  (with legacy `PROGRESS.md %` fallback); roll-up **re-pointed off tickets** onto
+  the stored `progressPct`; the docs-tree read endpoints; the two-tier
+  (Project/Detailed) requirements UI with `MarkdownView` and a full-screen reader;
+  the editable HQ-owned Project Requirements; the advisory Definition-of-Done REST;
+  the `/update-progress` skill (`.claude/skills/update-progress/`).
+- **Deferred:** the **enforced** prod-E2E verified-completion gate (and
+  `completion:` frontmatter integrity) — for v1 the pushed % is `/update-progress`'s
+  computed estimate, not a gated guarantee.

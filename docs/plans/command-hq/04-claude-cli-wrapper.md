@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 82
+completion: 90
 feature: claude-cli-wrapper
 ---
 
@@ -33,12 +33,42 @@ Three sources, never PTY text parsing:
 
 1. **PTY pass-through** renders the native interactive `claude` unchanged.
 2. The daemon **tails Claude Code's transcript JSONL**
-   (`~/.claude/projects/<hash>/<sid>.jsonl`) for structured message/tool events
-   and cost/token deltas.
+   (`<config>/projects/<hash>/<sid>.jsonl`) for structured message/tool events and
+   cost/token deltas. The transcript lives under whatever config root the inner
+   Claude runs against — which is the isolated `~/.claude+` (below), so the tailer
+   resolves its base from `config.ConfigDir()` and falls back to `~/.claude` only
+   when isolation is inactive. The per-project `<hash>` is Claude Code's slug:
+   **every** non-alphanumeric character (including `_`) becomes `-`, runs are not
+   collapsed (`C:\Users\me\workflow_harness` → `C--Users-me-workflow-harness`);
+   replacing only path separators missed the underscore and captured nothing.
+   *Code:* `capture/parse.go` (`TranscriptPath`/`projectHash`/`slugifyPath`).
 3. **Hooks** (`settings.json` PreToolUse/PostToolUse/Stop/Notification) post
    low-latency lifecycle + `status.change` signals to the daemon's local socket.
 
 *Code today:* `wrapper/internal/capture/` (`hooks.go`, `jsonl.go`, `parse.go`).
+
+## Isolated `~/.claude+` config root (no `~/.claude` pollution)
+
+claude+ launches its inner `claude` with `CLAUDE_CONFIG_DIR` pointed at an
+**isolated config root, `~/.claude+`**, so the product-bundled skills/agents and
+the session history claude+ generates never land in the user's personal
+`~/.claude`. Because the env var is set only on the child claude+ spawns, a normal
+`claude` run (claude+ not running, or a separate session) still reads `~/.claude`
+and never sees this root.
+
+**As-built shape (divergence from the migration plan).** The plan
+([U21](../2026-06-03-001-feat-command-hq-new-model-migration-plan.md)) described a
+*per-session* `~/.claude+/run/<id>` dir built with symlinks and torn down on close.
+The code instead uses a **single stable `~/.claude+`** root that is **seeded once**
+from `~/.claude` (`.credentials.json`, `.claude.json`, `settings.json`, `.mcp.json`
+— copied only when absent) and **never torn down**, so auth, onboarding, settings,
+MCP, and transcripts persist across claude+ restarts; claude+ then owns its own
+copies. `skills/`/`agents/` under it receive pulled (synced) items. This is simpler
+and more durable than the per-session symlink design, at the cost of write-through
+credential sharing (the stable root keeps its own seeded credentials rather than
+symlinking the live `~/.claude` login). *Code:* `internal/config/overlay.go`
+(`EnsureConfigDir`/`ConfigDir`), `internal/pty/session.go` (`DefaultSpawn` sets
+`Isolate`; `newSession` sets `CLAUDE_CONFIG_DIR`).
 
 ## Transport & auth
 
@@ -49,6 +79,9 @@ Three sources, never PTY text parsing:
   token authorizes the daemon's WS `$connect` and scopes its data to that user.
   No inbound ports needed — the daemon dials out. The token carries a TTL, a
   revoke control in HQ, and lives in the OS keychain (not a plaintext dotfile).
+  Device tokens are signed/verified with a backend `DEVICE_TOKEN_SECRET` (sourced
+  from secrets at deploy, not a baked placeholder); **rotating that secret
+  invalidates all outstanding tokens**, so devices must re-run `claude+ login`.
   *Code today:* `wrapper/internal/config/`, HQ side `backend/src/auth/device.ts`;
   connection setup captured in the project memory note `hq-connection-setup`.
 
@@ -144,9 +177,16 @@ attach rather than silently lacking the new frame.
 
 ## Status
 
-- **Built:** daemon + attach client, capture (hooks/jsonl), desktop bridge,
-  `--gui` discovery, npm/install scaffolding, terminal/session UX (visible
-  cursor, scrollback, LLM auto-titles, double-click rename, view switcher,
-  dangerous-mode propagation).
+- **Built:** daemon + attach client, capture (hooks/jsonl, with the hook receiver
+  forwarding lifecycle events), desktop bridge, `--gui` discovery, npm/install
+  scaffolding, terminal/session UX (visible cursor, scrollback, LLM auto-titles,
+  double-click rename, view switcher, dangerous-mode propagation), the **isolated
+  `~/.claude+` config root**, and config-sync (remote half + drift over the
+  `~/.claude` ∪ `~/.claude+` union).
+- **In progress (not on this branch):** a `UserPromptSubmit` hook that auto-renames
+  a session on the first prompt and pushes the rename to the attached CLI tab; a
+  further daemon **protocol-version bump** so rebuilds auto-replace a stale daemon;
+  a heartbeat + ~60s freshness window so power-loss/killed daemons drop off HQ's
+  live list. See the overview's "In progress / next".
 - **Open:** full transport hardening (offline buffer edge cases), status-line and
   multiplexed-tab polish per the wireframe TUI screens.

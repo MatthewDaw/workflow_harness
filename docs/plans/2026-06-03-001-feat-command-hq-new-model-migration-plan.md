@@ -4,9 +4,27 @@ type: feat
 created: 2026-06-03
 origin: docs/plans/command-hq-overview.md
 depth: deep
+completion: 95
 ---
 
 # feat: Command HQ + claude+ — new-model migration (de-ticket, GitHub-progress, two-tier requirements, client skills)
+
+> **Status (as-built, 2026-06-03): LANDED.** Units U1–U22 are implemented on this
+> branch. Tickets are gone end-to-end (only incidental comments remain); roll-up is
+> re-pointed onto stored `progressPct`; GitHub `completion:` frontmatter is read +
+> stored; the two-tier requirements UI + `MarkdownView` ship; weekly is store/serve
+> for a client-posted report; the client skills live under `.claude/skills/`; the
+> isolated `~/.claude+` root + org-scope skill seed are in; and the infra fixes
+> (SearchStack removed from synth, CORS pinned, `DEVICE_TOKEN_SECRET` from secrets,
+> Go CI version) are applied. Remaining ~5% is deferred-by-design: the prod-E2E
+> verified-completion gate and the AgentForge optimizer/refine loop. The
+> "Implementation Units" below are kept as the historical execution record; treat
+> them as **done unless they appear in the overview's "In progress / next" list**.
+>
+> One notable as-built divergence from this plan: **U21 ships a _stable_ `~/.claude+`
+> root seeded once from `~/.claude`, not the per-session `~/.claude+/run/<id>`
+> symlink dir this plan described.** See `overlay.go` and the note in
+> [04-claude-cli-wrapper.md](./command-hq/04-claude-cli-wrapper.md).
 
 ## Summary
 

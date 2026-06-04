@@ -2,7 +2,7 @@
 status: active
 type: feature
 created: 2026-06-02
-completion: 85
+completion: 88
 feature: weekly-update
 ---
 
@@ -32,14 +32,20 @@ lifecycle, built natively and automated by the harness.
      deltas), and
    - how that **compared to last week's plan** (planned vs. actual = the
      *reconciliation*).
-   *Code today:* `weekly/align.ts` (`summarizeAlignment`, `computeDeltas`);
-   `github/history.ts`. (`attributeDone` is ticket-based and needs rework for the
-   no-ticket git-summary model.)
+   *Code today (built):* this reconciliation is assembled **client-side** by the
+   `/weekly-update` skill from the git diff today→−7d. The old server-side
+   `weekly/align.ts` (`summarizeAlignment`/`computeDeltas`/`attributeDone`) and
+   `weekly/agent.ts` were **deleted** in the migration — the whole `weekly/` module
+   is gone; the backend no longer generates weekly content. `github/history.ts`
+   remains for git-history reads.
 4. **Forward plan.** It fills the "what's coming next" section from the validated
    plan, each item linked to the outcome it advances, with projected deltas.
-5. **Publish.** Writing the update rolls its completion up into Company
-   Objectives.
-   *Code today:* `rest/weekly.ts` (PUT draft, POST publish → `recomputeOrgRollup`).
+5. **Publish.** The skill POSTs the assembled report (`done` summary, `plan`,
+   `conformityScore`) to HQ; publish recomputes the Company Objectives roll-up.
+   *Code today (built):* `rest/weekly.ts` is now **store/serve only** — it validates
+   and stores the client-posted report (PUT draft / POST publish →
+   `recomputeOrgRollup`) and serves it; `conformityScore` round-trips and is never a
+   gate.
 
 ## Native st6 framing (surface, don't hide)
 
@@ -69,8 +75,10 @@ Update") renders the *output*.
 
 ## Status
 
-- **Built:** the agent logic (validate/assemble/deltas) and draft/publish
-  endpoints.
-- **Not built:** the `/weekly-update` skill itself; the interview/conformity UX;
-  the explicit lifecycle states; the Weekly screen is currently display-only with
-  placeholder data.
+- **Built:** the `/weekly-update` skill (`.claude/skills/weekly-update/`) with the
+  interview + client-side never-blocking conformity score; the store/serve
+  `rest/weekly.ts` (draft/publish, `conformityScore` round-trip); the Weekly screen
+  (`ProjectWeekly.tsx`) renders the posted report.
+- **Not built / deferred:** the explicit `DRAFT → LOCKED → RECONCILING →
+  RECONCILED` lifecycle states as first-class status; the manager-visibility
+  conformity surfacing UX is minimal.
