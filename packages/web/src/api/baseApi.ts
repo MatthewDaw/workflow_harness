@@ -394,6 +394,35 @@ export const baseApi = createApi({
         method: 'POST',
         body: { action, payload: text !== undefined ? { text } : {} },
       }),
+      // Shut down / kill terminates the session, but the Sessions LIST page does
+      // not subscribe to that session's live-WS events, so a status→done event
+      // never reaches it and the row stayed live. Optimistically flip the row to
+      // `done` across every cached sessions view + the single-session cache so
+      // the UI reflects the action immediately; undo if the control call fails.
+      // Also invalidate `Session` so the list reconciles with server truth once
+      // the daemon has actually terminated.
+      async onQueryStarted({ sessionId, action }, { dispatch, queryFulfilled }) {
+        if (action !== 'shutdown' && action !== 'kill') return;
+        const setDone = (s: SessionProjection) => {
+          if (s.sessionId === sessionId) s.status = 'done';
+        };
+        const patches = [
+          dispatch(
+            baseApi.util.updateQueryData('getSession', sessionId, (draft) => {
+              if (draft) draft.status = 'done';
+            }),
+          ),
+          ...([undefined, { live: true }, { live: false }] as const).map((arg) =>
+            dispatch(baseApi.util.updateQueryData('getSessions', arg, (draft) => draft.forEach(setDone))),
+          ),
+        ];
+        try {
+          await queryFulfilled;
+        } catch {
+          patches.forEach((p) => p.undo());
+        }
+      },
+      invalidatesTags: ['Session'],
     }),
 
     /**

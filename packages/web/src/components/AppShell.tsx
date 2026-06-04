@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useAuth } from '../auth/AuthProvider.js';
-import { useGetSessionsQuery } from '../api/baseApi.js';
 import { wsConnect, wsDisconnect } from '../ws/liveActions.js';
 import type { RootState } from '../app/store.js';
 import { Emblem } from './Emblem.js';
@@ -24,14 +23,6 @@ export function AppShell() {
   const { user, signOut } = useAuth();
   const dispatch = useDispatch();
   const token = useSelector((s: RootState) => s.auth.idToken);
-  const { data: sessions } = useGetSessionsQuery({ live: true });
-  // Count by live status, not array length: the live-WS middleware folds a
-  // status change into the cached {live:true} list IN PLACE (it never removes a
-  // row), so a session that has since gone done/idle still sits in the array.
-  // Counting length therefore over-reports (e.g. "2 live" while only 1 is active).
-  const liveCount = (sessions ?? []).filter(
-    (s) => s.status === 'active' || s.status === 'needs_input',
-  ).length;
 
   // Open the live WebSocket once the user is authenticated (H3). Without this the
   // socket never opens, so live watch/steer/counters never update. The token
@@ -67,9 +58,6 @@ export function AppShell() {
               </NavLink>
             ))}
             <span className="ml-auto flex items-center gap-2.5 text-xs text-cream/70">
-              <span className="hq-dot hq-dot-live" />
-              {liveCount} live
-              <span className="text-cream/60">·</span>
               <span className="text-cream/80" title="Signed in">
                 {user?.username ?? 'me'}
               </span>
