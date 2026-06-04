@@ -30,6 +30,13 @@ type Daemon struct {
 
 	mu      sync.Mutex
 	clients map[string]net.Conn // attach client connections by id
+	// listSinks pushes a fresh session list (FrameSessAck) to each attached
+	// client. Registered per attach; invoked by broadcastSessList when the session
+	// list changes outside an attach loop (e.g. auto-rename/auto-title from the
+	// transcript tailer or the UserPromptSubmit hook), so the CLI tab strip updates
+	// immediately instead of showing a stale name. Each closure serializes its own
+	// write on the client's send mutex.
+	listSinks map[string]func()
 
 	evMu       sync.Mutex
 	eventSinks map[string]func(event.Envelope) // local event subscribers by id
@@ -54,6 +61,7 @@ func New(repoRoot string, spawn pty.SpawnFunc) (*Daemon, error) {
 		started:    time.Now(),
 		mux:        pty.NewMux(repoRoot, 80, 24, spawn),
 		clients:    map[string]net.Conn{},
+		listSinks:  map[string]func(){},
 		eventSinks: map[string]func(event.Envelope){},
 		stopCh:     make(chan struct{}),
 	}, nil
@@ -200,6 +208,25 @@ func (d *Daemon) emitSession(sid string, e event.Event) {
 	d.PublishEvent(event.Envelope{V: 1, TS: time.Now().UnixMilli(), Event: e})
 }
 
+// broadcastSessList pushes a fresh session list (FrameSessAck) to every attached
+// client. Used after a session-list-affecting change that happens OUTSIDE an
+// attach loop — auto-rename and auto-title from the transcript tailer, or the
+// UserPromptSubmit hook — so the CLI tab strip reflects the new name immediately
+// (the manual FrameRename path acks its own client inline; this covers the rest).
+// Best-effort and non-blocking: each sink serializes on its own client's write
+// mutex; a slow/broken client cannot stall the caller meaningfully.
+func (d *Daemon) broadcastSessList() {
+	d.mu.Lock()
+	sinks := make([]func(), 0, len(d.listSinks))
+	for _, s := range d.listSinks {
+		sinks = append(sinks, s)
+	}
+	d.mu.Unlock()
+	for _, s := range sinks {
+		s()
+	}
+}
+
 // SetHookIngestor registers the callback the Runtime uses to route a hook-sourced
 // event through the same emit path as the transcript tailer (local bus + HQ).
 // Until set (no Runtime), hook events fall back to a local-only publish.
@@ -230,6 +257,8 @@ func (d *Daemon) ingestHook(raw string) {
 	if h.HookEventName == "UserPromptSubmit" {
 		if renamed, name := d.mux.ApplyAutoName(h.SessionID, h.Prompt); renamed {
 			d.emitSession(h.SessionID, event.SessionRenameWithSummary(h.SessionID, name, firstPromptSummary(h.Prompt)))
+			// Refresh attached CLI clients' tab strip so the auto-name shows at once.
+			d.broadcastSessList()
 		}
 		return
 	}
@@ -325,6 +354,12 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 
 	d.mu.Lock()
 	d.clients[clientID] = conn
+	// Register a session-list sink so out-of-attach renames (auto-rename/title)
+	// can push this client a fresh sub-tab list. Reuses the same `send` (and its
+	// write mutex) as the attach loop, so writes stay serialized per client.
+	d.listSinks[clientID] = func() {
+		send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
+	}
 	d.mu.Unlock()
 
 	defer func() {
@@ -333,6 +368,7 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 		d.RemoveEventSink(clientID)
 		d.mu.Lock()
 		delete(d.clients, clientID)
+		delete(d.listSinks, clientID)
 		d.mu.Unlock()
 		// NB: sessions keep running — daemon survives client disconnect.
 	}()

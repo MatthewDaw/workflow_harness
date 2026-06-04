@@ -309,6 +309,8 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				onFirst := func(sessID, text string) {
 					if renamed, name := rt.d.mux.ApplyAutoName(sessID, text); renamed {
 						emit(sessID, event.SessionRename(sessID, name))
+						// Push the new name to attached CLI clients' tab strip at once.
+						rt.d.broadcastSessList()
 					}
 				}
 				// After the first full exchange, upgrade the provisional slug to a
@@ -324,6 +326,8 @@ func (rt *Runtime) captureLoop(instanceID string) {
 						}
 						if renamed, name := rt.d.mux.ApplyTitle(sessID, raw); renamed {
 							emit(sessID, event.SessionRename(sessID, name))
+							// Refresh attached CLI clients' tab strip with the LLM title.
+							rt.d.broadcastSessList()
 						}
 					}()
 				}
