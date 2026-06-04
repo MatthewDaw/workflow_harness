@@ -38,7 +38,9 @@ export function principalOf(event: APIGatewayProxyEventV2): Principal | undefine
   const userId = claims.sub;
   const orgValue = claims['custom:org'] ?? claims.org;
   if (typeof userId !== 'string' || typeof orgValue !== 'string') return undefined;
-  return { userId, org: orgValue };
+  const nameValue = claims.name ?? claims['custom:name'] ?? claims.email;
+  const name = typeof nameValue === 'string' ? nameValue : undefined;
+  return { userId, org: orgValue, ...(name ? { name } : {}) };
 }
 
 /** A JSON response with the given status and body. */
@@ -58,6 +60,8 @@ export const badRequest = (message: string): APIGatewayProxyResultV2 =>
   json(400, { error: message });
 export const unauthorized = (): APIGatewayProxyResultV2 => json(401, { error: 'unauthorized' });
 export const forbidden = (): APIGatewayProxyResultV2 => json(403, { error: 'forbidden' });
+/** 410 Gone — for retired endpoints (e.g. the scope-change route in the org catalog). */
+export const gone = (message = 'gone'): APIGatewayProxyResultV2 => json(410, { error: message });
 
 /** A path parameter, or undefined. */
 export function pathParam(event: APIGatewayProxyEventV2, name: string): string | undefined {

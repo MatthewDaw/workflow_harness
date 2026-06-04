@@ -50,6 +50,7 @@ describe('buildSeedSkills', () => {
     for (const s of skills) {
       expect(s.scope).toEqual({ tier: 'org', id: ORG });
       expect(s.source).toBe('built-in');
+      expect(s.createdBy).toEqual({ userId: 'system', name: 'system' });
       expect(s.body.length).toBeGreaterThan(0);
     }
 
@@ -65,7 +66,7 @@ describe('seedSkills', () => {
     await seedSkills(repo, ORG, FILES);
     await seedSkills(repo, ORG, FILES);
 
-    const stored = await repo.listSkills([{ tier: 'org', id: ORG }]);
+    const stored = await repo.listSkills(ORG);
     // N skills + 1 bundle, no duplicates from the second run.
     expect(stored).toHaveLength(FILES.length + 1);
     const names = stored.map((s) => s.name).sort();

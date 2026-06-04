@@ -110,16 +110,15 @@ describe('session projections', () => {
   });
 });
 
-describe('scoped queries', () => {
-  it('queries one partition per scope and merges results', async () => {
-    ddbMock.on(QueryCommand).resolves({ Items: [{ name: 'x' }] });
-    const out = await repo.listAgents([
-      { tier: 'org', id: 'acme' },
-      { tier: 'user', id: 'matt' },
-      { tier: 'project', id: 'weekly-compass' },
-    ]);
-    expect(out).toHaveLength(3); // one item per scope partition
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(3);
+describe('org-catalog queries', () => {
+  it('queries the single org partition for the catalog', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [{ name: 'x' }, { name: 'y' }] });
+    const out = await repo.listAgents('acme');
+    expect(out).toHaveLength(2);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1); // one org partition
+    const input = ddbMock.commandCalls(QueryCommand)[0]!.args[0].input;
+    expect(input.ExpressionAttributeValues![':pk']).toBe('SCOPE#org#acme');
+    expect(input.ExpressionAttributeValues![':sk']).toBe('AGENT#');
   });
 });
 

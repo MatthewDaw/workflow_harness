@@ -1,11 +1,12 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { projectSchema, type Project } from '@harness/shared';
+import { orgScope, projectSchema, type Project } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { GitHubApp } from '../github/app.js';
 import {
   badRequest,
   created,
   defaultRepo,
+  forbidden,
   notFound,
   ok,
   parseBody,
@@ -14,6 +15,7 @@ import {
   queryParam,
   unauthorized,
 } from './runtime.js';
+import { isAdmin } from './scopeauth.js';
 
 /**
  * REST: projects (U8).
@@ -305,12 +307,122 @@ export async function putProjectRequirements(
   return ok({ markdown });
 }
 
+// --- Project opt-in: enable/disable org-catalog skills + agents ----------
+//
+// Auth gate for all four: org admin OR the project's owner. The skill/agent name
+// must exist in the caller's org catalog (else 404). Responses return the
+// hydrated Project (both enabledSkills + enabledAgents arrays).
+
+/**
+ * Resolve the project for a catalog opt-in mutation, enforcing the
+ * admin-or-owner gate. Returns the project + principal, or an error result. A
+ * missing project is a 404; a non-owner non-admin is 403.
+ */
+async function projectForOptIn(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<
+  | { project: Project; principal: { userId: string; org: string } }
+  | { error: APIGatewayProxyResultV2 }
+> {
+  const principal = principalOf(event);
+  if (!principal) return { error: unauthorized() };
+  const id = pathParam(event, 'projectId');
+  if (!id) return { error: badRequest('missing project id') };
+  const project = await deps.repo.getProject(id);
+  if (!project) return { error: notFound() };
+  if (!isAdmin(event) && project.ownerUserId !== principal.userId) return { error: forbidden() };
+  return { project, principal };
+}
+
+/** POST /projects/:projectId/skills/:skillName — idempotent enable. */
+export async function enableProjectSkill(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, principal } = resolved;
+  const skillName = pathParam(event, 'skillName');
+  if (!skillName) return badRequest('missing skill name');
+
+  // The skill must exist in the org catalog.
+  const skill = await deps.repo.getSkill(orgScope(principal.org), skillName);
+  if (!skill) return notFound();
+
+  const updated = await deps.repo.addSkillToProject(project.id, skillName);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
+/** DELETE /projects/:projectId/skills/:skillName — disable. */
+export async function disableProjectSkill(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+  const skillName = pathParam(event, 'skillName');
+  if (!skillName) return badRequest('missing skill name');
+
+  const updated = await deps.repo.removeSkillFromProject(project.id, skillName);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
+/** POST /projects/:projectId/agents/:agentName — enable + union the agent's skills. */
+export async function enableProjectAgent(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, principal } = resolved;
+  const agentName = pathParam(event, 'agentName');
+  if (!agentName) return badRequest('missing agent name');
+
+  // The agent must exist in the org catalog.
+  const agent = await deps.repo.getAgent(orgScope(principal.org), agentName);
+  if (!agent) return notFound();
+
+  const updated = await deps.repo.addAgentToProject(project.id, agentName, principal.org);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
+/** DELETE /projects/:projectId/agents/:agentName — disable (does NOT prune skills). */
+export async function disableProjectAgent(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+  const agentName = pathParam(event, 'agentName');
+  if (!agentName) return badRequest('missing agent name');
+
+  const updated = await deps.repo.removeAgentFromProject(project.id, agentName);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
 /** Routes the verbs/sub-paths by method/path for a single Lambda integration. */
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: ProjectsDeps = { repo: defaultRepo() };
   const method = event.requestContext.http.method;
   const hasId = Boolean(pathParam(event, 'id'));
   const rawPath = event.requestContext.http.path ?? event.rawPath ?? '';
+
+  // Project opt-in for the org catalog (uses the :projectId path param).
+  if (/\/skills\/[^/]+$/.test(rawPath)) {
+    if (method === 'POST') return enableProjectSkill(event, deps);
+    if (method === 'DELETE') return disableProjectSkill(event, deps);
+  }
+  if (/\/agents\/[^/]+$/.test(rawPath)) {
+    if (method === 'POST') return enableProjectAgent(event, deps);
+    if (method === 'DELETE') return disableProjectAgent(event, deps);
+  }
 
   if (method === 'POST' && hasId && rawPath.endsWith('/refresh')) return refreshProject(event, deps);
   if (method === 'PUT' && hasId && /\/requirements$/.test(rawPath))
