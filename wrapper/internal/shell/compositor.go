@@ -596,9 +596,12 @@ func (c *Compositor) renderSessionBody(w, h int) (curX, curY int, curVis bool) {
 			if rw < 1 {
 				rw = 1
 			}
-			c.screen.Set(vx, bodyTop+y, Cell{Ch: ch, FG: g.FG, BG: g.BG})
+			// Propagate reverse/bold so claude's reverse-video block cursor (drawn
+			// when it hides the hardware cursor) and any reverse/bold text stay
+			// visible — dropping them here made the input cursor disappear.
+			c.screen.Set(vx, bodyTop+y, Cell{Ch: ch, FG: g.FG, BG: g.BG, Reverse: g.Reverse(), Bold: g.Bold()})
 			if rw == 2 && vx+1 < w {
-				c.screen.Set(vx+1, bodyTop+y, Cell{Ch: ' ', FG: g.FG, BG: g.BG, WideCont: true})
+				c.screen.Set(vx+1, bodyTop+y, Cell{Ch: ' ', FG: g.FG, BG: g.BG, Reverse: g.Reverse(), WideCont: true})
 			}
 			vx += rw
 		}

@@ -68,6 +68,15 @@ type Glyph struct {
 	FG, BG Color
 }
 
+// Reverse reports whether the glyph carries the reverse-video attribute. The
+// embedded terminal draws its block cursor (and selections) as reverse-video
+// cells whenever the hardware cursor is hidden, so a caller mirroring the grid
+// must honor this or the cursor/selection becomes invisible.
+func (g Glyph) Reverse() bool { return g.Mode&attrReverse != 0 }
+
+// Bold reports whether the glyph carries the bold attribute.
+func (g Glyph) Bold() bool { return g.Mode&attrBold != 0 }
+
 type line []Glyph
 
 type Cursor struct {
