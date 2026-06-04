@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { stripFrontmatter } from '../lib/frontmatter.js';
 
 /**
  * MarkdownView (U9): renders GitHub-Flavored Markdown for the requirements
@@ -11,6 +12,10 @@ import remarkGfm from 'remark-gfm';
  * enable `rehype-raw`), so embedded HTML in the source is rendered as inert
  * text. That keeps HQ-owned and repo-sourced markdown sanitized without an
  * extra sanitizer pass.
+ *
+ * Repo-sourced docs (docs/PRD.md, docs/plans/**) lead with a `---` YAML
+ * frontmatter block (`completion:`, `status:`, …) that is metadata, not prose —
+ * we strip it so it never renders as a stray `--- completion: 88 ---` line.
  */
 export function MarkdownView({ markdown }: { markdown: string }) {
   return (
@@ -28,7 +33,7 @@ export function MarkdownView({ markdown }: { markdown: string }) {
             ) : null,
         }}
       >
-        {markdown}
+        {stripFrontmatter(markdown)}
       </ReactMarkdown>
     </div>
   );

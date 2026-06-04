@@ -5,6 +5,7 @@ import {
 } from '../../api/baseApi.js';
 import { Bar, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
+import { parseCompletion } from '../../lib/frontmatter.js';
 
 /**
  * Project Requirements sub-tab (U10): the project's HIGH-LEVEL requirements,
@@ -21,7 +22,9 @@ export function ProjectRequirements() {
   });
 
   const markdown = requirements?.markdown ?? '';
-  const pct = project?.progressPct ?? 0;
+  // Prefer the doc's own `completion:` frontmatter so the bar matches the body
+  // immediately; fall back to the project's stored progressPct (set on refresh).
+  const pct = parseCompletion(markdown) ?? project?.progressPct ?? 0;
 
   return (
     <div className="hq-pad" data-testid="project-requirements">

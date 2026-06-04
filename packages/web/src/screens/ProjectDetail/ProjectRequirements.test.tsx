@@ -47,6 +47,24 @@ describe('ProjectRequirements (U10)', () => {
     expect(bar).toHaveAttribute('aria-valuenow', '62');
   });
 
+  it("drives the bar from the doc's completion: frontmatter and hides the frontmatter block", async () => {
+    renderWithProviders(<ProjectRequirements />, {
+      route: '/projects/weekly-compass/requirements',
+      routePath: '/projects/:projectId/requirements',
+      seed: {
+        projects: [PROJECT], // progressPct: 62
+        requirements: { 'weekly-compass': '---\ncompletion: 88\nstatus: active\n---\n\n# Goal\n\nShip it.' },
+      },
+    });
+    await screen.findByRole('heading', { name: 'Goal' });
+    // Bar reflects the doc's 88, NOT the stored progressPct of 62.
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '88');
+    // The frontmatter block is stripped from the rendered body.
+    const view = screen.getByTestId('markdown-view');
+    expect(view.textContent).not.toContain('completion: 88');
+    expect(view.textContent).not.toContain('---');
+  });
+
   it('is read-only: no ✎ Edit button and no editor textarea', async () => {
     renderReq();
     await screen.findByRole('heading', { name: 'Goal' });
