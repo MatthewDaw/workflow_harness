@@ -90,9 +90,37 @@ There are two registration paths; both land in the same org catalog:
      the project's land flow if one exists (e.g. `/land-and-deploy`); else fast-
      forward `main` to this commit and push, or open a PR and merge it. Use the
      developer's own `git`/`gh` — never `--no-verify`.
-  3. Once it's on `main`, the `seed-skills.yml` workflow re-seeds the org catalog
-     automatically. To re-seed immediately instead of waiting, run:
-     `npm run build -w @harness/backend && SEED_ORG=<org> node infra/scripts/seed-skills.mjs`.
+  3. **Seed the deployed catalog NOW — do not wait for the Action.** The
+     `seed-skills.yml` workflow will eventually re-seed on the `main` push, but
+     the user wants the skill live on the website the moment this skill finishes.
+     So run the seed directly against the deployed `harness` table yourself
+     (it is idempotent — upserts by key — so running it is always safe):
+
+     ```bash
+     npm run build -w @harness/backend \
+       && SEED_ORG="${SEED_ORG:-personasearch}" HARNESS_TABLE=harness AWS_REGION=us-east-1 \
+          node infra/scripts/seed-skills.mjs
+     ```
+
+     - `SEED_ORG` must match the org the website serves (the deployed default is
+       `personasearch`; confirm against `packages/web/.env*` `VITE_ORG` if unsure).
+     - The seed reads **every** `.claude/skills/*/SKILL.md`, so the new skill is
+       written into the org catalog as a `command-hq-starter` member.
+     - **Requires local AWS credentials** with write access to the `harness`
+       table (same role the deploy uses). If the seed fails with a credentials /
+       AccessDenied error, say so plainly and fall back to: trigger the
+       `seed-skills` GitHub Action (Actions → seed-skills → Run workflow), or ask
+       someone with deploy creds to run the seed. Do not claim it is live when the
+       seed did not succeed.
+     - Run `SEED_DRY_RUN=1 …` first if you want to preview the records without
+       writing.
+
+  4. **Tell the user where to see it.** Seeded skills land as members of the
+     `command-hq-starter` bundle, which the web **Skills** tab hides from the
+     top-level grid by default. After the seed succeeds, the skill is visible by
+     either toggling **"show in bundles"** on `/skills` or opening the
+     `command-hq-starter` bundle. A hard refresh of the page picks up the new
+     catalog (the project may need a refresh/reconnect if it caches).
 
 - **Direct catalog REST (admin).** Register via the Command HQ skills REST,
   authorized with the device/session token claude+ already holds (HQ API base from

@@ -52,6 +52,38 @@ Report the printed result to the user, e.g. `skills synced: pulled 2, pushed 0`.
 A freshly-pulled skill is available immediately for the next turn (claude+'s
 inner Claude reads skills from `~/.claude+`).
 
+## Then seed the deployed catalog so it's LIVE on the website
+
+`sync-skills` reconciles `~/.claude+` (this machine) and pushes local-only skills
+via the admin REST, but the **website's Skills tab reads the deployed org
+catalog**, which is only repopulated by the seed. When the goal is "run the skill
+and see it live on the website," always finish by seeding the deployed `harness`
+table directly — do **not** wait for the `seed-skills.yml` GitHub Action:
+
+```bash
+npm run build -w @harness/backend \
+  && SEED_ORG="${SEED_ORG:-personasearch}" HARNESS_TABLE=harness AWS_REGION=us-east-1 \
+     node infra/scripts/seed-skills.mjs
+```
+
+- The seed reads **every** repo `.claude/skills/*/SKILL.md` and upserts them into
+  the org catalog as `command-hq-starter` members. It is idempotent, so re-running
+  is always safe.
+- `SEED_ORG` must match the org the website serves (deployed default
+  `personasearch`; confirm via `packages/web/.env*` `VITE_ORG`).
+- **Requires local AWS credentials** for the `harness` table. If the seed fails
+  with a credentials / AccessDenied error, report it and fall back to running the
+  `seed-skills` GitHub Action (Actions → seed-skills → Run workflow) — and do not
+  claim the website is updated when the seed did not succeed.
+- For the website to show skills from the repo (not just `~/.claude+`), the new
+  `.claude/skills/<name>/` file(s) must be on `main` first if you also want the
+  Action path / other machines to pick them up — commit + push them, then seed.
+
+After seeding, the skill shows in the web **Skills** tab. Because it's a
+`command-hq-starter` member, it sits inside that bundle: toggle **"show in
+bundles"** on `/skills` or open the `command-hq-starter` bundle to see it (a hard
+page refresh picks up the new catalog).
+
 ## When nothing happens
 
 - `pulled 0, pushed 0` — already in sync; nothing to do.
