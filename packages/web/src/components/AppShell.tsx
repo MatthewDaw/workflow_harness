@@ -65,7 +65,7 @@ export function AppShell() {
               {liveCount} live
               <span className="text-cream/60">·</span>
               <span className="text-cream/80" title="Signed in">
-                @{user?.username ?? 'me'}
+                {user?.username ?? 'me'}
               </span>
               <button
                 type="button"

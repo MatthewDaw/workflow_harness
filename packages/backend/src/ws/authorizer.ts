@@ -32,7 +32,10 @@ export const handler = async (
 ): Promise<APIGatewayAuthorizerResult> => {
   const resource = event.methodArn;
   const token = event.queryStringParameters?.token;
-  if (!token) return policy('anonymous', 'Deny', resource, {});
+  if (!token) {
+    console.warn('ws authorizer: denying connection — no token on handshake query string');
+    return policy('anonymous', 'Deny', resource, {});
+  }
   try {
     const principal = await verifyDeviceToken(token);
     return policy(principal.userId, 'Allow', resource, {
@@ -40,7 +43,15 @@ export const handler = async (
       org: principal.org,
       role: 'daemon',
     });
-  } catch {
+  } catch (err) {
+    // Surface WHY the token was rejected (expired / bad signature / wrong
+    // issuer-audience). A silent `catch {}` here previously made a
+    // DEVICE_TOKEN_SECRET mismatch invisible in CloudWatch and indistinguishable
+    // from any other denial. Never log the token itself.
+    console.warn(
+      'ws authorizer: denying connection — device token rejected:',
+      err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+    );
     return policy('anonymous', 'Deny', resource, {});
   }
 };

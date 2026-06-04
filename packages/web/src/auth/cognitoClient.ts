@@ -40,11 +40,34 @@ export function createCognitoClient(config: CognitoConfig): AuthClient {
     },
   });
 
-  const toUser = (userId: string, username: string): AuthUser => ({
-    userId,
-    username,
-    org: config.org,
-  });
+  // Google-federated users get a synthetic Cognito username like
+  // "google_104923206893820071904", which is useless to show. Prefer the
+  // human-friendly identity claims from the ID token (name → given_name →
+  // email local-part), falling back to the raw username only if none exist.
+  const friendlyName = (rawUsername: string, claims: Record<string, unknown>): string => {
+    const name = typeof claims.name === 'string' ? claims.name.trim() : '';
+    if (name) return name;
+    const given = typeof claims.given_name === 'string' ? claims.given_name.trim() : '';
+    if (given) return given;
+    const email = typeof claims.email === 'string' ? claims.email.trim() : '';
+    if (email) return email.split('@')[0] ?? email;
+    return rawUsername;
+  };
+
+  const toUser = async (userId: string, rawUsername: string): Promise<AuthUser> => {
+    let claims: Record<string, unknown> = {};
+    try {
+      const session = await fetchAuthSession();
+      claims = session.tokens?.idToken?.payload ?? {};
+    } catch {
+      // No session/claims available — fall back to the raw username below.
+    }
+    return {
+      userId,
+      username: friendlyName(rawUsername, claims),
+      org: config.org,
+    };
+  };
 
   return {
     async getCurrentUser() {
