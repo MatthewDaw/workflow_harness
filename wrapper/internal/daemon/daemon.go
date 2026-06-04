@@ -257,8 +257,6 @@ func (d *Daemon) ingestHook(raw string) {
 	if h.HookEventName == "UserPromptSubmit" {
 		if renamed, name := d.mux.ApplyAutoName(h.SessionID, h.Prompt); renamed {
 			d.emitSession(h.SessionID, event.SessionRenameWithSummary(h.SessionID, name, firstPromptSummary(h.Prompt)))
-			// Refresh attached CLI clients' tab strip so the auto-name shows at once.
-			d.broadcastSessList()
 		}
 		return
 	}

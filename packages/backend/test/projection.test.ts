@@ -60,32 +60,3 @@ describe('applyEvent — session.rename summary', () => {
     expect(manualRename.summary).toBe('fix the login bug');
   });
 });
-
-describe('applyEvent — session.heartbeat', () => {
-  it('bumps lastEventAt and changes no other field', () => {
-    const started = applyEvent(undefined, env(1, startEvent, 1_000));
-    const beat = applyEvent(
-      started,
-      env(2, { kind: 'session.heartbeat', sessionId: SESSION }, 5_000),
-    );
-    expect(beat.lastEventAt).toBe(5_000);
-    // Everything else is carried through untouched (status, name, tokens, cost).
-    expect({ ...beat, lastEventAt: 0, maxSeq: 0 }).toEqual({
-      ...started,
-      lastEventAt: 0,
-      maxSeq: 0,
-    });
-    expect(beat.maxSeq).toBe(2);
-  });
-
-  it('does not revive lastEventAt for an out-of-order (older-seq) heartbeat', () => {
-    const started = applyEvent(undefined, env(5, startEvent, 5_000));
-    const lateBeat = applyEvent(
-      started,
-      env(2, { kind: 'session.heartbeat', sessionId: SESSION }, 9_000),
-    );
-    // Older seq: latest-activity fields must not advance.
-    expect(lateBeat.lastEventAt).toBe(5_000);
-    expect(lateBeat.maxSeq).toBe(5);
-  });
-});
