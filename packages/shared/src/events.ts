@@ -77,6 +77,15 @@ export const statusChangeEventSchema = z.object({
   to: sessionStatusSchema,
 });
 
+// Periodic liveness ping a daemon emits (~every 20s) for each LIVE session, even
+// when the session is idle. The backend bumps lastEventAt on receipt so a
+// genuinely-alive idle session stays live; a powered-off laptop stops sending
+// these, so read-time freshness drops its sessions within the stale window.
+export const sessionHeartbeatEventSchema = z.object({
+  kind: z.literal('session.heartbeat'),
+  sessionId,
+});
+
 export const eventSchema = z.discriminatedUnion('kind', [
   sessionStartEventSchema,
   sessionRenameEventSchema,
@@ -86,6 +95,7 @@ export const eventSchema = z.discriminatedUnion('kind', [
   toolResultEventSchema,
   costTickEventSchema,
   statusChangeEventSchema,
+  sessionHeartbeatEventSchema,
 ]);
 export type Event = z.infer<typeof eventSchema>;
 export type EventKind = Event['kind'];

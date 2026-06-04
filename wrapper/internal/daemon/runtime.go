@@ -56,6 +56,33 @@ func (rt *Runtime) emit(sid string, e event.Event) {
 	}
 }
 
+// heartbeatInterval is how often the runtime emits a session.heartbeat for each
+// live session. Comfortably below the backend's 60s stale window so a genuinely
+// alive idle session always refreshes before it would be considered stale.
+const heartbeatInterval = 20 * time.Second
+
+// heartbeatLoop emits a session.heartbeat for every live session on a fixed
+// interval until the daemon shuts down. Best-effort and non-blocking: it reuses
+// the shared emit path (local bus + HQ when configured) and never blocks the
+// daemon — a dead session list simply produces no heartbeats. When the daemon
+// process dies (e.g. power loss) the loop stops with it, so HQ stops seeing
+// heartbeats and read-time freshness retires those sessions.
+func (rt *Runtime) heartbeatLoop() {
+	defer diag.Recover("runtime.heartbeatLoop")
+	tk := time.NewTicker(heartbeatInterval)
+	defer tk.Stop()
+	for {
+		select {
+		case <-rt.stop:
+			return
+		case <-tk.C:
+			for _, v := range rt.d.mux.List() {
+				rt.emit(v.ID, event.SessionHeartbeat(v.ID))
+			}
+		}
+	}
+}
+
 // hqConfig is read from ~/.claude-plus/credentials (written by `claude+ login`).
 type hqConfig struct {
 	URL   string
@@ -139,6 +166,12 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 
 	// Per-session transcript tailers feed the envelope stream (local bus + HQ).
 	go rt.captureLoop(instanceID)
+
+	// Heartbeat: periodically emit session.heartbeat for each live session so HQ's
+	// lastEventAt stays fresh even while a session is idle. If the laptop loses
+	// power the daemon dies and stops heartbeating, so HQ's read-time freshness
+	// drops those sessions within the stale window (no reaper needed).
+	go rt.heartbeatLoop()
 
 	// Agents/skills drift meter (U19): poll HQ's effective registry and fold the
 	// drift count into the status snapshot. Only runs when an HQ REST base is

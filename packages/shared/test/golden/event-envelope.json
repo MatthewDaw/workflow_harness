@@ -95,5 +95,13 @@
       "from": "active",
       "to": "needs_input"
     }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200008000,
+    "seq": 8,
+    "event": { "kind": "session.heartbeat", "sessionId": "a91f" }
   }
 ]

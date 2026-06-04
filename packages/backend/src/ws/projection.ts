@@ -101,6 +101,11 @@ export function applyEvent(
     case 'status.change':
       next.status = ev.to;
       break;
+    case 'session.heartbeat':
+      // A liveness ping: lastEventAt is already bumped above, which keeps the
+      // session fresh (and, for active/needs_input sessions, in the GSI1 live
+      // index via the unchanged status). No other field changes.
+      break;
     case 'tool.call':
     case 'tool.result':
     case 'session.start':

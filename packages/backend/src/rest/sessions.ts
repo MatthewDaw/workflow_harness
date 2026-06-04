@@ -36,6 +36,28 @@ export interface SessionsDeps {
 const DEFAULT_EVENT_PAGE = 100;
 
 /**
+ * Read-time freshness window. A session whose status is active/needs_input but
+ * whose last event (including periodic `session.heartbeat` pings) is older than
+ * this is treated as NOT live — its daemon has gone silent (e.g. the laptop lost
+ * power and died without sending a "done"). A genuinely-alive idle session keeps
+ * heartbeating (~every 20s), so it stays well inside this window. This makes
+ * powered-off laptops disappear from the live view within ~60s without a reaper.
+ */
+export const STALE_WINDOW_MS = 60_000;
+
+/**
+ * Whether a session is live RIGHT NOW: it must be in a live status
+ * (active/needs_input) AND have produced an event within the stale window.
+ */
+export function isSessionLive(
+  session: { status: string; lastEventAt: number },
+  now: number,
+): boolean {
+  const liveStatus = session.status === 'active' || session.status === 'needs_input';
+  return liveStatus && now - session.lastEventAt <= STALE_WINDOW_MS;
+}
+
+/**
  * Body of POST /sessions/{id}/control. The sessionId is the path param; the body
  * carries the ControlAction + payload (matching the web's `sendControl`, which
  * posts `{ action, payload }`).
@@ -53,11 +75,20 @@ export async function listSessions(
   if (!principal) return unauthorized();
 
   const liveOnly = queryParam(event, 'live') === 'true';
+  const now = Date.now();
 
   // Live index is cross-project; scope it to the caller. For the full firehose we
   // gather the caller's projects then their sessions.
   let sessions = await deps.repo.listLiveSessions();
   sessions = sessions.filter((s) => s.ownerUserId === principal.userId);
+
+  if (liveOnly) {
+    // Read-time freshness: a session whose status is live but whose last event is
+    // older than the stale window has a dead/silent daemon (e.g. powered-off
+    // laptop). Drop it so it disappears from the live view within ~60s — no
+    // reaper, no extra write path.
+    sessions = sessions.filter((s) => isSessionLive(s, now));
+  }
 
   if (!liveOnly) {
     const projects = await deps.repo.listProjectsForUser(principal.userId);
@@ -72,10 +103,11 @@ export async function listSessions(
     sessions = [...byId.values()];
   }
 
-  // Live-first, then most-recent activity.
-  const isLive = (status: string): number =>
-    status === 'active' || status === 'needs_input' ? 1 : 0;
-  sessions.sort((a, b) => isLive(b.status) - isLive(a.status) || b.lastEventAt - a.lastEventAt);
+  // Live-first, then most-recent activity. A stale active session (silent daemon)
+  // is treated as not-live here too, so it sorts below genuinely-live sessions.
+  const liveRank = (s: { status: string; lastEventAt: number }): number =>
+    isSessionLive(s, now) ? 1 : 0;
+  sessions.sort((a, b) => liveRank(b) - liveRank(a) || b.lastEventAt - a.lastEventAt);
 
   return ok({ sessions });
 }
