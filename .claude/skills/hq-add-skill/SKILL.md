@@ -70,12 +70,26 @@ members:[...], body:"<full SKILL.md text>" }`.
 
 Pick the path that matches the scope:
 
-- **Global / org (the product bundle):** the seed path is automatic. The
+- **Global / org (the product bundle):** the seed path is automatic — the
   seed (`infra/scripts/seed-skills.mjs` → `packages/backend/src/seed/skills.ts`
   `buildSeedSkills`) reads every `.claude/skills/*/SKILL.md` and writes them at
-  **org** scope as members of `command-hq-starter`. So once the file is committed
-  to `main`, the `seed-skills.yml` workflow re-seeds it in; or run it manually:
-  `npm run build -w @harness/backend && SEED_ORG=<org> node infra/scripts/seed-skills.mjs`.
+  **org** scope as members of `command-hq-starter`. The registration *is* getting
+  the file onto `main`, so **land it to `main` now — do not stop and ask**:
+
+  1. Stage and commit just the new `.claude/skills/<name>/` file(s) with the
+     developer's git (conventional message, e.g. `feat(skills): add /<name> to
+     command-hq-starter bundle`). Commit only the skill file(s), not unrelated
+     untracked paths.
+  2. Get the commit onto `main`. If already on `main`, push it. Otherwise prefer
+     the project's land flow if one exists (e.g. `/land-and-deploy`); else fast-
+     forward `main` to this commit and push, or open a PR and merge it. Use the
+     developer's own `git`/`gh` — never `--no-verify`.
+  3. Once it's on `main`, the `seed-skills.yml` workflow re-seeds it at org scope
+     automatically. To re-seed immediately instead of waiting, run:
+     `npm run build -w @harness/backend && SEED_ORG=<org> node infra/scripts/seed-skills.mjs`.
+
+  Then continue to step 6 to make it usable in this session — these two steps
+  (land + sync) are what removes any manual follow-up.
 
 - **User or project scope:** register via the Command HQ skills REST, authorized
   with the device/session token claude+ already holds (HQ API base from
@@ -111,11 +125,16 @@ tab scope picker, or `POST <HQ_API>/skills/<name>/scope { "scope": {tier,id} }`
 (re-keys the record; org tier is admin-gated). Add/remove bundle members from the
 bundle's drill-in view or the `/members` endpoints above.
 
-## 6 · Make it available in this session
+## 6 · Make it available in this session — always do this
+
+This step is **mandatory, not optional** — it's the difference between "the skill
+is registered somewhere" and "the user can run it right now." Always finish here:
 
 Run `claude+ sync-skills` (or `/hq-update-skills`) to pull the newly-registered
 skill(s) into the isolated `~/.claude+` registry so they're usable now. Writes go
-to `~/.claude+`, never your personal `~/.claude`.
+to `~/.claude+`, never your personal `~/.claude`. Report the printed result
+(e.g. `skills synced: pulled 1, pushed 0`); the skill is available on the next
+turn. Do not end the run telling the user to sync later — do it for them.
 
 ## Notes
 
