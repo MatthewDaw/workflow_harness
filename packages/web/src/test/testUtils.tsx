@@ -11,6 +11,7 @@ import type {
   Skill,
   WeeklyUpdate,
   DefinitionOfDone,
+  Envelope,
 } from '@harness/shared';
 import { makeStore, type AppStore } from '../app/store.js';
 import { AuthProvider } from '../auth/AuthProvider.js';
@@ -24,6 +25,8 @@ import type { AuthUser } from '../auth/authClient.js';
 export interface SeedData {
   projects?: Project[];
   sessions?: SessionProjection[];
+  /** Stored event history per session, keyed by sessionId, served as backfill. */
+  sessionEvents?: Record<string, Envelope[]>;
   objectives?: ObjectiveNode[];
   agents?: Agent[];
   skills?: Skill[];
@@ -99,7 +102,13 @@ export function installFetchStub(seed: SeedData) {
     if (path === 'device/approve') return json({ approved: true });
 
     const sess = /^sessions\/([^/]+)$/.exec(path);
-    if (sess) return json((seed.sessions ?? []).find((s) => s.sessionId === sess[1]) ?? null);
+    if (sess) {
+      const id = sess[1]!;
+      const session = (seed.sessions ?? []).find((s) => s.sessionId === id) ?? null;
+      // Mirror the real GET /sessions/:id, which returns { session, events }.
+      // getSession reads `session`; getSessionEvents reads `events` (backfill).
+      return json({ session, events: seed.sessionEvents?.[id] ?? [] });
+    }
 
     const weekly = /^projects\/([^/]+)\/weekly$/.exec(path);
     if (weekly) return json(seed.weekly?.[weekly[1]!] ?? []);

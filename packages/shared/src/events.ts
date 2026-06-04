@@ -35,16 +35,28 @@ export const sessionRenameEventSchema = z.object({
   summary: z.string().optional(),
 });
 
+// Cap on any single carried-content field (user/assistant text, tool args, tool
+// result) so a giant transcript block can't blow up an envelope or the table
+// item. The wrapper truncates to this; the schema does not re-validate length.
+export const MAX_CONTENT_CHARS = 8000;
+
 export const userMsgEventSchema = z.object({
   kind: z.literal('user.msg'),
   sessionId,
   tokens: z.number().int().nonnegative(),
+  // The actual user-turn text (truncated). Optional for backward compatibility:
+  // older daemons emit only the token count. When present the live-watch feed
+  // renders the real prompt instead of just "you · N tok".
+  text: z.string().optional(),
 });
 
 export const assistantMsgEventSchema = z.object({
   kind: z.literal('assistant.msg'),
   sessionId,
   tokens: z.number().int().nonnegative(),
+  // The actual assistant-reply text (truncated). Optional for backward
+  // compatibility; when present the feed renders Claude's real words.
+  text: z.string().optional(),
 });
 
 export const toolCallEventSchema = z.object({

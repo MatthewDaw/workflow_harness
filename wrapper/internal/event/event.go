@@ -83,6 +83,10 @@ type Event struct {
 	// user.msg / assistant.msg / cost.tick
 	Tokens *int64 `json:"tokens,omitempty"`
 
+	// user.msg / assistant.msg: the actual (truncated) turn text. Optional; older
+	// daemons omitted it. Carries the real content HQ renders in the live feed.
+	Text string `json:"text,omitempty"`
+
 	// cost.tick
 	DeltaUsd *float64 `json:"deltaUsd,omitempty"`
 	TotalUsd *float64 `json:"totalUsd,omitempty"`
@@ -136,9 +140,21 @@ func UserMsg(sessionID string, tokens int64) Event {
 	return Event{Kind: KindUserMsg, SessionID: sessionID, Tokens: int64Ptr(tokens)}
 }
 
+// UserMsgText builds a user.msg event carrying the actual (already-truncated)
+// user-turn text alongside the token count.
+func UserMsgText(sessionID string, tokens int64, text string) Event {
+	return Event{Kind: KindUserMsg, SessionID: sessionID, Tokens: int64Ptr(tokens), Text: text}
+}
+
 // AssistantMsg builds an assistant.msg event.
 func AssistantMsg(sessionID string, tokens int64) Event {
 	return Event{Kind: KindAssistantMsg, SessionID: sessionID, Tokens: int64Ptr(tokens)}
+}
+
+// AssistantMsgText builds an assistant.msg event carrying the actual
+// (already-truncated) assistant-reply text alongside the token count.
+func AssistantMsgText(sessionID string, tokens int64, text string) Event {
+	return Event{Kind: KindAssistantMsg, SessionID: sessionID, Tokens: int64Ptr(tokens), Text: text}
 }
 
 // ToolCall builds a tool.call event.

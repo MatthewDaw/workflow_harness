@@ -10,6 +10,7 @@ import type {
   ScopeRef,
   ControlAction,
   DefinitionOfDone,
+  Envelope,
 } from '@harness/shared';
 
 /**
@@ -143,6 +144,19 @@ export const baseApi = createApi({
       query: (id) => `sessions/${id}`,
       transformResponse: unwrapOne<SessionProjection>('session'),
       providesTags: (_r, _e, id) => [{ type: 'Session', id }],
+    }),
+
+    /**
+     * Backfill the stored event history for a session (the last N events).
+     * The same `GET /sessions/:id` endpoint returns `{ session, events }`; this
+     * query reads the `events` array so the Watch & steer feed shows history
+     * immediately on open instead of "waiting for activity…". The live-WS stream
+     * carries everything thereafter; the LiveWatch view merges the two by `seq`.
+     */
+    getSessionEvents: build.query<Envelope[], { id: string; limit?: number }>({
+      query: ({ id, limit }) => `sessions/${id}${limit ? `?limit=${limit}` : ''}`,
+      transformResponse: unwrapArray<Envelope>('events'),
+      providesTags: (_r, _e, { id }) => [{ type: 'Session', id }],
     }),
 
     getObjectives: build.query<ObjectiveNode[], void>({
@@ -403,6 +417,7 @@ export const {
   useRefreshProjectMutation,
   useGetSessionsQuery,
   useGetSessionQuery,
+  useGetSessionEventsQuery,
   useGetObjectivesQuery,
   useCreateObjectiveMutation,
   useDeleteObjectiveMutation,

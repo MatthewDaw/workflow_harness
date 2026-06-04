@@ -73,6 +73,34 @@ describe('event envelope schema', () => {
     expect(roundTripped.event.repo).toBe('acme/weekly-compass');
   });
 
+  it('carries optional real text on user.msg / assistant.msg and round-trips it', () => {
+    for (const kind of ['user.msg', 'assistant.msg'] as const) {
+      const parsed = parseEnvelope({
+        v: 1,
+        instanceId: 'inst-0',
+        host: 'h',
+        ts: 1,
+        seq: 0,
+        event: { kind, sessionId: 'a91f', tokens: 12, text: 'the real content' },
+      });
+      expect(parsed.event).toMatchObject({ kind, text: 'the real content' });
+      const roundTripped = JSON.parse(JSON.stringify(parsed));
+      expect(roundTripped.event.text).toBe('the real content');
+    }
+  });
+
+  it('still validates user.msg / assistant.msg without text (older daemons)', () => {
+    const parsed = parseEnvelope({
+      v: 1,
+      instanceId: 'inst-0',
+      host: 'h',
+      ts: 1,
+      seq: 0,
+      event: { kind: 'user.msg', sessionId: 'a91f', tokens: 5 },
+    });
+    expect(parsed.event).not.toHaveProperty('text');
+  });
+
   it('still validates a session.start without a repo field (older daemons)', () => {
     const parsed = parseEnvelope({
       v: 1,

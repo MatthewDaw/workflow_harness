@@ -17,7 +17,28 @@ export function applyEventToProjection(
   prev: SessionProjection | undefined,
   env: Envelope,
 ): SessionProjection | undefined {
-  if (!prev) return prev;
+  // Bootstrap a projection from a session.start we have no prior state for, so a
+  // session that goes live mid-session (after the lists were fetched) becomes a
+  // real, countable row instead of being dropped. Other event kinds still need a
+  // prior projection — they carry no identity to synthesize one from.
+  if (!prev) {
+    if (env.event.kind === 'session.start') {
+      return {
+        sessionId: env.event.sessionId,
+        projectId: env.event.projectId,
+        name: env.event.name,
+        host: env.host,
+        agent: env.event.agent,
+        status: 'active',
+        tokens: 0,
+        costUsd: 0,
+        startedAt: env.ts,
+        lastEventAt: env.ts,
+        maxSeq: env.seq,
+      };
+    }
+    return prev;
+  }
   if (env.seq <= prev.maxSeq) return prev; // ignore stale/duplicate
   const next: SessionProjection = { ...prev, maxSeq: env.seq, lastEventAt: env.ts };
   const e = env.event;
@@ -55,6 +76,9 @@ export const liveMiddleware: Middleware = (store) => {
     }
   };
 
+  const isLiveStatus = (status: string): boolean =>
+    status === 'active' || status === 'needs_input';
+
   const foldEvent = (env: Envelope) => {
     const sessionId = env.event.sessionId;
     // Update the single-session cache entry.
@@ -64,14 +88,37 @@ export const liveMiddleware: Middleware = (store) => {
         if (updated) Object.assign(draft, updated);
       }),
     );
+    // A full projection we can ADD to the {live:true} list if this session is
+    // newly live and not yet present there (otherwise the header "N live" count
+    // under-reports it). Prefer the single-session cache (richest), else any
+    // cached list row, else a bootstrap from a session.start event.
+    const state = store.getState() as never;
+    const knownProjection: SessionProjection | undefined =
+      (baseApi.endpoints.getSession.select(sessionId)(state).data as SessionProjection | undefined) ??
+      findInLists(state, sessionId) ??
+      applyEventToProjection(undefined, env);
+
     // Update the matching row in any cached sessions list.
     for (const live of [undefined, { live: true }, { live: false }] as const) {
       dispatch(
         baseApi.util.updateQueryData('getSessions', live, (draft) => {
           const idx = draft.findIndex((s) => s.sessionId === sessionId);
-          if (idx === -1) return;
-          const updated = applyEventToProjection(draft[idx], env);
-          if (updated) draft[idx] = updated;
+          if (idx !== -1) {
+            const updated = applyEventToProjection(draft[idx], env);
+            if (updated) draft[idx] = updated;
+            return;
+          }
+          // Session not yet in this cached list. For the {live:true} list, a
+          // session that becomes live AFTER the list was fetched must be ADDED,
+          // or the header "N live" count under-reports it.
+          if (
+            live &&
+            live.live === true &&
+            knownProjection &&
+            isLiveStatus(knownProjection.status)
+          ) {
+            draft.push(knownProjection);
+          }
         }),
       );
     }
@@ -122,6 +169,18 @@ export const liveMiddleware: Middleware = (store) => {
     return next(action);
   };
 };
+
+/** Find a session's projection in any cached getSessions list (richest first). */
+function findInLists(state: never, sessionId: string): SessionProjection | undefined {
+  for (const arg of [undefined, { live: false }, { live: true }] as const) {
+    const list = baseApi.endpoints.getSessions.select(arg)(state).data as
+      | SessionProjection[]
+      | undefined;
+    const hit = list?.find((s) => s.sessionId === sessionId);
+    if (hit) return hit;
+  }
+  return undefined;
+}
 
 function safeJson(raw: unknown): unknown {
   if (typeof raw !== 'string') return raw;

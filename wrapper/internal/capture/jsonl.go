@@ -19,22 +19,52 @@ import (
 	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
-// transcriptLine is the subset of a Claude Code transcript JSONL row we read.
-// Claude Code's transcript is an append-only JSONL; each line is one record.
-// The exact schema is pinned by the recorded fixture in testdata and isolated
-// here so a Claude Code format change is contained (R2).
+// transcriptLine is the subset of a CURRENT Claude Code transcript JSONL row we
+// read. The transcript is an append-only JSONL; each line is one record. The
+// exact schema is pinned by the recorded fixture in testdata and isolated here
+// so a Claude Code format change is contained (R2).
+//
+// Current schema (claude-plus, CLI v2.1.x), the ground truth this parses:
+//   - A row's discriminator is `type`: "user", "assistant", and many control
+//     rows ("attachment", "system", "mode", "permission-mode", "ai-title",
+//     "last-prompt", "queue-operation", "file-history-snapshot", …) we ignore.
+//   - user / assistant rows nest the real payload under `message`. The
+//     `message.content` is EITHER a plain string (a user prompt) OR an ARRAY of
+//     content blocks. Each block has a `type`:
+//       text        → {type:"text", text:"…"}                 (user/assistant)
+//       thinking     → {type:"thinking", …}                   (assistant; skipped)
+//       tool_use     → {type:"tool_use", id, name, input:{…}} (assistant)
+//       tool_result  → {type:"tool_result", tool_use_id, content, is_error}
+//                                                              (carried on USER rows)
+//   - assistant rows carry server usage at `message.usage` (input/output tokens).
+//
+// So a single assistant row may expand into multiple events (text + N tool_use),
+// and a user row into either a prompt event or N tool_result events. handleLine
+// walks `message.content[]` and emits ONE event per meaningful block.
 type transcriptLine struct {
-	Type      string          `json:"type"`      // "user" | "assistant" | "tool_use" | "tool_result" | "result"
-	Role      string          `json:"role"`      // some versions use role instead of type
-	Message   json.RawMessage `json:"message"`   // nested message payload
-	ToolName  string          `json:"name"`      // tool_use
-	ToolInput json.RawMessage `json:"input"`     // tool_use
-	IsError   bool            `json:"is_error"`  // tool_result
-	Content   json.RawMessage `json:"content"`   // tool_result / message content
-	Usage     *usage          `json:"usage"`     // assistant / result usage
-	CostUSD   *float64        `json:"costUSD"`   // result rows carry cumulative cost
-	DurationMs *int64         `json:"durationMs"`
-	Timestamp string          `json:"timestamp"`
+	Type    string          `json:"type"`
+	Message json.RawMessage `json:"message"`
+}
+
+// messageEnvelope is the nested `message` object on user/assistant rows.
+type messageEnvelope struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"` // string OR []block
+	Usage   *usage          `json:"usage"`
+}
+
+// block is one element of a `message.content` array. The union is wide; we read
+// the fields relevant to each block type and ignore the rest.
+type block struct {
+	Type string          `json:"type"`
+	Text string          `json:"text"` // text
+	// tool_use
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+	// tool_result
+	ToolUseID string          `json:"tool_use_id"`
+	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"` // string OR [{type:text,text}]
 }
 
 type usage struct {
@@ -133,7 +163,13 @@ func (t *Tailer) Run(every time.Duration, stop <-chan struct{}) {
 	}
 }
 
-// handleLine maps a single transcript record to zero or more events.
+// handleLine maps a single transcript record to zero or more events. It walks
+// the current claude transcript schema (see transcriptLine): only user and
+// assistant rows carry content; everything else (control/metadata rows) is
+// skipped. A user/assistant row's `message.content` is either a string (a user
+// prompt) or an array of blocks; each meaningful block emits its own event so HQ
+// receives EVERYTHING (user text, assistant text, every tool_use, every
+// tool_result) — not one coarse event per row.
 func (t *Tailer) handleLine(line string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -143,61 +179,105 @@ func (t *Tailer) handleLine(line string) {
 	if err := json.Unmarshal([]byte(line), &row); err != nil {
 		return // skip unparseable lines rather than crash (R2)
 	}
-
-	kind := row.Type
-	if kind == "" {
-		kind = row.Role
+	if row.Type != "user" && row.Type != "assistant" {
+		return // control/metadata row — nothing to forward
+	}
+	if len(row.Message) == 0 {
+		return
 	}
 
-	switch kind {
+	var msg messageEnvelope
+	if err := json.Unmarshal(row.Message, &msg); err != nil {
+		return
+	}
+
+	switch row.Type {
 	case "user":
-		text := extractText(row.Message, row.Content)
-		if !t.sawFirst {
-			t.sawFirst = true
-			t.firstUserText = text
-			if t.onFirst != nil && text != "" {
-				t.onFirst(t.sessID, text)
-			}
-		}
-		t.emit(event.UserMsg(t.sessID, tokenCount(text)))
+		t.handleUser(msg)
 	case "assistant":
-		var tokens int64
-		if row.Usage != nil {
-			tokens = row.Usage.OutputTokens
+		t.handleAssistant(msg)
+	}
+}
+
+// handleUser emits events for a user row. The content is either a plain prompt
+// string (one user.msg) or an array that may contain tool_result blocks (one
+// tool.result each) and/or text blocks (one user.msg).
+func (t *Tailer) handleUser(msg messageEnvelope) {
+	// Plain-string content: a typed user prompt.
+	if s, ok := asString(msg.Content); ok {
+		text := strings.TrimSpace(s)
+		if text == "" {
+			return
 		}
-		// The first assistant reply that carries text completes the opening
-		// exchange; hand it (with the first user turn) to the title generator
-		// exactly once. Tool-only assistant turns carry no text, so we wait for a
-		// textual reply.
-		if !t.sawAssistant && t.firstUserText != "" {
-			if atext := extractText(row.Message, row.Content); atext != "" {
+		t.firstTurn(text)
+		t.emit(event.UserMsgText(t.sessID, tokenCount(text), capContent(text)))
+		return
+	}
+
+	blocks := parseBlocks(msg.Content)
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			text := strings.TrimSpace(b.Text)
+			if text == "" {
+				continue
+			}
+			t.firstTurn(text)
+			t.emit(event.UserMsgText(t.sessID, tokenCount(text), capContent(text)))
+		case "tool_result":
+			summary := capContent(textFromContent(b.Content))
+			// Current transcript tool_result rows carry no duration; report 0ms.
+			t.emit(event.ToolResult(t.sessID, !b.IsError, 0, summary))
+		}
+	}
+}
+
+// handleAssistant emits events for an assistant row: one assistant.msg per text
+// block (carrying the real text) and one tool.call per tool_use block. thinking
+// and other block types are skipped. Server usage (message.usage) attributes
+// output tokens to the first text block of the turn.
+func (t *Tailer) handleAssistant(msg messageEnvelope) {
+	var tokens int64
+	if msg.Usage != nil {
+		tokens = msg.Usage.OutputTokens
+	}
+	blocks := parseBlocks(msg.Content)
+	textEmitted := false
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			text := strings.TrimSpace(b.Text)
+			if text == "" {
+				continue
+			}
+			// The first textual assistant reply completes the opening exchange;
+			// hand it (with the first user turn) to the title generator once.
+			if !t.sawAssistant && t.firstUserText != "" {
 				t.sawAssistant = true
 				if t.onExchange != nil {
-					t.onExchange(t.sessID, t.firstUserText, atext)
+					t.onExchange(t.sessID, t.firstUserText, text)
 				}
 			}
-		}
-		t.emit(event.AssistantMsg(t.sessID, tokens))
-	case "tool_use":
-		t.emit(event.ToolCall(t.sessID, row.ToolName, summarizeInput(row.ToolInput)))
-	case "tool_result":
-		var ms int64
-		if row.DurationMs != nil {
-			ms = *row.DurationMs
-		}
-		t.emit(event.ToolResult(t.sessID, !row.IsError, ms, summarizeContent(row.Content)))
-	case "result":
-		if row.CostUSD != nil {
-			delta := *row.CostUSD - t.totalUsd
-			if delta < 0 {
-				delta = 0
+			tok := int64(0)
+			if !textEmitted {
+				tok = tokens // attribute the row's output tokens to its first text block
+				textEmitted = true
 			}
-			t.totalUsd = *row.CostUSD
-			var tokens int64
-			if row.Usage != nil {
-				tokens = row.Usage.InputTokens + row.Usage.OutputTokens
-			}
-			t.emit(event.CostTick(t.sessID, round2(delta), round2(t.totalUsd), tokens))
+			t.emit(event.AssistantMsgText(t.sessID, tok, capContent(text)))
+		case "tool_use":
+			t.emit(event.ToolCall(t.sessID, b.Name, summarizeInput(b.Input)))
 		}
+	}
+}
+
+// firstTurn records the session's first user text (for auto-name) exactly once.
+func (t *Tailer) firstTurn(text string) {
+	if t.sawFirst {
+		return
+	}
+	t.sawFirst = true
+	t.firstUserText = text
+	if t.onFirst != nil && text != "" {
+		t.onFirst(t.sessID, text)
 	}
 }

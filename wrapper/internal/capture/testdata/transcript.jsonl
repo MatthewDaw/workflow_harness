@@ -1,5 +1,0 @@
-{"type":"user","message":{"content":[{"type":"text","text":"add reconciliation view"}]},"timestamp":"2026-06-01T00:00:00Z"}
-{"type":"tool_use","name":"Read","input":{"file_path":"src/state/weeklyLifecycle.ts"},"timestamp":"2026-06-01T00:00:04Z"}
-{"type":"tool_result","is_error":false,"durationMs":8,"content":"142 lines","timestamp":"2026-06-01T00:00:05Z"}
-{"type":"assistant","usage":{"input_tokens":120,"output_tokens":84},"message":{"content":[{"type":"text","text":"Done."}]},"timestamp":"2026-06-01T00:00:06Z"}
-{"type":"result","costUSD":0.62,"usage":{"input_tokens":40000,"output_tokens":8000},"timestamp":"2026-06-01T00:00:07Z"}

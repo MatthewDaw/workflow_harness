@@ -66,41 +66,47 @@ func slugifyPath(p string) string {
 	return b.String()
 }
 
-// contentBlock is one element of a message content array (text or tool blocks).
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
+// maxContentChars caps any single carried-content field (user/assistant text,
+// tool args, tool result) so a giant transcript block can't blow up an envelope
+// or the table item. Mirrors MAX_CONTENT_CHARS in packages/shared.
+const maxContentChars = 8000
 
-// messagePayload is the nested message object in user/assistant rows.
-type messagePayload struct {
-	Content json.RawMessage `json:"content"`
-}
-
-// extractText pulls human-readable text from a message/content payload, which
-// may be a plain string or an array of content blocks.
-func extractText(message, content json.RawMessage) string {
-	if len(message) > 0 {
-		var mp messagePayload
-		if err := json.Unmarshal(message, &mp); err == nil && len(mp.Content) > 0 {
-			if s := textFromContent(mp.Content); s != "" {
-				return s
-			}
-		}
+// asString reports whether a content payload is a plain JSON string and returns
+// its value. Current user prompts are carried as a bare string.
+func asString(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
 	}
-	return textFromContent(content)
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, true
+	}
+	return "", false
 }
 
-// textFromContent handles both `"a string"` and `[{type,text}, ...]`.
+// parseBlocks decodes a `message.content` array into its blocks. A non-array
+// (e.g. a plain string) yields nil so callers can fall back to asString.
+func parseBlocks(raw json.RawMessage) []block {
+	if len(raw) == 0 {
+		return nil
+	}
+	var blocks []block
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil
+	}
+	return blocks
+}
+
+// textFromContent pulls human-readable text from a tool_result `content`, which
+// may be a plain string or an array of `{type:"text", text:"…"}` blocks.
 func textFromContent(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
+	if s, ok := asString(raw); ok {
 		return strings.TrimSpace(s)
 	}
-	var blocks []contentBlock
+	var blocks []block
 	if err := json.Unmarshal(raw, &blocks); err == nil {
 		var parts []string
 		for _, b := range blocks {
@@ -111,6 +117,16 @@ func textFromContent(raw json.RawMessage) string {
 		return strings.TrimSpace(strings.Join(parts, " "))
 	}
 	return ""
+}
+
+// capContent truncates carried content to maxContentChars (rune-safe), so we
+// forward the REAL content but never an unbounded blob.
+func capContent(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxContentChars {
+		return s
+	}
+	return truncate(s, maxContentChars)
 }
 
 // tokenCount is a cheap heuristic (~4 chars/token) used only when the transcript
@@ -127,43 +143,45 @@ func tokenCount(text string) int64 {
 	return n
 }
 
-// summarizeInput renders a short, single-line summary of a tool's input for the
-// tool.call event argsSummary field.
+// argsSummaryCap bounds a tool.call argsSummary. Larger than the old 80 so the
+// real command/args are visible in the HQ feed, but still bounded.
+const argsSummaryCap = 2000
+
+// summarizeInput renders the tool's input for the tool.call argsSummary field:
+// the most descriptive common field when present, otherwise the compact JSON.
+// Capped at argsSummaryCap.
 func summarizeInput(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return truncate(string(raw), 80)
+		return truncate(string(raw), argsSummaryCap)
 	}
 	// Prefer the most descriptive common fields.
-	for _, k := range []string{"file_path", "path", "command", "pattern", "query", "url"} {
+	for _, k := range []string{"command", "file_path", "path", "pattern", "query", "url"} {
 		if v, ok := m[k]; ok {
 			if s, ok := v.(string); ok && s != "" {
-				return truncate(s, 80)
+				return truncate(s, argsSummaryCap)
 			}
 		}
 	}
 	b, _ := json.Marshal(m)
-	return truncate(string(b), 80)
+	return truncate(string(b), argsSummaryCap)
 }
 
-// summarizeContent renders a short summary of a tool result.
-func summarizeContent(raw json.RawMessage) string {
-	s := textFromContent(raw)
-	if s == "" {
-		s = truncate(string(raw), 80)
-	}
-	return truncate(s, 120)
-}
-
+// truncate shortens s to at most n runes, appending an ellipsis when cut. It is
+// rune-safe so a multibyte UTF-8 character is never split.
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }
 
 // round2 rounds USD to cents to keep envelopes tidy.
