@@ -74,6 +74,37 @@ describe('live WS middleware', () => {
 
     await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('needs_input'));
   });
+
+  it('renders an activity feed row per live event', async () => {
+    const { store } = renderWithProviders(<LiveWatch />, {
+      route: '/sessions/a91f',
+      routePath: '/sessions/:sessionId',
+      seed: { sessions: [SESSION] },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('active'));
+    // Empty feed shows the waiting placeholder.
+    expect(screen.getByText(/waiting for activity/)).toBeInTheDocument();
+
+    store.dispatch(
+      wsEvent({
+        v: 1,
+        instanceId: 'inst-0',
+        host: 'matt@mbp',
+        ts: 2000,
+        seq: 10,
+        event: { kind: 'tool.call', sessionId: 'a91f', tool: 'grep', argsSummary: 'foo' },
+      }),
+    );
+    store.dispatch(wsEvent(statusEnvelope(11, 'needs_input')));
+
+    await waitFor(() => expect(screen.getAllByTestId('live-event-row')).toHaveLength(2));
+    const rows = screen.getAllByTestId('live-event-row');
+    expect(rows[0]).toHaveTextContent('→ grep foo');
+    expect(rows[1]).toHaveTextContent('● active → needs_input');
+    // Streaming caret shows while the session is active/needs_input with events.
+    expect(screen.getByText(/▌ streaming/)).toBeInTheDocument();
+  });
 });
 
 describe('LiveWatch steer → sendControl', () => {

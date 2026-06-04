@@ -2,6 +2,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { setupListeners } from '@reduxjs/toolkit/query';
 import { baseApi } from '../api/baseApi.js';
 import { authReducer } from './authSlice.js';
+import { liveEventsReducer } from './liveEventsSlice.js';
 import { liveMiddleware } from '../ws/liveMiddleware.js';
 
 /** Build the Redux store (a factory so tests get an isolated instance). */
@@ -10,6 +11,7 @@ export function makeStore() {
     reducer: {
       [baseApi.reducerPath]: baseApi.reducer,
       auth: authReducer,
+      liveEvents: liveEventsReducer,
     },
     middleware: (getDefault) => getDefault().concat(baseApi.middleware, liveMiddleware),
   });
