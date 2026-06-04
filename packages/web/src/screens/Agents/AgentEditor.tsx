@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { Agent, ScopeRef, ScopeTier } from '@harness/shared';
-import { SCOPE_TIERS } from '@harness/shared';
+import type { Agent } from '@harness/shared';
+import { orgScope } from '@harness/shared';
 import {
   useGetAgentsQuery,
   useGetSkillsQuery,
@@ -10,28 +10,16 @@ import {
 import { useAuth } from '../../auth/AuthProvider.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
 
-const SCOPE_LABEL: Record<ScopeTier, string> = {
-  org: 'Org · all users',
-  user: 'My global · all my repos',
-  project: 'Project',
-};
-
-/** Resolve a scope ref for a chosen tier against the viewer context. */
-function scopeForTier(tier: ScopeTier, ctx: { org: string; userId: string }): ScopeRef {
-  if (tier === 'org') return { tier: 'org', id: ctx.org };
-  if (tier === 'project') return { tier: 'project', id: ctx.userId };
-  return { tier: 'user', id: ctx.userId };
-}
-
 /**
- * Agent editor (U17): scope selector + skill catalog picker, Save persists via
- * `saveAgent`. Reached at /agents/new (create) and /agents/:name/edit (edit).
+ * Agent editor (collapsed model): model + name + prompt + skill picker. There is
+ * no scope selector — the server forces org scope. Reached at /agents/new
+ * (create) and /agents/:name/edit (edit).
  */
 export function AgentEditor() {
   const { name } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const ctx = { org: user?.org ?? '', userId: user?.userId ?? '' };
+  const org = user?.org ?? '';
 
   const { data: agents } = useGetAgentsQuery();
   const { data: skills } = useGetSkillsQuery();
@@ -50,7 +38,7 @@ export function AgentEditor() {
     draft ??
     existing ?? {
       name: name ?? '',
-      scope: scopeForTier('user', ctx),
+      scope: orgScope(org),
       model: 'claude-sonnet-4',
       prompt: '',
       skills: [],
@@ -66,7 +54,10 @@ export function AgentEditor() {
 
   const onSave = async () => {
     if (!agent.name.trim()) return;
-    await saveAgent(agent).unwrap();
+    // On create do not send scope — the server forces org scope and stamps
+    // createdBy. Send only the editable fields.
+    const { scope: _scope, createdBy: _createdBy, ...rest } = agent;
+    await saveAgent(rest as Agent).unwrap();
     navigate('/agents');
   };
 
@@ -83,7 +74,7 @@ export function AgentEditor() {
     <div className="hq-pad" data-testid="agent-editor">
       <ScreenHeader
         title={isEdit ? `Edit agent · ${agent.name}` : 'New agent'}
-        subtitle="Define the prompt, model, scope, and the skills this agent draws from."
+        subtitle="Define the prompt, model, and the skills this agent draws from."
       />
 
       <div className="hq-box bg-paper">
@@ -103,20 +94,6 @@ export function AgentEditor() {
           value={agent.model}
           onChange={(e) => set({ model: e.target.value })}
         />
-
-        <label className="mt-3 block text-xs font-medium text-mut">Scope</label>
-        <select
-          className="hq-btn mt-1"
-          data-testid="agent-scope"
-          value={agent.scope.tier}
-          onChange={(e) => set({ scope: scopeForTier(e.target.value as ScopeTier, ctx) })}
-        >
-          {SCOPE_TIERS.map((t) => (
-            <option key={t} value={t}>
-              {SCOPE_LABEL[t]}
-            </option>
-          ))}
-        </select>
 
         <div className="mt-3 flex items-center justify-between">
           <label className="block text-xs font-medium text-mut">Prompt</label>
@@ -153,7 +130,7 @@ export function AgentEditor() {
             const on = agent.skills.includes(s.name);
             return (
               <button
-                key={`${s.scope.tier}-${s.name}`}
+                key={s.name}
                 type="button"
                 className={`hq-btn ${on ? 'hq-btn-pri' : ''}`}
                 data-testid={`catalog-skill-${s.name}`}

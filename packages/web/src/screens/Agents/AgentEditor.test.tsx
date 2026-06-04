@@ -5,10 +5,12 @@ import type { Agent, Skill } from '@harness/shared';
 import { AgentEditor } from './AgentEditor.js';
 import { renderWithProviders } from '../../test/testUtils.js';
 
+const ORG = { tier: 'org', id: 'acme' } as const;
+
 const SKILLS: Skill[] = [
   {
     name: 'gh',
-    scope: { tier: 'org', id: 'acme' },
+    scope: ORG,
     kind: 'skill',
     description: 'GitHub CLI',
     source: 'built-in',
@@ -17,7 +19,7 @@ const SKILLS: Skill[] = [
   },
   {
     name: 'browse',
-    scope: { tier: 'user', id: 'user-matt' },
+    scope: ORG,
     kind: 'skill',
     description: 'Headless browser',
     source: 'local',
@@ -29,7 +31,7 @@ const SKILLS: Skill[] = [
 const AGENTS: Agent[] = [
   {
     name: 'builder',
-    scope: { tier: 'user', id: 'user-matt' },
+    scope: ORG,
     model: 'claude-sonnet-4',
     prompt: 'Builds',
     skills: ['gh'],
@@ -58,7 +60,7 @@ function lastAgentPost(): Record<string, unknown> | undefined {
 describe('AgentEditor (U17)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('creates a new agent: name + scope + skills persist via saveAgent', async () => {
+  it('creates a new agent: name + skills persist via saveAgent, no scope sent', async () => {
     renderWithProviders(<AgentEditor />, {
       route: '/agents/new',
       routePath: '/agents/new',
@@ -66,17 +68,18 @@ describe('AgentEditor (U17)', () => {
     });
     await screen.findByTestId('agent-editor');
 
+    // No scope selector in the collapsed model.
+    expect(screen.queryByTestId('agent-scope')).not.toBeInTheDocument();
+
     await userEvent.type(screen.getByTestId('agent-name'), 'distiller');
-    await userEvent.selectOptions(screen.getByTestId('agent-scope'), 'org');
     await userEvent.click(await screen.findByTestId('catalog-skill-browse'));
     await userEvent.click(screen.getByTestId('agent-save'));
 
     await waitFor(() => expect(lastAgentPost()).toBeDefined());
     const body = lastAgentPost()!;
-    expect(body).toMatchObject({
-      name: 'distiller',
-      scope: { tier: 'org', id: 'acme' },
-    });
+    expect(body).toMatchObject({ name: 'distiller' });
+    // Server forces org scope; the client must not send scope on create.
+    expect(body.scope).toBeUndefined();
     expect(body.skills).toContain('browse');
   });
 

@@ -20,6 +20,8 @@ const PROJECTS: Project[] = [
     prdGoal: 'Replace 15-Five with an RCDO-linked weekly planning module.',
     progressPct: 62,
     liveSessionCount: 2,
+    enabledSkills: [],
+    enabledAgents: [],
   },
 ];
 

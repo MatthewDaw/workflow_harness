@@ -12,6 +12,7 @@ const SUBTABS = [
   { to: 'detailed-requirements', label: 'Detailed Requirements' },
   { to: 'weekly', label: 'Weekly' },
   { to: 'sessions', label: 'Sessions' },
+  { to: 'skills', label: 'Skills' },
   { to: 'agents', label: 'Agents' },
 ];
 

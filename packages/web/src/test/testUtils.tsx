@@ -82,6 +82,15 @@ export function installFetchStub(seed: SeedData) {
     if (path === 'skills') return json(seed.skills ?? []);
     if (path === 'sessions') return json(seed.sessions ?? []);
 
+    // Project skill/agent opt-in: return the (seeded) project so the mutation
+    // resolves; cache invalidation drives a refetch in tests.
+    const projSkill = /^projects\/([^/]+)\/skills\/([^/]+)$/.exec(path);
+    if (projSkill)
+      return json({ project: (seed.projects ?? []).find((p) => p.id === projSkill[1]) ?? null });
+    const projAgent = /^projects\/([^/]+)\/agents\/([^/]+)$/.exec(path);
+    if (projAgent)
+      return json({ project: (seed.projects ?? []).find((p) => p.id === projAgent[1]) ?? null });
+
     const proj = /^projects\/([^/]+)$/.exec(path);
     if (proj) return json((seed.projects ?? []).find((p) => p.id === proj[1]) ?? null);
 
