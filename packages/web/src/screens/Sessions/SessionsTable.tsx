@@ -11,18 +11,14 @@ function truncate(text: string | undefined, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-/** Sort live/needs_input first, then by most recent activity. */
-function sortLiveFirst(sessions: SessionProjection[]): SessionProjection[] {
-  const rank: Record<string, number> = { needs_input: 0, active: 1, idle: 2, done: 3 };
-  return [...sessions].sort((a, b) => {
-    const r = (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
-    return r !== 0 ? r : b.lastEventAt - a.lastEventAt;
-  });
+/** Sort by most recent activity first (newest `lastEventAt` at the top). */
+function sortByRecentActivity(sessions: SessionProjection[]): SessionProjection[] {
+  return [...sessions].sort((a, b) => b.lastEventAt - a.lastEventAt);
 }
 
 /** Shared sessions table used by the cross-project list and project sub-tab. */
 export function SessionsTable({ sessions }: { sessions: SessionProjection[] }) {
-  const rows = sortLiveFirst(sessions);
+  const rows = sortByRecentActivity(sessions);
   // One ticking "now" for every row so the "last activity" labels age in place
   // without each row owning its own interval.
   const now = useNow();
