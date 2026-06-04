@@ -211,6 +211,12 @@ func TestInstallHooksIdempotent(t *testing.T) {
 	if p1 != p2 {
 		t.Fatalf("settings path drifted")
 	}
+	// Hooks must be written into the isolated claude+ config root (~/.claude+),
+	// not ~/.claude, since claude+ launches Claude with CLAUDE_CONFIG_DIR there.
+	wantDir := filepath.Join(home, ".claude+")
+	if filepath.Dir(p1) != wantDir {
+		t.Fatalf("hooks installed at %q, want under %q", p1, wantDir)
+	}
 	b, _ := os.ReadFile(p1)
 	// Re-install must not duplicate our managed entry under Notification.
 	// A crude check: the command should appear exactly 5 times (one per managed
