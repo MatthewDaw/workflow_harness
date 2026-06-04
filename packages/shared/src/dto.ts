@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { sessionStatusSchema } from './events.js';
-import { scopeRefSchema } from './scope.js';
+import { scopeRefSchema, orgScopeRefSchema } from './scope.js';
 
 /** Read/write DTOs for the core entities. These shape the REST API surface. */
 
@@ -18,8 +18,32 @@ export const projectSchema = z.object({
   framingReadAt: z.string().optional(),
   /** True when the last refresh could not reach GitHub; served data is stale (U7). */
   framingStale: z.boolean().optional(),
+  /**
+   * Skills this project has opted into (skill names from the org catalog).
+   * A connected repo materializes exactly these (plus the skills brought by
+   * enabledAgents via union-on-add) into ~/.claude+. Defaults to [].
+   */
+  enabledSkills: z.array(z.string()).default([]),
+  /**
+   * Agents this project has opted into (agent names from the org catalog).
+   * Adding an agent unions its declared `skills` into `enabledSkills`.
+   * Defaults to [].
+   */
+  enabledAgents: z.array(z.string()).default([]),
 });
 export type Project = z.infer<typeof projectSchema>;
+
+/**
+ * Authorship stamp for catalog items (skills + agents). Set from the
+ * authenticated principal on create; powers the "filter by author" facet in
+ * the web pickers. Optional on read for back-compat with records created
+ * before this field existed.
+ */
+export const createdBySchema = z.object({
+  userId: z.string().min(1),
+  name: z.string().min(1),
+});
+export type CreatedBy = z.infer<typeof createdBySchema>;
 
 /** The current-state projection of a session, derived from its event stream. */
 export const sessionProjectionSchema = z.object({
@@ -53,11 +77,14 @@ export type Priority = z.infer<typeof prioritySchema>;
 
 export const agentSchema = z.object({
   name: z.string().min(1),
-  scope: scopeRefSchema,
+  /** Org-only catalog: tier is always 'org'. (3-tier scope retired for agents.) */
+  scope: orgScopeRefSchema,
   model: z.string().min(1),
   prompt: z.string().default(''),
   skills: z.array(z.string()).default([]),
   tools: z.array(z.string()).default([]),
+  /** Authorship stamp set on create; optional on read for back-compat. */
+  createdBy: createdBySchema.optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
 
@@ -78,7 +105,8 @@ export type SkillKind = z.infer<typeof skillKindSchema>;
 
 export const skillSchema = z.object({
   name: z.string().min(1),
-  scope: scopeRefSchema,
+  /** Org-only catalog: tier is always 'org'. (3-tier scope retired for skills.) */
+  scope: orgScopeRefSchema,
   kind: skillKindSchema,
   description: z.string().default(''),
   source: z.enum(['built-in', 'local', 'custom']).default('local'),
@@ -96,6 +124,8 @@ export const skillSchema = z.object({
    * Never written by clients; present only on GET /skills responses.
    */
   resolvedMembers: z.array(z.string()).optional(),
+  /** Authorship stamp set on create; optional on read for back-compat. */
+  createdBy: createdBySchema.optional(),
 });
 export type Skill = z.infer<typeof skillSchema>;
 
