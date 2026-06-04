@@ -52,6 +52,11 @@ func main() {
 				fail(err)
 			}
 			return
+		case "sync-skills":
+			if err := cmdSyncSkills(); err != nil {
+				fail(err)
+			}
+			return
 		}
 	}
 
@@ -149,6 +154,23 @@ func cmdAttachIndex(n int) error {
 		return err
 	}
 	return runShell(c, label)
+}
+
+// cmdSyncSkills (`claude+ sync-skills`) runs a one-shot reconcile of HQ's
+// effective skills/agents into the isolated ~/.claude+ registry — the on-demand
+// counterpart to the per-session auto-sync, exposed for the `/update-skills`
+// skill. Pulled (HQ-only) items land in ~/.claude+, never the user's ~/.claude.
+func cmdSyncSkills() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	pulled, pushed, err := daemon.SyncSkillsNow(cwd)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("skills synced: pulled %d, pushed %d (into ~/.claude+)\n", pulled, pushed)
+	return nil
 }
 
 // runDaemon is the detached daemon entrypoint (`claude+ __daemon <repoRoot>`).

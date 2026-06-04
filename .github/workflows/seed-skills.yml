@@ -1,0 +1,49 @@
+# Auto-seeds the bundled product skills into Command HQ whenever the repo's
+# skill definitions change on main (plan U22). The full deploy workflow only
+# runs on a manual dispatch, so this lightweight job keeps HQ's org-scope bundle
+# in step with `.claude/skills/` without a full redeploy: a skill edit landing on
+# main re-runs the idempotent seed within ~30s.
+name: seed-skills
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".claude/skills/**"
+      - "packages/backend/src/seed/**"
+      - "infra/scripts/seed-skills.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install workspaces
+        run: npm ci
+      # The seed reads the compiled record builder + key scheme from the backend
+      # so it can never drift from how the REST layer stores skills.
+      - name: Build shared + backend
+        run: npm run build -w @harness/shared -w @harness/backend
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Seed bundled skills into HQ (org scope)
+        run: node infra/scripts/seed-skills.mjs
+        env:
+          SEED_ORG: ${{ vars.SEED_ORG || 'personasearch' }}
+          HARNESS_TABLE: harness
+          AWS_REGION: ${{ env.AWS_REGION }}

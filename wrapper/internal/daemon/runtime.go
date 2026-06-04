@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -185,6 +186,36 @@ func (rt *Runtime) reconcileSkills() {
 	}
 	// Refresh the drift meter to reflect the post-reconcile state.
 	_ = rt.d.SyncConfigOnce(src)
+}
+
+// SyncSkillsNow performs a one-shot skills/agents reconcile against HQ for the
+// given repo: HQ-only items are materialized into ~/.claude+ and local-only ones
+// pushed to HQ user scope (U19/U21). It is the on-demand entrypoint behind the
+// `/update-skills` skill and `claude+ sync-skills`, reusing the same source +
+// reconcile the daemon runs automatically per session. Returns counts actuated.
+func SyncSkillsNow(repoRoot string) (pulled, pushed int, err error) {
+	base, ok := loadAPIBase()
+	if !ok {
+		return 0, 0, fmt.Errorf("no HQ API base configured (run `claude+ login`)")
+	}
+	cfg, ok := loadHQConfig()
+	if !ok {
+		return 0, 0, fmt.Errorf("not signed in to HQ (run `claude+ login`)")
+	}
+	src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(repoRoot))
+	report, err := config.ComputeDrift(src)
+	if err != nil {
+		return 0, 0, err
+	}
+	local, err := config.ReadLocal()
+	if err != nil {
+		return 0, 0, err
+	}
+	pulled, pushed, errs := config.Reconcile(report, src, local)
+	if len(errs) > 0 {
+		return pulled, pushed, errs[0]
+	}
+	return pulled, pushed, nil
 }
 
 // syncSkillsOnce triggers the skills auto-sync the first time a given session is

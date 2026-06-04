@@ -41,16 +41,43 @@ func claudeDir() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
-// ReadLocal reads all local agents and skills under ~/.claude. Malformed files
-// are reported (Err set) rather than aborting the scan (edge case in U17).
+// ReadLocal reads all local agents and skills, over the union of the user's own
+// registry (~/.claude) and the isolated claude+ registry (~/.claude+, where
+// product-bundled skills live — see overlay.go). Reading both means drift is
+// computed over everything the inner Claude can see, while a pull only ever
+// writes into ~/.claude+ (ApplyPulled), so bundled skills never pollute the
+// user's personal ~/.claude. On a name collision the user's own ~/.claude entry
+// wins. Malformed files are reported (Err set) rather than aborting the scan.
 func ReadLocal() ([]Item, error) {
-	dir, err := claudeDir()
+	userDir, err := claudeDir()
 	if err != nil {
 		return nil, err
 	}
+	plus, err := plusDir()
+	if err != nil {
+		return nil, err
+	}
+
 	var items []Item
-	items = append(items, readDir(filepath.Join(dir, "agents"), KindAgent)...)
-	items = append(items, readDir(filepath.Join(dir, "skills"), KindSkill)...)
+	items = append(items, readDir(filepath.Join(userDir, "agents"), KindAgent)...)
+	items = append(items, readDir(filepath.Join(userDir, "skills"), KindSkill)...)
+
+	// Union in the isolated claude+ registry, skipping names already provided by
+	// the user's own registry (~/.claude wins on collision).
+	seen := map[string]bool{}
+	for _, it := range items {
+		seen[string(it.Kind)+"/"+it.Name] = true
+	}
+	for _, it := range append(
+		readDir(filepath.Join(plus, "agents"), KindAgent),
+		readDir(filepath.Join(plus, "skills"), KindSkill)...,
+	) {
+		if seen[string(it.Kind)+"/"+it.Name] {
+			continue
+		}
+		items = append(items, it)
+	}
+
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Kind != items[j].Kind {
 			return items[i].Kind < items[j].Kind
@@ -94,14 +121,16 @@ func readDir(root string, kind Kind) []Item {
 	return out
 }
 
-// ApplyPulled materializes an HQ item into the local ~/.claude tree: agents land
-// at agents/<name>.md, skills at skills/<name>/SKILL.md. Parent directories are
-// created as needed. The write is additive and reversible (a pull never deletes
-// other definitions), and writing exactly `body` keeps the local hash equal to
-// the HQ hash, so a freshly pulled item reads back as in-sync (reconcile is
-// idempotent).
+// ApplyPulled materializes an HQ item into the isolated claude+ tree
+// (~/.claude+): agents land at agents/<name>.md, skills at skills/<name>/SKILL.md.
+// It writes into ~/.claude+, never the user's personal ~/.claude, so pulled
+// product-bundled skills stay out of their normal Claude dataset. Parent
+// directories are created as needed. The write is additive and reversible (a pull
+// never deletes other definitions), and writing exactly `body` keeps the local
+// hash equal to the HQ hash, so a freshly pulled item reads back as in-sync
+// (reconcile is idempotent).
 func ApplyPulled(item RemoteItem, body string) error {
-	dir, err := claudeDir()
+	dir, err := plusDir()
 	if err != nil {
 		return err
 	}

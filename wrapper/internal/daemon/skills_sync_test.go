@@ -57,7 +57,8 @@ func newTestRuntime(t *testing.T, src config.RemoteSource) *Runtime {
 }
 
 // TestReconcileSkillsPullsHQOnly proves the auto-sync pulls an HQ-only skill into
-// the local ~/.claude tree (the #1 user ask: applicable skills appear).
+// the isolated claude+ tree (~/.claude+), the #1 user ask (applicable skills
+// appear) without polluting the user's personal ~/.claude (U19/U21).
 func TestReconcileSkillsPullsHQOnly(t *testing.T) {
 	src := &fakeSource{}
 	rt := newTestRuntime(t, src)
@@ -65,13 +66,17 @@ func TestReconcileSkillsPullsHQOnly(t *testing.T) {
 	rt.reconcileSkills()
 
 	home := os.Getenv("HOME")
-	skill := filepath.Join(home, ".claude", "skills", "hq-only", "SKILL.md")
+	skill := filepath.Join(home, ".claude+", "skills", "hq-only", "SKILL.md")
 	b, err := os.ReadFile(skill)
 	if err != nil {
 		t.Fatalf("expected pulled skill at %s: %v", skill, err)
 	}
 	if string(b) != "# hq-only skill\nbody" {
 		t.Fatalf("pulled skill body = %q", string(b))
+	}
+	// It must NOT land in the user's personal ~/.claude.
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "hq-only")); !os.IsNotExist(err) {
+		t.Fatalf("pulled skill must not pollute ~/.claude (err=%v)", err)
 	}
 }
 

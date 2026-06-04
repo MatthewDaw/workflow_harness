@@ -45,6 +45,8 @@ This plan turns those into dependency-ordered, test-protected units.
 | Single laptop; no remote/SSH | 03/04/06 | U6, U21 (docs/comments), U20 |
 | Wire-up gaps: steer, scope/bundle/editor, hook receiver, config-sync | audit | U16–U19 |
 | Infra fixes | audit | U20 |
+| Bundled product skills isolated from `~/.claude` (no pollution) | this conversation | U21 |
+| Bundled skills visible in HQ out of the box (org-scope bundle seed) | this conversation | U22 |
 | All currently-green suites stay green | review | every unit's Verification |
 
 ---
@@ -94,11 +96,16 @@ flowchart TD
     U16[U16 web: wire steer]
     U17[U17 web: scope/bundle controls + agent editor]
     U18[U18 wrapper: fix hook receiver]
-    U19[U19 wrapper: config-sync remote half + drift]
+    U19[U19 wrapper: config-sync remote half + drift → ~/.claude+]
+    U21[U21 wrapper: isolated ~/.claude+ config root]
   end
   subgraph F["Phase F — Infra fixes"]
     U20[U20 drop SearchStack, secret, Go CI, CORS]
   end
+  subgraph G["Phase G — Bundled skills (isolation + HQ seed)"]
+    U22[U22 backend/infra: HQ org-scope skill bundle seed]
+  end
+  U21-->U19
   U1-->U2-->U3
   U2-->U4
   U1-->U5
@@ -127,7 +134,13 @@ flowchart TD
   endforge/SKILL.md            # U15 — distill → register at author scope; single-admin promote
 ```
 
-(Source-of-truth location is the repo `.claude/skills/`; distribution to `~/.claude/skills/` rides the config-sync layer from U19.)
+(Source-of-truth location is the repo `.claude/skills/`. These bundled product
+skills are **never written into the user's personal `~/.claude/skills/`** — that
+would pollute their normal Claude Code dataset. Instead they are distributed into
+an **isolated, session-scoped config root** the claude+ PTY points its inner
+Claude at (U21), and seeded into Command HQ at **org scope as one bundle** so the
+website shows them with no device/sync dependency (U22). The config-sync layer
+(U19) reads that isolated root so the wrapper still reports them as registered.)
 
 ---
 
@@ -303,8 +316,14 @@ flowchart TD
 - **Requirements:** wire-up gap. **Dependencies:** none.
 - **Files:** modify `wrapper/internal/config/sync.go` (fetch remote items from HQ; reconcile push/pull), `wrapper/internal/config/claude.go` (apply pulled items locally), `wrapper/internal/daemon/status.go` (call `SetDrift` from the computed diff), tests `wrapper/internal/config/sync_test.go` (drift count from a populated remote; reconcile idempotence).
 - **Approach:** Reuse the existing pure `Diff`; add the remote fetch + actuator + wire `SetDrift` so `StatusSnapshot.Drift` reflects real drift.
-- **Test scenarios:** Happy: local-only item → "needs push"; HQ-only → "needs pull"; drift count > 0 surfaces in the status snapshot. Edge: converged state → drift 0. Edge: malformed remote item reported, not fatal; reconcile idempotent.
-- **Verification:** drift meter non-zero on real drift; sync tests green.
+- **Distribution target (revised):** `ApplyPulled` writes pulled items into the
+  isolated claude+ root (`~/.claude+`, see U21), **not** the user's personal
+  `~/.claude/skills/`. `ReadLocal` reads both `~/.claude` (the user's own) and
+  `~/.claude+` (product-bundled) so drift is computed over the union, but a pull
+  only ever materializes into `~/.claude+`. This keeps bundled product skills out
+  of the user's normal Claude dataset.
+- **Test scenarios:** Happy: local-only item → "needs push"; HQ-only → "needs pull"; drift count > 0 surfaces in the status snapshot. Edge: converged state → drift 0. Edge: malformed remote item reported, not fatal; reconcile idempotent. Edge: a pulled skill lands under `~/.claude+`, never `~/.claude`.
+- **Verification:** drift meter non-zero on real drift; sync tests green; pulled items appear only under `~/.claude+`.
 
 ### U20. Infra fixes
 
@@ -313,6 +332,68 @@ flowchart TD
 - **Files:** modify `infra/bin/infra.ts` (remove `SearchStack` from the synth app, or exclude from the deploy step), `.github/workflows/deploy.yml` (wire `DEVICE_TOKEN_SECRET` from secrets; don't `cdk deploy --all` SearchStack), `.github/workflows/release.yml` (Go `1.23` → `1.25`), `infra/lib/api-stack.ts` (CORS `allowOrigins` → the CloudFront origin, not `*`), tests `infra/test/*` (assert SearchStack absent; CORS pinned).
 - **Test scenarios:** infra assertions: synth no longer includes the OpenSearch collection; HTTP API CORS origin is the CloudFront domain; `DEVICE_TOKEN_SECRET` is sourced from env/secret, not the placeholder.
 - **Verification:** `cdk synth` clean without SearchStack; infra tests green; CI Go version matches `go.mod`.
+
+### U21. Isolated, session-scoped claude+ config root (`~/.claude+`)
+
+- **Goal:** Run the inner Claude that claude+ launches against an isolated config
+  root so bundled product skills/agents and claude+ session history never land in
+  the user's personal `~/.claude`, while still sharing login + MCP.
+- **Requirements:** Bundled product skills isolated from `~/.claude`. **Dependencies:** none (independent of the migration units).
+- **Files:** create `wrapper/internal/config/overlay.go` (build + teardown of the
+  session config root), modify `wrapper/internal/pty/session.go` (`DefaultSpawn`
+  builds the root and sets `CLAUDE_CONFIG_DIR`; `Session.Close` tears it down),
+  modify `wrapper/internal/config/claude.go` (`ReadLocal` reads `~/.claude` ∪
+  `~/.claude+`; `ApplyPulled` targets `~/.claude+`), tests
+  `wrapper/internal/config/overlay_test.go`.
+- **Approach:** Product skills live under a stable isolated source `~/.claude+/skills`
+  (+ `agents`). At session start, build a **per-session** config dir (under
+  `~/.claude+/run/<sessionID>`): symlink `skills`/`agents` to the isolated source,
+  **symlink** `.credentials.json` from `~/.claude` (token refresh writes through to
+  the real shared login), **copy** `settings.json` + `.mcp.json` (read-only
+  snapshot so claude+ can't edit the user's real config). Set the child's
+  `CLAUDE_CONFIG_DIR` to that per-session dir (`session.go:91` already owns the
+  child env). Tear the dir down on `Session.Close`. Because `CLAUDE_CONFIG_DIR` is
+  set only on the child claude+ spawns, a normal `claude` (claude+ not running, or
+  a separate session) never sees the isolated root — the symlink/config is "in
+  place" only for the specific inner Claude claude+ launches.
+- **Cross-platform note:** symlink creation on Windows needs Developer Mode or
+  elevation; `overlay.go` falls back to a copy when `os.Symlink` fails (logging
+  that credential write-through is degraded), so the session still launches.
+- **Test scenarios:** Happy: build returns a dir containing `skills` (→ isolated
+  source), a `.credentials.json` link, and copied `settings.json`; `CLAUDE_CONFIG_DIR`
+  points at it. Isolation: nothing is written under `~/.claude`. Teardown: the
+  per-session dir is removed on close; the isolated source survives. Edge: missing
+  `~/.claude/.credentials.json` (logged-out) → build still succeeds without the link.
+- **Verification:** `go build ./...` + `go test ./...` pass; a launched session
+  has `CLAUDE_CONFIG_DIR=~/.claude+/run/<id>`; `~/.claude/skills` is untouched.
+
+### U22. HQ org-scope bundled-skill seed (website shows them out of the box)
+
+- **Goal:** Register the repo's `.claude/skills/` set into Command HQ at **org
+  scope, grouped as one bundle**, so the Skills tab shows them on a fresh deploy
+  with no device connected or sync run. This is the direct fix for "the bundled
+  skills aren't in the website."
+- **Requirements:** Bundled skills visible in HQ out of the box. **Dependencies:** none (uses the existing `Repo.putSkill` + scope/key model).
+- **Files:** create `packages/backend/src/seed/skills.ts` (pure
+  `buildSeedSkills(org, files)` → `Skill[]` incl. the bundle record, + `seedSkills(repo, org, files)`
+  that upserts them), test `packages/backend/test/seedSkills.test.ts`; create
+  `infra/scripts/seed-skills.mjs` (reads `.claude/skills/*/SKILL.md`, parses
+  `name`/`description` frontmatter, writes to the deployed `harness` table via the
+  AWS SDK); wire an optional post-deploy seed step in `.github/workflows/deploy.yml`.
+- **Approach:** Each skill becomes a `Skill{ scope:{tier:'org',id:org}, kind:'skill',
+  source:'built-in', description, body }`; one `kind:'bundle'` record
+  (`name:'command-hq-starter'`) lists them as `members`. `putSkill` is an upsert,
+  so re-running the seed is idempotent. The website's `resolveSkills` already
+  composes org scope into every user's effective set and annotates the bundle with
+  `resolvedMembers`, so no web change is needed.
+- **Test scenarios:** Happy: `buildSeedSkills('acme', files)` yields N skill
+  records at org scope with `source:'built-in'` + non-empty `body`, plus one bundle
+  whose `members` equals the skill names. Idempotence: `seedSkills` run twice
+  leaves one record per skill (upsert). Resolve: after seeding, `resolveSkills`
+  for any user in the org returns the bundle with `resolvedMembers` = the 5 names.
+- **Verification:** backend suite green; running the seed script against the
+  deployed table makes the Skills tab show the "command-hq-starter" bundle for
+  every user in the org.
 
 ---
 

@@ -2,6 +2,7 @@ package pty
 
 import (
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	pty "github.com/aymanbagabas/go-pty"
+
+	"github.com/workflow-harness/claude-plus/internal/config"
 )
 
 // Status mirrors the session lifecycle status used in the event contract.
@@ -47,6 +50,10 @@ type Session struct {
 
 	histMu sync.Mutex
 	hist   []byte // recent raw PTY output, replayed to newly-attached sinks
+
+	// cleanup tears down the per-session isolated config root (U21), if one was
+	// built for this session. nil for non-isolated (test/fake) spawns.
+	cleanup func()
 }
 
 // maxHist caps a session's replay buffer. claude is a full-screen TUI that
@@ -63,6 +70,12 @@ type CmdSpec struct {
 	Args []string
 	Dir  string
 	Env  []string
+	// Isolate requests an isolated, session-scoped CLAUDE_CONFIG_DIR for the
+	// child (see config.BuildSessionConfigDir): product-bundled skills + claude+
+	// session history stay out of the user's personal ~/.claude. Only DefaultSpawn
+	// (the real `claude` launch) sets this; test/fake specs leave it false so they
+	// never touch the developer's home.
+	Isolate bool
 }
 
 // SpawnFunc produces the CmdSpec for a claude child. It is a field so tests can
@@ -89,12 +102,27 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 		Dir:  repoRoot,
 		// Also tag the child via the environment for any out-of-band correlation.
 		Env: append(os.Environ(), "CLAUDE_PLUS_SESSION="+sessionID),
+		// Run against an isolated ~/.claude+ config root (U21).
+		Isolate: true,
 	}
 }
 
 // newSession starts a claude child under a PTY with the given dimensions.
 func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
 	spec := spawn(repoRoot, id)
+
+	// Build the isolated config root for the real claude launch (U21). A failure
+	// here must never block a session — fall back to the inherited ~/.claude.
+	var cleanup func()
+	if spec.Isolate {
+		if dir, cl, err := config.BuildSessionConfigDir(id); err == nil {
+			spec.Env = append(spec.Env, "CLAUDE_CONFIG_DIR="+dir)
+			cleanup = cl
+		} else {
+			log.Printf("pty: isolated config root for session %s failed, using ~/.claude: %v", id, err)
+		}
+	}
+
 	// Resolve a bare command name against PATH up front. go-pty/os-exec would
 	// otherwise resolve it relative to Dir (the repo root) and fail to find a
 	// PATH binary like `claude` once a working directory is set.
@@ -124,6 +152,7 @@ func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Se
 	return &Session{
 		ID: id, Name: name,
 		cmd: c, pt: pt, status: StatusActive, cols: cols, rows: rows,
+		cleanup: cleanup,
 	}, nil
 }
 
@@ -324,5 +353,10 @@ func (s *Session) Close() error {
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
-	return s.cmd.Wait()
+	err := s.cmd.Wait()
+	// Tear down the isolated per-session config root (U21), if one was built.
+	if s.cleanup != nil {
+		s.cleanup()
+	}
+	return err
 }
