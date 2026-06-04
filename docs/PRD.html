@@ -1,5 +1,5 @@
 ---
-completion: 88
+completion: 89
 ---
 
 <!--hq:compliance v1-->
@@ -12,7 +12,7 @@ completion: 88
 <tr><td>Source Code</td><td>✅ met</td><td>Monorepo with <code>packages/backend</code>, <code>packages/web</code>, <code>packages/shared</code>, the Go CLI wrapper in <code>wrapper/</code>, and AWS CDK infra in <code>infra/</code>.</td></tr>
 <tr><td>Technical Documentation</td><td>✅ met</td><td><code>docs/PRD.html</code>, requirements breakdown under <code>docs/plans/</code> (<code>command-hq-overview.html</code>, migration plan), plus <code>wrapper/README.md</code> and <code>infra/README.md</code>.</td></tr>
 <tr><td>Demo Video</td><td>❌ missing</td><td>No video/demo asset found in the repo (no <code>*.mp4</code> or demo file).</td></tr>
-<tr><td>Test Results</td><td>⚠ partial</td><td>Backend suite green (204/204 in <code>packages/backend/test/**</code>); web suite has 2 pre-existing failures.</td></tr>
+<tr><td>Test Results</td><td>✅ met</td><td>All suites green: backend 204/204, web 109/109, shared 27/27, infra passing.</td></tr>
 <tr><td>AI Usage Log</td><td>❌ missing</td><td>No AI-usage log file present (no <code>AI_USAGE</code> / ai-usage doc in repo root or <code>docs/</code>).</td></tr>
 <tr><td>Client-side SPA, no SSR (Next/Remix)</td><td>✅ met</td><td><code>packages/web</code> is a Vite-built React SPA; no Next.js or Remix in the stack.</td></tr>
 <tr><td>Data fetching without Redux Saga/Thunk</td><td>✅ met</td><td>Web data layer uses plain fetch/query hooks; no <code>redux-saga</code> or <code>redux-thunk</code> dependency.</td></tr>
