@@ -188,6 +188,18 @@ func (s *Session) History() []byte {
 	return out
 }
 
+// PID returns the operating-system process id of the session's child, or 0 if
+// the session has no live child (test-constructed or already torn down). Used by
+// integration tests to prove the child process actually dies on terminate.
+func (s *Session) PID() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
+
 // Resize propagates new terminal dimensions to the PTY. It records the size even
 // when there is no underlying PTY (s.pt == nil), which only happens for
 // test-constructed sessions — production sessions always have a live PTY.

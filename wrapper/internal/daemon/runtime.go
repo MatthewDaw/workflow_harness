@@ -160,6 +160,12 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 		home, _ := os.UserHomeDir()
 		if buf, err := transport.OpenRingBuffer(filepath.Join(home, ".claude-plus", "outbound.jsonl")); err == nil {
 			recv := d.NewControlReceiver()
+			// When HQ force-shuts-down a session (or a ghost from a dead daemon),
+			// emit a terminal status.change -> done so HQ drops it from the live
+			// list and the row the user clicked actually disappears (#1, #2).
+			recv.Terminated = func(sessionID string) {
+				rt.emit(sessionID, event.StatusChange(sessionID, event.StatusActive, event.StatusDone))
+			}
 			rt.client = transport.NewClient(cfg.URL, cfg.Token, instanceID, buf, recv.Handle)
 			go rt.client.Run()
 		}
@@ -400,10 +406,25 @@ func (rt *Runtime) captureLoop(instanceID string) {
 			// Clean up state for sessions that have ended: stop their tailer
 			// goroutine and forget their announce/sync markers so the maps don't
 			// grow without bound (leak #11). A reused id (new session) re-announces.
+			//
+			// A session that was announced to HQ and has now left the mux has
+			// genuinely ended — natural exit, client ✕, or an HQ force shutdown that
+			// closed the child (which makes the pump's onSessionExit remove it). Emit
+			// a terminal status.change -> done so HQ retires the live row (#3). This
+			// is the catch-all that keeps HQ's live list matching reality regardless
+			// of HOW the session ended; the receiver's own done emit (#1/#2) covers
+			// the instant case and ghosts the captureLoop never saw.
 			for id, ch := range tailStops {
 				if !live[id] {
 					close(ch)
 					delete(tailStops, id)
+				}
+			}
+			// Emit done for every announced session that has left the mux, even one
+			// whose tailer never started, so no live row is ever orphaned.
+			for id := range announced {
+				if !live[id] {
+					emit(id, event.StatusChange(id, event.StatusActive, event.StatusDone))
 					delete(announced, id)
 					rt.forgetSkillSync(id)
 				}

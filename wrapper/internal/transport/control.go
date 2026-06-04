@@ -56,6 +56,17 @@ type Receiver struct {
 	// Nack, if set, is called when a frame cannot be applied (for surfacing to
 	// HQ / logging). Returning the error lets the WS layer NACK upstream.
 	Nack func(ControlFrame, error)
+	// Terminated, if set, is invoked with the sessionId after a shutdown/kill
+	// control is applied — for BOTH a known session that was actually torn down
+	// AND an unknown/ghost session that this daemon never hosted. It is the hook
+	// the daemon uses to emit a terminal `status.change -> done` event to HQ so
+	// the live row clears. Without it, a successful shutdown left HQ believing the
+	// session was still live (it never learned the session ended), which the user
+	// experienced as "I clicked force shut down and nothing happened". Emitting
+	// done for ghosts is intentional: instanceId is stable per device, so a
+	// shutdown for a session from an earlier dead daemon routes to the live daemon
+	// that never had it — the row must still disappear, so we emit done anyway.
+	Terminated func(sessionID string)
 }
 
 // NewReceiver wires a receiver to the session mux.
@@ -68,6 +79,14 @@ func (r *Receiver) Handle(f ControlFrame) {
 		if r.Nack != nil {
 			r.Nack(f, err)
 		}
+	}
+}
+
+// emitTerminated invokes the Terminated hook if set. Centralized so every
+// shutdown/kill path (known + ghost) notifies HQ identically.
+func (r *Receiver) emitTerminated(sessionID string) {
+	if r.Terminated != nil {
+		r.Terminated(sessionID)
 	}
 }
 
@@ -98,16 +117,27 @@ func (r *Receiver) apply(f ControlFrame) error {
 		// doesn't exit within the grace window (handled inside Shutdown).
 		sess := r.mux.Get(f.SessionID)
 		if sess == nil {
+			// Ghost: a session this daemon never hosted (stable per-device
+			// instanceId routes an old daemon's sessions here). Still tell HQ it's
+			// done so the live row the user clicked actually disappears.
+			r.emitTerminated(f.SessionID)
 			return fmt.Errorf("control: no session %q", f.SessionID)
 		}
-		return sess.Shutdown(shutdownGrace)
+		err := sess.Shutdown(shutdownGrace)
+		// The child is now gone; notify HQ so the live row clears. We emit even on
+		// a Shutdown error so a partially-failed teardown still retires the row.
+		r.emitTerminated(f.SessionID)
+		return err
 	case ActionKill:
 		// Immediate force terminate.
 		sess := r.mux.Get(f.SessionID)
 		if sess == nil {
+			r.emitTerminated(f.SessionID)
 			return fmt.Errorf("control: no session %q", f.SessionID)
 		}
-		return sess.Close()
+		err := sess.Close()
+		r.emitTerminated(f.SessionID)
+		return err
 	default:
 		return fmt.Errorf("control: unknown action %q", f.Action)
 	}
