@@ -5,7 +5,7 @@ import type { Skill } from '@harness/shared';
 import { SkillBundle } from './SkillBundle.js';
 import { renderWithProviders } from '../../test/testUtils.js';
 
-const SCOPE = { tier: 'user', id: 'user-matt' } as const;
+const SCOPE = { tier: 'org', id: 'acme' } as const;
 
 const SKILLS: Skill[] = [
   {

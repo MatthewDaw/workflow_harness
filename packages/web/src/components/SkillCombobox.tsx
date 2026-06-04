@@ -12,9 +12,13 @@ import { useId, useMemo, useRef, useState } from 'react';
 export interface SkillOption {
   /** The skill name (the value committed on select). */
   name: string;
-  /** Optional secondary label, e.g. scope tier or "bundle". */
+  /** Optional secondary label, e.g. "bundle". */
   hint?: string;
+  /** Author (createdBy.name) used by the author-filter facet + option hint. */
+  author?: string;
 }
+
+const ANY_AUTHOR = '__any__';
 
 export function SkillCombobox({
   options,
@@ -38,16 +42,28 @@ export function SkillCombobox({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [chosen, setChosen] = useState('');
+  const [author, setAuthor] = useState<string>(ANY_AUTHOR);
   const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const authors = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of options) if (o.author) set.add(o.author);
+    return [...set].sort();
+  }, [options]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter(
-      (o) => o.name.toLowerCase().includes(q) || (o.hint ?? '').toLowerCase().includes(q),
-    );
-  }, [options, query]);
+    return options.filter((o) => {
+      if (author !== ANY_AUTHOR && (o.author ?? 'Unknown') !== author) return false;
+      if (!q) return true;
+      return (
+        o.name.toLowerCase().includes(q) ||
+        (o.hint ?? '').toLowerCase().includes(q) ||
+        (o.author ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [options, query, author]);
 
   const choose = (name: string) => {
     setChosen(name);
@@ -75,6 +91,30 @@ export function SkillCombobox({
 
   return (
     <span className="relative inline-flex items-center gap-1.5" data-testid={testid}>
+      {authors.length > 0 && (
+        <>
+          <label className="sr-only" htmlFor={`${listId}-author`}>
+            Filter by author
+          </label>
+          <select
+            id={`${listId}-author`}
+            className="hq-btn"
+            data-testid={`${testid}-author`}
+            value={author}
+            onChange={(e) => {
+              setAuthor(e.target.value);
+              setActive(0);
+            }}
+          >
+            <option value={ANY_AUTHOR}>any author</option>
+            {authors.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
       <span className="relative inline-block">
         <input
           ref={inputRef}
@@ -126,6 +166,9 @@ export function SkillCombobox({
               >
                 {o.name}
                 {o.hint && <span className="ml-1.5 text-[11px] text-faint">{o.hint}</span>}
+                {o.author && (
+                  <span className="ml-1.5 text-[11px] text-faint">by {o.author}</span>
+                )}
               </li>
             ))}
           </ul>

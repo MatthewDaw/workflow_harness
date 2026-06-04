@@ -12,6 +12,8 @@ const PROJECT: Project = {
   ownerUserId: 'user-matt',
   progressPct: 62,
   liveSessionCount: 0,
+  enabledSkills: [],
+  enabledAgents: [],
 };
 
 function renderProjects() {

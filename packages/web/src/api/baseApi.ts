@@ -190,13 +190,14 @@ export const baseApi = createApi({
       invalidatesTags: ['Dod'],
     }),
 
-    getAgents: build.query<Agent[], { projectId?: string } | void>({
-      query: (arg) => (arg && arg.projectId ? `agents?project=${arg.projectId}` : 'agents'),
+    /** Org skill/agent catalog (collapsed model): no projectId, org scope only. */
+    getAgents: build.query<Agent[], void>({
+      query: () => 'agents',
       transformResponse: unwrapArray<Agent>('agents'),
       providesTags: ['Agent'],
     }),
-    getSkills: build.query<Skill[], { projectId?: string } | void>({
-      query: (arg) => (arg && arg.projectId ? `skills?project=${arg.projectId}` : 'skills'),
+    getSkills: build.query<Skill[], void>({
+      query: () => 'skills',
       transformResponse: unwrapArray<Skill>('skills'),
       providesTags: ['Skill'],
     }),
@@ -247,33 +248,56 @@ export const baseApi = createApi({
 
     // ---- Mutations (U22/U24/U25) ----
 
-    /** Elevate/demote an agent: rewrite its scope key (project ↔ user ↔ org). */
-    changeAgentScope: build.mutation<Agent, { name: string; from: ScopeRef; to: ScopeRef }>({
-      query: ({ name, from, to }) => ({
-        url: `agents/${encodeURIComponent(name)}/scope?${scopeQuery(from)}`,
-        method: 'POST',
-        body: { scope: to },
-      }),
-      transformResponse: unwrapOne<Agent>('agent'),
-      invalidatesTags: ['Agent'],
-    }),
-
-    /** Create or update an agent (the editor's Save & sync). */
+    /** Create or update an agent (the editor's Save & sync; server forces org scope). */
     saveAgent: build.mutation<Agent, Agent>({
       query: (agent) => ({ url: 'agents', method: 'POST', body: agent }),
       transformResponse: unwrapOne<Agent>('agent'),
       invalidatesTags: ['Agent'],
     }),
 
-    /** Elevate/demote a skill (or bundle) to a new scope. */
-    changeSkillScope: build.mutation<Skill, { name: string; from: ScopeRef; to: ScopeRef }>({
-      query: ({ name, from, to }) => ({
-        url: `skills/${encodeURIComponent(name)}/scope?${scopeQuery(from)}`,
+    // ---- Project opt-in (collapsed org-catalog model) ----
+
+    /** Add a skill to a project's enabledSkills (idempotent). */
+    enableProjectSkill: build.mutation<Project, { projectId: string; skillName: string }>({
+      query: ({ projectId, skillName }) => ({
+        url: `projects/${projectId}/skills/${encodeURIComponent(skillName)}`,
         method: 'POST',
-        body: { scope: to },
       }),
-      transformResponse: unwrapOne<Skill>('skill'),
-      invalidatesTags: ['Skill'],
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /** Remove a skill from a project's enabledSkills. */
+    disableProjectSkill: build.mutation<Project, { projectId: string; skillName: string }>({
+      query: ({ projectId, skillName }) => ({
+        url: `projects/${projectId}/skills/${encodeURIComponent(skillName)}`,
+        method: 'DELETE',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /**
+     * Add an agent to a project's enabledAgents; the server also unions the
+     * agent's skills (bundles flattened) into enabledSkills.
+     */
+    enableProjectAgent: build.mutation<Project, { projectId: string; agentName: string }>({
+      query: ({ projectId, agentName }) => ({
+        url: `projects/${projectId}/agents/${encodeURIComponent(agentName)}`,
+        method: 'POST',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /** Remove an agent from enabledAgents (does NOT prune enabledSkills). */
+    disableProjectAgent: build.mutation<Project, { projectId: string; agentName: string }>({
+      query: ({ projectId, agentName }) => ({
+        url: `projects/${projectId}/agents/${encodeURIComponent(agentName)}`,
+        method: 'DELETE',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
     }),
 
     /** Add a member skill (or nested bundle) into a bundle. */
@@ -391,9 +415,11 @@ export const {
   useGetProjectDocContentQuery,
   useGetProjectRequirementsQuery,
   usePutProjectRequirementsMutation,
-  useChangeAgentScopeMutation,
   useSaveAgentMutation,
-  useChangeSkillScopeMutation,
+  useEnableProjectSkillMutation,
+  useDisableProjectSkillMutation,
+  useEnableProjectAgentMutation,
+  useDisableProjectAgentMutation,
   useAddBundleMemberMutation,
   useRemoveBundleMemberMutation,
   useDissolveBundleMutation,

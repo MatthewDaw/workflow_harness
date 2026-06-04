@@ -11,6 +11,7 @@ import { DetailedRequirements } from '../screens/ProjectDetail/DetailedRequireme
 import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
 import { ProjectAgents } from '../screens/ProjectDetail/ProjectAgents.js';
+import { ProjectSkills } from '../screens/ProjectDetail/ProjectSkills.js';
 import { Sessions } from '../screens/Sessions/Sessions.js';
 import { LiveWatch } from '../screens/LiveWatch/LiveWatch.js';
 import { Agents } from '../screens/Agents/Agents.js';
@@ -42,6 +43,7 @@ export function AppRoutes() {
           <Route path="detailed-requirements" element={<DetailedRequirements />} />
           <Route path="weekly" element={<ProjectWeekly />} />
           <Route path="sessions" element={<ProjectSessions />} />
+          <Route path="skills" element={<ProjectSkills />} />
           <Route path="agents" element={<ProjectAgents />} />
         </Route>
 
