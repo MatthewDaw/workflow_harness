@@ -90,6 +90,12 @@ export const skillSchema = z.object({
    * bundles / metadata-only records.
    */
   body: z.string().default(''),
+  /**
+   * Read-only annotation populated by the resolve endpoint for bundles: the
+   * transitively-flattened leaf-skill member names (nested bundles expanded).
+   * Never written by clients; present only on GET /skills responses.
+   */
+  resolvedMembers: z.array(z.string()).optional(),
 });
 export type Skill = z.infer<typeof skillSchema>;
 

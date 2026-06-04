@@ -44,7 +44,7 @@ function lastMatching(pred: (url: string, method: string) => boolean):
 describe('SkillBundle ops (U17)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('adds a member via addBundleMember', async () => {
+  it('adds a member via a searchable combobox (filters as you type)', async () => {
     renderWithProviders(<SkillBundle />, {
       route: '/skills/review-kit',
       routePath: '/skills/:bundleName',
@@ -53,8 +53,19 @@ describe('SkillBundle ops (U17)', () => {
     await screen.findByTestId('skill-bundle');
     await screen.findByTestId('member-gh');
 
-    await userEvent.selectOptions(screen.getByTestId('add-member-select'), 'qa');
-    await userEvent.click(screen.getByTestId('add-member'));
+    // The combobox lists candidate skills (qa is not yet a member).
+    const input = screen.getByTestId('add-member-input');
+    await userEvent.click(input);
+    expect(screen.getByTestId('add-member-option-qa')).toBeInTheDocument();
+
+    // Typing filters the list down to the match.
+    await userEvent.type(input, 'qa');
+    expect(screen.getByTestId('add-member-option-qa')).toBeInTheDocument();
+    expect(screen.queryByTestId('add-member-option-gh')).not.toBeInTheDocument();
+
+    // Choose the option, then commit.
+    await userEvent.click(screen.getByTestId('add-member-option-qa'));
+    await userEvent.click(screen.getByTestId('add-member-commit'));
 
     await waitFor(() =>
       expect(
