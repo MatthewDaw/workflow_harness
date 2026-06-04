@@ -1,5 +1,5 @@
 ---
-completion: 0
+completion: 88
 ---
 
 # Command HQ + claude+ — Project Requirements

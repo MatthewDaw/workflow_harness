@@ -2,10 +2,10 @@
 status: active
 type: overview
 created: 2026-06-02
-completion: 90
+completion: 91
 ---
 
-> **completion: 90%** — this top-of-`docs/plans/` file represents the requirements
+> **completion: 91%** — this top-of-`docs/plans/` file represents the requirements
 > for the **whole project**. The website reads this number and displays it on both
 > the Command HQ high-level **Project Requirements** bar and the **Detailed
 > Requirements** root. Every doc in this folder carries its own `completion:` at the
