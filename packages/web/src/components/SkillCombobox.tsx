@@ -23,6 +23,7 @@ export function SkillCombobox({
   testid = 'skill-combobox',
   buttonLabel,
   onCommit,
+  emptyHint = 'No matching skills',
 }: {
   options: SkillOption[];
   /** Fired when an option is highlighted/selected (sets the pending value). */
@@ -33,6 +34,12 @@ export function SkillCombobox({
   buttonLabel?: string;
   /** Fired with the chosen name when the commit button is pressed. */
   onCommit?: (name: string) => void;
+  /**
+   * Message shown in the listbox when nothing matches the typed query. Callers
+   * pass a context-specific hint (e.g. "register it with /hq-add-skill") so a
+   * not-in-catalog dead-end isn't silent.
+   */
+  emptyHint?: string;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -105,7 +112,7 @@ export function SkillCombobox({
           >
             {filtered.length === 0 && (
               <li className="px-2 py-1 text-xs text-faint" data-testid={`${testid}-empty`}>
-                No matching skills
+                {emptyHint}
               </li>
             )}
             {filtered.map((o, i) => (

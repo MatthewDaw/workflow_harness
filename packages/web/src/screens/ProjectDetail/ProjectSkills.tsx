@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { Skill } from '@harness/shared';
 import {
@@ -23,15 +24,27 @@ export function ProjectSkills() {
   const [enableSkill] = useEnableProjectSkillMutation();
   const [disableSkill] = useDisableProjectSkillMutation();
 
+  const [addError, setAddError] = useState<string | null>(null);
+
   const enabled = project?.enabledSkills ?? [];
   const byName = new Map<string, Skill>(catalog.map((s) => [s.name, s]));
 
   // Candidates: catalog skills not already enabled.
   const candidates = catalog.filter((s) => !enabled.includes(s.name));
 
-  const onAdd = (skillName: string) => {
+  const onAdd = async (skillName: string) => {
     if (!skillName || !projectId) return;
-    enableSkill({ projectId, skillName });
+    try {
+      await enableSkill({ projectId, skillName }).unwrap();
+      setAddError(null);
+    } catch {
+      // The Skills tab can only enable skills that exist in the org catalog; a
+      // 404 here means the name isn't registered. Surface it instead of failing
+      // silently — registering happens via /hq-add-skill.
+      setAddError(
+        `Couldn't add "${skillName}" — it isn't in the org catalog. Register it first with /hq-add-skill.`,
+      );
+    }
   };
   const onRemove = (skillName: string) => {
     if (!projectId) return;
@@ -58,8 +71,14 @@ export function ProjectSkills() {
               author: c.createdBy?.name,
             }))}
             onCommit={onAdd}
+            emptyHint="Not in the org catalog — register it with /hq-add-skill first."
           />
         </div>
+        {addError && (
+          <div className="mt-2 text-xs text-rose-600" role="alert" data-testid="add-skill-error">
+            {addError}
+          </div>
+        )}
       </div>
 
       {enabled.length === 0 && (

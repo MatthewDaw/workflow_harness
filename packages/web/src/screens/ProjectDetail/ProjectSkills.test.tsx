@@ -76,4 +76,19 @@ describe('ProjectSkills (project opt-in)', () => {
       ).toBeDefined(),
     );
   });
+
+  it('shows a register hint when the typed skill is not in the org catalog', async () => {
+    renderWithProviders(<ProjectSkills />, {
+      route: '/projects/weekly-compass/skills',
+      routePath: '/projects/:projectId/skills',
+      seed: { projects: [PROJECT], skills: SKILLS },
+    });
+    const input = await screen.findByTestId('enable-skill-input');
+
+    // `gstack` is not in the seeded catalog → the combobox surfaces the
+    // not-in-catalog hint instead of silently offering nothing.
+    await userEvent.type(input, 'gstack');
+    const empty = await screen.findByTestId('enable-skill-empty');
+    expect(empty.textContent).toMatch(/hq-add-skill/);
+  });
 });
