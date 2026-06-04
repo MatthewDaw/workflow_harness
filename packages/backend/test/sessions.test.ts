@@ -4,7 +4,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { Envelope, Event, Project, SessionProjection } from '@harness/shared';
 import { Repo, type ConnectionRecord } from '../src/db/repo.js';
-import { control, getSession, listSessions } from '../src/rest/sessions.js';
+import { STALE_WINDOW_MS, control, getSession, listSessions } from '../src/rest/sessions.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
@@ -30,12 +30,14 @@ function project(id: string, owner: string): Project {
   return { id, name: id, repo: `gh/acme/${id}`, ownerUserId: owner, liveSessionCount: 0 };
 }
 
+// Default lastEventAt to "now" so a session in a live status counts as fresh
+// under read-time freshness; tests that want a stale session pass an old value.
 function session(
   id: string,
   projectId: string,
   owner: string,
   status: SessionProjection['status'],
-  lastEventAt = 1,
+  lastEventAt = Date.now(),
 ): SessionProjection {
   return {
     sessionId: id,
@@ -58,10 +60,13 @@ function env(seq: number, event: Event): Envelope {
 
 describe('GET /sessions', () => {
   it('lists the caller sessions live-first, scoped to uid', async () => {
+    const now = Date.now();
     await repo.putProject(project('p1', MATT));
-    await repo.putSessionProjection(session('idle-1', 'p1', MATT, 'idle', 5));
-    await repo.putSessionProjection(session('live-1', 'p1', MATT, 'active', 2));
-    await repo.putSessionProjection(session('alice-live', 'p2', ALICE, 'active', 9));
+    // idle-1 has the most recent activity but a non-live status; live-1 is active
+    // and fresh, so it must still sort first (live-first beats recency).
+    await repo.putSessionProjection(session('idle-1', 'p1', MATT, 'idle', now - 100));
+    await repo.putSessionProjection(session('live-1', 'p1', MATT, 'active', now - 5000));
+    await repo.putSessionProjection(session('alice-live', 'p2', ALICE, 'active', now - 1000));
 
     const res = await listSessions(httpEvent({ method: 'GET', userId: MATT }), deps);
     const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
@@ -80,6 +85,42 @@ describe('GET /sessions', () => {
     );
     const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
     expect(sessions.map((s) => s.sessionId)).toEqual(['live-1']);
+  });
+
+  it('?live=true excludes a stale active session (silent daemon) but keeps a fresh one', async () => {
+    const now = Date.now();
+    await repo.putProject(project('p1', MATT));
+    // Fresh: heartbeated within the stale window — a genuinely-alive session.
+    await repo.putSessionProjection(session('fresh', 'p1', MATT, 'active', now - 1000));
+    // Stale: status is still active, but the daemon died (e.g. power loss) and
+    // stopped heartbeating, so the last event is older than the stale window.
+    await repo.putSessionProjection(
+      session('stale', 'p1', MATT, 'active', now - STALE_WINDOW_MS - 1000),
+    );
+
+    const res = await listSessions(
+      httpEvent({ method: 'GET', userId: MATT, query: { live: 'true' } }),
+      deps,
+    );
+    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
+    expect(sessions.map((s) => s.sessionId)).toEqual(['fresh']);
+  });
+
+  it('treats a stale active session as not-live in the full firehose ordering', async () => {
+    const now = Date.now();
+    await repo.putProject(project('p1', MATT));
+    // The stale session has the most recent-looking status but a silent daemon;
+    // the fresh-but-idle session is genuinely-not-live too. The fresh active one
+    // must sort first. We assert the stale active session is NOT ranked live.
+    await repo.putSessionProjection(session('fresh-live', 'p1', MATT, 'active', now - 500));
+    await repo.putSessionProjection(
+      session('stale-active', 'p1', MATT, 'active', now - STALE_WINDOW_MS - 1),
+    );
+
+    const res = await listSessions(httpEvent({ method: 'GET', userId: MATT }), deps);
+    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
+    // Stale active sorts below the fresh live session despite both being "active".
+    expect(sessions[0]!.sessionId).toBe('fresh-live');
   });
 });
 

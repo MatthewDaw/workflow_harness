@@ -39,14 +39,15 @@ func ValidStatus(s Status) bool {
 type Kind string
 
 const (
-	KindSessionStart  Kind = "session.start"
-	KindSessionRename Kind = "session.rename"
-	KindUserMsg       Kind = "user.msg"
-	KindAssistantMsg  Kind = "assistant.msg"
-	KindToolCall      Kind = "tool.call"
-	KindToolResult    Kind = "tool.result"
-	KindCostTick      Kind = "cost.tick"
-	KindStatusChange  Kind = "status.change"
+	KindSessionStart     Kind = "session.start"
+	KindSessionRename    Kind = "session.rename"
+	KindUserMsg          Kind = "user.msg"
+	KindAssistantMsg     Kind = "assistant.msg"
+	KindToolCall         Kind = "tool.call"
+	KindToolResult       Kind = "tool.result"
+	KindCostTick         Kind = "cost.tick"
+	KindStatusChange     Kind = "status.change"
+	KindSessionHeartbeat Kind = "session.heartbeat"
 )
 
 // Event is the discriminated union of every event kind. It is modeled as a flat
@@ -102,9 +103,9 @@ type Envelope struct {
 }
 
 // boolPtr / int64Ptr / f64Ptr are small constructors for the optional fields.
-func boolPtr(b bool) *bool        { return &b }
-func int64Ptr(i int64) *int64     { return &i }
-func f64Ptr(f float64) *float64   { return &f }
+func boolPtr(b bool) *bool      { return &b }
+func int64Ptr(i int64) *int64   { return &i }
+func f64Ptr(f float64) *float64 { return &f }
 
 // ----- Event constructors (kept parallel to the TS schemas) -----
 
@@ -163,6 +164,14 @@ func StatusChange(sessionID string, from, to Status) Event {
 	return Event{Kind: KindStatusChange, SessionID: sessionID, From: from, To: to}
 }
 
+// SessionHeartbeat builds a session.heartbeat event. The daemon emits these
+// periodically for each live session so HQ can bump lastEventAt and keep a
+// genuinely-alive idle session live; absence of heartbeats lets read-time
+// freshness drop a powered-off laptop's sessions.
+func SessionHeartbeat(sessionID string) Event {
+	return Event{Kind: KindSessionHeartbeat, SessionID: sessionID}
+}
+
 // Validate checks that an event has the required fields for its kind. It mirrors
 // the zod refinements on the TS side (non-empty strings, valid statuses, etc.).
 func (e Event) Validate() error {
@@ -198,6 +207,8 @@ func (e Event) Validate() error {
 		if !ValidStatus(e.From) || !ValidStatus(e.To) {
 			return fmt.Errorf("status.change: from/to must be valid statuses")
 		}
+	case KindSessionHeartbeat:
+		// Only sessionId is required (checked above).
 	default:
 		return fmt.Errorf("unknown event kind %q", e.Kind)
 	}
