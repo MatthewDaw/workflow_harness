@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -220,6 +221,18 @@ func (d *Daemon) ingestHook(raw string) {
 	if err := json.Unmarshal([]byte(raw), &h); err != nil || h.SessionID == "" {
 		return
 	}
+	// UserPromptSubmit fires on every prompt the user submits, but ApplyAutoName
+	// is idempotent: only the FIRST turn renames the session. When it does, emit a
+	// session.rename carrying both the derived slug name and the (trimmed, capped)
+	// raw first prompt as the summary. This is the authoritative auto-name path;
+	// the transcript tailer's onFirst remains a fallback. We do NOT fall through to
+	// MapHook for this kind (UserPromptSubmit carries no status transition).
+	if h.HookEventName == "UserPromptSubmit" {
+		if renamed, name := d.mux.ApplyAutoName(h.SessionID, h.Prompt); renamed {
+			d.emitSession(h.SessionID, event.SessionRenameWithSummary(h.SessionID, name, firstPromptSummary(h.Prompt)))
+		}
+		return
+	}
 	// Seed the prior status from the live session so the mapped transition starts
 	// from where the session actually is, not a guess.
 	var prev event.Status
@@ -239,6 +252,17 @@ func (d *Daemon) ingestHook(raw string) {
 	}
 	// No Runtime wired (local-only daemon): publish to the local bus directly.
 	d.PublishEvent(event.Envelope{V: 1, TS: time.Now().UnixMilli(), Event: ev})
+}
+
+// firstPromptSummary trims a raw first prompt and caps it to a display-friendly
+// length so the session.rename summary stays bounded on the wire.
+func firstPromptSummary(prompt string) string {
+	s := strings.TrimSpace(prompt)
+	const max = 200
+	if len(s) > max {
+		s = s[:max]
+	}
+	return s
 }
 
 // attach proxies PTY I/O for an attached client until it detaches or drops. It

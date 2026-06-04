@@ -116,10 +116,11 @@ func TestInstallHooksIdempotent(t *testing.T) {
 	}
 	b, _ := os.ReadFile(p1)
 	// Re-install must not duplicate our managed entry under Notification.
-	// A crude check: the command should appear exactly 4 times (one per event).
+	// A crude check: the command should appear exactly 5 times (one per managed
+	// event: PreToolUse, PostToolUse, Stop, Notification, UserPromptSubmit).
 	got := countOccurrences(string(b), "claude-plus __hook")
-	if got != 4 {
-		t.Errorf("expected 4 managed hook commands, got %d", got)
+	if got != 5 {
+		t.Errorf("expected 5 managed hook commands, got %d", got)
 	}
 }
 

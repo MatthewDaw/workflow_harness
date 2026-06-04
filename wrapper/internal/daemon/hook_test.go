@@ -56,6 +56,38 @@ func TestHookEventReachesDaemon(t *testing.T) {
 	})
 }
 
+// TestUserPromptSubmitHookRenamesSession proves a UserPromptSubmit hook carrying
+// the user's first prompt triggers ApplyAutoName and surfaces a session.rename on
+// the local bus that carries BOTH a derived slug name and the raw first prompt as
+// the summary. Only the first prompt renames (ApplyAutoName is idempotent).
+func TestUserPromptSubmitHookRenamesSession(t *testing.T) {
+	d, repo := startTestDaemon(t)
+	defer d.Stop()
+
+	s, err := d.Mux().Spawn("")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	snapshot := collectEvents(d, "hooktest")
+
+	prompt := "fix the login bug in the cursor flow"
+	raw := `{"hook_event_name":"UserPromptSubmit","session_id":"` + s.ID + `","prompt":"` + prompt + `"}`
+	if err := SendHook(repo, []byte(raw)); err != nil {
+		t.Fatalf("SendHook: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		for _, env := range snapshot() {
+			e := env.Event
+			if e.Kind == event.KindSessionRename && e.SessionID == s.ID &&
+				e.Name != "" && e.Summary == prompt {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // TestHookMalformedPayloadDropped is the U18 edge case: a malformed payload (and
 // a no-op hook kind) produce no event and leave the daemon stable.
 func TestHookMalformedPayloadDropped(t *testing.T) {
