@@ -56,7 +56,7 @@ Migrated from the original build plan; the durable rationale for the stack.
 5. **Auth.** Cognito user pool for web; a device token (device-code flow, `claude+ login`) authorizes the daemon's outbound WS and scopes its data to that user. No inbound ports needed (the daemon dials out); the token carries a TTL + revoke + OS-keychain storage.
 6. **Control gateway over WebSocket.** HQ steers a session by routing a control frame to the daemon's stored `connectionId` on its persistent *outbound* WS; ownership re-checked on every frame.
 7. **Forge semantic search (removed, not just deferred).** Session-summary vector retrieval (OpenSearch k-NN / DynamoDB cosine) was dropped along with the `backend/src/forge/` pipeline and the `SearchStack`; AgentForge distills client-side from the working diff. No server-side embeddings.
-8. **Scope model.** Three tiers `org` / `user#uid` / `proj#pid`; resolution composes all three, narrowest wins on name collision; elevate/demote rewrites the scope key. Objectives are org-global.
+8. **Org catalog + per-project opt-in (skills & agents).** Skills and agents are a single **org-scoped catalog** (every record `scope: { tier: 'org', id: org }`, keyed at `SCOPE#org#<org>`). The old 3-tier scope + narrowest-wins `resolveScoped`/`isVisible` are **retired** for skills/agents; there is no elevate/demote (the scope-change endpoint returns `410`). Each project opts in via `enabledSkills`/`enabledAgents`; enabling an agent unions its (bundle-flattened) `skills` into `enabledSkills`. Every catalog write stamps `createdBy: { userId, name }` and is admin-gated. `resolveScoped`/`isVisible`/`SCOPE_PRECEDENCE` are kept only for non-catalog entities and the wrapper golden fixture. Objectives are still org-global. See the [org-catalog design spec](../../superpowers/specs/2026-06-03-org-catalog-scope-collapse-design.md).
 9. **GitHub via a GitHub App.** Reads requirement docs + git history (weekly "done") + branch/PR state — **read-only (`contents:read`), installed per-repo**. HQ reads from GitHub and never writes; `/update-progress` pushes completion numbers from the client side.
 10. **Distribution.** goreleaser cross-compile + an npm wrapper package (per-platform prebuilt binaries via `optionalDependencies`) + `curl | sh` (with a published `checksums.txt` + SHA-256 verification in the installer). PTY via `creack/pty`.
 11. **LLM-backed features run on the user's Claude subscription, client-side.** AgentForge distill/optimize and the Weekly conformity score run inside the claude+ PTY via Claude Code; neither the Lambda backend nor the wrapper calls a hosted model or holds model keys. See [feature 5](./05-agentforge.md).
@@ -69,12 +69,12 @@ Single table `harness`, overloaded `PK`/`SK` + GSIs for cross-cutting queries.
 | Entity | PK | SK | Notes / GSI |
 |---|---|---|---|
 | User | `USER#<uid>` | `PROFILE` | — |
-| Project (repo) | `PROJ#<pid>` | `META` | GSI1 `USER#<uid>` → projects |
+| Project (repo) | `PROJ#<pid>` | `META` | GSI1 `USER#<uid>` → projects; META stores `enabledSkills`/`enabledAgents` (opt-in name lists, default `[]`) |
 | Instance (claude+) | `PROJ#<pid>` | `INST#<host>` | live state, uptime, session count |
 | Session | `PROJ#<pid>` | `SESS#<sid>` | GSI1 `live` status → cross-project live list |
 | Event (append-only) | `SESS#<sid>` | `EVT#<ts>#<seq>` | TTL on old raw events optional |
-| Agent | `SCOPE#<scope>` | `AGENT#<name>` | scope ∈ org / user#uid / proj#pid |
-| Skill / Bundle | `SCOPE#<scope>` | `SKILL#<name>` | bundle holds member refs; nestable |
+| Agent | `SCOPE#org#<org>` | `AGENT#<name>` | org catalog only (no user/proj tiers); `createdBy {userId,name}`; keeps `skills[]` |
+| Skill / Bundle | `SCOPE#org#<org>` | `SKILL#<name>` | org catalog only (no user/proj tiers); `createdBy {userId,name}`; bundle holds member refs; nestable |
 | Objective node | `ORG#<org>` | `RCDO#<path>` | tree path; roll-up % cached |
 | Weekly update | `PROJ#<pid>` | `WEEK#<isoweek>` | client-posted report: `done` summary + `plan` + `conformityScore` (no ticket alignment) |
 
@@ -85,6 +85,11 @@ The Project record additionally stores `progressPct` + `prdGoal` +
 *Code:* `backend/src/db/keys.ts`, `db/repo.ts`; contracts in `packages/shared/src/`.
 Event records hold tool args + message content; at single-user scope, secrets-
 redaction-on-capture and a mandatory event TTL are deferred hardening.
+
+`resolveScoped`/`isVisible` (`packages/shared/src/scope.ts`) are **retained only**
+for non-catalog entities and the wrapper golden fixture — skills/agents no longer
+use them (every record is org-scoped and listed directly by
+`scopePartition(orgScope(org))`).
 
 ## Event schema (directional contract, shared package)
 

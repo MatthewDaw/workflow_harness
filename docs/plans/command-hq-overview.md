@@ -54,7 +54,7 @@ React/Spring/Module-Federation stack.
 |---|---------|-----------|--------|
 | 1 | **Plan mapping** | Company goal → repo goal → detailed breakdown, with a tool that auto-audits progress and verifies completion | [01-plan-mapping.md](./command-hq/01-plan-mapping.md) |
 | 2 | **Weekly plan** | A `/weekly-update` skill that interviews you on next-week goals, then auto-writes "what got done" (from git) vs "what's next" | [02-weekly-update.md](./command-hq/02-weekly-update.md) |
-| 3 | **Claude Code integration** | Registered agents/skills in HQ, promotion across repo/user/team scopes, and live session watch + steer | [03-claude-code-integration.md](./command-hq/03-claude-code-integration.md) |
+| 3 | **Claude Code integration** | A single org catalog of agents/skills in HQ, per-project opt-in (`enabledSkills`/`enabledAgents`), and live session watch + steer | [03-claude-code-integration.md](./command-hq/03-claude-code-integration.md) |
 | 4 | **Claude CLI wrapper** | `claude+` wraps the real `claude` CLI as a persistent, capturable daemon (survives terminal close; single-laptop) | [04-claude-cli-wrapper.md](./command-hq/04-claude-cli-wrapper.md) |
 | 5 | **AgentForge** | Mark a slice of work, capture it, and distill it into a reusable org-wide agent via prompt gradient-descent | [05-agentforge.md](./command-hq/05-agentforge.md) |
 
@@ -108,9 +108,9 @@ reflects current reality.
 |---|---|---|---|
 | 1 Plan mapping | roll-up re-pointed off tickets onto stored `progressPct`; GitHub `completion:` frontmatter read/store (`github/history.ts`, `rest/projects.ts`); docs-tree REST; Definition-of-Done REST (`rest/dod.ts`, advisory). **Prod-E2E gate still deferred.** | objectives tree + bars; two-tier requirements UI built (`ProjectRequirements.tsx`, `DetailedRequirements.tsx`, `MarkdownView`); editable Project Requirements | `/update-progress` skill **built** |
 | 2 Weekly plan | weekly = store/serve a client-posted report (`rest/weekly.ts`); ticket-based `assembleWeekly`/`align.ts` removed; `conformityScore` round-trips | Weekly screen renders posted report (`ProjectWeekly.tsx`) | `/weekly-update` skill **built** |
-| 3 CC integration | scope model + registry + control gateway (`ws/control.ts`); steer/scope/bundle wired | agents/skills/sessions/live-watch screens; steer + scope/bundle controls wired | config sync (remote half + drift) exists |
+| 3 CC integration | org catalog (skills/agents org-only + `createdBy`) + per-project opt-in (`enabledSkills`/`enabledAgents`, agent-enable skill union) + control gateway (`ws/control.ts`); project opt-in REST wired; scope-change endpoint retired | agents/skills (flat org catalog, author filter)/sessions/live-watch screens; per-project Skills + Agents opt-in toggles wired | config sync (remote half + drift) materializes the linked project's enabled set |
 | 4 CLI wrapper | — | desktop (Wails) app exists; xterm UX (visible cursor, scrollback, double-click rename) | daemon/attach/capture; LLM auto-titles (`internal/title/`); hook receiver; **isolated `~/.claude+` config root** |
-| 5 AgentForge | fuzzy `forge/` backend **removed**; SearchStack dropped from synth | single-admin promote via scope-elevate on Agents screen | `/startforge`/`/endforge` skills **built** (distiller-first) |
+| 5 AgentForge | fuzzy `forge/` backend **removed**; SearchStack dropped from synth | distilled agents land in the org catalog; an admin enables them per project | `/startforge`/`/endforge` skills **built** (distiller-first) |
 
 > Legend: "built" = code present + tested in repo; "deferred" = explicitly parked
 > for a later increment. Detail files carry per-feature status sections.
@@ -127,12 +127,16 @@ Two subsystems underpin the skills story and weren't in the original map:
   non-alphanumeric char with `-` to match Claude Code's project-hash naming.
   *Code:* `wrapper/internal/config/overlay.go`, `pty/session.go`,
   `capture/parse.go` (`projectHash`/`slugifyPath`).
-- **HQ org-scope skill bundle seed.** The repo's `.claude/skills/` set is seeded
+- **HQ org-catalog skill bundle seed.** The repo's `.claude/skills/` set is seeded
   into HQ at **org scope** (`personasearch`), grouped as the **`command-hq-starter`**
-  bundle, so the Skills tab shows them on a fresh deploy with no device connected.
-  This is the source of truth for "skills visible in HQ out of the box." *Code:*
-  `packages/backend/src/seed/skills.ts`, `infra/scripts/seed-skills.mjs`,
-  `.github/workflows/seed-skills.yml` + the deploy seed step.
+  bundle, with `createdBy: { userId: 'system', name: 'system' }` stamped on each
+  record. The Skills tab shows them on a fresh deploy with no device connected; this
+  is the source of truth for "skills visible in HQ out of the box." A project then
+  **opts in** to the ones it wants (or enables an agent that brings them) via its
+  `enabledSkills`/`enabledAgents` — the seed populates the catalog, not any single
+  project. *Code:* `packages/backend/src/seed/skills.ts`,
+  `infra/scripts/seed-skills.mjs`, `.github/workflows/seed-skills.yml` + the deploy
+  seed step.
 
 ### In progress / next (NOT yet on this branch — do not treat as done)
 
@@ -146,7 +150,8 @@ Being built in parallel; the docs anticipate them but they are not merged here:
 - **Heartbeat + ~60s freshness window** so power-loss/killed daemons drop off HQ's
   live list.
 - **Overview tab removed** (project default tab → Project Requirements).
-- **Skills tab overhaul** (searchable picker, working scope-change, hide bundle
-  members by default with a toggle, a new `create-hq-skill` skill).
+- **Skills tab overhaul** (searchable picker with author filter, a per-project Skills
+  subtab for opt-in, hide bundle members by default with a toggle, a new
+  `create-hq-skill` skill).
 - **Delete agents/skills**, with the `command-hq-starter` bundle protected
   server-side.

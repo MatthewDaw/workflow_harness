@@ -6,11 +6,17 @@ completion: 93
 feature: claude-code-integration
 ---
 
-# Feature 3 — Claude Code Integration (registry, scopes, live sessions)
+# Feature 3 — Claude Code Integration (org catalog, per-project opt-in, live sessions)
 
-How Command HQ shows the agents/skills a developer has registered, how those get
-promoted between **repo → user → team** levels, and how active sessions are shown
-and steered.
+How Command HQ shows the agents/skills available to a developer as a single
+**org catalog**, how each project **opts in** to the skills/agents it wants, and
+how active sessions are shown and steered.
+
+> **Model change (2026-06-03):** the old 3-tier scope (repo / user / team) with
+> narrowest-wins resolution and scope promotion/demotion is **retired** for skills
+> and agents. Skills and agents are now a single **org-scoped catalog**; projects
+> turn individual items on via `enabledSkills` / `enabledAgents`. See the full
+> [org-catalog design spec](../../superpowers/specs/2026-06-03-org-catalog-scope-collapse-design.md).
 
 ## Registered agents & skills in HQ
 
@@ -29,25 +35,40 @@ HQ shows the product-bundled skills out of the box via the org-scope
 `command-hq-starter` seed (`packages/backend/src/seed/skills.ts`,
 `infra/scripts/seed-skills.mjs`), independent of any connected device.
 
-## Promotion across the three levels
+## Org catalog + per-project opt-in
 
-Scope tiers (your "repo / user / team" = code's `project / user / org`):
+There are no scope tiers for skills and agents anymore. Every skill and agent is
+**org-scoped** (`scope: { tier: "org", id: "<org>" }`) and lives in one shared
+**org catalog**. A project then chooses which of those items it wants:
 
-| Your term | Code tier | Meaning |
-|-----------|-----------|---------|
-| repo | `project` (`proj#<pid>`) | visible only inside that repo |
-| user | `user` (`user#<uid>`) | visible to that user across their repos |
-| team | `org` (`org#<id>`) | visible to the whole company |
+- **One catalog.** `GET /skills` and `GET /agents` return the whole org catalog —
+  no `?project` param, no `resolveScoped`. *Code:* `rest/skills.ts`, `rest/agents.ts`;
+  keys forced to `SCOPE#org#<org>` via `orgScope(org)` (`db/keys.ts`).
+- **Admin-gated writes.** `POST/PUT/DELETE /skills` and `/agents` are org-only and
+  admin-gated; the server forces `scope = orgScope(principal.org)` and stamps
+  `createdBy: { userId, name }` from the authenticated principal on create.
+- **Per-project opt-in.** A `Project` carries `enabledSkills: string[]` and
+  `enabledAgents: string[]` (skill/agent names; default `[]`). A project owner or
+  org admin toggles them:
+  - `POST|DELETE /projects/:id/skills/:name` — add/remove a skill directly (no agent
+    needed).
+  - `POST|DELETE /projects/:id/agents/:name` — enable/disable an agent. **Enabling an
+    agent UNIONS that agent's declared `skills` into `enabledSkills`** (de-duped;
+    bundles among them flattened transitively to leaf member skills), so the agent's
+    dependencies come along automatically. Disabling an agent removes it from
+    `enabledAgents` but does **not** prune `enabledSkills` (a skill may also be
+    enabled directly or brought by another agent).
+- **No promotion / demotion.** The scope-change endpoint
+  (`changeAgentScope`/`changeSkillScope`) is **retired** (returns `410 Gone` / route
+  removed); there is no tier to elevate or demote between.
+- AgentForge ([feature 5](./05-agentforge.md)) registers its distilled agents into
+  the **org catalog**; an admin then enables them per project.
 
-- **Resolution:** the effective set composes org + user + project; on a name
-  collision the **narrowest scope wins** (a repo skill overrides an org skill of
-  the same name). *Code:* `packages/shared/src/scope.ts` (`resolveScoped`,
-  `SCOPE_PRECEDENCE`).
-- **Promote / demote** ("elevate to org", "demote to project") simply **rewrites
-  the scope key** of the item. *Code:* `rest/scopeauth.ts`, the
-  `changeAgentScope` / `changeSkillScope` mutations in `web/src/api/baseApi.ts`.
-- AgentForge ([feature 5](./05-agentforge.md)) registers its distilled agents at
-  **org** scope so the whole team gets them.
+A connected repo materializes **only the linked project's** enabled sets into
+`~/.claude+`: the wrapper fetches the full org catalog, then keeps just the items
+named in that project's `enabledSkills` / `enabledAgents` — see
+[04](./04-claude-cli-wrapper.md) (isolated config root). Because an agent's skills were union-added into
+`enabledSkills` when it was enabled, no extra expansion is needed at sync time.
 
 ## Active sessions — show and steer
 
@@ -73,13 +94,16 @@ Scope tiers (your "repo / user / team" = code's `project / user / org`):
 
 ## Status
 
-- **Built:** scope model + resolution; agents/skills/bundles registry + REST;
-  config sync drift (over the `~/.claude` ∪ `~/.claude+` union); sessions list +
-  live watch + control gateway (inject/pause/interrupt/shutdown/kill); steer +
-  scope/bundle controls wired in the web UI; org-scope bundled-skill seed.
+- **Built:** org-catalog model (skills/agents org-only, `createdBy` stamped) +
+  per-project opt-in (`enabledSkills`/`enabledAgents`, agent-enable skill union);
+  agents/skills/bundles registry + REST; config sync drift (over the `~/.claude` ∪
+  `~/.claude+` union); sessions list + live watch + control gateway
+  (inject/pause/interrupt/shutdown/kill); steer + project opt-in controls wired in
+  the web UI; org-scope bundled-skill seed. The scope-change endpoint is retired.
 - **In progress (not on this branch):** session name + first-prompt columns on the
   Sessions tab; live per-session activity feed in the watch view; a Skills-tab
-  overhaul (searchable picker, hide bundle members by default, a `create-hq-skill`
-  skill); delete agents/skills with the `command-hq-starter` bundle protected
+  overhaul (searchable picker with author filter, hide bundle members by default, a
+  per-project Skills subtab, a `create-hq-skill` skill); delete agents/skills with
+  the `command-hq-starter` bundle protected
   server-side. See the overview's "In progress / next".
 - **Polish/open:** org-publish governance (review/approval at org scope).
