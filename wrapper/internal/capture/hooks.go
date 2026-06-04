@@ -5,11 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
 // HookEvent is the payload Claude Code posts to our hook command. We install a
-// hooks block in ~/.claude/settings.json whose command pipes the hook JSON to a
+// hooks block in ~/.claude+/settings.json whose command pipes the hook JSON to a
 // local endpoint (the daemon socket). This gives low-latency lifecycle/status
 // signals without parsing the screen (KTD3 source 3).
 type HookEvent struct {
@@ -32,17 +33,13 @@ type settingsHookExec struct {
 	Command string `json:"command"` // the claude+ hook shim invocation
 }
 
-// InstallHooks merges a hooks block into ~/.claude/settings.json that forwards
+// InstallHooks merges a hooks block into ~/.claude+/settings.json that forwards
 // lifecycle events to the daemon. Writes are additive: existing user hooks are
 // preserved; only our managed entries (identified by the shim command) are
 // reconciled. Returns the settings path written.
 func InstallHooks(hookCmd string) (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := config.EnsureConfigDir()
 	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, "settings.json")

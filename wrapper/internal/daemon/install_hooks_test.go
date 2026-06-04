@@ -9,7 +9,7 @@ import (
 
 // TestInstallHooksWritesSettings proves daemon startup's best-effort hook
 // install resolves this binary and writes a managed hooks block referencing the
-// `__hook` shim into ~/.claude/settings.json — the wiring that makes the hook
+// `__hook` shim into ~/.claude+/settings.json — the wiring that makes the hook
 // receiver loop live in production.
 func TestInstallHooksWritesSettings(t *testing.T) {
 	home := t.TempDir()
@@ -18,7 +18,7 @@ func TestInstallHooksWritesSettings(t *testing.T) {
 
 	installHooks()
 
-	b, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	b, err := os.ReadFile(filepath.Join(home, ".claude+", "settings.json"))
 	if err != nil {
 		t.Fatalf("settings.json not written: %v", err)
 	}
