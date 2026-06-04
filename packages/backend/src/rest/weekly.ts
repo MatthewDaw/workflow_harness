@@ -10,9 +10,9 @@ import {
   ok,
   parseBody,
   pathParam,
-  principalOf,
   unauthorized,
 } from './runtime.js';
+import { resolvePrincipal } from './bearerAuth.js';
 
 /**
  * REST: weekly updates (U11, store/serve in U4) — store + publish, scoped to
@@ -44,7 +44,7 @@ export async function listWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
+  const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
   const pid = pathParam(event, 'pid');
   if (!pid) return badRequest('missing project id');
@@ -57,7 +57,7 @@ export async function getWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
+  const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
   const pid = pathParam(event, 'pid');
   const week = pathParam(event, 'week');
@@ -77,7 +77,7 @@ export async function putWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
+  const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
   const pid = pathParam(event, 'pid');
   const week = pathParam(event, 'week');
@@ -111,7 +111,7 @@ export async function publishWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
+  const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
   const pid = pathParam(event, 'pid');
   const week = pathParam(event, 'week');

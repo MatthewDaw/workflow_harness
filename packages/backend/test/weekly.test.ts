@@ -149,3 +149,51 @@ describe('publish recomputes the org roll-up', () => {
     expect(res).toMatchObject({ statusCode: 404 });
   });
 });
+
+describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () => {
+  // The weekly routes use HttpNoneAuthorizer, so the PTY's device token arrives
+  // as a raw `Authorization: Bearer` header (no jwt.claims). resolvePrincipal
+  // must verify it (HS256, offline) and the request must succeed under ownership.
+  const SECRET = new TextEncoder().encode('test-device-secret');
+
+  beforeEach(() => {
+    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
+  });
+
+  async function bearerPutEvent(userId: string, body: unknown) {
+    const { signDeviceToken } = await import('../src/auth/verify.js');
+    const token = await signDeviceToken({ userId, org: ORG }, { secret: SECRET });
+    return httpEvent({
+      method: 'PUT',
+      userId: null, // no Cognito jwt claims — only the bearer header
+      rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
+      path: { pid: PROJ, week: WEEK },
+      headers: { authorization: `Bearer ${token}` },
+      body,
+    });
+  }
+
+  it('stores a posted report authenticated by a device token', async () => {
+    await repo.putProject(project(MATT));
+    const res = await putWeekly(await bearerPutEvent(MATT, { done: 'via device token', plan: 'x' }), deps);
+    expect(res).toMatchObject({ statusCode: 200 });
+    const stored = await repo.getWeekly(PROJ, WEEK);
+    expect(stored?.done).toBe('via device token');
+  });
+
+  it('401s when there is neither jwt claims nor a bearer token', async () => {
+    await repo.putProject(project(MATT));
+    const res = await putWeekly(
+      httpEvent({ method: 'PUT', userId: null, path: { pid: PROJ, week: WEEK },
+        rawPath: `/projects/${PROJ}/weekly/${WEEK}`, body: { done: 'x', plan: 'y' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 401 });
+  });
+
+  it("404s a device token whose user does not own the project (no enumeration)", async () => {
+    await repo.putProject(project(MATT));
+    const res = await putWeekly(await bearerPutEvent('someone-else', { done: 'x', plan: 'y' }), deps);
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+});

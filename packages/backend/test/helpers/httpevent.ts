@@ -14,6 +14,7 @@ export function httpEvent(opts: {
   rawPath?: string;
   path?: Record<string, string>;
   query?: Record<string, string>;
+  headers?: Record<string, string>;
   body?: unknown;
 }): APIGatewayProxyEventV2 {
   const claims =
@@ -30,7 +31,7 @@ export function httpEvent(opts: {
     routeKey: '$default',
     rawPath: opts.rawPath ?? '/',
     rawQueryString: '',
-    headers: {},
+    headers: opts.headers ?? {},
     requestContext: {
       http: {
         method: opts.method,

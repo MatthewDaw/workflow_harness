@@ -240,9 +240,15 @@ export class ApiStack extends cdk.Stack {
     r('/dod', [M.GET, M.PUT], dodFn, 'Dod');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
 
-    r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly');
-    r('/projects/{pid}/weekly/{week}', [M.GET, M.PUT], weeklyFn, 'WeeklyByWeek');
-    r('/projects/{pid}/weekly/{week}/publish', [M.POST], weeklyFn, 'WeeklyPublish');
+    // Weekly routes accept EITHER a Cognito ID token (web) OR the claude+ wrapper
+    // device token. The default gateway authorizer only accepts Cognito JWTs and
+    // would 403 the device token before the handler runs, so we OVERRIDE it with
+    // HttpNoneAuthorizer and let the weekly handler verify the bearer token itself
+    // (rest/bearerAuth.ts: device token OR Cognito), still enforcing project
+    // ownership. This is what lets `/hq-weekly-update` publish from the PTY.
+    r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly', new HttpNoneAuthorizer());
+    r('/projects/{pid}/weekly/{week}', [M.GET, M.PUT], weeklyFn, 'WeeklyByWeek', new HttpNoneAuthorizer());
+    r('/projects/{pid}/weekly/{week}/publish', [M.POST], weeklyFn, 'WeeklyPublish', new HttpNoneAuthorizer());
 
     // ---- Device-auth (claude+ device-code login) ------------------------------
     // start/poll are PUBLIC: the CLI hits them before it has any token. They must
