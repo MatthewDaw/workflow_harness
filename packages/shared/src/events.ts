@@ -29,6 +29,10 @@ export const sessionRenameEventSchema = z.object({
   kind: z.literal('session.rename'),
   sessionId,
   name: z.string().min(1),
+  // The raw first prompt the user typed, carried by the UserPromptSubmit hook so
+  // the Sessions read model can show it. Optional for backward compatibility:
+  // manual renames and older daemons omit it.
+  summary: z.string().optional(),
 });
 
 export const userMsgEventSchema = z.object({

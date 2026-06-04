@@ -13,10 +13,12 @@ import (
 // local endpoint (the daemon socket). This gives low-latency lifecycle/status
 // signals without parsing the screen (KTD3 source 3).
 type HookEvent struct {
-	// HookEventName is one of PreToolUse | PostToolUse | Stop | Notification.
+	// HookEventName is one of PreToolUse | PostToolUse | Stop | Notification |
+	// UserPromptSubmit.
 	HookEventName string `json:"hook_event_name"`
 	SessionID     string `json:"session_id"`
 	Message       string `json:"message"` // Notification text
+	Prompt        string `json:"prompt"`  // UserPromptSubmit: the prompt the user typed
 }
 
 // settingsHook is the shape of one hook entry in settings.json.
@@ -58,7 +60,7 @@ func InstallHooks(hookCmd string) (string, error) {
 	managed := []settingsHook{{
 		Hooks: []settingsHookExec{{Type: "command", Command: hookCmd}},
 	}}
-	for _, evt := range []string{"PreToolUse", "PostToolUse", "Stop", "Notification"} {
+	for _, evt := range []string{"PreToolUse", "PostToolUse", "Stop", "Notification", "UserPromptSubmit"} {
 		hooks[evt] = mergeManaged(hooks[evt], managed, hookCmd)
 	}
 	settings["hooks"] = hooks

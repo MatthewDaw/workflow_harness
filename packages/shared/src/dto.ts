@@ -26,6 +26,8 @@ export const sessionProjectionSchema = z.object({
   sessionId: z.string().min(1),
   projectId: z.string().min(1),
   name: z.string().min(1),
+  /** The first prompt the user typed (from the UserPromptSubmit hook); shown in the Sessions list. */
+  summary: z.string().optional(),
   host: z.string().min(1),
   /** The claude+ instance hosting this session; used to route control frames. */
   instanceId: z.string().optional(),
