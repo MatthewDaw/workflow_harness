@@ -1,5 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import { stripFrontmatter } from '../lib/frontmatter.js';
 
 /**
@@ -8,10 +10,11 @@ import { stripFrontmatter } from '../lib/frontmatter.js';
  * requirements model — task lists (`- [x] done` / `- [ ] todo`), which we
  * render as ☑ / ☐ glyphs so a requirements doc reads like a checklist.
  *
- * Safety: react-markdown does NOT pass raw HTML through by default (we do not
- * enable `rehype-raw`), so embedded HTML in the source is rendered as inert
- * text. That keeps HQ-owned and repo-sourced markdown sanitized without an
- * extra sanitizer pass.
+ * Raw HTML: our converted `.html` docs have a body that is raw HTML (not
+ * markdown syntax), so we enable `rehype-raw` to parse embedded HTML and
+ * `rehype-sanitize` to strip scripts and event handlers. This gives us a single
+ * render path for both `.md` (markdown) and `.html` (raw HTML body) docs while
+ * preserving the existing safety posture — dangerous markup never executes.
  *
  * Repo-sourced docs (docs/PRD.md, docs/plans/**) lead with a `---` YAML
  * frontmatter block (`completion:`, `status:`, …) that is metadata, not prose —
@@ -22,6 +25,7 @@ export function MarkdownView({ markdown }: { markdown: string }) {
     <div className="hq-markdown" data-testid="markdown-view">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw, rehypeSanitize]}
         components={{
           // Render GFM task-list checkboxes as static glyphs (the underlying
           // <input type="checkbox"> is read-only/disabled by remark-gfm).

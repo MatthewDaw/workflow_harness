@@ -1,0 +1,202 @@
+---
+status: active
+type: feature
+created: 2026-06-02
+completion: 93
+feature: agentforge
+ground-truth: this doc (folds in the former docs/brainstorms/2026-06-02-forge-commands-requirements.md)
+origin: ../../ideation/2026-06-02-forge-agent-distillation.md
+---
+
+<h1>Feature 5 — AgentForge (capture a unit of work → distill a reusable agent)</h1>
+<p>Two bundled claude+ commands bracket a slice of work and distill it into a
+reusable agent — a short, focused prompt plus the minimal skills it needs —
+registered to Command HQ. <code>/hq-startforge</code> opens the boundary (lands current work to
+main, then branches a worktree); <code>/hq-endforge</code> closes it, distills the captured diff</p>
+<ul>
+<li>session into an agent, and registers it into the <strong>org catalog</strong> via the
+admin-gated agents/skills REST.</li>
+</ul>
+<blockquote>
+<p><strong>Model change (2026-06-03):</strong> with the <a href="../../superpowers/specs/2026-06-03-org-catalog-scope-collapse-design.md">org-catalog scope
+collapse</a>,
+skills and agents are a single <strong>org-scoped catalog</strong> (see
+<a href="./03-claude-code-integration.md">feature 3</a>). The older AgentForge design —
+register at the <em>author&#39;s own scope</em>, then a person <em>promotes</em> it org-wide via a
+scope-elevate control — is <strong>retired</strong>: the agents/skills REST now <strong>forces org
+scope</strong> and <strong>admin-gates</strong> every write (<code>rest/agents.ts</code> <code>createAgent</code>,
+<code>rest/skills.ts</code>), so a forged agent lands directly in the one org catalog and an
+admin enables it per project. There is no separate author-scope record and no
+scope-elevate promote step.</p>
+</blockquote>
+<h2>Problem frame</h2>
+<p>Good work done in one claude+ session is trapped there — the patterns, ordering,
+and skill choices that made a phase go well aren&#39;t reusable, so the next person
+solving a similar phase problem starts from scratch. claude+ already captures
+sessions and has an org-wide agent/skill registry (<code>wrapper/internal/config</code>), plus
+a read-side Forge concept that mines fuzzy history (<code>packages/backend/src/forge</code>).
+What&#39;s missing is a precise way to say &quot;<em>this</em> slice is worth keeping,&quot; capture it
+exactly, and turn it into a phase-specialist agent others can use. Today the cost
+is silent: hard-won approaches are re-derived across 175+ users instead of
+compounding.</p>
+<h2>Key decisions</h2>
+<ul>
+<li><strong>Distiller-first v1.</strong> v1 ships the <strong>capture → distill → register</strong> path
+end-to-end. The Claude Code optimize/refine loop (running candidate prompts in a
+worktree and scoring them) is <strong>deferred to the next increment</strong> so the capture +
+registration plumbing ships and proves out first.</li>
+<li><strong><code>/hq-startforge</code> lands current work to main, then branches.</strong> It commits + pushes
+the current branch&#39;s work to main for a clean baseline, then creates a fresh
+worktree + branch off main. If the work isn&#39;t cleanly landable, it <strong>aborts with a
+warning</strong> rather than forcing a messy land.</li>
+<li><strong>The quality gate is admin opt-in per project, not the CLI.</strong> <em>(Revised
+2026-06-03 — see the Model-change note.)</em> <code>/hq-endforge</code> registers the agent into
+the admin-gated <strong>org catalog</strong>; it is then enabled per project from a project&#39;s
+Agents tab (<code>screens/ProjectDetail/ProjectAgents.tsx</code>). The original author-scope +
+org-wide <em>promote</em> gate is retired with the scope collapse; the deliberate human
+step is now the per-project <strong>enable</strong>, not a scope elevation.</li>
+<li><strong><code>/hq-endforge</code> classifies but never silently blocks.</strong> It judges whether the diff
+is a coherent feature and warns (with reasons) when it looks incoherent, but the
+author can override and forge anyway.</li>
+<li><strong>Mint only the skills this agent needs.</strong> Reference existing skills where they
+match what was actually used; create the minimal new skills the agent requires and
+register those alongside it. No broad skill synthesis.</li>
+<li><strong>Optimize the combined prompt, split afterward</strong> <em>(applies once the optimizer
+lands)</em>. The distilled prompt may contain project-specifics; a post-step splits it
+into a reusable, project-agnostic agent prompt and a project-specific provenance
+doc.</li>
+</ul>
+<h2>Actors</h2>
+<ul>
+<li><strong>Forging user</strong> — runs <code>/hq-startforge</code> and <code>/hq-endforge</code>; reviews and confirms the
+forged agent before registration.</li>
+<li><strong>claude+ daemon / capture</strong> — records the session (transcript, skills used) and
+the diff between the start marker and <code>/hq-endforge</code>; the evidence the distiller uses.</li>
+<li><strong>Command HQ</strong> — the org catalog the agent + skills register into, and the web UI
+where agents are viewed and enabled per project.</li>
+<li><strong>Admin</strong> — the single admin who enables a forged agent on a project (the per-project
+opt-in that replaces the retired org-wide <em>promote</em>).</li>
+<li><strong>Consuming users</strong> — org members who receive an enabled agent via the existing
+config-sync drift/pull once it is turned on for their project.</li>
+</ul>
+<h2>Flows</h2>
+<ul>
+<li><strong>F1 — Start a forge.</strong> <code>/hq-startforge [what you&#39;re working on]</code> → land current work
+to main (commit + push); if not cleanly landable, <strong>abort with a warning and
+stop</strong>. Otherwise resolve a name (provided, or generated + user-confirmed), create
+a worktree + branch off main, and record the start marker (base commit).</li>
+<li><strong>F2 — Do the work.</strong> The user works in the forge branch; claude+ captures the
+session as it already does. No new user action.</li>
+<li><strong>F3 — End a forge.</strong> <code>/hq-endforge</code> → ask whether to generate a reusable agent (no →
+forge closes, no agent). If yes: classify coherence + warn if not (override
+allowed); distill a short focused prompt from the diff + session; curate the
+minimal skill set (reference existing, create needed-but-missing); show the drafted
+agent; on confirm, register the agent + any new skills into the org catalog (the
+REST forces org scope, admin-gated).</li>
+<li><strong>F4 — Enable per project.</strong> <em>(Revised 2026-06-03.)</em> An admin opens the forged
+agent in Command HQ and <strong>enables it on a project</strong> from that project&#39;s Agents tab
+(which unions its skills into the project&#39;s <code>enabledSkills</code>). Config-sync drift then
+makes it pullable by users on that project. The old org-wide scope-elevate <em>promote</em>
+is retired.</li>
+</ul>
+<h2>Requirements</h2>
+<p><strong>Capture &amp; boundary</strong></p>
+<ul>
+<li><strong>R1</strong> <code>/hq-startforge</code> accepts an optional description; when absent, it asks what the user is working on.</li>
+<li><strong>R2</strong> <code>/hq-startforge</code> names the forge: user-provided if given, else a generated name the user can accept or change.</li>
+<li><strong>R3</strong> <code>/hq-startforge</code> lands the current branch&#39;s work to main (commit + push) before creating the forge branch.</li>
+<li><strong>R4</strong> If the work can&#39;t be landed cleanly (conflicts / unrelated WIP), <code>/hq-startforge</code> aborts with an explanatory warning and makes no changes.</li>
+<li><strong>R5</strong> <code>/hq-startforge</code> creates a fresh worktree + branch off main and records the start marker for the end diff.</li>
+<li><strong>R6</strong> The evidence for distillation is the branch diff (start marker → <code>/hq-endforge</code>) plus the session claude+ already records; no new capture mechanism.</li>
+</ul>
+<p><strong>Distillation &amp; split</strong></p>
+<ul>
+<li><strong>R7</strong> <code>/hq-endforge</code> first asks whether to generate a reusable agent; &quot;no&quot; closes the forge without producing one.</li>
+<li><strong>R8</strong> When generating, <code>/hq-endforge</code> classifies whether the diff is a coherent feature and warns with reasons when it is not, but allows override.</li>
+<li><strong>R9</strong> <code>/hq-endforge</code> distills a short, focused prompt aimed at the phase problem; conciseness is for clarity, not a token-spend target.</li>
+<li><strong>R10</strong> The prompt encodes good working principles — foundation first, correct ordering, avoid known dead-ends — drawn partly from standing guidance and partly from the order actually followed in the captured session.</li>
+<li><strong>R11</strong> v1 registers the distilled prompt <strong>as-is</strong> (it may contain project-specifics), labeled &quot;not yet generalized&quot; in the registry. The project-agnostic split is <strong>deferred</strong> (see Deferred).</li>
+</ul>
+<p><strong>Skills</strong></p>
+<ul>
+<li><strong>R12</strong> The agent&#39;s skill set is curated, not searched: anchored on the skills actually used, kept minimal.</li>
+<li><strong>R13</strong> Where a needed capability matches an existing skill, the agent references it rather than duplicating it.</li>
+<li><strong>R14</strong> Where the agent needs a capability with no existing skill, <code>/hq-endforge</code> creates only that skill and registers it alongside the agent.</li>
+<li><strong>R15</strong> The registered agent references its skills as pointers; agent and skills are distinct registry records.</li>
+</ul>
+<p><strong>Registration &amp; HQ opt-in</strong> <em>(R17/R19/R20 revised 2026-06-03 for the org-catalog scope collapse — see the Model-change note)</em></p>
+<ul>
+<li><strong>R16</strong> <code>/hq-endforge</code> shows the drafted agent (prompt + curated skills) and registers only on the user&#39;s confirmation.</li>
+<li><strong>R17</strong> <code>/hq-endforge</code> registers the agent (and any new skills) into the <strong>org catalog</strong> via the agents/skills REST (server forces org scope, admin-gated). <em>(Originally: author&#39;s own scope.)</em></li>
+<li><strong>R18</strong> Registration completes such that the agent&#39;s skill pointers resolve (skills present before the agent is consumable).</li>
+<li><strong>R19</strong> Command HQ provides a control to view a catalog agent and <strong>enable it per project</strong> from the project&#39;s Agents tab. <em>(Originally: a scope-elevate &quot;promote to org&quot; control — retired.)</em></li>
+<li><strong>R20</strong> An enabled agent becomes available to users on that project through the existing config-sync drift/pull. <em>(Originally: a promoted agent reaching all org users.)</em></li>
+</ul>
+<h2>Acceptance examples</h2>
+<ul>
+<li><strong>AE1 (R3, R4)</strong> — uncommitted, conflicting WIP → <code>/hq-startforge</code> aborts with a warning and creates no branch/worktree.</li>
+<li><strong>AE2 (R7)</strong> — answering &quot;no&quot; at <code>/hq-endforge</code> registers no agent or skill.</li>
+<li><strong>AE3 (R8)</strong> — a diff of several unrelated changes → <code>/hq-endforge</code> warns it looks incoherent (with reasons) and still proceeds on override.</li>
+<li><strong>AE4 (R13, R14)</strong> — a session using one existing skill + one capability with no matching skill → the agent references the existing skill and one new skill is created and registered.</li>
+<li><strong>AE5 (R17, R19, R20)</strong> — a freshly forged agent lands in the org catalog but is not yet active on any project until an admin enables it from a project&#39;s Agents tab, after which users on that project pull it via config-sync.</li>
+</ul>
+<h2>Builds on existing code</h2>
+<ul>
+<li><strong>Distillation is client-side, no server pipeline.</strong> As built, the fuzzy read-side
+<code>packages/backend/src/forge/</code> backend (<code>embed.ts</code>/<code>propose.ts</code>/<code>search.ts</code>) and
+the OpenSearch <code>SearchStack</code> were <strong>removed</strong> — distillation runs inside the
+claude+ PTY on the user&#39;s own Claude subscription (<code>.claude/skills/endforge/</code>),
+not against a backend embeddings/search service. Registration reuses the existing
+agents/skills REST + scope model only.</li>
+<li><strong>Registry + sync</strong> <code>wrapper/internal/config/</code> — scoped (<code>org | user#uid | proj#pid</code>), content-hashed items, push/pull drift — carries registration and the
+promote-and-pull distribution.</li>
+<li><strong>Capture</strong> <code>wrapper/internal/capture/</code> — already records sessions + skills used,
+so the evidence is observable for free.</li>
+</ul>
+<h2>Deferred (later increments)</h2>
+<ul>
+<li><strong>The optimize/refine loop</strong> — run candidate prompts in a worktree, score for
+outcome + process quality, iterate (~3–5 times on the user&#39;s Claude subscription),
+plus the <strong>split pass</strong> (reusable prompt vs. project-specific provenance doc).
+<em>Partially landed:</em> an <code>/optimize-agent</code> skill (<code>.claude/skills/optimize-agent/</code>)
+now runs a client-side refine → self-judge → keep-best loop against an existing
+HQ agent and writes the improved prompt back via the agents REST. The
+capture-time split pass and an automated transfer-validation gate remain deferred.
+Rationale + 2026 research in the
+<a href="../../ideation/2026-06-02-forge-agent-distillation.md">ideation doc</a>.</li>
+<li>The &quot;try it out&quot; propagation / trainset loop; agent/skill versioning, hash-pinning,
+CI-on-skill-change, <code>AGENTS.md</code> export.</li>
+<li>The read-side Forge tab and its backend are <strong>removed</strong> (no <code>wrapper/internal/tui/</code>
+package, no <code>backend/src/forge/</code>), so only <code>/startforge</code>…<code>/endforge</code> is
+user-visible — already done, not a fast-follow.</li>
+</ul>
+<p><strong>Outside this v1&#39;s identity:</strong> token-spend / prompt-length optimization; search-based
+skill selection or broad skill synthesis beyond what the forged agent needs.</p>
+<h2>Open questions</h2>
+<ul>
+<li><strong>Resolved (2026-06-03):</strong> v1 runs with a <strong>single admin user</strong> who enables forged
+agents per project (the opt-in that replaced the retired org-wide promote);
+permissions/roles and a transfer-validation gate are out of scope for now.</li>
+<li><strong>During planning:</strong> exact start-marker shape + how <code>/hq-endforge</code> computes the diff;
+where the provenance doc is stored and how it links to the agent record; name/dedup
+when a forged agent collides with an existing one; abandoned-forge cleanup
+(worktree/branch left when <code>/hq-endforge</code> is never run).</li>
+<li><strong>[Deferred — 2026-06-03 review]</strong> Redact secrets (key/token patterns) from the
+diff + transcript before Claude Code distills them, so secrets can&#39;t land in a registered prompt.</li>
+<li><strong>Interaction states to define (design phase):</strong> <code>/hq-startforge</code> abort output (what
+the warning lists; partial-land handling) and the per-project enable control (what the
+admin sees before confirming).</li>
+</ul>
+<h2>Status</h2>
+<ul>
+<li><strong>Built:</strong> <code>/startforge</code> (land-to-main + worktree/branch + start marker) and
+<code>/endforge</code> (classify → distill → curate skills → register at author scope) under
+<code>.claude/skills/</code>; the single-admin <strong>promote</strong> path via the existing scope-elevate
+on the Agents screen; capture; the config-sync registry + org-wide drift/pull. An
+<code>/optimize-agent</code> skill ships a client-side prompt-refinement loop. The read-side
+fuzzy Forge backend + OpenSearch stack are removed.</li>
+<li><strong>Deferred:</strong> the capture-time optimize/refine + reusable/provenance split pass
+inside <code>/endforge</code>; an automated transfer-validation gate; secret redaction of the
+diff/transcript before distillation.</li>
+</ul>
+

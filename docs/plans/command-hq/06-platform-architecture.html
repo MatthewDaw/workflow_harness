@@ -1,0 +1,176 @@
+---
+status: active
+type: feature
+created: 2026-06-02
+completion: 91
+feature: platform-architecture
+note: Added beyond the user's five-feature list as the shared substrate. Fold/remove if undesired.
+---
+
+<h1>Platform &amp; Architecture (shared substrate — not a user-facing feature)</h1>
+<p>The foundation the five product features ride on. Not a user-facing feature, but
+without it none of the others have a home. The key technical decisions (KTD1–12),
+data model, and event schema below are the durable record — migrated here from the
+original build plan so this folder is self-contained.</p>
+<h2>Planes</h2>
+<ol>
+<li><strong>Capture/host</strong> — the <code>claude+</code> daemon (<a href="./04-claude-cli-wrapper.md">feature 4</a>).</li>
+<li><strong>Transport</strong> — outbound WebSocket from each daemon to the cloud; control
+frames back down (the <strong>control gateway</strong> that powers steering).</li>
+<li><strong>State</strong> — event store + projections (sessions, objectives roll-ups,
+weekly updates).</li>
+<li><strong>Presentation/control</strong> — Command HQ web + the wrapper&#39;s own tabs.</li>
+</ol>
+<h2>Stack</h2>
+<ul>
+<li><strong>AWS serverless:</strong> API Gateway <strong>HTTP API</strong> (REST) + <strong>WebSocket API</strong> (event
+ingest + live + control); <strong>Lambda</strong> (TypeScript); <strong>DynamoDB</strong> single-table
+with GSIs; <strong>DynamoDB Streams</strong> drive projections (session state, objective
+roll-ups).</li>
+<li><strong>Auth:</strong> <strong>Cognito</strong> for the web app (email/password self-signup <strong>disabled</strong>;
+accounts arrive via <strong>Google federated</strong> sign-in, auto-provisioned; a Cognito
+<strong>pre-token-generation Lambda</strong> defaults a missing <code>custom:org</code> to <code>personasearch</code>
+so a new account is authorized — <code>infra/lib/auth-stack.ts</code>); <strong>device tokens</strong> for
+the wrapper (<code>backend/src/auth/</code>). The API/WS JWT authorizer validates the ID token
+(audience = the app client id).</li>
+<li><strong>Forge vectors: removed.</strong> The OpenSearch Serverless <code>SearchStack</code> and the
+<code>backend/src/forge/</code> embeddings pipeline were dropped; AgentForge distills
+client-side (see <a href="./05-agentforge.md">feature 5</a>). No server-side embeddings.</li>
+<li><strong>GitHub App:</strong> <strong>read-only (<code>contents:read</code>)</strong> — reads requirement docs
+(<code>docs/plans/</code> tree + <code>completion:</code> frontmatter) and git history. HQ never writes
+to GitHub. <em>Code:</em> <code>backend/src/github/</code>.</li>
+<li><strong>Web:</strong> React + Vite + Tailwind SPA on S3 + CloudFront; <strong>RTK Query</strong> + a
+WebSocket middleware for live events.</li>
+<li><strong>IaC:</strong> CDK (<code>infra/</code>).</li>
+</ul>
+<h2>Key technical decisions (KTD1–12)</h2>
+<p>Migrated from the original build plan; the durable rationale for the stack.</p>
+<ol>
+<li><strong>Monorepo, npm workspaces, two languages.</strong> TS for <code>shared</code>/<code>backend</code>/<code>web</code>/<code>infra</code>; Go for <code>wrapper</code>. <code>packages/shared</code> is the single source of truth for the event schema + DTOs; the Go wrapper re-declares the envelope, kept in sync by a golden JSON fixture both sides test.</li>
+<li><strong>Daemon + thin attach client (tmux model).</strong> <code>claude+</code> spawns/attaches a per-repo background daemon over a local socket; sessions survive the terminal closing and are re-attachable on the same machine (single-laptop; no remote/SSH). (See <a href="./04-claude-cli-wrapper.md">feature 4</a>.)</li>
+<li><strong>Capture without screen-scraping.</strong> Three sources: PTY pass-through, tailing Claude Code&#39;s transcript JSONL, and <code>settings.json</code> hooks for lifecycle/status. Cost/tokens from the transcript.</li>
+<li><strong>Serverless backend.</strong> API GW HTTP API (REST) + WebSocket API (ingest + live + control); Lambda (TS); DynamoDB single-table + GSIs; Streams drive projections.</li>
+<li><strong>Auth.</strong> Cognito user pool for web; a device token (device-code flow, <code>claude+ login</code>) authorizes the daemon&#39;s outbound WS and scopes its data to that user. No inbound ports needed (the daemon dials out); the token carries a TTL + revoke + OS-keychain storage.</li>
+<li><strong>Control gateway over WebSocket.</strong> HQ steers a session by routing a control frame to the daemon&#39;s stored <code>connectionId</code> on its persistent <em>outbound</em> WS; ownership re-checked on every frame.</li>
+<li><strong>Forge semantic search (removed, not just deferred).</strong> Session-summary vector retrieval (OpenSearch k-NN / DynamoDB cosine) was dropped along with the <code>backend/src/forge/</code> pipeline and the <code>SearchStack</code>; AgentForge distills client-side from the working diff. No server-side embeddings.</li>
+<li><strong>Scope model.</strong> Three tiers <code>org</code> / <code>user#uid</code> / <code>proj#pid</code>; resolution composes all three, narrowest wins on name collision; elevate/demote rewrites the scope key. Objectives are org-global.</li>
+<li><strong>GitHub via a GitHub App.</strong> Reads requirement docs + git history (weekly &quot;done&quot;) + branch/PR state — <strong>read-only (<code>contents:read</code>), installed per-repo</strong>. HQ reads from GitHub and never writes; <code>/update-progress</code> pushes completion numbers from the client side.</li>
+<li><strong>Distribution.</strong> goreleaser cross-compile + an npm wrapper package (per-platform prebuilt binaries via <code>optionalDependencies</code>) + <code>curl | sh</code> (with a published <code>checksums.txt</code> + SHA-256 verification in the installer). PTY via <code>creack/pty</code>.</li>
+<li><strong>LLM-backed features run on the user&#39;s Claude subscription, client-side.</strong> AgentForge distill/optimize and the Weekly conformity score run inside the claude+ PTY via Claude Code; neither the Lambda backend nor the wrapper calls a hosted model or holds model keys. See <a href="./05-agentforge.md">feature 5</a>.</li>
+<li><strong>Frontend data layer.</strong> RTK Query against REST + a thin WebSocket middleware feeding live events into the store; Tailwind; wireframe markup promoted to components.</li>
+</ol>
+<h2>Data model (single-table, directional)</h2>
+<p>Single table <code>harness</code>, overloaded <code>PK</code>/<code>SK</code> + GSIs for cross-cutting queries.</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>PK</th>
+<th>SK</th>
+<th>Notes / GSI</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>User</td>
+<td><code>USER#&lt;uid&gt;</code></td>
+<td><code>PROFILE</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>Project (repo)</td>
+<td><code>PROJ#&lt;pid&gt;</code></td>
+<td><code>META</code></td>
+<td>GSI1 <code>USER#&lt;uid&gt;</code> → projects; META stores <code>enabledSkills</code>/<code>enabledAgents</code> (opt-in name lists, default <code>[]</code>)</td>
+</tr>
+<tr>
+<td>Instance (claude+)</td>
+<td><code>PROJ#&lt;pid&gt;</code></td>
+<td><code>INST#&lt;host&gt;</code></td>
+<td>live state, uptime, session count</td>
+</tr>
+<tr>
+<td>Session</td>
+<td><code>PROJ#&lt;pid&gt;</code></td>
+<td><code>SESS#&lt;sid&gt;</code></td>
+<td>GSI1 <code>live</code> status → cross-project live list</td>
+</tr>
+<tr>
+<td>Event (append-only)</td>
+<td><code>SESS#&lt;sid&gt;</code></td>
+<td><code>EVT#&lt;ts&gt;#&lt;seq&gt;</code></td>
+<td>TTL on old raw events optional</td>
+</tr>
+<tr>
+<td>Agent</td>
+<td><code>SCOPE#org#&lt;org&gt;</code></td>
+<td><code>AGENT#&lt;name&gt;</code></td>
+<td>org catalog only (no user/proj tiers); <code>createdBy {userId,name}</code>; keeps <code>skills[]</code></td>
+</tr>
+<tr>
+<td>Skill / Bundle</td>
+<td><code>SCOPE#org#&lt;org&gt;</code></td>
+<td><code>SKILL#&lt;name&gt;</code></td>
+<td>org catalog only (no user/proj tiers); <code>createdBy {userId,name}</code>; bundle holds member refs; nestable</td>
+</tr>
+<tr>
+<td>Objective node</td>
+<td><code>ORG#&lt;org&gt;</code></td>
+<td><code>RCDO#&lt;path&gt;</code></td>
+<td>tree path; roll-up % cached</td>
+</tr>
+<tr>
+<td>Weekly update</td>
+<td><code>PROJ#&lt;pid&gt;</code></td>
+<td><code>WEEK#&lt;isoweek&gt;</code></td>
+<td>client-posted report: <code>done</code> summary + <code>plan</code> + <code>conformityScore</code> (no ticket alignment)</td>
+</tr>
+</tbody></table>
+<p>The Project record additionally stores <code>progressPct</code> + <code>prdGoal</code> +
+<code>supportingOutcomeIds</code> (from the GitHub <code>completion:</code> read) with
+<code>framingReadAt</code>/<code>framingStale</code> for last-known-on-failure.</p>
+<p><em>Code:</em> <code>backend/src/db/keys.ts</code>, <code>db/repo.ts</code>; contracts in <code>packages/shared/src/</code>.
+Event records hold tool args + message content; at single-user scope, secrets-
+redaction-on-capture and a mandatory event TTL are deferred hardening.</p>
+<p><code>resolveScoped</code>/<code>isVisible</code> (<code>packages/shared/src/scope.ts</code>) are <strong>retained only</strong>
+for non-catalog entities and the wrapper golden fixture — skills/agents no longer
+use them (every record is org-scoped and listed directly by
+<code>scopePartition(orgScope(org))</code>).</p>
+<h2>Event schema (directional contract, shared package)</h2>
+<pre><code>Event =
+  | { kind: &quot;session.start&quot;, sessionId, projectId, host, agent?, name }
+  | { kind: &quot;session.rename&quot;, sessionId, name }            // auto-generated name
+  | { kind: &quot;user.msg&quot; | &quot;assistant.msg&quot;, sessionId, tokens }
+  | { kind: &quot;tool.call&quot;, sessionId, tool, args summary }
+  | { kind: &quot;tool.result&quot;, sessionId, ok, ms, summary }
+  | { kind: &quot;cost.tick&quot;, sessionId, deltaUsd, totalUsd, tokens }
+  | { kind: &quot;status.change&quot;, sessionId, from, to }          // active | needs_input | idle | done
+Envelope = { v, instanceId, host, ts, seq, event: Event }
+</code></pre>
+<h2>Monorepo layout</h2>
+<pre><code>packages/shared    # event schema, DTOs, zod, scope resolution (single source of truth)
+packages/backend   # TS Lambda handlers (REST + WS), DDB access layer
+packages/web       # React SPA (the HQ screens)
+infra              # CDK stacks
+wrapper            # Go: claude+ (daemon, attach, capture, config sync)
+npm/claude-plus    # npm distribution wrapper
+</code></pre>
+<h2>Deployed environment (prod)</h2>
+<p>Live and serving: API <code>https://l5edwucexb.execute-api.us-east-1.amazonaws.com</code>,
+WebSocket <code>wss://fgxq7ezbl1.execute-api.us-east-1.amazonaws.com/prod</code>, site
+<code>https://d13sqkbwzqe38l.cloudfront.net</code>, Cognito pool <code>us-east-1_HqxqXElfd</code>, org
+<code>personasearch</code>. CORS is pinned to the CloudFront origin (+ the local Vite dev
+origin), never <code>*</code> (<code>infra/lib/api-stack.ts</code>). The active CDK stacks are
+<code>AuthStack</code>, <code>ApiStack</code>, <code>SiteStack</code>; the <code>SearchStack</code> source file remains in
+<code>infra/lib/</code> but is <strong>excluded from the synth app</strong> (<code>infra/bin/infra.ts</code>) so a
+<code>cdk deploy --all</code> can&#39;t provision OpenSearch.</p>
+<h2>Status</h2>
+<ul>
+<li><strong>Built:</strong> shared contracts, DDB access layer, REST + WS handlers (including the
+control gateway, ticket subsystem <strong>removed</strong>), Cognito + Google-federation auth
+with the default-org Lambda, read-only GitHub integration (docs-tree +
+<code>completion:</code>), active CDK stacks, web data layer, the org-scope skill seed.</li>
+<li><strong>Open:</strong> end-to-end deploy hardening; Streams-driven projection coverage for the
+newer features (1, 2); the in-progress heartbeat/freshness for the live list (see
+the overview&#39;s &quot;In progress / next&quot;).</li>
+</ul>
+

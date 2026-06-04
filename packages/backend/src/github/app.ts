@@ -167,7 +167,7 @@ export class GitHubApp {
    * Outcomes). Returns undefined on 404 so callers treat it as absent.
    */
   async readPrdDoc(): Promise<string | undefined> {
-    return this.readFile('docs/PRD.md');
+    return (await this.readFile('docs/PRD.md')) ?? (await this.readFile('docs/PRD.html'));
   }
 
   /**
@@ -288,7 +288,7 @@ export class GitHubApp {
     const entries = await this.readTree(prefix, sha ?? 'HEAD');
     const docs: DocEntry[] = await Promise.all(
       entries
-        .filter((e) => e.path.endsWith('.md'))
+        .filter((e) => e.path.endsWith('.md') || e.path.endsWith('.html'))
         .map(async (e) => {
           const md = await this.readBlob(e.sha);
           return {
@@ -341,11 +341,19 @@ export class PublicGitHubReader extends GitHubApp {
   }
 }
 
-/** Derive a doc title: the leading `# ` heading (skipping frontmatter), else the basename. */
+/**
+ * Derive a doc title: the leading `# ` markdown heading (skipping frontmatter);
+ * else, for HTML bodies, the first `<h1>` inner text with tags stripped; else the
+ * basename.
+ */
 function docTitle(path: string, md: string | undefined): string {
   const base = path.split('/').pop() ?? path;
   if (!md) return base;
   const withoutFm = md.replace(/^﻿?---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, '');
   const heading = withoutFm.match(/^\s*#\s+(.+)$/m);
-  return heading?.[1]?.trim() || base;
+  if (heading?.[1]?.trim()) return heading[1].trim();
+  const h1 = withoutFm.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const h1Text = h1?.[1]?.replace(/<[^>]*>/g, '').trim();
+  if (h1Text) return h1Text;
+  return base;
 }

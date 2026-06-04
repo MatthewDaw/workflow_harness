@@ -124,6 +124,9 @@ export const skillSchema = z.object({
    * Never written by clients; present only on GET /skills responses.
    */
   resolvedMembers: z.array(z.string()).optional(),
+  /** Who created the catalog record (the seed stamps `system`; REST stamps the
+   * authenticated principal). Optional for legacy records written before it. */
+  createdBy: createdBySchema.optional(),
 });
 export type Skill = z.infer<typeof skillSchema>;
 

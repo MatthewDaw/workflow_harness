@@ -34,12 +34,27 @@ describe('MarkdownView (U9)', () => {
     expect(screen.getByRole('columnheader', { name: 'a' })).toBeInTheDocument();
   });
 
-  it('does not pass raw HTML through (sanitized)', () => {
+  it('renders a raw-HTML body (our converted .html docs)', () => {
+    render(<MarkdownView markdown={'<h2>Hello</h2><p>world</p>'} />);
+    expect(screen.getByRole('heading', { name: 'Hello' })).toBeInTheDocument();
+    expect(screen.getByText('world')).toBeInTheDocument();
+  });
+
+  it('strips frontmatter from an HTML-body doc', () => {
+    const { container } = render(
+      <MarkdownView markdown={'---\ncompletion: 5\n---\n<h2>Hi</h2>'} />,
+    );
+    expect(screen.getByRole('heading', { name: 'Hi' })).toBeInTheDocument();
+    expect(container.textContent ?? '').not.toContain('completion: 5');
+  });
+
+  it('sanitizes dangerous raw HTML (strips event handlers / scripts)', () => {
     const { container } = render(
       <MarkdownView markdown={'before <img src=x onerror="alert(1)"> after'} />,
     );
-    // Raw HTML is rendered as inert text, not as a live element.
-    expect(container.querySelector('img')).toBeNull();
+    // rehype-sanitize strips the event handler but keeps inert markup safe.
+    expect(container.querySelector('img')?.getAttribute('onerror')).toBeNull();
+    expect(container.querySelector('script')).toBeNull();
     expect(container.textContent).toContain('after');
   });
 });

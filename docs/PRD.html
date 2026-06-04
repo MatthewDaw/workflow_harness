@@ -1,0 +1,40 @@
+---
+completion: 88
+---
+
+<h1>Command HQ + claude+ — Project Requirements</h1>
+<p><strong>Product goal:</strong> Keep day-to-day agent work and company strategy in one
+continuously-synced system — every session a developer runs is captured, made
+visible, and reconciled against the company&#39;s objectives automatically, with
+completion that is verified from real code rather than self-reported.</p>
+<p>This document is the high-level <strong>Project Requirements</strong> for the product: the
+outcomes management expects, not how they are built. The detailed breakdown
+lives under <a href="./plans/command-hq-overview.md"><code>docs/plans/</code></a>; <code>st6_prd.md</code> is the
+inspiration this product builds on natively.</p>
+<h2>Required outcomes</h2>
+<ul>
+<li><p><strong>Plan mapping.</strong> Every repo&#39;s work ladders up from a company objective to a
+repo-level goal to a detailed requirements breakdown. Progress against those
+requirements is audited from the actual code and surfaced as a live completion
+number — not entered by hand. Completion is verifiable, not self-reported.</p>
+</li>
+<li><p><strong>Weekly plan.</strong> A developer can produce a weekly update that pairs &quot;what
+actually got done&quot; (derived from git history) with &quot;what&#39;s next,&quot; and have
+next week&#39;s commitments checked for alignment against the company&#39;s fixed
+objectives — visible to managers, never blocking the developer.</p>
+</li>
+<li><p><strong>Claude Code integration.</strong> A single organization-wide catalog of agents and
+skills, with each project opting in to the ones it wants. Live sessions are
+watchable and steerable as they run, so work in progress is observable across
+the company in real time.</p>
+</li>
+<li><p><strong>Claude CLI wrapper.</strong> <code>claude+</code> hosts the real <code>claude</code> CLI as a persistent
+per-repo daemon that survives terminal close, captures every session, and
+streams it to the cloud — without polluting the developer&#39;s personal Claude
+configuration.</p>
+</li>
+<li><p><strong>AgentForge.</strong> A developer can mark a slice of work, capture it, and distill
+it into a reusable, organization-wide agent, so proven workflows become shared
+capability instead of one-off effort.</p>
+</li>
+</ul>

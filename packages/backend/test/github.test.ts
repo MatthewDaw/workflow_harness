@@ -239,6 +239,30 @@ describe('app: docs/plans tree + content + cache (U8)', () => {
     expect(docs[1].completion).toBeUndefined();
   });
 
+  it('includes an .html doc, deriving its title from <h1> and completion from frontmatter', async () => {
+    const DOC_C =
+      '---\ncompletion: 73\n---\n<html><body><h1>Gamma <em>plan</em></h1><p>body</p></body></html>';
+    const fetch: FetchLike = async (url): Promise<FetchResponse> => {
+      if (url.includes('/access_tokens')) return resp(201, { token: 't' });
+      if (url.includes('/commits?per_page=1')) return resp(200, [{ sha: 'sha-1' }]);
+      if (url.includes('/git/trees/'))
+        return resp(200, {
+          tree: [
+            { path: 'docs/plans/a.md', type: 'blob', sha: 'blob-a' },
+            { path: 'docs/plans/c.html', type: 'blob', sha: 'blob-c' },
+          ],
+        });
+      if (url.endsWith('/git/blobs/blob-a'))
+        return resp(200, { encoding: 'base64', content: Buffer.from(DOC_A).toString('base64') });
+      if (url.endsWith('/git/blobs/blob-c'))
+        return resp(200, { encoding: 'base64', content: Buffer.from(DOC_C).toString('base64') });
+      return resp(404, {});
+    };
+    const docs = await makeApp(fetch).listDocs();
+    expect(docs.map((d) => d.path)).toEqual(['docs/plans/a.md', 'docs/plans/c.html']);
+    expect(docs[1]).toMatchObject({ title: 'Gamma plan', completion: 73 });
+  });
+
   it('serves a second call from cache without re-fetching blobs (rate-limit-safe)', async () => {
     const { calls, fetch } = docsFetch();
     const app = makeApp(fetch);
@@ -389,6 +413,22 @@ describe('app: docs/plans tree + content + cache (U8)', () => {
       return resp(404, {});
     };
     expect(await makeApp(fetch).readPrdDoc()).toContain('# Project Requirements');
+  });
+
+  it('falls back to docs/PRD.html when docs/PRD.md is 404', async () => {
+    const fetch: FetchLike = async (url) => {
+      if (url.includes('/access_tokens')) return resp(201, { token: 't' });
+      if (url.includes('/contents/docs/PRD.md')) return resp(404, { message: 'Not Found' });
+      if (url.includes('/contents/docs/PRD.html'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from('---\ncompletion: 31\n---\n<h1>Project Requirements</h1>').toString(
+            'base64',
+          ),
+        });
+      return resp(404, {});
+    };
+    expect(await makeApp(fetch).readPrdDoc()).toContain('<h1>Project Requirements</h1>');
   });
 });
 
