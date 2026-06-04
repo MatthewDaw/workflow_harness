@@ -1,15 +1,15 @@
 ---
-name: create-hq-skill
+name: hq-create-hq-skill
 description: >-
   Scaffold a new Command HQ skill: create a `.claude/skills/<name>/SKILL.md` with
   valid frontmatter (name + description), explain how it gets registered/seeded
   into Command HQ (the org-scope `command-hq-starter` bundle via the seed path),
   and how to add it to a bundle in the HQ Skills tab. Use when the user says
-  "/create-hq-skill", "create a new HQ skill", "scaffold a skill", "add a Command
+  "/hq-create-hq-skill", "create a new HQ skill", "scaffold a skill", "add a Command
   HQ skill", or "make a new bundled skill".
 ---
 
-# /create-hq-skill
+# /hq-create-hq-skill
 
 Authoring helper for **Command HQ skills**. A Command HQ skill is just a
 `.claude/skills/<name>/SKILL.md` file in the repo: HQ's seed reads that directory

@@ -1,5 +1,5 @@
 ---
-name: endforge
+name: hq-endforge
 description: >-
   Close an AgentForge capture boundary inside the claude+ PTY. It asks whether
   to generate a reusable agent; if yes it classifies whether the captured diff
@@ -8,11 +8,11 @@ description: >-
   minimal skill set (references existing skills, mints only missing ones), shows
   the draft, and on confirmation registers the agent + new skills to Command HQ
   at the AUTHOR's own scope. A single admin later promotes it org-wide in HQ.
-  Pair with /startforge. Use when the user says "/endforge", "end the forge",
+  Pair with /hq-startforge. Use when the user says "/hq-endforge", "end the forge",
   "distill this into an agent", or "register the forged agent".
 ---
 
-# /endforge
+# /hq-endforge
 
 The second half of the AgentForge v1 command pair (distiller-first). It turns
 the captured slice into a reusable agent — a short, focused prompt plus the
@@ -32,7 +32,7 @@ Reuse the existing **contract shape** (not any server-side drafter):
 
 - **The proposal shape** `AgentProposal` (`packages/shared/src/dto.ts`):
   `{ name, model, prompt, skills[], tools[], lowConfidence[], evidence[],
-  insufficientHistory }`. `/endforge` produces a proposal in this shape from the
+  insufficientHistory }`. `/hq-endforge` produces a proposal in this shape from the
   captured slice (the evidence here is the branch diff + this session, not
   k-NN-mined history).
 - Rank the skills/tools actually used in the captured session by frequency and
@@ -42,12 +42,12 @@ Reuse the existing **contract shape** (not any server-side drafter):
 v1 is **distiller-first**: the optimize/refine loop and the reusable/provenance
 split are **DEFERRED** (05-agentforge.md "Deferred"). The fuzzy read-side Forge
 surface is hidden in v1 (no `rest/forge.ts` route; the read-side tab is
-hidden) — only `/startforge`…`/endforge` is user-visible.
+hidden) — only `/hq-startforge`…`/hq-endforge` is user-visible.
 
 ## Steps (F3 in 05-agentforge.md; R7–R18)
 
 1. **Read the start marker.** Load `.claude/forge/<name>.json` written by
-   `/startforge`; the slice is `baseCommit..HEAD` plus the session claude+
+   `/hq-startforge`; the slice is `baseCommit..HEAD` plus the session claude+
    captured (transcript + skills used) (R6).
 2. **Ask whether to forge (R7).** "Generate a reusable agent from this slice?"
    If **no**, close the forge cleanly and register nothing — done (AE2).
@@ -89,7 +89,7 @@ The forge boundary is now closed; the agent exists at the author's scope only.
 
 ## Promote org-wide (F4 — a separate human step, R19/R20)
 
-`/endforge` never publishes org-wide. A **single admin** (v1 = one admin user =
+`/hq-endforge` never publishes org-wide. A **single admin** (v1 = one admin user =
 the promoter) opens the forged agent in Command HQ, reviews prompt + skills, and
 flips it to org scope via the existing scope-elevate path:
 
@@ -104,10 +104,10 @@ pointers resolve org-wide (`POST /skills/:name/scope`).
 
 ## Worked dry-run example (against THIS repo)
 
-Following the `/startforge` example (`skill-authoring-flow`):
+Following the `/hq-startforge` example (`skill-authoring-flow`):
 
 ```
-/endforge
+/hq-endforge
 ```
 
 1. Reads `.claude/forge/skill-authoring-flow.json`; diff = the four new

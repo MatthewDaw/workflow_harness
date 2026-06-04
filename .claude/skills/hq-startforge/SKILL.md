@@ -1,34 +1,34 @@
 ---
-name: startforge
+name: hq-startforge
 description: >-
   Open an AgentForge capture boundary inside the claude+ PTY. It lands the
   current branch's work to main (commit + push) for a clean baseline, then
   creates a fresh worktree + branch off main and records the start marker (base
-  commit) that /endforge will diff against. If the work can't be landed cleanly
+  commit) that /hq-endforge will diff against. If the work can't be landed cleanly
   it ABORTS with an explanatory warning and makes no changes. Pair with
-  /endforge. Use when the user says "/startforge", "start a forge", "begin
+  /hq-endforge. Use when the user says "/hq-startforge", "start a forge", "begin
   capturing this work", or "mark this slice for an agent".
 ---
 
-# /startforge
+# /hq-startforge
 
 The first half of the AgentForge v1 command pair (distiller-first, per
 `docs/plans/command-hq/05-agentforge.md`). It brackets a slice of work so
-`/endforge` can distill it into a reusable agent. This half only opens the
+`/hq-endforge` can distill it into a reusable agent. This half only opens the
 boundary; it never drafts or registers anything.
 
 ## When this runs
 
 In the developer's claude+ session, inside a connected git repo. It shells out
 to `git` (and `gh` if push needs auth). claude+ already captures the session
-(transcript + skills used) — `/startforge` adds no new capture mechanism; it
+(transcript + skills used) — `/hq-startforge` adds no new capture mechanism; it
 just records where the slice begins.
 
 ## Steps (F1 in 05-agentforge.md; R1–R6)
 
-1. **Description (R1).** Accept `/startforge [what you're working on]`. If
+1. **Description (R1).** Accept `/hq-startforge [what you're working on]`. If
    absent, ask the user what they're about to work on. Keep the answer as the
-   forge's working description (feeds `/endforge`'s distillation).
+   forge's working description (feeds `/hq-endforge`'s distillation).
 2. **Name (R2).** Use a user-provided name if given; otherwise generate a slug
    from the description and ask the user to accept or change it.
 3. **Land current work to main (R3).** Commit any pending work on the current
@@ -48,14 +48,14 @@ just records where the slice begins.
    tip the branch forked from) plus the description + name as the forge's start
    marker — written to a small local marker file in the worktree (e.g.
    `.claude/forge/<name>.json`: `{ name, description, baseСommit, startedAt }`).
-   `/endforge` reads this to compute the diff `baseCommit..HEAD`.
+   `/hq-endforge` reads this to compute the diff `baseCommit..HEAD`.
 
 The user then does the work in the forge worktree (F2 — no new action).
 
 ## Worked dry-run example (against THIS repo)
 
 ```
-/startforge "skill-authoring flow: write SKILL.md files for client commands"
+/hq-startforge "skill-authoring flow: write SKILL.md files for client commands"
 ```
 
 1. Description captured; name generated → `skill-authoring-flow`, user accepts.
@@ -67,7 +67,7 @@ The user then does the work in the forge worktree (F2 — no new action).
 4. `git worktree add ../forge-skill-authoring-flow -b forge/skill-authoring-flow main`.
 5. Writes `.claude/forge/skill-authoring-flow.json` with the base commit SHA.
 6. Prints: "Forge 'skill-authoring-flow' open. Base <sha>. Work in
-   ../forge-skill-authoring-flow, then run /endforge."
+   ../forge-skill-authoring-flow, then run /hq-endforge."
 
 ## Verification (this is a doc, not code)
 

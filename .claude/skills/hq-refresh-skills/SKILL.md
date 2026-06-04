@@ -1,16 +1,16 @@
 ---
-name: refresh-skills
+name: hq-refresh-skills
 description: >-
   Refresh this machine's local skills from Command HQ — pull down any skills that
   changed or were newly published in HQ into the isolated ~/.claude+ registry, so
   the claude+ session picks them up without restarting. Pull-focused: it checks HQ
   for drift and materializes the latest, leaving your personal ~/.claude
-  untouched. Use when the user says "/refresh-skills", "refresh my skills",
+  untouched. Use when the user says "/hq-refresh-skills", "refresh my skills",
   "pull the latest skills from HQ", "did any skills change in command hq", or
   after an admin publishes/updates a skill or bundle.
 ---
 
-# /refresh-skills
+# /hq-refresh-skills
 
 Pull the latest skills from Command HQ into this machine. Runs in the developer's
 claude+ session.
@@ -43,10 +43,10 @@ pulled skill is usable on the next turn (claude+ reads skills from `~/.claude+`)
 - A `differs` item (edited both locally and in HQ) is reported, not overwritten —
   surface it to the user; delete the local copy and re-run to adopt HQ's version.
 
-## Relation to /update-skills
+## Relation to /hq-update-skills
 
-`/update-skills` does the **bidirectional** reconcile (pulls HQ changes AND pushes
-your local-only skills up to your user scope). `/refresh-skills` is the
+`/hq-update-skills` does the **bidirectional** reconcile (pulls HQ changes AND pushes
+your local-only skills up to your user scope). `/hq-refresh-skills` is the
 **pull-only** framing — "just get me HQ's latest" — for when you don't want to
 publish anything, only consume updates. Both use `claude+ sync-skills` under the
 hood; the pushes are a no-op when you have nothing local-only.

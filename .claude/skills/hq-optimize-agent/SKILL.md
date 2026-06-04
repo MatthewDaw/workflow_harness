@@ -1,5 +1,5 @@
 ---
-name: optimize-agent
+name: hq-optimize-agent
 description: >-
   Run inside the claude+ PTY to refine an existing agent's system prompt using
   Claude Code itself — no external model API, no Bedrock; it runs on the
@@ -8,11 +8,11 @@ description: >-
   groundedness, coverage, actionability), optionally in a fresh git worktree,
   shows the trajectory + best prompt, and on confirmation writes the improved
   prompt back to HQ via the existing agents REST at the agent's own scope. Use
-  when the user says "/optimize-agent", "optimize an agent", "refine this
+  when the user says "/hq-optimize-agent", "optimize an agent", "refine this
   agent's prompt", or "tighten my agent prompt".
 ---
 
-# /optimize-agent
+# /hq-optimize-agent
 
 The client-side replacement for the (removed) server-side AgentForge prompt
 optimizer. Where the old path ran a Bedrock-backed generate/judge loop inside a
@@ -104,7 +104,7 @@ seen.
 ## Worked dry-run example (against THIS repo)
 
 ```
-/optimize-agent builder --scope user:matt
+/hq-optimize-agent builder --scope user:matt
 ```
 
 1. `GET /agents/builder?tier=user&id=matt` → prompt "do stuff", skills

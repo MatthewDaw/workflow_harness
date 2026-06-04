@@ -1,16 +1,16 @@
 ---
-name: update-skills
+name: hq-update-skills
 description: >-
   Run inside the claude+ PTY to refresh the locally-available skills from Command
   HQ. It performs a one-shot reconcile of HQ's effective (org + user + project)
   skill/agent registry into the isolated ~/.claude+ config root claude+ launches
   Claude against — pulling newly-published bundled skills and pushing your local
   ones — without ever touching your personal ~/.claude. Use when the user says
-  "/update-skills", "update my skills", "sync skills", "pull the latest skills",
+  "/hq-update-skills", "update my skills", "sync skills", "pull the latest skills",
   or after an admin publishes a new skill bundle in HQ.
 ---
 
-# /update-skills
+# /hq-update-skills
 
 On-demand refresh of the skills claude+ makes available to Claude. claude+
 already auto-syncs once per new session; this skill forces that refresh now, so a

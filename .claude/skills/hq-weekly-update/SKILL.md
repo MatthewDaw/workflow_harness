@@ -1,5 +1,5 @@
 ---
-name: weekly-update
+name: hq-weekly-update
 description: >-
   Run inside the claude+ PTY to generate and publish a weekly update. It reads
   the full git diff from today back 7 days as the "done" actuals, interviews the
@@ -7,11 +7,11 @@ description: >-
   score (how well the stated goals ladder up to the repo's fixed high-level
   goals), assembles a two-part report (done + plan), and POSTs it to Command
   HQ's weekly REST endpoint. It never blocks publish. Use when the user says
-  "/weekly-update", "weekly update", "do my weekly", "weekly report", or asks to
+  "/hq-weekly-update", "weekly update", "do my weekly", "weekly report", or asks to
   reconcile last week and plan next week.
 ---
 
-# /weekly-update
+# /hq-weekly-update
 
 Client-side weekly lifecycle (the st6 weekly, native + automated). The skill
 generates the report in the developer's session and POSTs it to HQ; HQ
@@ -83,7 +83,7 @@ Request body (JSON) the skill sends and the backend must validate + store:
   // next-week goals. Each item is free text; objectiveId is optional and links
   // the item to the Supporting Outcome it advances.
   "plan": [
-    { "text": "Wire prod-E2E gate into /update-progress", "objectiveId": "so-123" },
+    { "text": "Wire prod-E2E gate into /hq-update-progress", "objectiveId": "so-123" },
     { "text": "Promote forged agent org-wide", "objectiveId": null }
   ],
 
@@ -112,12 +112,12 @@ them, as it does today). The response echoes the stored `update`.
 ## Worked dry-run example (against THIS repo)
 
 ```
-/weekly-update
+/hq-weekly-update
 ```
 
 1. Window: 2026-05-27 → 2026-06-03; ISO week `2026-W23`.
-2. From git: "Authored the four client skills (/update-progress, /weekly-update,
-   /startforge, /endforge); began the de-ticket migration units."
+2. From git: "Authored the four client skills (/hq-update-progress, /hq-weekly-update,
+   /hq-startforge, /hq-endforge); began the de-ticket migration units."
 3. Interview → plan:
    - "Wire the prod-E2E Definition-of-Done gate" (objectiveId: the progress SO)
    - "Refactor the Saturday side project" (no objectiveId)

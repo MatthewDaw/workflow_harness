@@ -1,16 +1,16 @@
 ---
-name: add-skill
+name: hq-add-skill
 description: >-
   Add one skill or a whole bundle of skills to Command HQ from inside the claude+
   PTY. Reads the prompt to decide single-skill vs bundle, scaffolds each
   `.claude/skills/<name>/SKILL.md`, then registers them in Command HQ at the scope
   you choose — project, user (your global), or org (global / everyone). Use when
-  the user says "/add-skill", "add a skill", "add a bundle of skills", "register
+  the user says "/hq-add-skill", "add a skill", "add a bundle of skills", "register
   a skill in HQ", "add these skills at user/project/global scope", or "put this
   skill in command-hq-starter".
 ---
 
-# /add-skill
+# /hq-add-skill
 
 Author and register Command HQ skills — a single one or a whole bundle — and set
 their scope. Runs in the developer's claude+ session, inside a connected repo.
@@ -100,7 +100,7 @@ Pick the path that matches the scope:
   scope the caller must be an admin (`canWriteScope` gates it).
 
 - **Quick local-to-HQ for user scope:** `claude+ sync-skills` (a.k.a.
-  `/update-skills`) pushes any local-only `.claude/skills/*` up to **user** scope
+  `/hq-update-skills`) pushes any local-only `.claude/skills/*` up to **user** scope
   and pulls HQ's set down. Use this when user scope is all you need and you don't
   want to hand-call the REST.
 
@@ -113,7 +113,7 @@ bundle's drill-in view or the `/members` endpoints above.
 
 ## 6 · Make it available in this session
 
-Run `claude+ sync-skills` (or `/update-skills`) to pull the newly-registered
+Run `claude+ sync-skills` (or `/hq-update-skills`) to pull the newly-registered
 skill(s) into the isolated `~/.claude+` registry so they're usable now. Writes go
 to `~/.claude+`, never your personal `~/.claude`.
 
@@ -123,5 +123,5 @@ to `~/.claude+`, never your personal `~/.claude`.
   bundle, adding a `.claude/skills/<name>/` file is all that's needed — the seed
   picks it up. For user/project bundles, membership is the `members` array on the
   bundle record (REST or Skills tab).
-- This is the multi-skill / scope-aware companion to `/create-hq-skill` (which
+- This is the multi-skill / scope-aware companion to `/hq-create-hq-skill` (which
   scaffolds a single skill). Both ride the same seed + REST registration paths.

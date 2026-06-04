@@ -1,5 +1,5 @@
 ---
-name: init-command-hq
+name: hq-init-command-hq
 description: >-
   Run inside the claude+ PTY to scaffold the GitHub-side files Command HQ reads
   for a project: the high-level `PRD.md` (Project Overview goal + Supporting
@@ -9,11 +9,11 @@ description: >-
   where they are missing — it never overwrites existing content — then commits
   and pushes them with the developer's own git/gh so a freshly connected repo
   stops showing the "needs files" / 0% empty state. Use when the user says
-  "/init-command-hq", "init command hq", "scaffold the HQ files", "set up
+  "/hq-init-command-hq", "init command hq", "scaffold the HQ files", "set up
   PRD.md", or connects a repo that has no PRD/plan docs yet.
 ---
 
-# /init-command-hq
+# /hq-init-command-hq
 
 Bootstrapper for the **GitHub side** of a Command HQ project. HQ reads a repo
 through a read-only GitHub App; if the files it expects are absent, the Project
@@ -92,7 +92,7 @@ it tells the user to fill that in inside Command HQ.
    - [ ] <first requirement>
    ```
 
-   (`completion: 0` is the placeholder; `/update-progress` overwrites it with the
+   (`completion: 0` is the placeholder; `/hq-update-progress` overwrites it with the
    computed number on later runs.)
 
 4. **Scaffold `PROGRESS.md`** (repo root) **only if missing** — the legacy
@@ -106,7 +106,7 @@ it tells the user to fill that in inside Command HQ.
 
 5. **Report what was created vs. skipped**, then **commit + push.** Stage only
    the files this skill created. Commit with a message like
-   `chore(hq): scaffold Command HQ project files via /init-command-hq` (include
+   `chore(hq): scaffold Command HQ project files via /hq-init-command-hq` (include
    the repo's Co-Authored-By trailer). Push to the current branch's upstream with
    `git push` (use `gh` only if auth/PR is needed). Never use the GitHub Contents
    API — push with the dev's own git so HQ's next read sees the new SHA.
@@ -126,7 +126,7 @@ frontmatter, and the three tabs leave their empty states. HQ never writes back.
 ## Worked example (against a fresh repo)
 
 ```
-/init-command-hq
+/hq-init-command-hq
 ```
 
 Expected behavior on a repo with no HQ files:
@@ -147,11 +147,11 @@ Expected behavior on a repo with no HQ files:
 
    Next:
      - Edit Project Requirements body in Command HQ (HQ-owned, not in the repo).
-     - Replace placeholder text, then run /update-progress for real numbers.
+     - Replace placeholder text, then run /hq-update-progress for real numbers.
    ```
 
 6. `git add PRD.md docs/plans/overview.md PROGRESS.md && git commit -m "chore(hq):
-   scaffold Command HQ project files via /init-command-hq" && git push`.
+   scaffold Command HQ project files via /hq-init-command-hq" && git push`.
 
 On a repo that already has, say, `PRD.md` and a `docs/plans/` tree, it reports
 `skipped PRD.md`, `skipped docs/plans/** (N docs present)`, and only creates the

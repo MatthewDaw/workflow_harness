@@ -1,5 +1,5 @@
 ---
-name: update-progress
+name: hq-update-progress
 description: >-
   Run inside the claude+ PTY to audit a repo against its docs/plans/
   requirements, compute a code-vs-docs completion percentage per plan doc, write
@@ -7,12 +7,12 @@ description: >-
   GitHub with the developer's own git/gh credentials, and emit a compliance
   report. Command HQ then READS the pushed number to move the Project
   Requirements + Detailed Requirements bars — HQ never writes to GitHub. Use
-  when the user says "/update-progress", "update progress", "recompute
+  when the user says "/hq-update-progress", "update progress", "recompute
   completion", "push progress to HQ", or asks to reconcile what's built against
   the requirements docs.
 ---
 
-# /update-progress
+# /hq-update-progress
 
 Client-side progress auditor. It is the writer in a read-only-HQ world: **the
 `completion:` number in each GitHub `.md` is the single source of truth for the
@@ -86,7 +86,7 @@ pulls."
    frontmatter keys and the doc body byte-for-byte. If a doc has no frontmatter
    block, add a minimal one (`---\ncompletion: N\n---`).
 7. **Commit + push.** Stage only the changed `docs/plans/**` files. Commit with
-   a message like `chore(progress): update completion via /update-progress`
+   a message like `chore(progress): update completion via /hq-update-progress`
    (include the Co-Authored-By trailer the repo uses). Push to the current
    branch's upstream with `git push` (use `gh` only if auth/PR is needed). Never
    call the GitHub Contents API to write — push with the dev's own git, so HQ's
@@ -124,7 +124,7 @@ back.
 Run from the repo root in claude+:
 
 ```
-/update-progress
+/hq-update-progress
 ```
 
 Expected behavior on this repo's current tree:
@@ -135,13 +135,13 @@ Expected behavior on this repo's current tree:
    - `docs/plans/command-hq/02-weekly-update.md` (`completion: 45`)
    - `docs/plans/command-hq/05-agentforge.md` (`completion: 20`)
    - `docs/plans/2026-06-03-001-feat-command-hq-new-model-migration-plan.md`
-2. Audit `05-agentforge.md`: it lists `/startforge` and `/endforge` as
+2. Audit `05-agentforge.md`: it lists `/hq-startforge` and `/hq-endforge` as
    **Not built**. After this migration's skills land, the skill finds
-   `.claude/skills/startforge/SKILL.md` + `endforge/SKILL.md` present →
+   `.claude/skills/hq-startforge/SKILL.md` + `hq-endforge/SKILL.md` present →
    recomputes `05-agentforge.md` from `completion: 20` to, say, `completion: 30`
    (capture/register path documented; optimizer still deferred, fuzzy Forge
    still routed in backend).
-3. Audit `01-plan-mapping.md`: `/update-progress` itself now exists →
+3. Audit `01-plan-mapping.md`: `/hq-update-progress` itself now exists →
    nudges its number up; the prod-E2E hard gate is still deferred, so it stays
    well short of 100.
 4. Fetch the org DoD (`GET /dod`). Say it returns
@@ -150,7 +150,7 @@ Expected behavior on this repo's current tree:
    observed against the deployed env, so record it as unknown / not-yet-enforced.
 5. Edit those docs' `completion:` frontmatter in place.
 6. `git add docs/plans/... && git commit -m "chore(progress): update
-   completion via /update-progress" && git push`.
+   completion via /hq-update-progress" && git push`.
 7. Print a compliance report, e.g.:
 
    ```
@@ -166,8 +166,8 @@ Expected behavior on this repo's current tree:
    command-hq/01-plan-mapping.md      35  →   38     +3
    command-hq/02-weekly-update.md     45  →   45      0
 
-   Built:    /startforge, /endforge SKILL.md (.claude/skills/...)
-   Partial:  /update-progress (DoD prod-E2E hard gate — deferred)
+   Built:    /hq-startforge, /hq-endforge SKILL.md (.claude/skills/...)
+   Partial:  /hq-update-progress (DoD prod-E2E hard gate — deferred)
    Missing:  fuzzy-Forge retirement (rest still references forge/propose.ts)
 
    Drift (HQ Project Requirements vs GitHub docs):
