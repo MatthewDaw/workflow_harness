@@ -100,10 +100,96 @@ describe('live WS middleware', () => {
 
     await waitFor(() => expect(screen.getAllByTestId('live-event-row')).toHaveLength(2));
     const rows = screen.getAllByTestId('live-event-row');
-    expect(rows[0]).toHaveTextContent('→ grep foo');
+    // The tool.call row renders the tool name (header) AND its real input as a
+    // full-content body line below it.
+    expect(rows[0]).toHaveTextContent('→ grep');
+    expect(rows[0]).toHaveTextContent('foo');
     expect(rows[1]).toHaveTextContent('● active → needs_input');
     // Streaming caret shows while the session is active/needs_input with events.
     expect(screen.getByText(/▌ streaming/)).toBeInTheDocument();
+  });
+
+  it('renders FULL content: assistant/user text and tool result output bodies', async () => {
+    const { store } = renderWithProviders(<LiveWatch />, {
+      route: '/sessions/a91f',
+      routePath: '/sessions/:sessionId',
+      seed: { sessions: [SESSION] },
+    });
+    await waitFor(() => expect(screen.getByTestId('live-status')).toHaveTextContent('active'));
+
+    store.dispatch(
+      wsEvent({
+        v: 1,
+        instanceId: 'inst-0',
+        host: 'matt@mbp',
+        ts: 2000,
+        seq: 20,
+        event: { kind: 'user.msg', sessionId: 'a91f', tokens: 5, text: 'please run the build' },
+      }),
+    );
+    store.dispatch(
+      wsEvent({
+        v: 1,
+        instanceId: 'inst-0',
+        host: 'matt@mbp',
+        ts: 2001,
+        seq: 21,
+        event: {
+          kind: 'assistant.msg',
+          sessionId: 'a91f',
+          tokens: 9,
+          text: 'On it — running the build now.',
+        },
+      }),
+    );
+    store.dispatch(
+      wsEvent({
+        v: 1,
+        instanceId: 'inst-0',
+        host: 'matt@mbp',
+        ts: 2002,
+        seq: 22,
+        event: { kind: 'tool.result', sessionId: 'a91f', ok: true, ms: 120, summary: 'BUILD OK\n0 errors' },
+      }),
+    );
+
+    // The real conversation text + console output render as content bodies, not
+    // just token-count metadata.
+    await waitFor(() => expect(screen.getByText('please run the build')).toBeInTheDocument());
+    expect(screen.getByText('On it — running the build now.')).toBeInTheDocument();
+    expect(screen.getByText(/BUILD OK/)).toBeInTheDocument();
+  });
+
+  it('backfills stored history on open (no live events needed)', async () => {
+    // The fetch stub serves GET /sessions/:id as { session, events }; seed the
+    // events array so the backfill query returns history the feed renders.
+    const backfill: Envelope[] = [
+      {
+        v: 1,
+        instanceId: 'inst-0',
+        host: 'matt@mbp',
+        ts: 1500,
+        seq: 1,
+        event: { kind: 'user.msg', sessionId: 'a91f', tokens: 3, text: 'historical prompt' },
+      },
+      {
+        v: 1,
+        instanceId: 'inst-0',
+        host: 'matt@mbp',
+        ts: 1501,
+        seq: 2,
+        event: { kind: 'assistant.msg', sessionId: 'a91f', tokens: 4, text: 'historical reply' },
+      },
+    ];
+    renderWithProviders(<LiveWatch />, {
+      route: '/sessions/a91f',
+      routePath: '/sessions/:sessionId',
+      seed: { sessions: [SESSION], sessionEvents: { a91f: backfill } },
+    });
+
+    // The backfilled conversation appears WITHOUT any live WS event arriving.
+    await waitFor(() => expect(screen.getByText('historical prompt')).toBeInTheDocument());
+    expect(screen.getByText('historical reply')).toBeInTheDocument();
   });
 });
 

@@ -2,9 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import type { Envelope } from '@harness/shared';
-import { useGetSessionQuery, useSendControlMutation } from '../../api/baseApi.js';
+import {
+  useGetSessionQuery,
+  useGetSessionEventsQuery,
+  useSendControlMutation,
+} from '../../api/baseApi.js';
 import { wsSubscribe, wsUnsubscribe } from '../../ws/liveActions.js';
-import { selectSessionEvents } from '../../app/liveEventsSlice.js';
+import { selectSessionEvents, seedSessionEvents } from '../../app/liveEventsSlice.js';
 import type { RootState } from '../../app/store.js';
 import { useAuth } from '../../auth/AuthProvider.js';
 import { Bar, Pill, StatusDot, ScreenHeader } from '../../components/primitives.js';
@@ -16,24 +20,35 @@ function clock(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** Render one envelope's event as a compact one-line activity string. */
-function activityLine(env: Envelope): string | null {
+/**
+ * A rendered feed row: a compact header (who/what) plus an optional multi-line
+ * body carrying the REAL content — assistant/user text, tool call name+input,
+ * tool result output / console logs. The body is rendered monospace + pre-wrap
+ * so console output keeps its shape.
+ */
+interface FeedRow {
+  header: string;
+  body?: string;
+}
+
+/** Map one envelope's event to a feed row with full content. */
+function feedRow(env: Envelope): FeedRow | null {
   const e = env.event;
   switch (e.kind) {
     case 'tool.call':
-      return `→ ${e.tool}  ${e.argsSummary}`.trimEnd();
+      return { header: `→ ${e.tool}`, body: e.argsSummary || undefined };
     case 'tool.result':
-      return `${e.ok ? '✓' : '✗'} ${e.ms}ms  ${e.summary}`.trimEnd();
+      return { header: `${e.ok ? '✓' : '✗'} ${e.ms}ms`, body: e.summary || undefined };
     case 'user.msg':
-      return `▎ you · ${e.tokens} tok`;
+      return { header: `▎ you · ${e.tokens} tok`, body: e.text || undefined };
     case 'assistant.msg':
-      return `▎ claude · ${e.tokens} tok`;
+      return { header: `▎ claude · ${e.tokens} tok`, body: e.text || undefined };
     case 'cost.tick':
-      return `$ +${e.deltaUsd} (total ${e.totalUsd})`;
+      return { header: `$ +${e.deltaUsd} (total ${e.totalUsd})` };
     case 'status.change':
-      return `● ${e.from} → ${e.to}`;
+      return { header: `● ${e.from} → ${e.to}` };
     case 'session.rename':
-      return `✎ renamed → ${e.name}`;
+      return { header: `✎ renamed → ${e.name}` };
     case 'session.start':
     default:
       return null;
@@ -51,10 +66,25 @@ export function LiveWatch() {
   const dispatch = useDispatch();
   const { user } = useAuth();
   const { data: session, isLoading } = useGetSessionQuery(sessionId, { skip: !sessionId });
+  // Backfill the stored event history on open so the feed shows the full
+  // conversation immediately instead of "waiting for activity…". The live WS
+  // stream (below) appends everything thereafter; the slice merges both by seq.
+  const { data: backfill } = useGetSessionEventsQuery(
+    { id: sessionId, limit: 300 },
+    { skip: !sessionId },
+  );
   const [sendControl] = useSendControlMutation();
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState<string | null>(null);
   const events = useSelector((state: RootState) => selectSessionEvents(state, sessionId));
+
+  // Seed the backfilled page into the live slice once it arrives. Re-seeding is
+  // safe: the slice dedupes by seq, so live events already received are kept.
+  useEffect(() => {
+    if (sessionId && backfill && backfill.length > 0) {
+      dispatch(seedSessionEvents({ sessionId, events: backfill }));
+    }
+  }, [dispatch, sessionId, backfill]);
 
   // Auto-scroll the transcript to the newest event as the feed grows.
   const feedRef = useRef<HTMLDivElement>(null);
@@ -111,11 +141,21 @@ export function LiveWatch() {
               <div className="mt-2 whitespace-pre-wrap break-words">
                 {events.length === 0 && <div className="text-faint">waiting for activity…</div>}
                 {events.map((env) => {
-                  const line = activityLine(env);
-                  if (line === null) return null;
+                  const row = feedRow(env);
+                  if (row === null) return null;
                   return (
-                    <div key={env.seq} data-testid="live-event-row">
-                      <span className="text-faint">{clock(env.ts)}</span> {line}
+                    <div key={env.seq} data-testid="live-event-row" className="mb-1">
+                      <div>
+                        <span className="text-faint">{clock(env.ts)}</span> {row.header}
+                      </div>
+                      {row.body && (
+                        <div
+                          className="ml-[3ch] whitespace-pre-wrap break-words text-mut"
+                          data-testid="live-event-body"
+                        >
+                          {row.body}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
