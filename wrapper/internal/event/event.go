@@ -74,7 +74,7 @@ type Event struct {
 	Tool        string `json:"tool,omitempty"`
 	ArgsSummary string `json:"argsSummary,omitempty"`
 
-	// tool.result
+	// tool.result / session.rename
 	OK      *bool  `json:"ok,omitempty"`
 	Ms      *int64 `json:"ms,omitempty"`
 	Summary string `json:"summary,omitempty"`
@@ -121,6 +121,13 @@ func SessionStart(sessionID, projectID, host, name string, agent string, repo st
 // SessionRename builds a session.rename event.
 func SessionRename(sessionID, name string) Event {
 	return Event{Kind: KindSessionRename, SessionID: sessionID, Name: name}
+}
+
+// SessionRenameWithSummary builds a session.rename event that also carries the
+// first-prompt summary (the raw first prompt the user typed). The backend
+// projection folds summary into the session read model alongside the name.
+func SessionRenameWithSummary(sessionID, name, summary string) Event {
+	return Event{Kind: KindSessionRename, SessionID: sessionID, Name: name, Summary: summary}
 }
 
 // UserMsg builds a user.msg event.

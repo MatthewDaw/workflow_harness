@@ -88,6 +88,7 @@ export function applyEvent(
   switch (ev.kind) {
     case 'session.rename':
       next.name = ev.name;
+      if (ev.summary !== undefined) next.summary = ev.summary;
       break;
     case 'user.msg':
     case 'assistant.msg':

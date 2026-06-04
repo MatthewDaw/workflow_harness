@@ -42,6 +42,27 @@ describe('SessionsTable', () => {
     expect(screen.getByTestId('session-activity-a91f')).toHaveTextContent('3h ago');
   });
 
+  it('shows the session name and the first-prompt summary (truncated), with an em dash when absent', () => {
+    const longPrompt =
+      'fix the login bug in the cursor flow that breaks on the second attempt and more text';
+    renderWithProviders(
+      <SessionsTable
+        sessions={[
+          session({ sessionId: 'a91f', name: 'fix-login-cursor', summary: longPrompt }),
+          session({ sessionId: 'nosum', name: 'untitled', summary: undefined }),
+        ]}
+      />,
+    );
+    // name column still renders s.name under the existing testid.
+    expect(screen.getByTestId('session-name-a91f')).toHaveTextContent('fix-login-cursor');
+    // new first-prompt column renders the (truncated) summary with an ellipsis.
+    const summaryCell = screen.getByTestId('session-summary-a91f');
+    expect(summaryCell).toHaveTextContent('fix the login bug in the cursor flow');
+    expect(summaryCell.textContent?.endsWith('…')).toBe(true);
+    // missing summary falls back to an em dash.
+    expect(screen.getByTestId('session-summary-nosum')).toHaveTextContent('—');
+  });
+
   it('offers Shut down on live rows but not on done rows', () => {
     renderWithProviders(
       <SessionsTable

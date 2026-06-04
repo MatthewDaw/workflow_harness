@@ -5,6 +5,12 @@ import { StatusDot } from '../../components/primitives.js';
 import { useSendControlMutation } from '../../api/baseApi.js';
 import { relativeTime, useNow } from '../../lib/time.js';
 
+/** Truncate a first-prompt summary for table display; "—" when absent. */
+function truncate(text: string | undefined, max: number): string {
+  if (!text) return '—';
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 /** Sort live/needs_input first, then by most recent activity. */
 function sortLiveFirst(sessions: SessionProjection[]): SessionProjection[] {
   const rank: Record<string, number> = { needs_input: 0, active: 1, idle: 2, done: 3 };
@@ -30,7 +36,8 @@ export function SessionsTable({ sessions }: { sessions: SessionProjection[] }) {
           <th className="border-b border-line2 p-2 text-left">status</th>
           <th className="border-b border-line2 p-2 text-left">project</th>
           <th className="border-b border-line2 p-2 text-left">agent</th>
-          <th className="border-b border-line2 p-2 text-left">summary</th>
+          <th className="border-b border-line2 p-2 text-left">name</th>
+          <th className="border-b border-line2 p-2 text-left">first prompt</th>
           <th className="border-b border-line2 p-2 text-left">host</th>
           <th className="border-b border-line2 p-2 text-left">last activity</th>
           <th className="border-b border-line2 p-2 text-left">$</th>
@@ -76,6 +83,13 @@ function SessionRow({ session: s, now }: { session: SessionProjection; now: numb
       <td className="border-b border-line2 p-2">{s.agent ?? '—'}</td>
       <td className="border-b border-line2 p-2 text-mut" data-testid={`session-name-${s.sessionId}`}>
         {s.name}
+      </td>
+      <td
+        className="border-b border-line2 p-2 text-mut"
+        data-testid={`session-summary-${s.sessionId}`}
+        title={s.summary}
+      >
+        {truncate(s.summary, 60)}
       </td>
       <td className="border-b border-line2 p-2 font-mono text-faint">{s.host}</td>
       <td
