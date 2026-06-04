@@ -6,7 +6,9 @@ description: >-
   user on next-week goals, computes a never-blocking, manager-visible conformity
   score (how well the stated goals ladder up to the repo's fixed high-level
   goals), assembles a two-part report (done + plan), and POSTs it to Command
-  HQ's weekly REST endpoint. It never blocks publish. Use when the user says
+  HQ's weekly REST endpoint. Publishing is GATED on planning next week: it will
+  not publish until you have entered at least one concrete next-week goal (the
+  conformity score itself stays advisory and never blocks). Use when the user says
   "/hq-weekly-update", "weekly update", "do my weekly", "weekly report", or asks to
   reconcile last week and plan next week.
 ---
@@ -17,6 +19,25 @@ Client-side weekly lifecycle (the st6 weekly, native + automated). The skill
 generates the report in the developer's session and POSTs it to HQ; HQ
 **stores and serves** it (the backend no longer generates weekly content — see
 U4). Conformity is a stored, surfaced number, **never a gate**.
+
+## Publish gate — you MUST plan next week first (BLOCKING)
+
+The whole point of the weekly is to force planning, not just report what shipped.
+So publishing is **hard-gated on the plan**, separate from the advisory conformity
+score:
+
+- You MUST conduct the next-week interview (step 3) and capture **at least one
+  concrete `plan` item** (non-empty `text`) before any `PUT` draft or `POST
+  publish`.
+- If the user skips it, gives an empty answer, or says "just publish / no plan",
+  **do NOT publish.** Re-ask: "What are you going to work on next week? I can't
+  publish the weekly without a plan." Keep asking until there is ≥1 real goal, or
+  the user explicitly aborts the whole command (then publish nothing).
+- "Done"-only reports are not allowed. A report with `plan: []` must never be
+  PUT or published.
+- This gate is on the **existence of a plan**, not its quality. A low conformity
+  score still publishes (it only nudges); but *no plan at all* blocks. Vague
+  filler ("misc work", "stuff") doesn't count — push for a concrete goal.
 
 ## When this runs
 
@@ -53,12 +74,18 @@ scale to 0–100. Print the per-item rationale so the manager sees *why*.
    current ISO week, e.g. `2026-W23`.
 2. **Summarize done from git.** Read the diff/log for the window; produce a
    concise `done` summary (what shipped, which high-level items moved).
-3. **Interview for the plan.** Ask next-week goals; record them as `plan` items.
+3. **Interview for the plan (REQUIRED — gate).** Ask the user what they will work
+   on next week; record each as a `plan` item. **You may not advance to PUT/POST
+   until there is ≥1 concrete plan item.** If they decline or stall, re-ask and
+   explain you can't publish a weekly without a plan. Only an explicit abort of
+   the whole command ends it here (publishing nothing).
 4. **Compute the conformity score** (above). Show it; nudge if low; never block.
-5. **Assemble the report.** `done` summary text + `plan` items +
+5. **Assemble the report.** `done` summary text + the **non-empty** `plan` items +
    `conformityScore`.
-6. **POST to HQ.** PUT the draft, then POST publish (contract below). Publish
-   triggers HQ's org roll-up recompute (U3/U4).
+6. **POST to HQ — only if the gate passed.** Re-check `plan.length >= 1`; if it is
+   empty, STOP (do not PUT, do not publish) and return to step 3. Otherwise PUT
+   the draft, then POST publish (contract below). Publish triggers HQ's org
+   roll-up recompute (U3/U4).
 7. **Confirm.** Print the HQ Weekly screen URL and the stored conformity score.
 
 ## HQ POST contract (what the backend weekly unit must accept)
