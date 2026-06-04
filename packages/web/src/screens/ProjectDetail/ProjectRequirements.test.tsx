@@ -93,7 +93,7 @@ describe('ProjectRequirements (U10)', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '62');
     // The body region must not contain the raw sentinel text.
     const views = screen.getAllByTestId('markdown-view');
-    const bodyView = views[views.length - 1];
+    const bodyView = views[views.length - 1]!;
     expect(bodyView.textContent).not.toContain('hq:compliance');
     expect(bodyView.textContent).toContain('body');
   });

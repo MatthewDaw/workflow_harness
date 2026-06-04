@@ -24,7 +24,7 @@ export function extractCompliance(content: string): {
 } {
   const match = COMPLIANCE.exec(content);
   if (!match) return { report: null, body: content };
-  const report = match[1].trim();
+  const report = (match[1] ?? '').trim();
   const body = content.slice(0, match.index) + content.slice(match.index + match[0].length);
   return { report, body };
 }

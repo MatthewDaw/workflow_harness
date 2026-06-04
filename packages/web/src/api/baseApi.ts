@@ -241,10 +241,6 @@ export const baseApi = createApi({
       query: (projectId) => `projects/${projectId}/docs`,
       transformResponse: unwrapArray<ProjectDoc>('docs'),
       providesTags: (_r, _e, id) => [{ type: 'Docs', id }],
-      // The repo-sourced doc tree changes server-side (e.g. once GitHub reads
-      // start succeeding); always refetch on mount so a stale empty cache from an
-      // earlier failed read can't pin the page to "no requirement docs".
-      refetchOnMountOrArgChange: true,
     }),
 
     /** Markdown body of a single detailed-requirements doc (U11). */
@@ -260,7 +256,6 @@ export const baseApi = createApi({
       query: (projectId) => `projects/${projectId}/requirements`,
       transformResponse: unwrapOne<ProjectRequirements>('requirements'),
       providesTags: (_r, _e, id) => [{ type: 'Requirements', id }],
-      refetchOnMountOrArgChange: true,
     }),
 
     // ---- Mutations (U22/U24/U25) ----
