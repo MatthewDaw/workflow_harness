@@ -72,6 +72,7 @@ describe('AgentEditor (U17)', () => {
     expect(screen.queryByTestId('agent-scope')).not.toBeInTheDocument();
 
     await userEvent.type(screen.getByTestId('agent-name'), 'distiller');
+    await userEvent.selectOptions(screen.getByTestId('agent-scope'), 'org');
     await userEvent.click(await screen.findByTestId('catalog-skill-browse'));
     await userEvent.click(screen.getByTestId('agent-save'));
 

@@ -124,8 +124,6 @@ export const skillSchema = z.object({
    * Never written by clients; present only on GET /skills responses.
    */
   resolvedMembers: z.array(z.string()).optional(),
-  /** Authorship stamp set on create; optional on read for back-compat. */
-  createdBy: createdBySchema.optional(),
 });
 export type Skill = z.infer<typeof skillSchema>;
 
