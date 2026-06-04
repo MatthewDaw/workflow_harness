@@ -1,8 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { screen } from '@testing-library/react';
 import type { Project } from '@harness/shared';
-import { ProjectRequirements } from './ProjectRequirements.js';
+import { ProjectRequirements, ProjectRequirementsFull } from './ProjectRequirements.js';
 import { renderWithProviders } from '../../test/testUtils.js';
 
 const PROJECT: Project = {
@@ -32,7 +31,7 @@ function renderReq() {
 describe('ProjectRequirements (U10)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('renders HQ-owned requirements markdown with task-list glyphs', async () => {
+  it('renders requirements markdown from docs/PRD.md with task-list glyphs', async () => {
     renderReq();
     expect(await screen.findByRole('heading', { name: 'Goal' })).toBeInTheDocument();
     expect(screen.getByText('Replace 15-Five.')).toBeInTheDocument();
@@ -48,14 +47,35 @@ describe('ProjectRequirements (U10)', () => {
     expect(bar).toHaveAttribute('aria-valuenow', '62');
   });
 
-  it('opens an HQ-owned editor on ✎ Edit', async () => {
+  it('is read-only: no ✎ Edit button and no editor textarea', async () => {
     renderReq();
     await screen.findByRole('heading', { name: 'Goal' });
-    await userEvent.click(screen.getByRole('button', { name: '✎ Edit' }));
-    await waitFor(() => expect(screen.getByTestId('requirements-editor')).toBeInTheDocument());
-    expect(screen.getByLabelText('Requirements markdown')).toHaveValue(
-      '# Goal\n\nReplace 15-Five.\n\n- [x] login\n- [ ] reports',
-    );
-    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '✎ Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Requirements markdown')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('requirements-editor')).not.toBeInTheDocument();
+  });
+
+  it('shows the GitHub-sourced empty state when docs/PRD.md is missing', async () => {
+    renderWithProviders(<ProjectRequirements />, {
+      route: '/projects/weekly-compass/requirements',
+      routePath: '/projects/:projectId/requirements',
+      seed: { projects: [PROJECT], requirements: { 'weekly-compass': '' } },
+    });
+    expect(await screen.findByText('No docs/PRD.md found.')).toBeInTheDocument();
+  });
+});
+
+describe('ProjectRequirementsFull (U10)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('renders the markdown read-only with no editor', async () => {
+    renderWithProviders(<ProjectRequirementsFull />, {
+      route: '/projects/weekly-compass/requirements/full',
+      routePath: '/projects/:projectId/requirements/full',
+      seed,
+    });
+    expect(await screen.findByRole('heading', { name: 'Goal' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '✎ Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Requirements markdown')).not.toBeInTheDocument();
   });
 });

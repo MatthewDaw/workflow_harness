@@ -77,11 +77,13 @@ Plus the substrate everything rides on: **Platform & Architecture** —
                                      (feature 1, HQ renders read-only)
                                           │ /update-progress (client-side) computes
                                           │ + pushes completion: % to GitHub
-                                          │ (HQ reads it; HQ never writes)
+                                          │ (docs/PRD.md AND docs/plans/;
+                                          │  HQ reads it; HQ never writes)
                                           ▼
                                      Project Requirements
-                                     = single HQ-owned .md (feature 1, high level)
-                                     progress bar = top docs/plans completion: %
+                                     = repo docs/PRD.md on GitHub (feature 1,
+                                     high level, HQ renders read-only)
+                                     progress bar = docs/PRD.md completion: %
                                                             │ rolls up
                                                             ▼
                                                    Company Objectives (RCDO)
@@ -89,7 +91,7 @@ Plus the substrate everything rides on: **Platform & Architecture** —
    /weekly-update (feature 2): git history since last report = "actual",
    reconciled against the plan; conformity-checked against these objectives.
 
-   Source of truth: Project Requirements → Command HQ · Detailed Requirements + progress (completion:) → GitHub. HQ reads, never writes.
+   Source of truth: Project Requirements (docs/PRD.md), Detailed Requirements (docs/plans/), and progress (completion:) → all GitHub. HQ reads, never writes.
    Agents/Skills registry (feature 3) supplies the sessions;
    AgentForge (feature 5) mints new registry agents from captured sessions.
 ```

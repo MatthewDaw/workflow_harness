@@ -261,13 +261,15 @@ export async function getProjectDocContent(
   }
 }
 
-// --- U10: HQ-owned high-level requirements markdown ----------------------
+// --- Project Requirements: read-only from docs/PRD.md --------------------
 
 /**
- * GET /projects/:id/requirements — the project's HQ-owned high-level
- * requirements markdown. Returns `{ markdown }`, with an empty string when none
- * has been authored yet. HQ is the source of truth here, so this never reads
- * from GitHub.
+ * GET /projects/:id/requirements — the project's high-level requirements body,
+ * read read-only from `docs/PRD.md` on GitHub (distinct from the repo-root
+ * `PRD.md` that feeds the Project Overview). Returns `{ markdown }`, with an
+ * empty string when the file is absent. GitHub being unreachable / not connected
+ * degrades to `{ markdown: '', stale: true }` rather than a 500, mirroring the
+ * doc-content endpoint's failure posture.
  */
 export async function getProjectRequirements(
   event: APIGatewayProxyEventV2,
@@ -277,34 +279,16 @@ export async function getProjectRequirements(
   if ('error' in resolved) return resolved.error;
   const { project } = resolved;
 
-  const markdown = await deps.repo.getProjectRequirements(project.id);
-  return ok({ markdown });
-}
+  const make = deps.githubFor ?? defaultGithubFor;
+  const app = make(project);
+  if (!app) return ok({ markdown: '', stale: true });
 
-/**
- * PUT /projects/:id/requirements — store the project's HQ-owned high-level
- * requirements markdown (body `{ markdown }`) and echo it back. HQ owns this
- * doc, so it is persisted in the table and never written to GitHub.
- */
-export async function putProjectRequirements(
-  event: APIGatewayProxyEventV2,
-  deps: ProjectsDeps,
-): Promise<APIGatewayProxyResultV2> {
-  const resolved = await ownedProject(event, deps);
-  if ('error' in resolved) return resolved.error;
-  const { project } = resolved;
-
-  let body: unknown;
   try {
-    body = parseBody(event);
+    const markdown = await app.readPrdDoc();
+    return ok({ markdown: markdown ?? '' });
   } catch {
-    return badRequest('invalid JSON body');
+    return ok({ markdown: '', stale: true });
   }
-  const markdown = (body as { markdown?: unknown } | undefined)?.markdown;
-  if (typeof markdown !== 'string') return badRequest('missing markdown');
-
-  await deps.repo.putProjectRequirements(project.id, markdown);
-  return ok({ markdown });
 }
 
 // --- Project opt-in: enable/disable org-catalog skills + agents ----------
@@ -425,8 +409,6 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'POST' && hasId && rawPath.endsWith('/refresh')) return refreshProject(event, deps);
-  if (method === 'PUT' && hasId && /\/requirements$/.test(rawPath))
-    return putProjectRequirements(event, deps);
   if (method === 'GET' && hasId && /\/requirements$/.test(rawPath))
     return getProjectRequirements(event, deps);
   if (method === 'GET' && hasId && /\/docs\/content$/.test(rawPath))

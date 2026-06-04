@@ -6,7 +6,7 @@ completion: 88
 feature: weekly-update
 ---
 
-# Feature 2 — Weekly Plan (`/weekly-update`)
+# Feature 2 — Weekly Plan (`/hq-weekly-update`)
 
 A Claude command/skill that, when run, interviews the user about their coming
 goals and then auto-generates a weekly update with two halves: **what was
@@ -21,7 +21,7 @@ lifecycle, built natively and automated by the harness.
    up to the repo's **fixed high-level goals** (owned Supporting Outcomes / Project
    Requirements) and surfaces the score so a **manager can see when someone is
    drifting too far off**. It nudges the user to re-anchor but never blocks publish.
-   *Now:* the conformity score is computed client-side in the `/weekly-update`
+   *Now:* the conformity score is computed client-side in the `/hq-weekly-update`
    skill (Claude Code); the old `weekly/agent.ts` challenger + `weekly/align.ts` were removed.
 3. **Reconcile last week (auto, from git).** It reads the **git history since the
    last weekly report** and summarizes the week's commits/PRs as the "done"
@@ -33,7 +33,7 @@ lifecycle, built natively and automated by the harness.
    - how that **compared to last week's plan** (planned vs. actual = the
      *reconciliation*).
    *Code today (built):* this reconciliation is assembled **client-side** by the
-   `/weekly-update` skill from the git diff today→−7d. The old server-side
+   `/hq-weekly-update` skill from the git diff today→−7d. The old server-side
    `weekly/align.ts` (`summarizeAlignment`/`computeDeltas`/`attributeDone`) and
    `weekly/agent.ts` were **deleted** in the migration — the whole `weekly/` module
    is gone; the backend no longer generates weekly content. `github/history.ts`
@@ -75,7 +75,7 @@ Update") renders the *output*.
 
 ## Status
 
-- **Built:** the `/weekly-update` skill (`.claude/skills/weekly-update/`) with the
+- **Built:** the `/hq-weekly-update` skill (`.claude/skills/hq-weekly-update/`) with the
   interview + client-side never-blocking conformity score; the store/serve
   `rest/weekly.ts` (draft/publish, `conformityScore` round-trip); the Weekly screen
   (`ProjectWeekly.tsx`) renders the posted report.

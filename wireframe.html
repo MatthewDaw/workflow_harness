@@ -338,9 +338,9 @@
   </section>
 
   <!-- ======================= 2.4 TUI AGENTFORGE ======================= -->
-  <section class="screen" data-name="claude+ — AgentForge (/startforge … /endforge)">
-    <h2><span class="tag term">terminal</span> &nbsp;claude+ — AgentForge (<code>/startforge</code> … <code>/endforge</code>)</h2>
-    <p class="desc"><b>Commands, not a panel.</b> <code>/startforge</code> lands your current work to main, then branches a worktree and marks the slice; you do the work (the daemon captures the session + diff); <code>/endforge</code> distills it into a reusable agent — a short prompt + the minimal skills it needs — and registers it <b>at your own scope</b>. Promoting it org-wide is a deliberate step in Command HQ. <i>(v1 is distiller-first: capture → distill → register. The prompt optimize/refine loop is the next increment.)</i></p>
+  <section class="screen" data-name="claude+ — AgentForge (/hq-startforge … /hq-endforge)">
+    <h2><span class="tag term">terminal</span> &nbsp;claude+ — AgentForge (<code>/hq-startforge</code> … <code>/hq-endforge</code>)</h2>
+    <p class="desc"><b>Commands, not a panel.</b> <code>/hq-startforge</code> lands your current work to main, then branches a worktree and marks the slice; you do the work (the daemon captures the session + diff); <code>/hq-endforge</code> distills it into a reusable agent — a short prompt + the minimal skills it needs — and registers it into the <b>org catalog</b> (the agents/skills REST forces org scope, admin-gated). An admin then enables it on a project from that project's Agents tab. <i>(v1 is distiller-first: capture → distill → register. The prompt optimize/refine loop is the next increment.)</i></p>
 
     <div class="term">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="ttl">claude+ &nbsp;—&nbsp; command-hq · session: live-watch-stream</span></div>
@@ -350,9 +350,9 @@
         <div class="t">Stream</div>
         <div class="t" style="margin-left:auto;color:#7fc99a">● HQ linked</div>
       </div>
-      <div class="body"><span class="dim">… earlier: <span class="ok">/startforge "live-watch reducer"</span> — landed current work to main, branched worktree forge/live-watch-reducer off main, start marker pinned, capture on.</span>
+      <div class="body"><span class="dim">… earlier: <span class="ok">/hq-startforge "live-watch reducer"</span> — landed current work to main, branched worktree forge/live-watch-reducer off main, start marker pinned, capture on.</span>
 
-<span class="acc">›</span> <span class="ok">/endforge</span>
+<span class="acc">›</span> <span class="ok">/hq-endforge</span>
 
 <span class="acc">●</span> ⟨②⟩ Generate a reusable agent from this slice? <span class="ok">yes</span>
 <span class="acc">●</span> ⟨③⟩ Coherence check — diff is one focused feature <span class="ok">✓</span>  <span class="dim">(would warn + let you override if not)</span>
@@ -524,7 +524,7 @@
         <!-- Definition of Done config -->
         <div class="box" style="background:#fff;border-left:3px solid var(--good);margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div><span class="pill good">⟨⓪⟩ Definition of Done</span> &nbsp;<span class="muted" style="font-size:13px">what <code>/update-progress</code> must verify before any requirement turns green</span></div>
+            <div><span class="pill good">⟨⓪⟩ Definition of Done</span> &nbsp;<span class="muted" style="font-size:13px">what <code>/hq-update-progress</code> must verify before any requirement turns green</span></div>
             <span class="btn">✎ edit</span>
           </div>
           <div style="margin-top:8px;font-size:13px;display:flex;flex-wrap:wrap;gap:8px">
@@ -619,7 +619,7 @@
           <div class="col box" data-go="Project Requirements" style="background:#fff;cursor:pointer">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨①⟩ Project Requirements — goal &amp; objectives</div>
-              <span class="faint" style="font-size:11px">edit ›</span>
+              <span class="faint" style="font-size:11px">open ›</span>
             </div>
             <div class="muted" style="font-size:13px;margin-top:6px">Watch and steer every Claude Code session from anywhere — with <b>every</b> session traced to the work it advances and every goal laddering up to a company outcome.</div>
             <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-top:10px">⟨②⟩ Owns these Supporting Outcomes</div>
@@ -627,12 +627,12 @@
               <span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">SO · ship live steering ↑</span>
               <span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">SO · control round-trip &lt; 250ms ↑</span>
             </div>
-            <div class="faint" style="font-size:11px;margin-top:6px">edited in HQ (source of truth) · repos pull via <span class="mono">/sync-requirements</span> · ↑ links to <b>Company Objectives</b></div>
+            <div class="faint" style="font-size:11px;margin-top:6px">rendered read-only from the repo's <span class="mono">docs/PRD.md</span> on GitHub · ↑ links to <b>Company Objectives</b></div>
           </div>
           <div class="col box" style="background:#fff">
-            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨③⟩ Progress &nbsp;·&nbsp; 58% &nbsp;<span class="faint">· <span class="mono">completion:</span> from the top docs/plans doc</span></div>
+            <div class="faint" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">⟨③⟩ Progress &nbsp;·&nbsp; 58% &nbsp;<span class="faint">· <span class="mono">completion:</span> from <span class="mono">docs/PRD.md</span></span></div>
             <div class="bar" style="margin:8px 0"><i style="width:58%"></i></div>
-            <div class="muted" style="font-size:12px">Whole-project %, read from the top docs/plans <span class="mono">completion:</span> on GitHub. <span class="mono">/update-progress</span> (client-side) computes &amp; pushes it; HQ never writes.</div>
+            <div class="muted" style="font-size:12px">Whole-project %, read from <span class="mono">docs/PRD.md</span> <span class="mono">completion:</span> on GitHub. <span class="mono">/hq-update-progress</span> (client-side) computes &amp; pushes it; HQ never writes.</div>
             <div class="muted" style="font-size:12px;margin-top:6px">✓ Daemon + PTY ✓ Objectives roll-up ✓ Event capture&nbsp; · &nbsp;◦ Live watch view <span class="pill live">in&nbsp;progress</span>&nbsp; ◦ Forge</div>
           </div>
         </div>
@@ -694,8 +694,8 @@
 
     <ul class="anno">
       <li><b>Live app URL</b> — a clickable link to the deployed build being worked on, shown in the header next to the repo.</li>
-      <li><b>Project Requirements panel</b> — the HQ-owned high-level goals (a single <code>.md</code>, source of truth = HQ). Click to open/edit; owned Supporting Outcomes link ↑ to Company Objectives.</li>
-      <li><b>Progress</b> — the whole-project completion % read from the top <code>docs/plans/</code> doc on GitHub; <code>/update-progress</code> (client-side) computes &amp; pushes it. HQ reads, never writes.</li>
+      <li><b>Project Requirements panel</b> — the high-level goals from the repo's <code>docs/PRD.md</code>, rendered read-only from GitHub. Click to open; owned Supporting Outcomes link ↑ to Company Objectives.</li>
+      <li><b>Progress</b> — the whole-project completion % read from <code>docs/PRD.md</code> on GitHub; <code>/hq-update-progress</code> (client-side) computes &amp; pushes it. HQ reads, never writes.</li>
       <li><b>Design &amp; live app</b> — a preview of the repo's <code>wireframe.html</code> (when present) and the live application URL, pulled from the repo.</li>
       <li><b>Weekly Update card</b> — a summary of the latest <code>/weekly-update</code> (Reconciliation vs Plan, alignment). Click to open the full Weekly sub-tab.</li>
       <li><b>Session history</b> — active + past, live ones pinned. Watch / replay to drill in.</li>
@@ -705,7 +705,7 @@
   <!-- ======================= 4.2 HQ PROJECT REQUIREMENTS ======================= -->
   <section class="screen" data-name="HQ — Project › Project Requirements">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Project Requirements</h2>
-    <p class="desc">The <b>highest-level project details</b> — the simple, high-level goals <b>management writes</b> (the equivalent of an <code>st6_prd.md</code>). <b>Command HQ owns these — HQ is the source of truth</b> and they're editable here; a user can optionally download a copy into the repo via <code>/sync-requirements</code>, but HQ stays canonical. A green check appears when <code>/update-progress</code> verifies an item meets the Definition of Done. The long-form breakdown lives in <b>Detailed Requirements</b>, which is sourced from the repo's <code>docs/plans/</code> on GitHub.</p>
+    <p class="desc">The <b>highest-level project details</b> — the simple, high-level goals <b>management writes</b>, kept in the repo's <code>docs/PRD.md</code>. <b>GitHub is the source of truth; HQ renders it read-only</b> — no editing in HQ. A green check appears when <code>/hq-update-progress</code> verifies an item meets the Definition of Done. The long-form breakdown lives in <b>Detailed Requirements</b>, which is sourced from the repo's <code>docs/plans/</code> on GitHub. (Distinct from the repo-root <code>PRD.md</code>, which feeds the <b>Project Overview</b> goal + Supporting Outcomes.)</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / requirements</span></div>
@@ -727,12 +727,12 @@
         <!-- header: actions + progress -->
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
           <div>
-            <div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">Project Requirements</b><span class="pill good" style="font-size:10px">HQ-owned</span><span class="pill mono" style="font-size:10px">requirements.md</span></div>
-            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ a single markdown file, owned + edited in HQ · rendered raw · Definition of Done set in Company Objectives</div>
+            <div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">Project Requirements</b><span class="pill good" style="font-size:10px">GitHub-sourced</span><span class="pill mono" style="font-size:10px">docs/PRD.md</span></div>
+            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ the repo's <span class="mono">docs/PRD.md</span>, rendered read-only from GitHub · Definition of Done set in Company Objectives</div>
           </div>
-          <div><span class="btn">✎ Edit</span> <span class="btn" data-go="Requirements (full screen)">⛶ Full screen</span></div>
+          <div><span class="btn" data-go="Requirements (full screen)">⛶ Full screen</span></div>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:11px;margin:10px 0 4px" class="muted"><span>⟨②⟩ progress · <span class="mono">completion:</span> from the top docs/plans doc</span><span><b>58%</b></span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin:10px 0 4px" class="muted"><span>⟨②⟩ progress · <span class="mono">completion:</span> from <span class="mono">docs/PRD.md</span></span><span><b>58%</b></span></div>
         <div class="bar" style="margin-bottom:12px"><i style="width:58%"></i></div>
 
         <!-- the raw .md file, rendered -->
@@ -755,14 +755,14 @@
           </ul>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨③⟩ It's just a markdown file.</b> HQ renders this raw <code>.md</code> (the goals management writes); a GitHub-flavored <code>- [x]</code> shows as ☑. You never tick by hand — <code>/update-progress</code> (client-side) computes the completion % from code-vs-docs and pushes it to GitHub; HQ reads it (HQ never writes). The prod-E2E verification gate is deferred. Edit the goals with ✎ Edit.</div>
+        <div class="note" style="margin-top:14px"><b>⟨③⟩ It's just a markdown file.</b> HQ renders the repo's <code>docs/PRD.md</code> raw (the goals management writes); a GitHub-flavored <code>- [x]</code> shows as ☑. You never tick by hand — <code>/hq-update-progress</code> (client-side) computes the completion % from code-vs-docs and pushes it to GitHub; HQ reads it (HQ never writes). The prod-E2E verification gate is deferred. Edit the goals by committing to <code>docs/PRD.md</code> in the repo.</div>
       </div>
     </div>
 
     <ul class="anno">
-      <li><b>A single markdown file</b> — the highest-level goals management writes, owned + edited in HQ (source of truth) and rendered raw. Not pulled from GitHub.</li>
-      <li><b>Optional repo copy</b> — a user can download a snapshot into the repo via <code>/sync-requirements</code> (HQ → repo); HQ stays canonical.</li>
-      <li><b>Checks come from the file</b> — a GitHub-flavored <code>- [x]</code> renders as ☑; <code>/update-progress</code> (client-side) computes &amp; pushes it to GitHub; HQ reads, never writes. (Prod-E2E gate deferred.)</li>
+      <li><b>A repo markdown file</b> — the highest-level goals management writes, kept in <code>docs/PRD.md</code> and rendered read-only from GitHub. GitHub is the source of truth.</li>
+      <li><b>Scaffolded on connect</b> — <code>/hq-init-command-hq</code> creates a placeholder <code>docs/PRD.md</code> if the repo doesn't have one yet.</li>
+      <li><b>Checks come from the file</b> — a GitHub-flavored <code>- [x]</code> renders as ☑; <code>/hq-update-progress</code> (client-side) computes &amp; pushes the <code>completion:</code> to GitHub; HQ reads, never writes. (Prod-E2E gate deferred.)</li>
       <li><b>Detailed Requirements</b> (separate tab) renders the repo's <code>docs/plans/</code> breakdown (source of truth: GitHub).</li>
       <li><b>Full screen</b> — the same file, full-width, for reading / sharing.</li>
     </ul>
@@ -771,13 +771,13 @@
   <!-- ======================= 4.3 HQ REQUIREMENTS FULL SCREEN ======================= -->
   <section class="screen" data-name="HQ — Requirements (full screen)">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Requirements (full-screen reader)</h2>
-    <p class="desc">The full-screen reader for the highest-level project details (<b>HQ-owned</b>): clean, rendered markdown with completion checks inline — for reading and sharing. Editable in HQ.</p>
+    <p class="desc">The full-screen reader for the highest-level project details (the repo's <b><code>docs/PRD.md</code></b>): clean, rendered markdown with completion checks inline — for reading and sharing. Read-only; edits happen by committing to <code>docs/PRD.md</code>.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / requirements?view=full</span></div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line2)">
-        <div><b>command-hq</b> <span class="faint">— Project Requirements</span> <span class="pill good" style="font-size:10px">HQ-owned</span></div>
-        <div><span class="btn">✎ Edit</span> <span class="btn" data-go="Project Requirements">✕ Exit full screen</span></div>
+        <div><b>command-hq</b> <span class="faint">— Project Requirements</span> <span class="pill good" style="font-size:10px">GitHub-sourced</span> <span class="pill mono" style="font-size:10px">docs/PRD.md</span></div>
+        <div><span class="btn" data-go="Project Requirements">✕ Exit full screen</span></div>
       </div>
       <div class="pad" style="max-width:720px;margin:0 auto">
         <h1 style="font-size:22px;margin:8px 0 4px">Project Requirements</h1>
@@ -800,15 +800,15 @@
     </div>
 
     <ul class="anno">
-      <li><b>Reader mode</b> — the HQ-owned high-level goals rendered as clean markdown, no breakdown clutter.</li>
-      <li><b>Checks inline</b> — completion shown read-only here; editing the goals happens in HQ's editor.</li>
+      <li><b>Reader mode</b> — the high-level goals from <code>docs/PRD.md</code> rendered as clean markdown, no breakdown clutter.</li>
+      <li><b>Checks inline</b> — completion shown read-only here; editing the goals happens by committing to <code>docs/PRD.md</code> in the repo.</li>
     </ul>
   </section>
 
   <!-- ======================= 4.35 HQ DETAILED REQUIREMENTS ======================= -->
   <section class="screen" data-name="HQ — Project › Detailed Requirements">
     <h2><span class="tag web">web</span> &nbsp;Command HQ — Project › Detailed Requirements</h2>
-    <p class="desc">The <b>long form</b> — the breakdown that expands on the high-level goals, rendered straight from the repo's <code>docs/plans/</code>: a top-level document plus lower-level documents. <b>GitHub is the source of truth; HQ just renders it well</b> — read-only, in sync, no edits and no added data. Checkboxes inside those docs (which <code>/update-progress</code> commits to the repo) show as completion.</p>
+    <p class="desc">The <b>long form</b> — the breakdown that expands on the high-level goals, rendered straight from the repo's <code>docs/plans/</code>: a top-level document plus lower-level documents. <b>GitHub is the source of truth; HQ just renders it well</b> — read-only, in sync, no edits and no added data. Checkboxes inside those docs (which <code>/hq-update-progress</code> commits to the repo) show as completion.</p>
 
     <div class="frame browser">
       <div class="chrome"><span class="d"></span><span class="d"></span><span class="d"></span><span class="url mono">hq.claudeplus.dev / projects / command-hq / requirements/detail</span></div>
@@ -830,7 +830,7 @@
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
           <div>
             <div style="display:flex;align-items:center;gap:8px"><b style="font-size:15px">Detailed Requirements</b><span class="pill mono" style="font-size:10px">docs/plans/</span><span class="pill">synced from GitHub · 2h ago</span></div>
-            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ rendered straight from the repo — read-only · checkboxes maintained by <span class="mono">/update-progress</span></div>
+            <div class="faint" style="font-size:11px;margin-top:2px">⟨①⟩ rendered straight from the repo — read-only · checkboxes maintained by <span class="mono">/hq-update-progress</span></div>
           </div>
           <div><span class="btn">↗ Open in GitHub</span></div>
         </div>
@@ -857,7 +857,7 @@
           <div style="flex:1;min-width:0;border-left:1px solid var(--line2);padding-left:16px">
             <div style="display:flex;justify-content:space-between;align-items:center"><div class="faint mono" style="font-size:11px">docs/plans/command-hq/01-plan-mapping.md</div><span class="pill mono" style="font-size:10px">completion: 35</span></div>
             <h3 style="margin:4px 0 2px;font-size:16px">Plan Mapping</h3>
-            <p class="muted" style="font-size:12.5px;margin:0 0 10px">How a company goal narrows to a repo goal, then a detailed breakdown — kept honest by <code>/update-progress</code>.</p>
+            <p class="muted" style="font-size:12.5px;margin:0 0 10px">How a company goal narrows to a repo goal, then a detailed breakdown — kept honest by <code>/hq-update-progress</code>.</p>
 
             <div style="font-weight:700;font-size:13px;margin:10px 0 4px">## Capture &amp; transport</div>
             <div style="font-size:12.5px;display:flex;flex-direction:column;gap:3px;margin-left:2px">
@@ -877,14 +877,14 @@
           </div>
         </div>
 
-        <div class="note" style="margin-top:14px"><b>⟨④⟩ Just a renderer:</b> this tab reads the repo's <code>docs/plans/</code> from GitHub and displays it — no edits, no injected data. The only writes come from <code>/update-progress</code> (client-side) pushing completion numbers + <code>- [x]</code> ticks into those docs; HQ shows whatever the files say.</div>
+        <div class="note" style="margin-top:14px"><b>⟨④⟩ Just a renderer:</b> this tab reads the repo's <code>docs/plans/</code> from GitHub and displays it — no edits, no injected data. The only writes come from <code>/hq-update-progress</code> (client-side) pushing completion numbers + <code>- [x]</code> ticks into those docs; HQ shows whatever the files say.</div>
       </div>
     </div>
 
     <ul class="anno">
       <li><b>GitHub is the source of truth</b> — this is the repo's <code>docs/plans/</code> tree (a top-level doc + lower-level docs), rendered read-only and kept in sync.</li>
       <li><b>A doc browser</b> — pick a doc on the left, read its rendered markdown on the right. No editing, no data added on the page.</li>
-      <li><b>Checks live in the docs</b> — GitHub-flavored <code>- [x]</code> task items render as ☑; <code>/update-progress</code> is the only thing that commits those ticks, after the Definition of Done passes.</li>
+      <li><b>Checks live in the docs</b> — GitHub-flavored <code>- [x]</code> task items render as ☑; <code>/hq-update-progress</code> is the only thing that commits those ticks, after the Definition of Done passes.</li>
       <li><b>Progress</b> — counted from the checkboxes across these docs; editing the breakdown happens in GitHub.</li>
     </ul>
   </section>
@@ -943,7 +943,7 @@
             </div>
             <div class="muted" style="font-size:12px;margin:6px 0 2px">14 commits · 3 PRs merged · <b>71%</b> of last week's plan delivered</div>
             <div class="bar" style="margin:6px 0 6px"><i style="width:71%;background:var(--good)"></i></div>
-            <div class="muted" style="font-size:12px;margin-bottom:8px">✓ checked off <b>2</b> requirement items this week — <span class="faint">Live watch panel · State-machine transitions</span> (verified by <span class="mono">/update-progress</span>)</div>
+            <div class="muted" style="font-size:12px;margin-bottom:8px">✓ checked off <b>2</b> requirement items this week — <span class="faint">Live watch panel · State-machine transitions</span> (verified by <span class="mono">/hq-update-progress</span>)</div>
             <div style="font-size:12.5px;display:flex;flex-direction:column;gap:6px">
               <div style="display:flex;justify-content:space-between"><span>✓ Live watch panel shipped <span class="faint mono">#128</span></span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">ship live steering</span></div>
               <div style="display:flex;justify-content:space-between"><span>✓ State-machine transitions <span class="faint mono">#121</span></span><span class="pill skill" style="background:#f3f0e8;border-color:#e0d3b8;color:#7a6326">DO 1.1</span></div>
@@ -1277,7 +1277,7 @@
         </div>
         <div class="grid3">
           <div class="box" style="background:#fff">
-            <div style="display:flex;justify-content:space-between"><span class="pill skill">/update-progress</span><span class="faint" style="font-size:11px">HQ</span></div>
+            <div style="display:flex;justify-content:space-between"><span class="pill skill">/hq-update-progress</span><span class="faint" style="font-size:11px">HQ</span></div>
             <div class="muted" style="font-size:12px;margin:6px 0">Client-side: Claude computes the completion % from code-vs-docs and pushes it to GitHub (plus a compliance report). HQ reads it; HQ never writes.</div>
             <div class="faint" style="font-size:11px">scope: <b>org</b> · writes to Requirements (checks + completion %)</div>
           </div>
@@ -1287,9 +1287,9 @@
             <div class="faint" style="font-size:11px">scope: <b>org</b> · writes the Weekly update</div>
           </div>
           <div class="box" style="background:#fff">
-            <div style="display:flex;justify-content:space-between"><span class="pill skill">/sync-requirements</span><span class="faint" style="font-size:11px">HQ</span></div>
-            <div class="muted" style="font-size:12px;margin:6px 0">Pulls a read-only snapshot of HQ-owned requirements down into the repo (HQ → repo).</div>
-            <div class="faint" style="font-size:11px">scope: <b>org</b> · read-only mirror</div>
+            <div style="display:flex;justify-content:space-between"><span class="pill skill">/hq-init-command-hq</span><span class="faint" style="font-size:11px">HQ</span></div>
+            <div class="muted" style="font-size:12px;margin:6px 0">Scaffolds the GitHub-side files HQ reads — <code>docs/PRD.md</code> (Project Requirements), a headline <code>docs/plans/</code> doc, and root <code>PRD.md</code> — only where missing.</div>
+            <div class="faint" style="font-size:11px">scope: <b>org</b> · creates repo files (idempotent)</div>
           </div>
           <div class="box" style="background:#fff">
             <div style="display:flex;justify-content:space-between"><span class="pill skill">▤ forge</span> <span class="faint" style="font-size:11px">bundle · HQ</span></div>

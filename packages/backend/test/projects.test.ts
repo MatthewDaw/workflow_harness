@@ -10,8 +10,8 @@ import {
   getProjectDocContent,
   getProjectDocs,
   getProjectRequirements,
+  handler,
   listProjects,
-  putProjectRequirements,
   refreshProject,
   type ProjectsDeps,
 } from '../src/rest/projects.js';
@@ -127,7 +127,7 @@ describe('GET /projects/:id', () => {
  * every read throw (simulating GitHub unreachable / token expired).
  */
 function stubGithub(opts: { failing?: boolean } = {}) {
-  const calls = { listDocs: 0, readDoc: 0, framing: 0 };
+  const calls = { listDocs: 0, readDoc: 0, framing: 0, readPrd: 0 };
   const app = {
     async readFramingWithCompletion() {
       calls.framing++;
@@ -143,6 +143,11 @@ function stubGithub(opts: { failing?: boolean } = {}) {
       calls.readDoc++;
       if (opts.failing) throw new Error('github unreachable');
       return path === 'docs/plans/a.md' ? '# Alpha\nbody' : undefined;
+    },
+    async readPrdDoc() {
+      calls.readPrd++;
+      if (opts.failing) throw new Error('github unreachable');
+      return '# Project Requirements\n\n- ship the thing';
     },
   } as unknown as GitHubApp;
   return { app, calls };
@@ -319,67 +324,75 @@ describe('GET /projects/:id/docs/content (U8)', () => {
   });
 });
 
-// --- U10: HQ-owned high-level requirements markdown ----------------------
+// --- Project Requirements: read-only from docs/PRD.md --------------------
 
-describe('GET/PUT /projects/:id/requirements (U10)', () => {
-  it('GET returns an empty markdown for a project with none authored yet', async () => {
+describe('GET /projects/:id/requirements (docs/PRD.md)', () => {
+  it('serves docs/PRD.md read-only from GitHub', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const { app, calls } = stubGithub();
+    const res = await getProjectRequirements(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      depsWith(app),
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ markdown: string }>(res as { body: string }).markdown).toContain(
+      '# Project Requirements',
+    );
+    expect(calls.readPrd).toBe(1);
+  });
+
+  it("serves an empty markdown + stale when the project isn't GitHub-connected", async () => {
     await repo.putProject(project('weekly-compass', MATT));
     const res = await getProjectRequirements(
       httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
-      deps,
+      { repo, githubFor: () => undefined },
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ markdown: string }>(res as { body: string }).markdown).toBe('');
+    const body = bodyOf<{ markdown: string; stale: boolean }>(res as { body: string });
+    expect(body.markdown).toBe('');
+    expect(body.stale).toBe(true);
   });
 
-  it('PUT stores the markdown and echoes it back; a later GET serves it', async () => {
+  it('serves an empty markdown + stale (never 500) when GitHub is unreachable', async () => {
     await repo.putProject(project('weekly-compass', MATT));
-    const md = '# Requirements\n\n- ship the thing';
-    const putRes = await putProjectRequirements(
-      httpEvent({
-        method: 'PUT',
-        userId: MATT,
-        path: { id: 'weekly-compass' },
-        body: { markdown: md },
-      }),
-      deps,
-    );
-    expect(putRes).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ markdown: string }>(putRes as { body: string }).markdown).toBe(md);
-
-    const getRes = await getProjectRequirements(
+    const { app } = stubGithub({ failing: true });
+    const res = await getProjectRequirements(
       httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
-      deps,
+      depsWith(app),
     );
-    expect(bodyOf<{ markdown: string }>(getRes as { body: string }).markdown).toBe(md);
-  });
-
-  it('400s a PUT whose body has no markdown string', async () => {
-    await repo.putProject(project('weekly-compass', MATT));
-    const res = await putProjectRequirements(
-      httpEvent({ method: 'PUT', userId: MATT, path: { id: 'weekly-compass' }, body: {} }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 400 });
+    expect(res).toMatchObject({ statusCode: 200 });
+    const body = bodyOf<{ markdown: string; stale: boolean }>(res as { body: string });
+    expect(body.markdown).toBe('');
+    expect(body.stale).toBe(true);
   });
 
   it("404s another user's project requirements (no enumeration)", async () => {
     await repo.putProject(project('weekly-compass', MATT));
-    const getRes = await getProjectRequirements(
+    const { app } = stubGithub();
+    const res = await getProjectRequirements(
       httpEvent({ method: 'GET', userId: ALICE, path: { id: 'weekly-compass' } }),
-      deps,
+      depsWith(app),
     );
-    expect(getRes).toMatchObject({ statusCode: 404 });
-    const putRes = await putProjectRequirements(
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('handler: PUT /projects/:id/requirements no longer routes to a write', () => {
+  it('does not invoke a requirements write handler (falls through, no 200 echo)', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    // PUT /requirements has no route anymore: it falls through to listProjects,
+    // which never echoes back a `{ markdown }` body (proving no write path).
+    const res = await handler(
       httpEvent({
         method: 'PUT',
-        userId: ALICE,
+        userId: MATT,
+        rawPath: '/projects/weekly-compass/requirements',
         path: { id: 'weekly-compass' },
-        body: { markdown: 'x' },
+        body: { markdown: '# should not persist' },
       }),
-      deps,
     );
-    expect(putRes).toMatchObject({ statusCode: 404 });
+    const body = bodyOf<{ markdown?: string; projects?: unknown[] }>(res as { body: string });
+    expect(body.markdown).toBeUndefined();
   });
 });
 

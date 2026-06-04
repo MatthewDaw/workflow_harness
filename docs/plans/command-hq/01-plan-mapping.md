@@ -21,12 +21,13 @@ up to date.
    in `db/repo.ts`; UI `packages/web/src/screens/Objectives/Objectives.tsx`.
 
 2. **Project Requirements (per-repo, high level).** The simple, high-level list of
-   goals management writes — the equivalent of an `st6_prd.md`. It is **a single
-   markdown file owned by Command HQ; HQ is the source of truth.**
-   - Edited in HQ; a **full-screen markdown reader** view.
+   goals management writes — the equivalent of an `st6_prd.md`. It is the repo file
+   **`docs/PRD.md`, rendered read-only from GitHub.** GitHub is the source of truth;
+   HQ only renders it (no edits, no injected data) — distinct from the repo-root
+   `PRD.md`, which feeds the Project Overview tab.
+   - Rendered in HQ; a **full-screen markdown reader** view.
+   - Its `completion:` frontmatter drives the Project Requirements progress bar.
    - Each item shows a **green check** the moment it is *verified* complete.
-   - A user may optionally download a snapshot into the repo via a
-     `/sync-requirements` skill (HQ → repo, one direction); HQ stays canonical.
 
 3. **Detailed Requirements (per-repo, long form).** The breakdown that expands on
    the high-level goals — **rendered straight from the repo's `docs/plans/` on
@@ -43,13 +44,15 @@ up to date.
 
 ## Where completion lives
 
-**Every doc in `docs/plans/` carries a `completion:` percentage in its frontmatter
-(at the top). The website reads that number directly — it does not recompute it.**
+**`docs/PRD.md` and every doc in `docs/plans/` carry a `completion:` percentage in
+their frontmatter (at the top). The website reads those numbers directly — it does
+not recompute them.**
 
-- The **top-of-folder file** (`command-hq-overview.md`) represents the whole
-  project; its `completion:` is the headline number shown on **both** the HQ
-  high-level **Project Requirements** bar **and** the **Detailed Requirements**
-  root. One number, two surfaces.
+- **`docs/PRD.md`**'s `completion:` is the headline number on the high-level
+  **Project Requirements** bar.
+- The **top-of-`docs/plans/` file** (`command-hq-overview.md`) represents the whole
+  detailed breakdown; its `completion:` is the headline number shown on the
+  **Detailed Requirements** root.
 - Each lower-level doc shows its own `completion:` in the Detailed doc-tree.
 - Item-level detail still uses GitHub task items (`- [x]`) inside the docs; the
   headline bar is the frontmatter `completion:`.
@@ -59,13 +62,15 @@ up to date.
 
 ```
 /update-progress (client-side: Claude computes % from code vs docs)
-   → pushes completion: % to GitHub .md → HQ reads it (HQ never writes)
-   → Project Requirements bar + Detailed root.  Also emits a compliance report.
+   → pushes completion: % to docs/PRD.md AND docs/plans/ .md → HQ reads it (HQ never writes)
+   → Project Requirements bar (docs/PRD.md) + Detailed root (docs/plans/ headline).
+     Also emits a compliance report.
 ```
 
 *Code today (built):* `packages/backend/src/github/history.ts` parses the
-`completion:` frontmatter of the top `docs/plans/` doc (falling back to legacy
-`PROGRESS.md %`); `rest/projects.ts` stores it as the project's `progressPct`
+`completion:` frontmatter (`docs/PRD.md` for the Project Requirements bar, the top
+`docs/plans/` doc for the Detailed root, falling back to legacy `PROGRESS.md %`);
+`rest/projects.ts` stores the bar value as the project's `progressPct`
 (with `framingReadAt`/`framingStale` for last-known-on-failure);
 `projections/rollup.ts` (re-pointed off tickets in the migration) derives a
 Supporting-Outcome leaf % from that stored value. The web bars read the stored
@@ -88,8 +93,9 @@ skills register) that a developer runs in their repo. It:
    (client-side, with the dev's own git) by writing the `completion:` frontmatter.
    HQ reads it from GitHub to move the bar — **HQ never writes to GitHub.**
 4. **Generates a compliance report** comparing the requirements against what's
-   actually built and flagging drift (including between the HQ-owned Project
-   Requirements and the GitHub docs) — the reconciliation surface.
+   actually built and flagging drift (between the high-level `docs/PRD.md`
+   Project Requirements and the detailed `docs/plans/` docs) — the reconciliation
+   surface.
 
 **Completion is never typed in by hand** — it is earned by passing the gate.
 
@@ -124,7 +130,8 @@ prod-E2E *enforced* gate remains deferred (see Open questions).
   (with legacy `PROGRESS.md %` fallback); roll-up **re-pointed off tickets** onto
   the stored `progressPct`; the docs-tree read endpoints; the two-tier
   (Project/Detailed) requirements UI with `MarkdownView` and a full-screen reader;
-  the editable HQ-owned Project Requirements; the advisory Definition-of-Done REST;
+  the read-only `docs/PRD.md`-sourced Project Requirements; the advisory
+  Definition-of-Done REST;
   the `/update-progress` skill (`.claude/skills/update-progress/`).
 - **Deferred:** the **enforced** prod-E2E verified-completion gate (and
   `completion:` frontmatter integrity) — for v1 the pushed % is `/update-progress`'s

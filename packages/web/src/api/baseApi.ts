@@ -53,9 +53,10 @@ export interface ProjectDocContent {
   markdown: string;
 }
 
-/** HQ-owned high-level requirements markdown for a project (U10). */
+/** Project requirements markdown, sourced read-only from GitHub `docs/PRD.md`. */
 export interface ProjectRequirements {
   markdown: string;
+  stale?: boolean;
 }
 
 function unwrapArray<T>(key: string) {
@@ -239,25 +240,11 @@ export const baseApi = createApi({
       providesTags: (_r, _e, { path }) => [{ type: 'Docs', id: path }],
     }),
 
-    /** HQ-owned high-level requirements markdown for a project (U10, read). */
+    /** Project requirements markdown from GitHub `docs/PRD.md` (read-only). */
     getProjectRequirements: build.query<ProjectRequirements, string>({
       query: (projectId) => `projects/${projectId}/requirements`,
       transformResponse: unwrapOne<ProjectRequirements>('requirements'),
       providesTags: (_r, _e, id) => [{ type: 'Requirements', id }],
-    }),
-
-    /** HQ-owned high-level requirements markdown for a project (U10, write). */
-    putProjectRequirements: build.mutation<
-      ProjectRequirements,
-      { projectId: string; markdown: string }
-    >({
-      query: ({ projectId, markdown }) => ({
-        url: `projects/${projectId}/requirements`,
-        method: 'PUT',
-        body: { markdown },
-      }),
-      transformResponse: unwrapOne<ProjectRequirements>('requirements'),
-      invalidatesTags: (_r, _e, { projectId }) => [{ type: 'Requirements', id: projectId }],
     }),
 
     // ---- Mutations (U22/U24/U25) ----
@@ -429,7 +416,6 @@ export const {
   useGetProjectDocsQuery,
   useGetProjectDocContentQuery,
   useGetProjectRequirementsQuery,
-  usePutProjectRequirementsMutation,
   useSaveAgentMutation,
   useEnableProjectSkillMutation,
   useDisableProjectSkillMutation,

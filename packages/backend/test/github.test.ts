@@ -293,4 +293,96 @@ describe('app: docs/plans tree + content + cache (U8)', () => {
     expect(framing.progressPct).toBe(58); // top doc completion wins over PROGRESS.md's 62
     expect(framing.goal).toContain('single weekly view');
   });
+
+  it('prefers docs/PRD.md completion over the docs/plans top-doc completion', async () => {
+    const fetch: FetchLike = async (url) => {
+      if (url.includes('/access_tokens')) return resp(201, { token: 't' });
+      if (url.includes('/contents/docs/PRD.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from('---\ncompletion: 42\n---\n# Project Requirements\nbody').toString(
+            'base64',
+          ),
+        });
+      if (url.includes('/contents/PRD.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from(fixture('PRD.md')).toString('base64'),
+        });
+      if (url.includes('/contents/PROGRESS.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from(fixture('PROGRESS.md')).toString('base64'),
+        });
+      if (url.includes('/commits?per_page=1')) return resp(200, [{ sha: 'sha-1' }]);
+      if (url.includes('/git/trees/'))
+        return resp(200, { tree: [{ path: 'docs/plans/a.md', type: 'blob', sha: 'blob-a' }] });
+      if (url.endsWith('/git/blobs/blob-a'))
+        return resp(200, { encoding: 'base64', content: Buffer.from(DOC_A).toString('base64') });
+      return resp(404, {});
+    };
+    const framing = await makeApp(fetch).readFramingWithCompletion();
+    expect(framing.progressPct).toBe(42); // docs/PRD.md (42) wins over top doc (58)
+  });
+
+  it('falls back to the docs/plans top doc when docs/PRD.md is absent', async () => {
+    const fetch: FetchLike = async (url) => {
+      if (url.includes('/access_tokens')) return resp(201, { token: 't' });
+      if (url.includes('/contents/docs/PRD.md')) return resp(404, { message: 'Not Found' });
+      if (url.includes('/contents/PRD.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from(fixture('PRD.md')).toString('base64'),
+        });
+      if (url.includes('/contents/PROGRESS.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from(fixture('PROGRESS.md')).toString('base64'),
+        });
+      if (url.includes('/commits?per_page=1')) return resp(200, [{ sha: 'sha-1' }]);
+      if (url.includes('/git/trees/'))
+        return resp(200, { tree: [{ path: 'docs/plans/a.md', type: 'blob', sha: 'blob-a' }] });
+      if (url.endsWith('/git/blobs/blob-a'))
+        return resp(200, { encoding: 'base64', content: Buffer.from(DOC_A).toString('base64') });
+      return resp(404, {});
+    };
+    const framing = await makeApp(fetch).readFramingWithCompletion();
+    expect(framing.progressPct).toBe(58); // top doc completion
+  });
+
+  it('falls back to PROGRESS.md then 0 when neither docs/PRD.md nor a plan doc carry completion', async () => {
+    const fetch: FetchLike = async (url) => {
+      if (url.includes('/access_tokens')) return resp(201, { token: 't' });
+      if (url.includes('/contents/docs/PRD.md')) return resp(404, { message: 'Not Found' });
+      if (url.includes('/contents/PRD.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from(fixture('PRD.md')).toString('base64'),
+        });
+      if (url.includes('/contents/PROGRESS.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from(fixture('PROGRESS.md')).toString('base64'),
+        });
+      if (url.includes('/commits?per_page=1')) return resp(200, [{ sha: 'sha-1' }]);
+      // No docs/plans tree at all -> empty list, no top-doc completion.
+      if (url.includes('/git/trees/')) return resp(200, { tree: [] });
+      return resp(404, {});
+    };
+    const framing = await makeApp(fetch).readFramingWithCompletion();
+    expect(framing.progressPct).toBe(62); // PROGRESS.md fixture's 62%
+  });
+
+  it('reads docs/PRD.md raw markdown via readPrdDoc (Contents API)', async () => {
+    const fetch: FetchLike = async (url) => {
+      if (url.includes('/access_tokens')) return resp(201, { token: 't' });
+      if (url.includes('/contents/docs/PRD.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from('# Project Requirements\nbody').toString('base64'),
+        });
+      return resp(404, {});
+    };
+    expect(await makeApp(fetch).readPrdDoc()).toContain('# Project Requirements');
+  });
 });

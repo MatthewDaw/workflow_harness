@@ -1,12 +1,13 @@
 ---
 name: hq-update-progress
 description: >-
-  Run inside the claude+ PTY to audit a repo against its docs/plans/
-  requirements, compute a code-vs-docs completion percentage per plan doc, write
-  that number into each doc's `completion:` frontmatter, commit and push it to
-  GitHub with the developer's own git/gh credentials, and emit a compliance
-  report. Command HQ then READS the pushed number to move the Project
-  Requirements + Detailed Requirements bars — HQ never writes to GitHub. Use
+  Run inside the claude+ PTY to audit a repo against its docs/PRD.md +
+  docs/plans/ requirements, compute a code-vs-docs completion percentage per
+  doc, write that number into each doc's `completion:` frontmatter, commit and
+  push it to GitHub with the developer's own git/gh credentials, and emit a
+  compliance report. Command HQ then READS the pushed numbers to move the
+  Project Requirements bar (from docs/PRD.md) and the Detailed Requirements bar
+  (from the docs/plans/ headline) — HQ never writes to GitHub. Use
   when the user says "/hq-update-progress", "update progress", "recompute
   completion", "push progress to HQ", or asks to reconcile what's built against
   the requirements docs.
@@ -49,11 +50,17 @@ pulls."
 
 ## Steps
 
-1. **Locate the plan tree.** Enumerate `docs/plans/**/*.md`. The top-of-folder
-   doc (e.g. `docs/plans/command-hq-overview.md`, or the highest-level doc if no
-   overview exists) is the **headline** doc — its `completion:` is the single
-   number HQ shows on both the Project Requirements bar and the Detailed
-   Requirements root. Every other doc gets its own per-doc `completion:`.
+1. **Locate the audited docs.** Two sources:
+   - `docs/PRD.md` — the **Project Requirements headline**. Its `completion:` is
+     the single number HQ shows on the **Project Requirements bar** (the
+     high-level, "what management writes" altitude).
+   - `docs/plans/**/*.md` — the Detailed Requirements tree. The top-of-folder
+     doc (e.g. `docs/plans/command-hq-overview.md`, or the highest-level doc if
+     no overview exists) is the **Detailed headline** doc — its `completion:` is
+     the number HQ shows on the **Detailed Requirements root**. Every other plan
+     doc gets its own per-doc `completion:`.
+   If `docs/PRD.md` is absent, audit only the `docs/plans/` tree (no regression
+   for repos that have not added a `docs/PRD.md` yet).
 2. **Read the requirements.** For each doc, extract its stated requirements:
    frontmatter, the requirements/units/acceptance sections, and any GitHub task
    items (`- [ ]` / `- [x]`). These are the "claimed" surface.
@@ -74,18 +81,24 @@ pulls."
    estimate, but it **never blocks** the push (next steps run regardless).
 5. **Compute completion per doc.** For each doc, score each requirement as
    built / partial / not-built (a partial counts ~0.5), weight by the doc's own
-   structure, and roll up to a 0–100 integer. The headline doc's number is the
+   structure, and roll up to a 0–100 integer. Score `docs/PRD.md` the same way,
+   but against its **high-level** requirements (the "what management writes"
+   outcome bullets), not the detailed plan units — this is the standalone
+   Project Requirements headline number, computed independently of the
+   `docs/plans/` tree. The Detailed headline doc's number is the
    weighted mean of its child docs (mirror the roll-up math in
    `packages/backend/src/projections/rollup.ts`: leaf = built-fraction,
    internal = mean of children) so the pushed number matches how HQ rolls up.
    Use the DoD evaluation (step 4) as a corroborating signal — e.g. don't claim
    a doc 100% done if the org DoD's unit-test floor is failing — but do not
    block on it.
-6. **Write the frontmatter.** Edit each doc's YAML frontmatter, setting or
-   updating `completion:` to the computed integer. Preserve all other
-   frontmatter keys and the doc body byte-for-byte. If a doc has no frontmatter
-   block, add a minimal one (`---\ncompletion: N\n---`).
-7. **Commit + push.** Stage only the changed `docs/plans/**` files. Commit with
+6. **Write the frontmatter.** Edit each doc's YAML frontmatter — `docs/PRD.md`
+   and every `docs/plans/**` doc — setting or updating `completion:` to the
+   computed integer. Preserve all other frontmatter keys and the doc body
+   byte-for-byte. If a doc has no frontmatter block, add a minimal one
+   (`---\ncompletion: N\n---`).
+7. **Commit + push.** Stage only the changed requirements docs — `docs/PRD.md`
+   (when present) and the changed `docs/plans/**` files. Commit with
    a message like `chore(progress): update completion via /hq-update-progress`
    (include the Co-Authored-By trailer the repo uses). Push to the current
    branch's upstream with `git push` (use `gh` only if auth/PR is needed). Never
@@ -100,24 +113,26 @@ pulls."
        "not-yet-enforced — hard gate deferred").
      End with the explicit line: **"Definition of Done is advisory — this push
      was not blocked by DoD conformance."**
-   - **Requirements vs. built** — per doc: built / partial / missing, with the
-     evidence file(s) for each "built."
-   - **Drift** — discrepancies between the **HQ-owned Project Requirements**
-     (the high-level list HQ holds canonically) and the **GitHub docs**: items
+   - **Requirements vs. built** — per doc (including `docs/PRD.md`): built /
+     partial / missing, with the evidence file(s) for each "built."
+   - **Drift** — discrepancies between the high-level **Project Requirements**
+     (`docs/PRD.md`) and the **Detailed Requirements** (`docs/plans/**`): items
      present in one tier but not the other, or marked done in one but not built.
-     This is the reconciliation surface; HQ owns Project Requirements, GitHub
-     owns Detailed Requirements, and they can drift.
-   - **Computed vs. previous `completion:`** per doc (delta).
+     This is the reconciliation surface; both tiers are now GitHub-sourced repo
+     files, and they can still drift in altitude/coverage.
+   - **Computed vs. previous `completion:`** per doc (delta), `docs/PRD.md`
+     listed alongside the plan docs.
    - A one-line caveat: "v1 estimate; prod-E2E Definition-of-Done hard gate
      deferred (DoD is reported, not enforced)."
 
 ## What HQ does after this
 
 Nothing is posted. On the next project refresh (`POST /projects/:id/refresh` or
-connect-time read), the backend fetches the repo via the read-only GitHub App,
-parses the headline doc's `completion:`, stores `progressPct`, and the web
-Project Requirements + Detailed Requirements bars reflect it. HQ never writes
-back.
+connect-time read), the backend fetches the repo via the read-only GitHub App
+and parses the `completion:` numbers: `docs/PRD.md`'s drives the **Project
+Requirements** bar (and the objectives roll-up), and the `docs/plans/` headline
+doc's drives the **Detailed Requirements** root. The web bars reflect both. HQ
+never writes back.
 
 ## Worked dry-run example (against THIS repo)
 
@@ -129,8 +144,9 @@ Run from the repo root in claude+:
 
 Expected behavior on this repo's current tree:
 
-1. Enumerate `docs/plans/`:
-   - `docs/plans/command-hq-overview.md` (headline, if present)
+1. Locate the audited docs:
+   - `docs/PRD.md` (Project Requirements headline, frontmatter `completion: 0`)
+   - `docs/plans/command-hq-overview.md` (Detailed headline, if present)
    - `docs/plans/command-hq/01-plan-mapping.md` (frontmatter `completion: 35`)
    - `docs/plans/command-hq/02-weekly-update.md` (`completion: 45`)
    - `docs/plans/command-hq/05-agentforge.md` (`completion: 20`)
@@ -148,10 +164,13 @@ Expected behavior on this repo's current tree:
    `{ requiresUnitTests: true, requiresProdE2E: true, notes: "…" }`. Run the unit
    suites (`packages/*/npm test`) → green. Look for a prod E2E suite → none
    observed against the deployed env, so record it as unknown / not-yet-enforced.
-5. Edit those docs' `completion:` frontmatter in place.
-6. `git add docs/plans/... && git commit -m "chore(progress): update
+5. Score `docs/PRD.md` against its high-level requirement bullets (the Project
+   Requirements headline) — say its built surface lands it at `completion: 40`.
+6. Edit those docs' `completion:` frontmatter in place (`docs/PRD.md` and the
+   changed `docs/plans/**` docs).
+7. `git add docs/PRD.md docs/plans/... && git commit -m "chore(progress): update
    completion via /hq-update-progress" && git push`.
-7. Print a compliance report, e.g.:
+8. Print a compliance report, e.g.:
 
    ```
    Compliance report — 2026-06-03
@@ -162,6 +181,7 @@ Expected behavior on this repo's current tree:
    Definition of Done is advisory — this push was not blocked by DoD conformance.
 
    doc                              prev  →  new   delta
+   docs/PRD.md (Project Reqs)          0  →   40    +40
    command-hq/05-agentforge.md        20  →   30    +10
    command-hq/01-plan-mapping.md      35  →   38     +3
    command-hq/02-weekly-update.md     45  →   45      0
@@ -170,8 +190,9 @@ Expected behavior on this repo's current tree:
    Partial:  /hq-update-progress (DoD prod-E2E hard gate — deferred)
    Missing:  fuzzy-Forge retirement (rest still references forge/propose.ts)
 
-   Drift (HQ Project Requirements vs GitHub docs):
-     - "single-admin promote" listed in HQ PR; GitHub 05 has it as Not built.
+   Drift (Project Requirements docs/PRD.md vs Detailed docs/plans/):
+     - "single-admin promote" listed high-level in docs/PRD.md; GitHub 05 has
+       it as Not built.
 
    Caveat: v1 estimate; prod-E2E Definition-of-Done hard gate deferred
            (DoD is reported, not enforced).
@@ -180,5 +201,7 @@ Expected behavior on this repo's current tree:
 ## Verification (this is a doc, not code)
 
 Test expectation: none — SKILL.md authoring. The skill is verified by running
-it: it edits at least one `docs/plans/` doc's `completion:`, pushes, and prints
-a compliance report; after an HQ refresh the bar reflects the pushed number.
+it: it edits `docs/PRD.md`'s `completion:` (and at least one `docs/plans/` doc's),
+pushes, and prints a compliance report; after an HQ refresh the Project
+Requirements bar (from `docs/PRD.md`) and the Detailed Requirements bar (from the
+`docs/plans/` headline) reflect the pushed numbers.

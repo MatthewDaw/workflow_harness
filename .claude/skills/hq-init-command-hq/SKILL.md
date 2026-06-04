@@ -2,10 +2,11 @@
 name: hq-init-command-hq
 description: >-
   Run inside the claude+ PTY to scaffold the GitHub-side files Command HQ reads
-  for a project: the high-level `PRD.md` (Project Overview goal + Supporting
-  Outcomes), a headline `docs/plans/` requirements doc with `completion:`
-  frontmatter (Detailed Requirements tab + the Project Requirements progress
-  bar), and a legacy `PROGRESS.md` fallback. It writes placeholder files only
+  for a project: the repo-root `PRD.md` (Project Overview goal + Supporting
+  Outcomes), `docs/PRD.md` (the Project Requirements body + bar, with
+  `completion:` frontmatter), a headline `docs/plans/` requirements doc with
+  `completion:` frontmatter (Detailed Requirements tab + bar), and a legacy
+  `PROGRESS.md` fallback. It writes placeholder files only
   where they are missing — it never overwrites existing content — then commits
   and pushes them with the developer's own git/gh so a freshly connected repo
   stops showing the "needs files" / 0% empty state. Use when the user says
@@ -18,8 +19,9 @@ description: >-
 Bootstrapper for the **GitHub side** of a Command HQ project. HQ reads a repo
 through a read-only GitHub App; if the files it expects are absent, the Project
 Overview, Project Requirements, and Detailed Requirements tabs render their
-empty states (`missingFiles: ["PRD.md", "PROGRESS.md"]`, no requirement docs,
-bar at `0%`). This skill creates **placeholders** for those files so a new repo
+empty states (`missingFiles: ["PRD.md", "PROGRESS.md"]`, no `docs/PRD.md` body,
+no requirement docs, bar at `0%`). This skill creates **placeholders** for those
+files so a new repo
 shows up cleanly, then hands off to [[update-progress]] (which computes and
 pushes the real `completion:` numbers later).
 
@@ -42,14 +44,15 @@ the exact files and formats it looks for.
 | HQ tab | Repo file(s) | What's parsed |
 | --- | --- | --- |
 | **Project Overview** | `PRD.md` (repo root) | `Goal:` line (or first `#` heading) → the goal; `SO-…` tokens → Supporting Outcome ids. Absent → listed in `missingFiles`. |
-| **Project Requirements** (bar) | headline `docs/plans/**/*.md` | top doc's `completion:` frontmatter → `progressPct`. Falls back to `PROGRESS.md` `N%`, then `0`. |
+| **Project Requirements** (body **and** bar) | `docs/PRD.md` | the high-level requirements prose → the read-only body; `completion:` frontmatter → `progressPct`. Falls back (bar only) to the headline `docs/plans/**/*.md` `completion:`, then `PROGRESS.md` `N%`, then `0`. |
 | **Detailed Requirements** | `docs/plans/**/*.md` | doc tree + per-doc `completion:` frontmatter badge; selecting a doc serves its raw markdown. |
 | (legacy fallback) | `PROGRESS.md` (repo root) | first `N%` → progress when no plan-doc frontmatter exists. |
 
-**Not a repo file:** the **Project Requirements tab _body_** (the high-level
-requirements prose) is **HQ-owned** — stored in DynamoDB, edited inline in HQ
-via `PUT /projects/:id/requirements`. This skill cannot and does not create it;
-it tells the user to fill that in inside Command HQ.
+**Two different PRD files — do not confuse them:** the repo-root `PRD.md` feeds
+the **Project Overview** tab (goal + `SO-…` ids). `docs/PRD.md` is a **separate
+file** that feeds the **Project Requirements** tab (its body **and** its bar).
+Both are repo files read read-only from GitHub — neither is HQ-owned. This skill
+scaffolds both where missing.
 
 ## Steps
 
@@ -70,7 +73,33 @@ it tells the user to fill that in inside Command HQ.
    - SO-1: <the first supporting outcome this project owns>
    ```
 
-3. **Scaffold the headline plan doc** `docs/plans/overview.md` **only if no
+3. **Scaffold `docs/PRD.md`** (the **Project Requirements** source — distinct
+   from the repo-root `PRD.md`) **only if missing.** Both its body and its bar
+   come from this file. It MUST start with a `completion:` frontmatter block so
+   the Project Requirements bar reads `0%` cleanly, followed by a placeholder
+   high-level requirements body:
+
+   ```markdown
+   ---
+   completion: 0
+   ---
+
+   # <Project Name> — Project Requirements
+
+   The high-level requirements management writes for this project — the outcome-
+   level "what", not the detailed breakdown. Each bullet ladders up to a
+   Supporting Outcome and is expanded under the Detailed Requirements tab
+   (`docs/plans/**/*.md`).
+
+   ## Requirements
+
+   - <first high-level requirement>
+   ```
+
+   (`completion: 0` is the placeholder; `/hq-update-progress` overwrites it with
+   the computed number on later runs.)
+
+4. **Scaffold the headline plan doc** `docs/plans/overview.md` **only if no
    `docs/plans/**/*.md` exists.** This is the doc HQ treats as the headline (top
    of the tree) for both the Project Requirements bar and the Detailed
    Requirements root. It MUST start with a `completion:` frontmatter block so the
@@ -95,7 +124,7 @@ it tells the user to fill that in inside Command HQ.
    (`completion: 0` is the placeholder; `/hq-update-progress` overwrites it with the
    computed number on later runs.)
 
-4. **Scaffold `PROGRESS.md`** (repo root) **only if missing** — the legacy
+5. **Scaffold `PROGRESS.md`** (repo root) **only if missing** — the legacy
    fallback so progress resolves even before any plan-doc frontmatter is trusted:
 
    ```markdown
@@ -104,24 +133,23 @@ it tells the user to fill that in inside Command HQ.
    0% complete
    ```
 
-5. **Report what was created vs. skipped**, then **commit + push.** Stage only
+6. **Report what was created vs. skipped**, then **commit + push.** Stage only
    the files this skill created. Commit with a message like
    `chore(hq): scaffold Command HQ project files via /hq-init-command-hq` (include
    the repo's Co-Authored-By trailer). Push to the current branch's upstream with
    `git push` (use `gh` only if auth/PR is needed). Never use the GitHub Contents
    API — push with the dev's own git so HQ's next read sees the new SHA.
-6. **Tell the user the two manual follow-ups:**
-   - Fill in the **Project Requirements body inside Command HQ** (HQ-owned, not
-     in the repo).
-   - Replace the placeholder goal / requirements text, then run
-     **[[update-progress]]** to compute real `completion:` numbers.
+7. **Tell the user the manual follow-up:** replace the placeholder goal /
+   requirements text in `PRD.md`, `docs/PRD.md`, and `docs/plans/overview.md`,
+   then run **[[update-progress]]** to compute real `completion:` numbers.
 
 ## What HQ does after this
 
 Nothing is posted. On the next project refresh (`POST /projects/:id/refresh` or
 connect-time read), the backend fetches the repo via the read-only GitHub App,
-finds `PRD.md` (goal + SOs), the `docs/plans/` tree, and the `completion:`
-frontmatter, and the three tabs leave their empty states. HQ never writes back.
+finds `PRD.md` (goal + SOs), `docs/PRD.md` (Project Requirements body + bar), the
+`docs/plans/` tree, and the `completion:` frontmatter, and the three tabs leave
+their empty states. HQ never writes back.
 
 ## Worked example (against a fresh repo)
 
@@ -133,25 +161,29 @@ Expected behavior on a repo with no HQ files:
 
 1. `git rev-parse --show-toplevel` → repo root confirmed.
 2. No `PRD.md` → write the placeholder (heading + `Goal:` + `SO-1`).
-3. No `docs/plans/**/*.md` → create `docs/plans/overview.md` with
+3. No `docs/PRD.md` → write the Project Requirements placeholder with
+   `completion: 0` frontmatter + a high-level requirements body.
+4. No `docs/plans/**/*.md` → create `docs/plans/overview.md` with
    `completion: 0` frontmatter.
-4. No `PROGRESS.md` → write `0% complete`.
-5. Print:
+5. No `PROGRESS.md` → write `0% complete`.
+6. Print:
 
    ```
    init-command-hq — scaffolded:
      created  PRD.md
+     created  docs/PRD.md              (completion: 0)
      created  docs/plans/overview.md   (completion: 0)
      created  PROGRESS.md
      skipped  (none already present)
 
    Next:
-     - Edit Project Requirements body in Command HQ (HQ-owned, not in the repo).
-     - Replace placeholder text, then run /hq-update-progress for real numbers.
+     - Replace placeholder text in PRD.md, docs/PRD.md, and docs/plans/overview.md,
+       then run /hq-update-progress for real numbers.
    ```
 
-6. `git add PRD.md docs/plans/overview.md PROGRESS.md && git commit -m "chore(hq):
-   scaffold Command HQ project files via /hq-init-command-hq" && git push`.
+7. `git add PRD.md docs/PRD.md docs/plans/overview.md PROGRESS.md && git commit -m
+   "chore(hq): scaffold Command HQ project files via /hq-init-command-hq" &&
+   git push`.
 
 On a repo that already has, say, `PRD.md` and a `docs/plans/` tree, it reports
 `skipped PRD.md`, `skipped docs/plans/** (N docs present)`, and only creates the
@@ -160,8 +192,9 @@ genuinely-missing files (or nothing, committing nothing).
 ## Verification (this is a doc, not code)
 
 Test expectation: none — SKILL.md authoring. The skill is verified by running it
-in a repo with no HQ files: it creates `PRD.md`, `docs/plans/overview.md` (with
-`completion: 0`), and `PROGRESS.md`, pushes them, and re-running it creates
-nothing (idempotent). After an HQ refresh the Overview shows the goal, the
-Detailed Requirements tab lists the headline doc, and the bar reads `0%` instead
-of the empty state.
+in a repo with no HQ files: it creates `PRD.md`, `docs/PRD.md` (with
+`completion: 0`), `docs/plans/overview.md` (with `completion: 0`), and
+`PROGRESS.md`, pushes them, and re-running it creates nothing (idempotent). After
+an HQ refresh the Overview shows the goal, the Project Requirements tab renders
+`docs/PRD.md` read-only, the Detailed Requirements tab lists the headline doc,
+and the bars read `0%` instead of the empty state.

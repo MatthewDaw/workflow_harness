@@ -160,17 +160,32 @@ export class GitHubApp {
   }
 
   /**
-   * Read the project framing (U7) with progress sourced the new way: prefer the
-   * top `docs/plans/` doc's `completion:` frontmatter, fall back to the legacy
+   * Read `docs/PRD.md` — the Project Requirements headline source. Distinct from
+   * the repo-root `PRD.md` (which feeds the Project Overview goal + Supporting
+   * Outcomes). Returns undefined on 404 so callers treat it as absent.
+   */
+  async readPrdDoc(): Promise<string | undefined> {
+    return this.readFile('docs/PRD.md');
+  }
+
+  /**
+   * Read the project framing (U7) with progress sourced the new way: prefer
+   * `docs/PRD.md`'s `completion:` frontmatter (the Project Requirements headline),
+   * fall back to the top `docs/plans/` doc's `completion:`, then the legacy
    * `PROGRESS.md %`, finally 0. Goal + owned Supporting Outcomes still come from
-   * `PRD.md`. Read-only; no writes to GitHub anywhere.
+   * the repo-root `PRD.md`. Read-only; no writes to GitHub anywhere.
    */
   async readFramingWithCompletion(): Promise<ProjectFraming> {
-    const [framing, docs] = await Promise.all([this.readFraming(), this.listDocs().catch(() => [])]);
+    const [framing, docs, prdMd] = await Promise.all([
+      this.readFraming(),
+      this.listDocs().catch(() => []),
+      this.readPrdDoc().catch(() => undefined),
+    ]);
     // The "top" doc is the lexicographically-first under docs/plans/ (our docs are
     // date-prefixed, so this is the earliest/canonical plan). listDocs() is sorted.
     const topCompletion = docs[0]?.completion;
-    const progressPct = topCompletion ?? framing.progressPct ?? 0;
+    const prdCompletion = parseCompletionFrontmatter(prdMd);
+    const progressPct = prdCompletion ?? topCompletion ?? framing.progressPct ?? 0;
     return { ...framing, progressPct };
   }
 
