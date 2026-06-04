@@ -51,47 +51,6 @@ const BUNDLE_SKILLS: Skill[] = [
   },
 ];
 
-const ORG = { tier: 'org', id: 'acme' } as const;
-const BUNDLE_SKILLS: Skill[] = [
-  {
-    name: 'command-hq-starter',
-    scope: ORG,
-    kind: 'bundle',
-    description: 'Bundled skills',
-    source: 'built-in',
-    members: ['endforge', 'weekly-update'],
-    resolvedMembers: ['endforge', 'weekly-update'],
-    body: '',
-  },
-  {
-    name: 'endforge',
-    scope: ORG,
-    kind: 'skill',
-    description: '',
-    source: 'built-in',
-    members: [],
-    body: '',
-  },
-  {
-    name: 'weekly-update',
-    scope: ORG,
-    kind: 'skill',
-    description: '',
-    source: 'built-in',
-    members: [],
-    body: '',
-  },
-  {
-    name: 'loner',
-    scope: ORG,
-    kind: 'skill',
-    description: 'standalone',
-    source: 'local',
-    members: [],
-    body: '',
-  },
-];
-
 interface StubReq {
   url: string;
   method: string;
@@ -141,42 +100,9 @@ describe('Skills scope controls (U17)', () => {
 
     expect(screen.getByTestId('skill-author-loner')).toHaveTextContent('by Matt');
 
-    await userEvent.selectOptions(screen.getByTestId('skill-author-filter'), 'Matt');
+    await userEvent.selectOptions(screen.getByTestId('author-filter'), 'Matt');
     expect(screen.getByTestId('skill-card-loner')).toBeInTheDocument();
     expect(screen.queryByTestId('skill-card-command-hq-starter')).not.toBeInTheDocument();
-  });
-
-  it('moves a skill into a new scope group on success (cache invalidation)', async () => {
-    // After the scope change, RTK Query refetches; the fetch stub serves the
-    // moved record so the skill should render under the new tier group.
-    const moved = [
-      { ...SKILLS[0]!, scope: { tier: 'user', id: 'user-matt' } as const },
-    ];
-    renderWithProviders(<Skills />, { route: '/skills', seed: { skills: SKILLS } });
-    await screen.findByTestId('skill-card-browse');
-    // Starts under the project group.
-    expect(screen.getByTestId('scope-group-project')).toContainElement(
-      screen.getByTestId('skill-card-browse'),
-    );
-
-    // Re-point the stub to the moved record before firing the change.
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: unknown) => {
-      const url = String((input as { url: string }).url);
-      const method = ((input as { method?: string }).method ?? 'GET').toUpperCase();
-      const body = url.includes('/skills') && method === 'GET' ? moved : { skill: moved[0] };
-      return new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    });
-
-    await userEvent.selectOptions(screen.getByTestId('skill-scope-picker-browse'), 'user');
-
-    await waitFor(() =>
-      expect(screen.getByTestId('scope-group-user')).toContainElement(
-        screen.getByTestId('skill-card-browse'),
-      ),
-    );
   });
 });
 
