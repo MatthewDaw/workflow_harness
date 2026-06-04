@@ -2,11 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import type { Envelope } from '@harness/shared';
-import {
-  useGetSessionQuery,
-  useGetSessionEventsQuery,
-  useSendControlMutation,
-} from '../../api/baseApi.js';
+import { useGetSessionQuery, useSendControlMutation } from '../../api/baseApi.js';
 import { wsSubscribe, wsUnsubscribe } from '../../ws/liveActions.js';
 import { selectSessionEvents } from '../../app/liveEventsSlice.js';
 import type { RootState } from '../../app/store.js';
@@ -20,13 +16,7 @@ function clock(ts: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/**
- * Render one envelope's event as an activity string carrying the REAL content
- * claude+ produced. user/assistant rows now ship the actual turn text (`text`);
- * tool.call ships the command/args (`argsSummary`); tool.result ships the
- * truncated output (`summary`). When `text` is absent (older daemons) we fall
- * back to the token count so the feed degrades gracefully rather than going blank.
- */
+/** Render one envelope's event as a compact one-line activity string. */
 function activityLine(env: Envelope): string | null {
   const e = env.event;
   switch (e.kind) {
@@ -35,13 +25,9 @@ function activityLine(env: Envelope): string | null {
     case 'tool.result':
       return `${e.ok ? '✓' : '✗'} ${e.ms}ms  ${e.summary}`.trimEnd();
     case 'user.msg':
-      return e.text && e.text.trim() !== ''
-        ? `▎ you · ${e.text}`
-        : `▎ you · ${e.tokens} tok`;
+      return `▎ you · ${e.tokens} tok`;
     case 'assistant.msg':
-      return e.text && e.text.trim() !== ''
-        ? `▎ claude · ${e.text}`
-        : `▎ claude · ${e.tokens} tok`;
+      return `▎ claude · ${e.tokens} tok`;
     case 'cost.tick':
       return `$ +${e.deltaUsd} (total ${e.totalUsd})`;
     case 'status.change':
@@ -52,18 +38,6 @@ function activityLine(env: Envelope): string | null {
     default:
       return null;
   }
-}
-
-/**
- * Merge backfilled history (REST) with the live WS feed, deduped by `seq` and
- * sorted ascending. Backfill seeds the view on open so it shows real history
- * immediately; the live slice carries everything that arrives after subscribe.
- */
-function mergeEvents(backfill: readonly Envelope[], live: readonly Envelope[]): Envelope[] {
-  const bySeq = new Map<number, Envelope>();
-  for (const env of backfill) bySeq.set(env.seq, env);
-  for (const env of live) bySeq.set(env.seq, env);
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
 
 /**
@@ -86,8 +60,7 @@ export function LiveWatch() {
   const [sendControl] = useSendControlMutation();
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState<string | null>(null);
-  const liveEvents = useSelector((state: RootState) => selectSessionEvents(state, sessionId));
-  const events = mergeEvents(backfill ?? [], liveEvents);
+  const events = useSelector((state: RootState) => selectSessionEvents(state, sessionId));
 
   // Auto-scroll the transcript to the newest event as the feed grows.
   const feedRef = useRef<HTMLDivElement>(null);
