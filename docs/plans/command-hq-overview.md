@@ -2,10 +2,10 @@
 status: active
 type: overview
 created: 2026-06-02
-completion: 83
+completion: 90
 ---
 
-> **completion: 58%** — this top-of-`docs/plans/` file represents the requirements
+> **completion: 90%** — this top-of-`docs/plans/` file represents the requirements
 > for the **whole project**. The website reads this number and displays it on both
 > the Command HQ high-level **Project Requirements** bar and the **Detailed
 > Requirements** root. Every doc in this folder carries its own `completion:` at the
@@ -27,6 +27,15 @@ app that turns that stream into a live, strategy-aligned view of all work:
 company objectives, per-repo requirements, agents/skills, live sessions,
 and weekly reconciliation. The thesis: **day-to-day agent work and company
 strategy are the same system, kept in sync automatically.**
+
+**Live deployment (prod).** Command HQ is deployed and serving:
+API `https://l5edwucexb.execute-api.us-east-1.amazonaws.com`, WebSocket
+`wss://fgxq7ezbl1.execute-api.us-east-1.amazonaws.com/prod`, site
+`https://d13sqkbwzqe38l.cloudfront.net`, Cognito pool `us-east-1_HqxqXElfd`,
+default org `personasearch`. New accounts come from **Google federated sign-in**
+(email/password self-signup is disabled); a Cognito pre-token-generation Lambda
+defaults a missing `custom:org` to `personasearch` so a fresh account is
+authorized everywhere (`infra/lib/auth-stack.ts`).
 
 ## Relationship to `st6_prd.md`
 
@@ -87,13 +96,57 @@ Plus the substrate everything rides on: **Platform & Architecture** —
 
 ## Build status at a glance
 
+The **new-model migration**
+([2026-06-03 plan](./2026-06-03-001-feat-command-hq-new-model-migration-plan.md),
+units U1–U22) is **landed**: tickets are removed end-to-end, GitHub `completion:`
+frontmatter is the progress source of truth, the two-tier requirements UI ships,
+the client skills exist under `.claude/skills/`, and the infra footguns
+(SearchStack, device-token secret, Go CI, CORS) are fixed. The table below
+reflects current reality.
+
 | Feature | Backend | Frontend | Skill/CLI |
 |---|---|---|---|
-| 1 Plan mapping | roll-up + GitHub parse exist; **/update-progress + prod-E2E gate + editable requirements: not built** | objectives tree + progress bars exist; **two-tier requirements UI, edit, full-screen, checks: not built (wireframed)** | `/update-progress` skill: **not built** |
-| 2 Weekly plan | agent logic + draft/publish endpoints exist | weekly screen is display-only/stubbed | `/weekly-update` skill: **not built** |
-| 3 CC integration | scope model + registry + control gateway exist | agents/skills/sessions screens exist | config sync exists |
-| 4 CLI wrapper | — | desktop (Wails) app exists | daemon/attach/capture exist |
-| 5 AgentForge | `forge/` embed+propose+search exist | — | `/startforge`/`/endforge`: **not built** |
+| 1 Plan mapping | roll-up re-pointed off tickets onto stored `progressPct`; GitHub `completion:` frontmatter read/store (`github/history.ts`, `rest/projects.ts`); docs-tree REST; Definition-of-Done REST (`rest/dod.ts`, advisory). **Prod-E2E gate still deferred.** | objectives tree + bars; two-tier requirements UI built (`ProjectRequirements.tsx`, `DetailedRequirements.tsx`, `MarkdownView`); editable Project Requirements | `/update-progress` skill **built** |
+| 2 Weekly plan | weekly = store/serve a client-posted report (`rest/weekly.ts`); ticket-based `assembleWeekly`/`align.ts` removed; `conformityScore` round-trips | Weekly screen renders posted report (`ProjectWeekly.tsx`) | `/weekly-update` skill **built** |
+| 3 CC integration | scope model + registry + control gateway (`ws/control.ts`); steer/scope/bundle wired | agents/skills/sessions/live-watch screens; steer + scope/bundle controls wired | config sync (remote half + drift) exists |
+| 4 CLI wrapper | — | desktop (Wails) app exists; xterm UX (visible cursor, scrollback, double-click rename) | daemon/attach/capture; LLM auto-titles (`internal/title/`); hook receiver; **isolated `~/.claude+` config root** |
+| 5 AgentForge | fuzzy `forge/` backend **removed**; SearchStack dropped from synth | single-admin promote via scope-elevate on Agents screen | `/startforge`/`/endforge` skills **built** (distiller-first) |
 
-> Legend: "exists" = code present in repo; "not built" = designed/wireframed only.
-> Detail files carry per-feature status sections.
+> Legend: "built" = code present + tested in repo; "deferred" = explicitly parked
+> for a later increment. Detail files carry per-feature status sections.
+
+### Isolated config root + bundled-skill seed (cross-cutting, built)
+
+Two subsystems underpin the skills story and weren't in the original map:
+
+- **Isolated `~/.claude+` config root.** claude+ launches its inner Claude with
+  `CLAUDE_CONFIG_DIR=~/.claude+` — a **stable** directory seeded once from
+  `~/.claude` (auth/settings/MCP) — so product-bundled skills and claude+ session
+  history never pollute the user's personal `~/.claude`. The capture tailer follows
+  the same root, and the transcript directory slug replaces **every**
+  non-alphanumeric char with `-` to match Claude Code's project-hash naming.
+  *Code:* `wrapper/internal/config/overlay.go`, `pty/session.go`,
+  `capture/parse.go` (`projectHash`/`slugifyPath`).
+- **HQ org-scope skill bundle seed.** The repo's `.claude/skills/` set is seeded
+  into HQ at **org scope** (`personasearch`), grouped as the **`command-hq-starter`**
+  bundle, so the Skills tab shows them on a fresh deploy with no device connected.
+  This is the source of truth for "skills visible in HQ out of the box." *Code:*
+  `packages/backend/src/seed/skills.ts`, `infra/scripts/seed-skills.mjs`,
+  `.github/workflows/seed-skills.yml` + the deploy seed step.
+
+### In progress / next (NOT yet on this branch — do not treat as done)
+
+Being built in parallel; the docs anticipate them but they are not merged here:
+
+- Live **per-session activity feed** in the watch view.
+- **Session name + first-prompt columns** in the Sessions tab.
+- A **`UserPromptSubmit`** hook that auto-renames a session on the first prompt and
+  pushes the rename to the attached CLI tab.
+- A **daemon protocol-version bump** so rebuilds auto-replace a stale daemon.
+- **Heartbeat + ~60s freshness window** so power-loss/killed daemons drop off HQ's
+  live list.
+- **Overview tab removed** (project default tab → Project Requirements).
+- **Skills tab overhaul** (searchable picker, working scope-change, hide bundle
+  members by default with a toggle, a new `create-hq-skill` skill).
+- **Delete agents/skills**, with the `command-hq-starter` bundle protected
+  server-side.

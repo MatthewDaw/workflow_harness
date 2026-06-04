@@ -29,11 +29,18 @@ original build plan so this folder is self-contained.
   ingest + live + control); **Lambda** (TypeScript); **DynamoDB** single-table
   with GSIs; **DynamoDB Streams** drive projections (session state, objective
   roll-ups).
-- **Auth:** **Cognito** for the web app; **device tokens** for the wrapper
-  (`backend/src/auth/`).
-- **Forge vectors:** OpenSearch Serverless (vector) for session-summary k-NN;
-  DynamoDB brute-force cosine as a low-volume fallback.
-- **GitHub App:** reads git history (weekly "done"), branch/PR state. *Code:* `backend/src/github/`.
+- **Auth:** **Cognito** for the web app (email/password self-signup **disabled**;
+  accounts arrive via **Google federated** sign-in, auto-provisioned; a Cognito
+  **pre-token-generation Lambda** defaults a missing `custom:org` to `personasearch`
+  so a new account is authorized — `infra/lib/auth-stack.ts`); **device tokens** for
+  the wrapper (`backend/src/auth/`). The API/WS JWT authorizer validates the ID token
+  (audience = the app client id).
+- **Forge vectors: removed.** The OpenSearch Serverless `SearchStack` and the
+  `backend/src/forge/` embeddings pipeline were dropped; AgentForge distills
+  client-side (see [feature 5](./05-agentforge.md)). No server-side embeddings.
+- **GitHub App:** **read-only (`contents:read`)** — reads requirement docs
+  (`docs/plans/` tree + `completion:` frontmatter) and git history. HQ never writes
+  to GitHub. *Code:* `backend/src/github/`.
 - **Web:** React + Vite + Tailwind SPA on S3 + CloudFront; **RTK Query** + a
   WebSocket middleware for live events.
 - **IaC:** CDK (`infra/`).
@@ -48,7 +55,7 @@ Migrated from the original build plan; the durable rationale for the stack.
 4. **Serverless backend.** API GW HTTP API (REST) + WebSocket API (ingest + live + control); Lambda (TS); DynamoDB single-table + GSIs; Streams drive projections.
 5. **Auth.** Cognito user pool for web; a device token (device-code flow, `claude+ login`) authorizes the daemon's outbound WS and scopes its data to that user. No inbound ports needed (the daemon dials out); the token carries a TTL + revoke + OS-keychain storage.
 6. **Control gateway over WebSocket.** HQ steers a session by routing a control frame to the daemon's stored `connectionId` on its persistent *outbound* WS; ownership re-checked on every frame.
-7. **Forge semantic search (deferred).** Session-summary vector retrieval (OpenSearch k-NN / DynamoDB cosine fallback) is not built; AgentForge v1 distills from the working diff directly. No server-side embeddings.
+7. **Forge semantic search (removed, not just deferred).** Session-summary vector retrieval (OpenSearch k-NN / DynamoDB cosine) was dropped along with the `backend/src/forge/` pipeline and the `SearchStack`; AgentForge distills client-side from the working diff. No server-side embeddings.
 8. **Scope model.** Three tiers `org` / `user#uid` / `proj#pid`; resolution composes all three, narrowest wins on name collision; elevate/demote rewrites the scope key. Objectives are org-global.
 9. **GitHub via a GitHub App.** Reads requirement docs + git history (weekly "done") + branch/PR state — **read-only (`contents:read`), installed per-repo**. HQ reads from GitHub and never writes; `/update-progress` pushes completion numbers from the client side.
 10. **Distribution.** goreleaser cross-compile + an npm wrapper package (per-platform prebuilt binaries via `optionalDependencies`) + `curl | sh` (with a published `checksums.txt` + SHA-256 verification in the installer). PTY via `creack/pty`.
@@ -69,7 +76,11 @@ Single table `harness`, overloaded `PK`/`SK` + GSIs for cross-cutting queries.
 | Agent | `SCOPE#<scope>` | `AGENT#<name>` | scope ∈ org / user#uid / proj#pid |
 | Skill / Bundle | `SCOPE#<scope>` | `SKILL#<name>` | bundle holds member refs; nestable |
 | Objective node | `ORG#<org>` | `RCDO#<path>` | tree path; roll-up % cached |
-| Weekly update | `PROJ#<pid>` | `WEEK#<isoweek>` | done[] + plan[] + alignment |
+| Weekly update | `PROJ#<pid>` | `WEEK#<isoweek>` | client-posted report: `done` summary + `plan` + `conformityScore` (no ticket alignment) |
+
+The Project record additionally stores `progressPct` + `prdGoal` +
+`supportingOutcomeIds` (from the GitHub `completion:` read) with
+`framingReadAt`/`framingStale` for last-known-on-failure.
 
 *Code:* `backend/src/db/keys.ts`, `db/repo.ts`; contracts in `packages/shared/src/`.
 Event records hold tool args + message content; at single-user scope, secrets-
@@ -100,9 +111,23 @@ wrapper            # Go: claude+ (daemon, attach, capture, config sync)
 npm/claude-plus    # npm distribution wrapper
 ```
 
+## Deployed environment (prod)
+
+Live and serving: API `https://l5edwucexb.execute-api.us-east-1.amazonaws.com`,
+WebSocket `wss://fgxq7ezbl1.execute-api.us-east-1.amazonaws.com/prod`, site
+`https://d13sqkbwzqe38l.cloudfront.net`, Cognito pool `us-east-1_HqxqXElfd`, org
+`personasearch`. CORS is pinned to the CloudFront origin (+ the local Vite dev
+origin), never `*` (`infra/lib/api-stack.ts`). The active CDK stacks are
+`AuthStack`, `ApiStack`, `SiteStack`; the `SearchStack` source file remains in
+`infra/lib/` but is **excluded from the synth app** (`infra/bin/infra.ts`) so a
+`cdk deploy --all` can't provision OpenSearch.
+
 ## Status
 
-- **Built:** shared contracts, DDB access layer, REST + WS handlers, auth,
-  GitHub integration, CDK stacks, web data layer.
-- **Open:** end-to-end deploy hardening; Streams-driven projection coverage for
-  the newer features (1, 2).
+- **Built:** shared contracts, DDB access layer, REST + WS handlers (including the
+  control gateway, ticket subsystem **removed**), Cognito + Google-federation auth
+  with the default-org Lambda, read-only GitHub integration (docs-tree +
+  `completion:`), active CDK stacks, web data layer, the org-scope skill seed.
+- **Open:** end-to-end deploy hardening; Streams-driven projection coverage for the
+  newer features (1, 2); the in-progress heartbeat/freshness for the live list (see
+  the overview's "In progress / next").
