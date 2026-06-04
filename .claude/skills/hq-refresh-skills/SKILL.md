@@ -17,9 +17,10 @@ claude+ session.
 
 ## What it does
 
-1. **Check for drift.** Compares HQ's effective skill/agent set (org → user →
-   project, narrowest wins) against the local `~/.claude+` registry. If nothing
-   changed, report "already up to date" and stop.
+1. **Check for drift.** Fetches the org catalog (`GET /skills`, `GET /agents`),
+   filters it to the linked project's enabled set (`enabledSkills` /
+   `enabledAgents`), and compares that effective set against the local `~/.claude+`
+   registry. If nothing changed, report "already up to date" and stop.
 2. **Pull changes.** For anything new or updated in HQ, materialize it into
    `~/.claude+/skills/<name>/SKILL.md` (agents into `~/.claude+/agents/`). Writes
    go only to the isolated `~/.claude+` root — never your personal `~/.claude`.
@@ -45,8 +46,8 @@ pulled skill is usable on the next turn (claude+ reads skills from `~/.claude+`)
 
 ## Relation to /hq-update-skills
 
-`/hq-update-skills` does the **bidirectional** reconcile (pulls HQ changes AND pushes
-your local-only skills up to your user scope). `/hq-refresh-skills` is the
+`/hq-update-skills` does the **bidirectional** reconcile (pulls the project's enabled
+changes AND pushes your local-only skills up to the org catalog). `/hq-refresh-skills` is the
 **pull-only** framing — "just get me HQ's latest" — for when you don't want to
 publish anything, only consume updates. Both use `claude+ sync-skills` under the
 hood; the pushes are a no-op when you have nothing local-only.
