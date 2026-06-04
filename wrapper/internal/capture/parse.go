@@ -32,18 +32,38 @@ func TranscriptPath(repoRoot, sessionID string) (string, error) {
 }
 
 // projectHash derives Claude Code's per-project directory name. Claude Code
-// slugifies the absolute path (replacing path separators); we additionally hash
-// for a stable fallback. Isolated here so it can be re-pinned if the layout
-// changes (R2).
+// slugifies the absolute path by replacing every non-alphanumeric character with
+// a dash (NOT just path separators): `C:\Users\me\workflow_harness` becomes
+// `C--Users-me-workflow-harness` — note the underscore also becomes a dash, and
+// runs of specials are NOT collapsed. Replacing only `/ \ :` (the old behavior)
+// missed the underscore, so the tailer watched a directory that never exists and
+// no transcript events were ever captured. Isolated here so it can be re-pinned
+// if the layout changes (R2).
 func projectHash(repoRoot string) string {
-	// Claude Code uses a dash-slugged absolute path as the directory name.
-	slug := strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(repoRoot)
+	slug := slugifyPath(repoRoot)
 	slug = strings.TrimPrefix(slug, "-")
 	if slug == "" {
 		sum := sha1.Sum([]byte(repoRoot))
 		return hex.EncodeToString(sum[:])[:16]
 	}
 	return slug
+}
+
+// slugifyPath maps every non-alphanumeric rune to a dash, mirroring Claude Code's
+// project-directory naming. Specials are mapped 1:1 (no collapsing), so `C:\` ->
+// `C--`.
+func slugifyPath(p string) string {
+	var b strings.Builder
+	b.Grow(len(p))
+	for _, r := range p {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 // contentBlock is one element of a message content array (text or tool blocks).
