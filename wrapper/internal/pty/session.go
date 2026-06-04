@@ -2,6 +2,7 @@ package pty
 
 import (
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	pty "github.com/aymanbagabas/go-pty"
+
+	"github.com/workflow-harness/claude-plus/internal/config"
 )
 
 // Status mirrors the session lifecycle status used in the event contract.
@@ -95,6 +98,17 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 // newSession starts a claude child under a PTY with the given dimensions.
 func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
 	spec := spawn(repoRoot, id)
+
+	// Point the real claude launch at the stable isolated config root ~/.claude+
+	// (U21), so bundled skills + claude+ history stay out of the user's personal
+	// ~/.claude while auth/transcripts/settings persist across restarts. A failure
+	// here must never block a session — fall back to the inherited ~/.claude.
+	if dir, err := config.EnsureConfigDir(); err == nil {
+		spec.Env = append(spec.Env, "CLAUDE_CONFIG_DIR="+dir)
+	} else {
+		log.Printf("pty: isolated config root failed, using ~/.claude: %v", err)
+	}
+
 	// Resolve a bare command name against PATH up front. go-pty/os-exec would
 	// otherwise resolve it relative to Dir (the repo root) and fail to find a
 	// PATH binary like `claude` once a working directory is set.
