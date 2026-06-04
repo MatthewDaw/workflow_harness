@@ -23,6 +23,7 @@ import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const skillsDir = path.join(repoRoot, '.claude', 'skills');
+const bundlesManifest = path.join(skillsDir, 'bundles.json');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG ?? 'acme';
@@ -93,13 +94,32 @@ function readSkillFiles() {
   return files.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Load the bundle manifest (`.claude/skills/bundles.json`) — the single source of
+ * truth for how skills are grouped into bundles. Absent manifest => no bundles
+ * (every skill standalone). Each entry is `{ description, members[] }`.
+ */
+function readBundleManifest() {
+  if (!existsSync(bundlesManifest)) {
+    console.warn(`[seed-skills] no bundle manifest at ${bundlesManifest} — seeding all skills standalone.`);
+    return {};
+  }
+  try {
+    return JSON.parse(readFileSync(bundlesManifest, 'utf8'));
+  } catch (err) {
+    console.error(`[seed-skills] could not parse ${bundlesManifest}:`, err);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const files = readSkillFiles();
   if (files.length === 0) {
     console.error('[seed-skills] found no SKILL.md files to seed');
     process.exit(1);
   }
-  const records = buildSeedSkills(ORG, files);
+  const manifest = readBundleManifest();
+  const records = buildSeedSkills(ORG, files, manifest);
 
   if (process.env.SEED_DRY_RUN) {
     for (const r of records) {
@@ -121,9 +141,12 @@ async function main() {
   }
 
   const skillNames = records.filter((r) => r.kind === 'skill').map((r) => r.name);
+  const bundleNames = records.filter((r) => r.kind === 'bundle').map((r) => r.name);
   console.log(
-    `[seed-skills] seeded ${skillNames.length} skills + 1 bundle into ${TABLE} ` +
-      `at org#${ORG}: ${skillNames.join(', ')}`,
+    `[seed-skills] seeded ${skillNames.length} skills + ${bundleNames.length} bundle(s) ` +
+      `into ${TABLE} at org#${ORG}.\n` +
+      `  skills: ${skillNames.join(', ')}\n` +
+      `  bundles: ${bundleNames.map((b) => `${b}`).join(', ') || '(none)'}`,
   );
 }
 

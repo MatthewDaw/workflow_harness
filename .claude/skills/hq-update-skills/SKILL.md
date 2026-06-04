@@ -66,9 +66,10 @@ npm run build -w @harness/backend \
      node infra/scripts/seed-skills.mjs
 ```
 
-- The seed reads **every** repo `.claude/skills/*/SKILL.md` and upserts them into
-  the org catalog as `command-hq-starter` members. It is idempotent, so re-running
-  is always safe.
+- The seed reads **every** repo `.claude/skills/*/SKILL.md` and upserts each into
+  the org catalog as a standalone skill, plus one bundle per entry in the manifest
+  `.claude/skills/bundles.json` (a skill joins `command-hq-starter` only if listed
+  there). It is idempotent, so re-running is always safe.
 - `SEED_ORG` must match the org the website serves (deployed default
   `personasearch`; confirm via `packages/web/.env*` `VITE_ORG`).
 - **Requires local AWS credentials** for the `harness` table. If the seed fails
@@ -79,10 +80,10 @@ npm run build -w @harness/backend \
   `.claude/skills/<name>/` file(s) must be on `main` first if you also want the
   Action path / other machines to pick them up — commit + push them, then seed.
 
-After seeding, the skill shows in the web **Skills** tab. Because it's a
-`command-hq-starter` member, it sits inside that bundle: toggle **"show in
-bundles"** on `/skills` or open the `command-hq-starter` bundle to see it (a hard
-page refresh picks up the new catalog).
+After seeding, the skill shows in the web **Skills** tab. A standalone skill
+appears directly in the top-level grid; a bundled one (listed in the manifest)
+sits inside its bundle — toggle **"show in bundles"** on `/skills` or open the
+bundle to see it (a hard page refresh picks up the new catalog).
 
 ## When nothing happens
 

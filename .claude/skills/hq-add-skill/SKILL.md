@@ -75,11 +75,14 @@ the server forces `scope` and stamps `createdBy`.
 
 There are two registration paths; both land in the same org catalog:
 
-- **The product bundle (`command-hq-starter`) via the seed path.** The seed
+- **The org catalog via the seed path.** The seed
   (`infra/scripts/seed-skills.mjs` → `packages/backend/src/seed/skills.ts`
-  `buildSeedSkills`) reads every `.claude/skills/*/SKILL.md` and writes them into
-  the **org catalog** as members of `command-hq-starter`, stamping
-  `createdBy:{userId:'system',name:'system'}`. The registration *is* getting the
+  `buildSeedSkills`) reads every `.claude/skills/*/SKILL.md` and writes each into
+  the **org catalog** as a standalone skill, stamping
+  `createdBy:{userId:'system',name:'system'}`. **Bundling is opt-in via the
+  manifest** `.claude/skills/bundles.json` — a new skill joins `command-hq-starter`
+  (or any bundle) only if you add its name to that bundle's `members`. Unless the
+  user asks to bundle it, leave it standalone. The registration *is* getting the
   file onto `main`, so **land it to `main` now — do not stop and ask**:
 
   1. Stage and commit just the new `.claude/skills/<name>/` file(s) with the
@@ -104,8 +107,9 @@ There are two registration paths; both land in the same org catalog:
 
      - `SEED_ORG` must match the org the website serves (the deployed default is
        `personasearch`; confirm against `packages/web/.env*` `VITE_ORG` if unsure).
-     - The seed reads **every** `.claude/skills/*/SKILL.md`, so the new skill is
-       written into the org catalog as a `command-hq-starter` member.
+     - The seed reads **every** `.claude/skills/*/SKILL.md` and writes the new
+       skill into the org catalog as a **standalone** skill (no bundle) unless its
+       name is listed in `.claude/skills/bundles.json`.
      - **Requires local AWS credentials** with write access to the `harness`
        table (same role the deploy uses). If the seed fails with a credentials /
        AccessDenied error, say so plainly and fall back to: trigger the
@@ -115,12 +119,10 @@ There are two registration paths; both land in the same org catalog:
      - Run `SEED_DRY_RUN=1 …` first if you want to preview the records without
        writing.
 
-  4. **Tell the user where to see it.** Seeded skills land as members of the
-     `command-hq-starter` bundle, which the web **Skills** tab hides from the
-     top-level grid by default. After the seed succeeds, the skill is visible by
-     either toggling **"show in bundles"** on `/skills` or opening the
-     `command-hq-starter` bundle. A hard refresh of the page picks up the new
-     catalog (the project may need a refresh/reconnect if it caches).
+  4. **Tell the user where to see it.** A standalone skill shows directly in the
+     top-level **Skills** grid after a hard refresh. If you added it to a bundle
+     via the manifest, it's hidden under that bundle by default — toggle **"show
+     in bundles"** on `/skills` or open the bundle to see it.
 
 - **Direct catalog REST (admin).** Register via the Command HQ skills REST,
   authorized with the device/session token claude+ already holds (HQ API base from

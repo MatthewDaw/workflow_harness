@@ -21,18 +21,46 @@ export interface SeedSkillFile {
   body: string;
 }
 
-/** The single named bundle the seeded skills are grouped under in the Skills tab. */
+/**
+ * The product starter bundle's name. Kept as a named export because callers and
+ * tests reference it, but it is no longer special-cased: it is just one entry in
+ * the bundle manifest like any other.
+ */
 export const STARTER_BUNDLE_NAME = 'command-hq-starter';
 
+/** One bundle's declaration in the manifest: a human description + its members. */
+export interface BundleSpec {
+  description: string;
+  members: string[];
+}
+
 /**
- * Build the org-scope `Skill[]` to seed: one `kind:'skill'` record per file plus
- * one `kind:'bundle'` record listing them as members. Everything is `source:
- * 'built-in'` to distinguish product-bundled skills from a user's own. Parsing
- * each through `skillSchema` applies defaults and guards the shape.
+ * The bundle manifest — the **single source of truth** for how seeded skills are
+ * organized into bundles. Maps `<bundleName>` to its spec. A skill that no bundle
+ * lists is seeded as a **standalone** catalog skill, so creating a new skill does
+ * not bundle it with anything unless it is explicitly added here. Lives in the
+ * repo at `.claude/skills/bundles.json`; the seed loads it and passes it in.
  */
-export function buildSeedSkills(org: string, files: SeedSkillFile[]): Skill[] {
+export type BundleManifest = Record<string, BundleSpec>;
+
+/**
+ * Build the org-scope `Skill[]` to seed: one `kind:'skill'` record per file, plus
+ * one `kind:'bundle'` record per manifest entry. A bundle's `members` are the
+ * manifest's declared members, intersected with the skills that actually exist
+ * (so a stale manifest reference is dropped, not stored as a dangling member).
+ * Skills not named by any bundle are still seeded — just standalone. Everything is
+ * `source:'built-in'`. Parsing each through `skillSchema` applies defaults and
+ * guards the shape.
+ */
+export function buildSeedSkills(
+  org: string,
+  files: SeedSkillFile[],
+  manifest: BundleManifest = {},
+): Skill[] {
   const scope = orgScope(org);
   const createdBy = { userId: 'system', name: 'system' } as const;
+  const known = new Set(files.map((f) => f.name));
+
   const skills = files.map((f) =>
     skillSchema.parse({
       name: f.name,
@@ -44,16 +72,20 @@ export function buildSeedSkills(org: string, files: SeedSkillFile[]): Skill[] {
       createdBy,
     }),
   );
-  const bundle = skillSchema.parse({
-    name: STARTER_BUNDLE_NAME,
-    scope,
-    kind: 'bundle',
-    description: 'Skills bundled with Command HQ + claude+ (forge, weekly, progress).',
-    source: 'built-in',
-    members: files.map((f) => f.name),
-    createdBy,
-  });
-  return [...skills, bundle];
+
+  const bundles = Object.entries(manifest).map(([name, spec]) =>
+    skillSchema.parse({
+      name,
+      scope,
+      kind: 'bundle',
+      description: spec.description,
+      source: 'built-in',
+      members: spec.members.filter((m) => known.has(m)),
+      createdBy,
+    }),
+  );
+
+  return [...skills, ...bundles];
 }
 
 /**
@@ -65,8 +97,9 @@ export async function seedSkills(
   repo: Repo,
   org: string,
   files: SeedSkillFile[],
+  manifest: BundleManifest = {},
 ): Promise<Skill[]> {
-  const records = buildSeedSkills(org, files);
+  const records = buildSeedSkills(org, files, manifest);
   for (const record of records) {
     await repo.putSkill(record);
   }

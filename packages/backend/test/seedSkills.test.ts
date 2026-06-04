@@ -30,20 +30,35 @@ beforeEach(() => {
 });
 
 const ORG = 'acme';
-const FILES: SeedSkillFile[] = [
-  { name: 'update-progress', description: 'push completion to GitHub', body: '# update-progress\nbody' },
-  { name: 'weekly-update', description: 'weekly report to HQ', body: '# weekly-update\nbody' },
-  { name: 'startforge', description: 'open a forge boundary', body: '# startforge\nbody' },
-  { name: 'endforge', description: 'distill an agent', body: '# endforge\nbody' },
-  { name: 'optimize-agent', description: 'refine an agent prompt', body: '# optimize-agent\nbody' },
+// The `hq-*` files are product skills (bundle members); the non-`hq-` files are
+// standalone catalog skills that must NOT join the starter bundle.
+const HQ_FILES: SeedSkillFile[] = [
+  { name: 'hq-update-progress', description: 'push completion to GitHub', body: '# hq-update-progress\nbody' },
+  { name: 'hq-weekly-update', description: 'weekly report to HQ', body: '# hq-weekly-update\nbody' },
+  { name: 'hq-startforge', description: 'open a forge boundary', body: '# hq-startforge\nbody' },
+  { name: 'hq-endforge', description: 'distill an agent', body: '# hq-endforge\nbody' },
+  { name: 'hq-optimize-agent', description: 'refine an agent prompt', body: '# hq-optimize-agent\nbody' },
 ];
+const STANDALONE_FILES: SeedSkillFile[] = [
+  { name: 'gstack', description: 'headless browser QA', body: '# gstack\nbody' },
+  { name: 'compound-engineering', description: 'install the CE plugin', body: '# compound-engineering\nbody' },
+];
+const FILES: SeedSkillFile[] = [...HQ_FILES, ...STANDALONE_FILES];
+// Manifest: only the product skills belong to command-hq-starter.
+const MANIFEST = {
+  [STARTER_BUNDLE_NAME]: {
+    description: 'Skills bundled with Command HQ + claude+.',
+    members: HQ_FILES.map((f) => f.name),
+  },
+};
 
 describe('buildSeedSkills', () => {
-  it('builds one org-scope built-in skill per file plus a bundle of all of them', () => {
-    const records = buildSeedSkills(ORG, FILES);
+  it('seeds one skill per file but bundles only the manifest-declared members', () => {
+    const records = buildSeedSkills(ORG, FILES, MANIFEST);
     const skills = records.filter((r) => r.kind === 'skill');
     const bundles = records.filter((r) => r.kind === 'bundle');
 
+    // Every file is seeded as a standalone catalog skill...
     expect(skills).toHaveLength(FILES.length);
     expect(bundles).toHaveLength(1);
 
@@ -54,17 +69,20 @@ describe('buildSeedSkills', () => {
       expect(s.body.length).toBeGreaterThan(0);
     }
 
+    // ...but only the hq-* skills are members of command-hq-starter.
     const bundle = bundles[0] as Skill;
     expect(bundle.name).toBe(STARTER_BUNDLE_NAME);
     expect(bundle.scope).toEqual({ tier: 'org', id: ORG });
-    expect(bundle.members).toEqual(FILES.map((f) => f.name));
+    expect(bundle.members).toEqual(HQ_FILES.map((f) => f.name));
+    expect(bundle.members).not.toContain('gstack');
+    expect(bundle.members).not.toContain('compound-engineering');
   });
 });
 
 describe('seedSkills', () => {
   it('is idempotent — running twice leaves one record per skill', async () => {
-    await seedSkills(repo, ORG, FILES);
-    await seedSkills(repo, ORG, FILES);
+    await seedSkills(repo, ORG, FILES, MANIFEST);
+    await seedSkills(repo, ORG, FILES, MANIFEST);
 
     const stored = await repo.listSkills(ORG);
     // N skills + 1 bundle, no duplicates from the second run.
@@ -74,7 +92,7 @@ describe('seedSkills', () => {
   });
 
   it('makes the bundle resolve for any user in the org with its members flattened', async () => {
-    await seedSkills(repo, ORG, FILES);
+    await seedSkills(repo, ORG, FILES, MANIFEST);
 
     // A user who has registered nothing of their own still sees the org bundle.
     const res = await resolveSkills(
@@ -86,6 +104,6 @@ describe('seedSkills', () => {
 
     expect(bundle).toBeDefined();
     expect(bundle?.kind).toBe('bundle');
-    expect(bundle?.resolvedMembers?.sort()).toEqual(FILES.map((f) => f.name).sort());
+    expect(bundle?.resolvedMembers?.sort()).toEqual(HQ_FILES.map((f) => f.name).sort());
   });
 });

@@ -1,21 +1,25 @@
 ---
-name: hq-create-hq-skill
+name: hq-create-skill
 description: >-
   Scaffold a new Command HQ skill: create a `.claude/skills/<name>/SKILL.md` with
   valid frontmatter (name + description), explain how it gets registered/seeded
-  into Command HQ (the org-scope `command-hq-starter` bundle via the seed path),
-  and how to add it to a bundle in the HQ Skills tab. Use when the user says
-  "/hq-create-hq-skill", "create a new HQ skill", "scaffold a skill", "add a Command
-  HQ skill", or "make a new bundled skill".
+  into Command HQ, and how to add it to a bundle via the bundle manifest. A new
+  skill is STANDALONE by default — it joins a bundle only when you list it in
+  `.claude/skills/bundles.json`. Use when the user says "/hq-create-skill",
+  "create a new HQ skill", "scaffold a skill", "add a Command HQ skill", or "make
+  a new skill".
 ---
 
-# /hq-create-hq-skill
+# /hq-create-skill
 
 Authoring helper for **Command HQ skills**. A Command HQ skill is just a
 `.claude/skills/<name>/SKILL.md` file in the repo: HQ's seed reads that directory
-and writes each skill into the registry at **org scope**, grouped under the
-`command-hq-starter` bundle, so every user in the org sees it. This skill walks
-you through creating one correctly and getting it registered.
+and writes each skill into the org catalog. This skill walks you through creating
+one correctly and getting it registered.
+
+> **A new skill is standalone by default.** Seeding it does NOT add it to any
+> bundle. It joins `command-hq-starter` (or any other bundle) **only** when you
+> explicitly list it in the bundle manifest, `.claude/skills/bundles.json`.
 
 ## When this runs
 
@@ -46,8 +50,8 @@ in HQ (`skillSchema.body`) so a daemon can materialize it locally on sync.
 3. **Write the body.** Sections that work well: a one-line summary, "When this
    runs", "Steps", and "Contract" (any endpoints/commands it depends on — only
    reference things that actually exist).
-4. **Scaffold the file.** Create `.claude/skills/<name>/SKILL.md` with the above.
-   A minimal valid template:
+4. **Scaffold the file.** Create `.claude/skills/<name>/SKILL.md`. A minimal valid
+   template:
 
    ```markdown
    ---
@@ -75,31 +79,42 @@ in HQ (`skillSchema.body`) so a daemon can materialize it locally on sync.
 
 - **Source of truth:** the repo's `.claude/skills/<name>/SKILL.md`.
 - **Seed:** `node infra/scripts/seed-skills.mjs` reads every `.claude/skills/*`
-  directory, parses each `SKILL.md`, and (via the backend's
-  `buildSeedSkills` in `packages/backend/src/seed/skills.ts`) writes one
-  `kind:'skill'` record per file plus a `command-hq-starter` `kind:'bundle'`
-  record listing them as members — all at **org scope**, `source:'built-in'`.
-  Run `npm run build -w @harness/backend` first (the seed imports the compiled
+  directory, parses each `SKILL.md`, reads the bundle manifest, and (via the
+  backend's `buildSeedSkills` in `packages/backend/src/seed/skills.ts`) writes one
+  `kind:'skill'` record per file plus one `kind:'bundle'` record per manifest
+  entry — all at **org scope**, `source:'built-in'`. Run
+  `npm run build -w @harness/backend` first (the seed imports the compiled
   builder), then the seed script. It is idempotent.
 - **Per-device sync:** `claude+ sync-skills` (and the auto-sync on each new
-  claude+ session) reconciles HQ's effective registry into the isolated
+  claude+ session) reconciles HQ's effective catalog into the isolated
   `~/.claude+` config root, so a just-seeded skill becomes usable without
   restarting.
 
-## How to add it to a bundle
+## How to put it in a bundle (opt-in)
 
-- **Default bundle:** running the seed automatically lists every
-  `.claude/skills/*` skill as a member of `command-hq-starter`, so a new file is
-  in that bundle on the next seed.
-- **In the HQ Skills tab:** open the bundle card → use the searchable "add skill"
-  combobox to add the skill as a member, or the scope picker to elevate/demote a
-  skill between org / my-global / project scopes. Members of a bundle are hidden
-  from the top-level grid by default (toggle "Show skills that are in bundles" to
-  reveal them).
+Bundles are organized by the **manifest** at `.claude/skills/bundles.json` — the
+single source of truth for "what skills go in what bundles." A skill is standalone
+unless a bundle lists it as a member:
+
+```json
+{
+  "command-hq-starter": {
+    "description": "Skills bundled with Command HQ + claude+.",
+    "members": ["hq-update-progress", "hq-weekly-update", "hq-create-skill"]
+  }
+}
+```
+
+- To add this skill to `command-hq-starter`, append its `name` to that bundle's
+  `members` array. To create a **new** bundle, add a new top-level entry with its
+  own `description` + `members`. Re-seed to apply.
+- Members of a bundle are hidden from the top-level Skills grid by default (toggle
+  "Show skills that are in bundles" to reveal them), so a standalone skill is the
+  most visible.
 
 ## Contract
 
 This skill depends only on things that already exist: the `.claude/skills/`
-convention, `infra/scripts/seed-skills.mjs`, `buildSeedSkills`, the skills REST
-(`packages/backend/src/rest/skills.ts`), and `claude+ sync-skills`. It invents no
-new backend surface.
+convention, the `.claude/skills/bundles.json` manifest, `infra/scripts/seed-skills.mjs`,
+`buildSeedSkills`, the skills REST (`packages/backend/src/rest/skills.ts`), and
+`claude+ sync-skills`. It invents no new backend surface.
