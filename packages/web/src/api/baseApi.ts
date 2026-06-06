@@ -37,6 +37,20 @@ export const SESSIONS_CACHE_ARG = 'all' as const;
  * the sole consumer.
  */
 
+/**
+ * The signed-in principal as the backend resolves it (`GET /me`). `org` is the
+ * caller's REAL membership from their profile record — null when they have not
+ * joined/created an org yet — so the OrgGate can force onboarding. Declared here
+ * (rather than @harness/shared) because the auth gate is the only consumer.
+ */
+export interface Me {
+  userId: string;
+  name?: string;
+  /** null = no membership yet → OrgGate forces create/join. */
+  org: string | null;
+  admin?: boolean;
+}
+
 /** A node in the project's detailed-requirements doc tree (U11). */
 export interface ProjectDoc {
   /** Repo-relative path, e.g. `docs/requirements/auth.md`. */
@@ -92,6 +106,7 @@ export const baseApi = createApi({
     },
   }),
   tagTypes: [
+    'Me',
     'Project',
     'Session',
     'Objective',
@@ -103,6 +118,86 @@ export const baseApi = createApi({
     'Dod',
   ],
   endpoints: (build) => ({
+    /**
+     * The signed-in principal and their REAL org membership (org-onboarding).
+     * Unlike the data handlers, /me never falls back to the token claim, so a
+     * user with no profile.org reads back `org: null` and the OrgGate forces
+     * them to create or join an org before the app mounts.
+     */
+    getMe: build.query<Me, void>({
+      query: () => 'me',
+      // The /me response is a bare object; unwrapOne keeps us tolerant of a
+      // future wrapped shape ({ me: {...} }) without a contract break.
+      transformResponse: unwrapOne<Me>('me'),
+      providesTags: ['Me'],
+    }),
+
+    /**
+     * Create a brand-new org (org-onboarding). The creator becomes its admin and
+     * their profile.org is set server-side. Switching org swaps EVERY org-scoped
+     * dataset, so onQueryStarted resets the whole cache (see joinOrg) after the
+     * write so the app reloads under the new org.
+     */
+    createOrg: build.mutation<{ org: string; admin: boolean }, { name: string; password: string }>({
+      query: (body) => ({ url: 'orgs', method: 'POST', body }),
+      invalidatesTags: ['Me'],
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        // A failed create (409/400) leaves the caller in their prior (no-)org, so
+        // there is nothing to reset; swallow the rejection here — the component's
+        // own .unwrap() catch surfaces the error to the user.
+        try {
+          await queryFulfilled;
+        } catch {
+          return;
+        }
+        // Everything the old org cached is now wrong; drop it so each query
+        // refetches under the membership we just established.
+        dispatch(
+          baseApi.util.invalidateTags([
+            'Me',
+            'Objective',
+            'Agent',
+            'Skill',
+            'Project',
+            'Session',
+            'Weekly',
+            'Dod',
+          ]),
+        );
+      },
+    }),
+
+    /**
+     * Join an EXISTING org by exact name + password (org-onboarding). On success
+     * the caller's profile.org is set; like createOrg we reset every org-scoped
+     * dataset so the app re-reads under the joined org.
+     */
+    joinOrg: build.mutation<{ org: string; admin: boolean }, { name: string; password: string }>({
+      query: (body) => ({ url: 'orgs/join', method: 'POST', body }),
+      invalidatesTags: ['Me'],
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        // A failed join (403/400) means no membership changed; swallow it (the
+        // component's .unwrap() catch shows the generic error) and skip the reset.
+        try {
+          await queryFulfilled;
+        } catch {
+          return;
+        }
+        dispatch(
+          baseApi.util.invalidateTags([
+            'Me',
+            'Objective',
+            'Agent',
+            'Skill',
+            'Project',
+            'Session',
+            'Weekly',
+            'Dod',
+          ]),
+        );
+      },
+    }),
+
     getProjects: build.query<Project[], void>({
       query: () => 'projects',
       transformResponse: unwrapArray<Project>('projects'),
@@ -408,7 +503,9 @@ export const baseApi = createApi({
             }),
           ),
           ...([undefined, { live: true }, { live: false }] as const).map((arg) =>
-            dispatch(baseApi.util.updateQueryData('getSessions', arg, (draft) => draft.forEach(setDone))),
+            dispatch(
+              baseApi.util.updateQueryData('getSessions', arg, (draft) => draft.forEach(setDone)),
+            ),
           ),
         ];
         try {
@@ -438,6 +535,9 @@ export const baseApi = createApi({
 export type { Priority };
 
 export const {
+  useGetMeQuery,
+  useCreateOrgMutation,
+  useJoinOrgMutation,
   useGetProjectsQuery,
   useGetProjectQuery,
   useCreateProjectMutation,

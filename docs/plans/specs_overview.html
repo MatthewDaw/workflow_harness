@@ -15,8 +15,8 @@ top; <code>/update-progress</code> maintains them.</p>
 <h1>Command HQ + claude+ — Feature Overview</h1>
 <p><strong>This is the single top-level map of what we&#39;re building, and the canonical,
 self-contained spec for the project.</strong> Each feature has a detail file under
-<a href="./command-hq/"><code>command-hq/</code></a>; the durable technical decisions (KTD1–12, data
-model, event schema) live in <a href="./command-hq/06-platform-architecture.md">06-platform-architecture.md</a>.
+<a href="./features/"><code>features/</code></a>; the durable technical decisions (KTD1–12, data
+model, event schema) live in <a href="./features/platform_architecture.html">platform_architecture.html</a>.
 Read this file first for direction.</p>
 <h2>What this product is (one paragraph)</h2>
 <p><code>claude+</code> is a terminal wrapper that hosts the real <code>claude</code> CLI as a persistent
@@ -56,35 +56,41 @@ React/Spring/Module-Federation stack.</p>
 <td>1</td>
 <td><strong>Plan mapping</strong></td>
 <td>Company goal → repo goal → detailed breakdown, with a tool that auto-audits progress and verifies completion</td>
-<td><a href="./command-hq/01-plan-mapping.md">01-plan-mapping.md</a></td>
+<td><a href="./features/plan_mapping.html">plan_mapping.html</a></td>
 </tr>
 <tr>
 <td>2</td>
 <td><strong>Weekly plan</strong></td>
 <td>A <code>/weekly-update</code> skill that interviews you on next-week goals, then auto-writes &quot;what got done&quot; (from git) vs &quot;what&#39;s next&quot;</td>
-<td><a href="./command-hq/02-weekly-update.md">02-weekly-update.md</a></td>
+<td><a href="./features/weekly_update.html">weekly_update.html</a></td>
 </tr>
 <tr>
 <td>3</td>
 <td><strong>Claude Code integration</strong></td>
 <td>A single org catalog of agents/skills in HQ, per-project opt-in (<code>enabledSkills</code>/<code>enabledAgents</code>), and live session watch + steer</td>
-<td><a href="./command-hq/03-claude-code-integration.md">03-claude-code-integration.md</a></td>
+<td><a href="./features/claude_code_integration.html">claude_code_integration.html</a></td>
 </tr>
 <tr>
 <td>4</td>
 <td><strong>Claude CLI wrapper</strong></td>
 <td><code>claude+</code> wraps the real <code>claude</code> CLI as a persistent, capturable daemon (survives terminal close; single-laptop)</td>
-<td><a href="./command-hq/04-claude-cli-wrapper.md">04-claude-cli-wrapper.md</a></td>
+<td><a href="./features/claude_cli_wrapper.html">claude_cli_wrapper.html</a></td>
 </tr>
 <tr>
 <td>5</td>
 <td><strong>AgentForge</strong></td>
 <td>Mark a slice of work, capture it, and distill it into a reusable org-wide agent via prompt gradient-descent</td>
-<td><a href="./command-hq/05-agentforge.md">05-agentforge.md</a></td>
+<td><a href="./features/agentforge.html">agentforge.html</a></td>
 </tr>
 </tbody></table>
 <p>Plus the substrate everything rides on: <strong>Platform &amp; Architecture</strong> —
-<a href="./command-hq/06-platform-architecture.md">06-platform-architecture.md</a>.</p>
+<a href="./features/platform_architecture.html">platform_architecture.html</a>.</p>
+<p>And the auth/onboarding prerequisite that gates all of the above: <strong>Organization
+Management</strong> — <a href="./features/organization_management.html">organization_management.html</a>.
+On first sign-in a user with no org must <strong>create or join one</strong> (name + password)
+before the app renders; org membership is DB-driven on the user&#39;s PROFILE record (not
+just the auto-assigned <code>custom:org</code> claim), and every feature&#39;s data is then scoped to
+the chosen org.</p>
 <h2>How the pieces fit together</h2>
 <pre><code>        claude+ (wrapper, feature 4)
         runs sessions in a repo, captures events
@@ -119,7 +125,7 @@ React/Spring/Module-Federation stack.</p>
 </code></pre>
 <h2>Build status at a glance</h2>
 <p>The <strong>new-model migration</strong>
-(<a href="./2026-06-03-001-feat-command-hq-new-model-migration-plan.md">2026-06-03 plan</a>,
+(<a href="./features/">2026-06-03 plan</a>,
 units U1–U22) is <strong>landed</strong>: tickets are removed end-to-end, GitHub <code>completion:</code>
 frontmatter is the progress source of truth, the two-tier requirements UI ships,
 the client skills exist under <code>.claude/skills/</code>, and the infra footguns

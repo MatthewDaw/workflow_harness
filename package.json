@@ -11,6 +11,9 @@
     "node": ">=20"
   },
   "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run build -w @harness/shared && npm run dev -w @harness/backend",
+    "dev:web": "npm run dev -w @harness/web",
     "build": "npm run build -w @harness/shared && npm run build -w @harness/backend && npm run build -w @harness/web",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -19,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.41",
+    "concurrently": "^9.1.0",
     "prettier": "^3.3.3",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"

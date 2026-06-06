@@ -49,7 +49,7 @@ the session history claude+ generates never land in the user&#39;s personal
 <code>claude</code> run (claude+ not running, or a separate session) still reads <code>~/.claude</code>
 and never sees this root.</p>
 <p><strong>As-built shape (divergence from the migration plan).</strong> The plan
-(<a href="../2026-06-03-001-feat-command-hq-new-model-migration-plan.md">U21</a>) described a
+(<a href="../specs_overview.html">U21</a>) described a
 <em>per-session</em> <code>~/.claude+/run/&lt;id&gt;</code> dir built with symlinks and torn down on close.
 The code instead uses a <strong>single stable <code>~/.claude+</code></strong> root that is <strong>seeded once</strong>
 from <code>~/.claude</code> (<code>.credentials.json</code>, <code>.claude.json</code>, <code>settings.json</code>, <code>.mcp.json</code>
@@ -65,7 +65,7 @@ symlinking the live <code>~/.claude</code> login). <em>Code:</em> <code>internal
 <ul>
 <li>Outbound-only <strong>WebSocket</strong> to the cloud, with <strong>offline buffering</strong> that
 replays after reconnect. Control frames come back down the same socket
-(<a href="./03-claude-code-integration.md">feature 3 steering</a>).</li>
+(<a href="./claude_code_integration.html">feature 3 steering</a>).</li>
 <li><strong>Device-token auth:</strong> <code>claude+ login</code> runs a device-code flow against HQ; the
 token authorizes the daemon&#39;s WS <code>$connect</code> and scopes its data to that user.
 No inbound ports needed — the daemon dials out. The token carries a TTL, a

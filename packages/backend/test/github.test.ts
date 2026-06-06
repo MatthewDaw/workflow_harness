@@ -13,6 +13,7 @@ import {
   attributeCommits,
   buildFraming,
   parseCompletionFrontmatter,
+  parseGoal,
   parsePrd,
   parseProgress,
   resolveProgressPct,
@@ -51,6 +52,37 @@ describe('history: PRD/PROGRESS parsing + framing', () => {
     expect(framing.missingFiles).toEqual([]);
     expect(framing.progressPct).toBe(62);
     expect(framing.supportingOutcomeIds).toContain('SO-RECONCILE');
+  });
+});
+
+describe('history: parseGoal (docs/PRD goal fallback)', () => {
+  it('extracts a "Product goal:" paragraph from an HTML docs/PRD body', () => {
+    const html =
+      '---\ncompletion: 89\n---\n<h1>Project Requirements</h1>\n' +
+      '<p><strong>Product goal:</strong> Keep day-to-day agent work and company\n' +
+      'strategy in one synced system — verified from real code rather than\n' +
+      'self-reported.</p>\n<h2>Required outcomes</h2>';
+    const goal = parseGoal(html);
+    expect(goal).toContain('Keep day-to-day agent work');
+    expect(goal).toContain('self-reported.');
+    // Single-lined, no tags, no leading title.
+    expect(goal).not.toContain('<');
+    expect(goal).not.toContain('\n');
+    expect(goal).not.toContain('Project Requirements');
+  });
+
+  it('extracts a markdown "Goal:" line and decodes HTML entities', () => {
+    expect(parseGoal('# Title\n\n**Goal:** Ship the company&#39;s weekly view.\n')).toBe(
+      "Ship the company's weekly view.",
+    );
+  });
+
+  it('returns undefined when there is no goal label (no title fallback)', () => {
+    expect(
+      parseGoal('---\ncompletion: 10\n---\n<h1>Just a heading</h1>\n<p>Body text.</p>'),
+    ).toBeUndefined();
+    expect(parseGoal(undefined)).toBeUndefined();
+    expect(parseGoal('')).toBeUndefined();
   });
 });
 
@@ -291,7 +323,8 @@ describe('app: docs/plans tree + content + cache (U8)', () => {
     const empty: FetchLike = async (url) => {
       if (url.includes('/access_tokens')) return resp(201, { token: 't' });
       if (url.includes('/commits?per_page=1')) return resp(200, [{ sha: 's' }]);
-      if (url.includes('/git/trees/')) return resp(200, { tree: [{ path: 'README.md', type: 'blob', sha: 'r' }] });
+      if (url.includes('/git/trees/'))
+        return resp(200, { tree: [{ path: 'README.md', type: 'blob', sha: 'r' }] });
       return resp(404, {});
     };
     expect(await makeApp(empty).listDocs()).toEqual([]);
@@ -321,6 +354,29 @@ describe('app: docs/plans tree + content + cache (U8)', () => {
     const framing = await makeApp(fetch).readFramingWithCompletion();
     expect(framing.progressPct).toBe(58); // top doc completion wins over PROGRESS.md's 62
     expect(framing.goal).toContain('single weekly view');
+  });
+
+  it('sources the goal from docs/PRD when the repo-root PRD.md is absent', async () => {
+    const prdHtml =
+      '---\ncompletion: 89\n---\n<h1>Command HQ — Project Requirements</h1>\n' +
+      '<p><strong>Product goal:</strong> Keep day-to-day agent work and company\n' +
+      'strategy in one continuously-synced system.</p>';
+    const fetch: FetchLike = async (url) => {
+      if (url.includes('/access_tokens')) return resp(201, { token: 't' });
+      // No repo-root PRD.md / PROGRESS.md (this repo keeps everything in docs/).
+      if (url.includes('/contents/docs/PRD.md'))
+        return resp(200, {
+          encoding: 'base64',
+          content: Buffer.from(prdHtml).toString('base64'),
+        });
+      if (url.includes('/commits?per_page=1')) return resp(200, [{ sha: 'sha-1' }]);
+      if (url.includes('/git/trees/')) return resp(200, { tree: [] });
+      return resp(404, {});
+    };
+    const framing = await makeApp(fetch).readFramingWithCompletion();
+    expect(framing.progressPct).toBe(89); // docs/PRD.md completion frontmatter
+    expect(framing.goal).toContain('Keep day-to-day agent work');
+    expect(framing.goal).not.toContain('Project Requirements');
   });
 
   it('prefers docs/PRD.md completion over the docs/plans top-doc completion', async () => {

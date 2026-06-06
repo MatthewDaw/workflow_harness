@@ -40,6 +40,15 @@ export function orgScope(org: string): OrgScopeRef {
   return { tier: 'org', id: org };
 }
 
+/**
+ * Construct a user-tier scope ref. Returns the general `ScopeRef` (not a
+ * literal-narrowed type) so it composes with key builders + queries that accept
+ * any tier — used to address user-scoped catalog items alongside org-scoped ones.
+ */
+export function userScope(userId: string): ScopeRef {
+  return { tier: 'user', id: userId };
+}
+
 /** The viewer context a resolution is performed against. */
 export interface ScopeContext {
   org: string;

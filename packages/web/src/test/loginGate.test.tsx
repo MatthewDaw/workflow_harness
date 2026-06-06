@@ -29,4 +29,15 @@ describe('login gate', () => {
 
     await waitFor(() => expect(screen.getByTestId('objectives-screen')).toBeInTheDocument());
   });
+
+  it('renders Objectives after "Continue with Google"', async () => {
+    // The Google path does not call setUser directly — it relies on the client's
+    // onChange firing (mirrors the Cognito Hub event after an OAuth redirect). The
+    // mock must emit that change or the gate never flips. Regression guard.
+    render(<App store={makeStore()} authClient={createMockClient(null)} router={memoryRouter} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /continue with google/i }));
+
+    await waitFor(() => expect(screen.getByTestId('objectives-screen')).toBeInTheDocument());
+  });
 });

@@ -14,7 +14,7 @@ data model, and event schema below are the durable record — migrated here from
 original build plan so this folder is self-contained.</p>
 <h2>Planes</h2>
 <ol>
-<li><strong>Capture/host</strong> — the <code>claude+</code> daemon (<a href="./04-claude-cli-wrapper.md">feature 4</a>).</li>
+<li><strong>Capture/host</strong> — the <code>claude+</code> daemon (<a href="./claude_cli_wrapper.html">feature 4</a>).</li>
 <li><strong>Transport</strong> — outbound WebSocket from each daemon to the cloud; control
 frames back down (the <strong>control gateway</strong> that powers steering).</li>
 <li><strong>State</strong> — event store + projections (sessions, objectives roll-ups,
@@ -32,10 +32,14 @@ accounts arrive via <strong>Google federated</strong> sign-in, auto-provisioned;
 <strong>pre-token-generation Lambda</strong> defaults a missing <code>custom:org</code> to <code>personasearch</code>
 so a new account is authorized — <code>infra/lib/auth-stack.ts</code>); <strong>device tokens</strong> for
 the wrapper (<code>backend/src/auth/</code>). The API/WS JWT authorizer validates the ID token
-(audience = the app client id).</li>
+(audience = the app client id). <strong>Org membership is DB-driven, not the token claim:</strong>
+the source of truth is <code>USER#&lt;uid&gt;/PROFILE.org</code>, chosen on first sign-in by
+<strong>create or join</strong> (name + password — see
+<a href="./organization_management.html">Organization Management</a>); the <code>custom:org</code> claim
+is kept only as the <code>effectiveOrg</code> fallback for back-compat + device tokens.</li>
 <li><strong>Forge vectors: removed.</strong> The OpenSearch Serverless <code>SearchStack</code> and the
 <code>backend/src/forge/</code> embeddings pipeline were dropped; AgentForge distills
-client-side (see <a href="./05-agentforge.md">feature 5</a>). No server-side embeddings.</li>
+client-side (see <a href="./agentforge.html">feature 5</a>). No server-side embeddings.</li>
 <li><strong>GitHub App:</strong> <strong>read-only (<code>contents:read</code>)</strong> — reads requirement docs
 (<code>docs/plans/</code> tree + <code>completion:</code> frontmatter) and git history. HQ never writes
 to GitHub. <em>Code:</em> <code>backend/src/github/</code>.</li>
@@ -47,16 +51,16 @@ WebSocket middleware for live events.</li>
 <p>Migrated from the original build plan; the durable rationale for the stack.</p>
 <ol>
 <li><strong>Monorepo, npm workspaces, two languages.</strong> TS for <code>shared</code>/<code>backend</code>/<code>web</code>/<code>infra</code>; Go for <code>wrapper</code>. <code>packages/shared</code> is the single source of truth for the event schema + DTOs; the Go wrapper re-declares the envelope, kept in sync by a golden JSON fixture both sides test.</li>
-<li><strong>Daemon + thin attach client (tmux model).</strong> <code>claude+</code> spawns/attaches a per-repo background daemon over a local socket; sessions survive the terminal closing and are re-attachable on the same machine (single-laptop; no remote/SSH). (See <a href="./04-claude-cli-wrapper.md">feature 4</a>.)</li>
+<li><strong>Daemon + thin attach client (tmux model).</strong> <code>claude+</code> spawns/attaches a per-repo background daemon over a local socket; sessions survive the terminal closing and are re-attachable on the same machine (single-laptop; no remote/SSH). (See <a href="./claude_cli_wrapper.html">feature 4</a>.)</li>
 <li><strong>Capture without screen-scraping.</strong> Three sources: PTY pass-through, tailing Claude Code&#39;s transcript JSONL, and <code>settings.json</code> hooks for lifecycle/status. Cost/tokens from the transcript.</li>
 <li><strong>Serverless backend.</strong> API GW HTTP API (REST) + WebSocket API (ingest + live + control); Lambda (TS); DynamoDB single-table + GSIs; Streams drive projections.</li>
-<li><strong>Auth.</strong> Cognito user pool for web; a device token (device-code flow, <code>claude+ login</code>) authorizes the daemon&#39;s outbound WS and scopes its data to that user. No inbound ports needed (the daemon dials out); the token carries a TTL + revoke + OS-keychain storage.</li>
+<li><strong>Auth.</strong> Cognito user pool for web; a device token (device-code flow, <code>claude+ login</code>) authorizes the daemon&#39;s outbound WS and scopes its data to that user. No inbound ports needed (the daemon dials out); the token carries a TTL + revoke + OS-keychain storage. <strong>Org membership is a DB fact, not a token default:</strong> a user&#39;s org is chosen on first sign-in via create/join (name + password) and stored on the PROFILE record; <code>effectiveOrg(event, repo) = profile.org ?? token-claim-org</code> scopes every org-scoped handler off that chosen org, with the <code>custom:org</code> claim retained only as the fallback. See <a href="./organization_management.html">Organization Management</a>.</li>
 <li><strong>Control gateway over WebSocket.</strong> HQ steers a session by routing a control frame to the daemon&#39;s stored <code>connectionId</code> on its persistent <em>outbound</em> WS; ownership re-checked on every frame.</li>
 <li><strong>Forge semantic search (removed, not just deferred).</strong> Session-summary vector retrieval (OpenSearch k-NN / DynamoDB cosine) was dropped along with the <code>backend/src/forge/</code> pipeline and the <code>SearchStack</code>; AgentForge distills client-side from the working diff. No server-side embeddings.</li>
-<li><strong>Scope model.</strong> Three tiers <code>org</code> / <code>user#uid</code> / <code>proj#pid</code>; resolution composes all three, narrowest wins on name collision; elevate/demote rewrites the scope key. Objectives are org-global.</li>
+<li><strong>Scope model.</strong> Three tiers <code>org</code> / <code>user#uid</code> / <code>proj#pid</code>; resolution composes all three, narrowest wins on name collision; elevate/demote rewrites the scope key. Objectives are org-global. The <code>org</code> tier is the user&#39;s <strong>DB-chosen</strong> org (resolved by <code>effectiveOrg</code> from the PROFILE record), so the catalog and objectives partition by that org id — and the <code>user#uid</code> tier keeps the catalog partitionable by user id as well.</li>
 <li><strong>GitHub via a GitHub App.</strong> Reads requirement docs + git history (weekly &quot;done&quot;) + branch/PR state — <strong>read-only (<code>contents:read</code>), installed per-repo</strong>. HQ reads from GitHub and never writes; <code>/update-progress</code> pushes completion numbers from the client side.</li>
 <li><strong>Distribution.</strong> goreleaser cross-compile + an npm wrapper package (per-platform prebuilt binaries via <code>optionalDependencies</code>) + <code>curl | sh</code> (with a published <code>checksums.txt</code> + SHA-256 verification in the installer). PTY via <code>creack/pty</code>.</li>
-<li><strong>LLM-backed features run on the user&#39;s Claude subscription, client-side.</strong> AgentForge distill/optimize and the Weekly conformity score run inside the claude+ PTY via Claude Code; neither the Lambda backend nor the wrapper calls a hosted model or holds model keys. See <a href="./05-agentforge.md">feature 5</a>.</li>
+<li><strong>LLM-backed features run on the user&#39;s Claude subscription, client-side.</strong> AgentForge distill/optimize and the Weekly conformity score run inside the claude+ PTY via Claude Code; neither the Lambda backend nor the wrapper calls a hosted model or holds model keys. See <a href="./agentforge.html">feature 5</a>.</li>
 <li><strong>Frontend data layer.</strong> RTK Query against REST + a thin WebSocket middleware feeding live events into the store; Tailwind; wireframe markup promoted to components.</li>
 </ol>
 <h2>Data model (single-table, directional)</h2>
@@ -74,7 +78,13 @@ WebSocket middleware for live events.</li>
 <td>User</td>
 <td><code>USER#&lt;uid&gt;</code></td>
 <td><code>PROFILE</code></td>
-<td>—</td>
+<td>source of truth for org membership: <code>org?</code> (chosen via create/join; null until onboarded) + <code>admin?</code> (org creator)</td>
+</tr>
+<tr>
+<td>Org</td>
+<td><code>ORG#&lt;org&gt;</code></td>
+<td><code>META</code></td>
+<td>created on first-sign-in <strong>create</strong> (conditional, <code>409</code> on collision); holds <code>name</code>, <code>createdBy</code>, <code>createdAt</code> + scrypt <code>passwordSalt</code>/<code>passwordHash</code> (server-only, never returned). Shares the partition with objectives + the DoD</td>
 </tr>
 <tr>
 <td>Project (repo)</td>

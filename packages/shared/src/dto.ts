@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { sessionStatusSchema } from './events.js';
-import { scopeRefSchema, orgScopeRefSchema } from './scope.js';
+import { scopeRefSchema } from './scope.js';
 
 /** Read/write DTOs for the core entities. These shape the REST API surface. */
 
@@ -9,6 +9,13 @@ export const projectSchema = z.object({
   name: z.string().min(1),
   repo: z.string().min(1), // e.g. gh/acme/weekly-compass
   ownerUserId: z.string().min(1),
+  /**
+   * The org this project belongs to, stamped from the creator's EFFECTIVE org at
+   * create time. Optional for back-compat with projects created before org-driven
+   * membership existed; listing is still by owner, but the stamp lets future
+   * partitioning/filtering scope projects by org.
+   */
+  org: z.string().optional(),
   prdGoal: z.string().optional(),
   progressPct: z.number().min(0).max(100).optional(),
   /** Supporting Outcomes this project owns, parsed from PRD/framing (U7). */
@@ -45,6 +52,68 @@ export const createdBySchema = z.object({
 });
 export type CreatedBy = z.infer<typeof createdBySchema>;
 
+/**
+ * A user's PROFILE record (`USER#<userId> / PROFILE`). This is the SOURCE OF
+ * TRUTH for org membership: a user with `org` unset genuinely has NO org and is
+ * forced through onboarding (create/join). Membership used to come from the
+ * Cognito `custom:org` token claim (auto-assigned, so everyone always "had" an
+ * org); moving it to the DB lets a user truly be org-less. `admin` is the
+ * org-admin flag (the org creator is the first admin).
+ */
+export const userProfileSchema = z.object({
+  userId: z.string().min(1),
+  name: z.string().optional(),
+  org: z.string().optional(),
+  admin: z.boolean().optional(),
+});
+export type UserProfile = z.infer<typeof userProfileSchema>;
+
+/**
+ * The PUBLIC org record returned to clients. The stored ORG item also carries a
+ * password salt + hash (see backend `OrgRecord`); those are NEVER serialized to
+ * a client, so this shape deliberately omits them.
+ */
+export const orgSchema = z.object({
+  name: z.string().min(1),
+  createdBy: z.string().min(1),
+  createdAt: z.number().int().nonnegative(),
+});
+export type Org = z.infer<typeof orgSchema>;
+
+/**
+ * The `GET /me` response. Carries the authenticated identity plus the effective
+ * org membership. `org` is nullable (not optional) so the web's OrgGate can
+ * distinguish "no org yet -> onboard" from a present org explicitly.
+ */
+export const meResponseSchema = z.object({
+  userId: z.string().min(1),
+  name: z.string().optional(),
+  org: z.string().nullable(),
+  admin: z.boolean().optional(),
+});
+export type MeResponse = z.infer<typeof meResponseSchema>;
+
+/**
+ * Request validation for org create/join. An org name must be typed EXACTLY to
+ * join, so it is trimmed (no leading/trailing whitespace surprises) and capped.
+ * The password floor (>= 6 chars) is enforced here so both create and join
+ * reject obviously-empty secrets before any hashing/compare.
+ */
+export const orgNameSchema = z.string().trim().min(1).max(64);
+export const orgPasswordSchema = z.string().min(6).max(200);
+
+export const createOrgRequestSchema = z.object({
+  name: orgNameSchema,
+  password: orgPasswordSchema,
+});
+export type CreateOrgRequest = z.infer<typeof createOrgRequestSchema>;
+
+export const joinOrgRequestSchema = z.object({
+  name: orgNameSchema,
+  password: orgPasswordSchema,
+});
+export type JoinOrgRequest = z.infer<typeof joinOrgRequestSchema>;
+
 /** The current-state projection of a session, derived from its event stream. */
 export const sessionProjectionSchema = z.object({
   sessionId: z.string().min(1),
@@ -77,8 +146,13 @@ export type Priority = z.infer<typeof prioritySchema>;
 
 export const agentSchema = z.object({
   name: z.string().min(1),
-  /** Org-only catalog: tier is always 'org'. (3-tier scope retired for agents.) */
-  scope: orgScopeRefSchema,
+  /**
+   * Catalog scope. `org` is the default tier (the org-wide catalog), but
+   * user-scoped agents are also representable so the catalog partitions by org
+   * AND by user. `scopeRefSchema` is a strict superset of the old org-only
+   * shape, so every existing org-scoped record still validates.
+   */
+  scope: scopeRefSchema,
   model: z.string().min(1),
   prompt: z.string().default(''),
   skills: z.array(z.string()).default([]),
@@ -105,8 +179,13 @@ export type SkillKind = z.infer<typeof skillKindSchema>;
 
 export const skillSchema = z.object({
   name: z.string().min(1),
-  /** Org-only catalog: tier is always 'org'. (3-tier scope retired for skills.) */
-  scope: orgScopeRefSchema,
+  /**
+   * Catalog scope. `org` is the default tier (the org-wide catalog), but
+   * user-scoped skills are also representable so the catalog partitions by org
+   * AND by user. `scopeRefSchema` is a strict superset of the old org-only
+   * shape, so every existing org-scoped record still validates.
+   */
+  scope: scopeRefSchema,
   kind: skillKindSchema,
   description: z.string().default(''),
   source: z.enum(['built-in', 'local', 'custom']).default('local'),

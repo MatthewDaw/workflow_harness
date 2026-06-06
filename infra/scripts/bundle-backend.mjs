@@ -25,6 +25,7 @@ const handlers = [
   'rest/weekly',
   'rest/device',
   'rest/dod',
+  'rest/orgs',
   'ws/connect',
   'ws/disconnect',
   'ws/default',

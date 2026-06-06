@@ -59,15 +59,17 @@ describe('appendEvent', () => {
   });
 
   it('is idempotent on a duplicate seq (swallows ConditionalCheckFailed)', async () => {
-    ddbMock.on(PutCommand).rejects(
-      Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' }),
-    );
+    ddbMock
+      .on(PutCommand)
+      .rejects(Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' }));
     const res = await repo.appendEvent(envelope(0));
     expect(res.stored).toBe(false);
   });
 
   it('rethrows non-conditional errors', async () => {
-    ddbMock.on(PutCommand).rejects(Object.assign(new Error('boom'), { name: 'ThrottlingException' }));
+    ddbMock
+      .on(PutCommand)
+      .rejects(Object.assign(new Error('boom'), { name: 'ThrottlingException' }));
     await expect(repo.appendEvent(envelope(0))).rejects.toThrow('boom');
   });
 });
@@ -163,38 +165,5 @@ describe('getProject', () => {
     expect(ddbMock.commandCalls(GetCommand)[0]!.args[0].input.Key).toEqual(
       k.projectKey('weekly-compass'),
     );
-  });
-});
-
-describe('ensureProject', () => {
-  const project = {
-    id: 'weekly-compass',
-    name: 'weekly-compass',
-    repo: 'weekly-compass',
-    ownerUserId: 'matt',
-    liveSessionCount: 0,
-  };
-
-  it('conditionally creates the project with the owner GSI index', async () => {
-    ddbMock.on(PutCommand).resolves({});
-    const res = await repo.ensureProject(project);
-    expect(res).toEqual({ created: true });
-
-    const input = ddbMock.commandCalls(PutCommand)[0]!.args[0].input;
-    expect(input.ConditionExpression).toBe('attribute_not_exists(PK)');
-    expect(input.Item).toMatchObject({
-      ...k.projectKey(project.id),
-      ...project,
-      ...k.projectOwnerIndex(project.ownerUserId, project.id),
-    });
-  });
-
-  it('is idempotent: a ConditionalCheckFailed reports created:false (no clobber)', async () => {
-    const err = Object.assign(new Error('exists'), {
-      name: 'ConditionalCheckFailedException',
-    });
-    ddbMock.on(PutCommand).rejects(err);
-    const res = await repo.ensureProject(project);
-    expect(res).toEqual({ created: false });
   });
 });

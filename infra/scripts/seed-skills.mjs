@@ -29,6 +29,12 @@ const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 const ORG = process.env.SEED_ORG ?? 'acme';
 const TABLE = process.env.HARNESS_TABLE ?? 'harness';
 const REGION = process.env.AWS_REGION ?? 'us-east-1';
+// Owner of the user-scoped grant for non-bundle skills (compound-engineering,
+// gstack, playwright-cli). They are NOT in the org default — they seed at this
+// user's scope so a granted account can see them while a fresh org cannot.
+// Defaults to the inert 'system' owner (no human account lands there) unless a
+// deploy points it at a real account. buildSeedSkills applies the same default.
+const GRANT_OWNER = process.env.SEED_GRANT_OWNER ?? 'system';
 
 if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
   console.error(
@@ -41,9 +47,7 @@ if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
 const { buildSeedSkills } = await import(
   pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href
 );
-const { skillKey } = await import(
-  pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
-);
+const { skillKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
 
 /**
  * Parse the `name` and (folded) `description` out of a SKILL.md YAML front
@@ -101,7 +105,9 @@ function readSkillFiles() {
  */
 function readBundleManifest() {
   if (!existsSync(bundlesManifest)) {
-    console.warn(`[seed-skills] no bundle manifest at ${bundlesManifest} — seeding all skills standalone.`);
+    console.warn(
+      `[seed-skills] no bundle manifest at ${bundlesManifest} — seeding all skills standalone.`,
+    );
     return {};
   }
   try {
@@ -119,14 +125,22 @@ async function main() {
     process.exit(1);
   }
   const manifest = readBundleManifest();
-  const records = buildSeedSkills(ORG, files, manifest);
+  const records = buildSeedSkills(ORG, files, manifest, GRANT_OWNER);
 
   if (process.env.SEED_DRY_RUN) {
     for (const r of records) {
-      const desc = r.kind === 'bundle' ? `members=[${r.members.join(', ')}]` : `${r.description.slice(0, 60)}…`;
-      console.log(`[dry-run] ${r.kind} ${r.name} @ org#${ORG} (${r.source}) ${desc}`);
+      const where = `${r.scope.tier}#${r.scope.id}`;
+      const desc =
+        r.kind === 'bundle'
+          ? `members=[${r.members.join(', ')}]`
+          : `${r.description.slice(0, 60)}…`;
+      console.log(`[dry-run] ${r.kind} ${r.name} @ ${where} (${r.source}) ${desc}`);
     }
+    const orgDefault = records.filter((r) => r.scope.tier === 'org').map((r) => r.name);
+    const granted = records.filter((r) => r.scope.tier === 'user').map((r) => r.name);
     console.log(`[seed-skills] DRY RUN — ${records.length} records, nothing written.`);
+    console.log(`  org-default (org#${ORG}): ${orgDefault.join(', ')}`);
+    console.log(`  user-granted (user#${GRANT_OWNER}): ${granted.join(', ') || '(none)'}`);
     return;
   }
 
@@ -140,13 +154,18 @@ async function main() {
     );
   }
 
-  const skillNames = records.filter((r) => r.kind === 'skill').map((r) => r.name);
+  const orgSkills = records
+    .filter((r) => r.kind === 'skill' && r.scope.tier === 'org')
+    .map((r) => r.name);
+  const grantedSkills = records
+    .filter((r) => r.kind === 'skill' && r.scope.tier === 'user')
+    .map((r) => r.name);
   const bundleNames = records.filter((r) => r.kind === 'bundle').map((r) => r.name);
   console.log(
-    `[seed-skills] seeded ${skillNames.length} skills + ${bundleNames.length} bundle(s) ` +
-      `into ${TABLE} at org#${ORG}.\n` +
-      `  skills: ${skillNames.join(', ')}\n` +
-      `  bundles: ${bundleNames.map((b) => `${b}`).join(', ') || '(none)'}`,
+    `[seed-skills] seeded ${records.length} records into ${TABLE}.\n` +
+      `  org-default skills (org#${ORG}): ${orgSkills.join(', ')}\n` +
+      `  user-granted skills (user#${GRANT_OWNER}): ${grantedSkills.join(', ') || '(none)'}\n` +
+      `  bundles (org#${ORG}): ${bundleNames.map((b) => `${b}`).join(', ') || '(none)'}`,
   );
 }
 

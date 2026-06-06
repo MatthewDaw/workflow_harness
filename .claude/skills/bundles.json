@@ -5,7 +5,7 @@
       "hq-add-skill",
       "hq-create-skill",
       "hq-endforge",
-      "hq-init-command-hq",
+      "hq-init",
       "hq-optimize-agent",
       "hq-refresh-skills",
       "hq-relogin",

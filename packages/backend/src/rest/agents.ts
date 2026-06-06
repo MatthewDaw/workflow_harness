@@ -15,6 +15,7 @@ import {
   unauthorized,
 } from './runtime.js';
 import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
+import { effectiveOrg } from './membership.js';
 
 /**
  * REST: agents — collapsed to a single ORG catalog (mirrors skills.ts).
@@ -39,7 +40,11 @@ export async function resolveAgents(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
-  const agents = await deps.repo.listAgents(principal.org);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return ok({ agents: [] });
+  // Pass the caller's userId so the merged org+user catalog is returned (a
+  // user-scoped agent shadows an org-scoped one of the same name).
+  const agents = await deps.repo.listAgents(org, principal.userId);
   return ok({ agents });
 }
 
@@ -50,6 +55,8 @@ export async function createAgent(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
   if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
 
   const name = pathParam(event, 'name');
   let body: unknown;
@@ -60,14 +67,14 @@ export async function createAgent(
   }
 
   // Force org scope (ignore any client-supplied scope) and parse the rest.
-  const candidate = { ...(body as Record<string, unknown>), scope: orgScope(principal.org) };
+  const candidate = { ...(body as Record<string, unknown>), scope: orgScope(org) };
   const parsed = agentSchema.safeParse(candidate);
   if (!parsed.success) return badRequest(parsed.error.message);
   const agent: Agent = parsed.data;
 
   if (name) {
     // PUT /agents/:name — update; preserve the existing createdBy stamp.
-    const existing = await deps.repo.getAgent(orgScope(principal.org), name);
+    const existing = await deps.repo.getAgent(orgScope(org), name);
     agent.createdBy = existing?.createdBy ?? agent.createdBy;
   } else {
     agent.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
@@ -85,7 +92,9 @@ export async function getAgent(
   if (!principal) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const agent = await deps.repo.getAgent(orgScope(principal.org), name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return notFound();
+  const agent = await deps.repo.getAgent(orgScope(org), name);
   if (!agent) return notFound();
   return ok({ agent });
 }
@@ -99,7 +108,9 @@ export async function deleteAgent(
   if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  await deps.repo.deleteAgent(orgScope(principal.org), name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+  await deps.repo.deleteAgent(orgScope(org), name);
   return ok({ deleted: true });
 }
 

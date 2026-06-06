@@ -15,6 +15,7 @@ import {
   unauthorized,
 } from './runtime.js';
 import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
+import { effectiveOrg } from './membership.js';
 
 /**
  * REST: skills + bundles — collapsed to a single ORG catalog.
@@ -67,8 +68,12 @@ export async function resolveSkills(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return ok({ skills: [] });
 
-  const all = await deps.repo.listSkills(principal.org);
+  // Pass the caller's userId so the merged org+user catalog is returned (a
+  // user-scoped skill shadows an org-scoped one of the same name).
+  const all = await deps.repo.listSkills(org, principal.userId);
   const byName = new Map(all.map((s) => [s.name, s]));
   // Annotate bundles with their transitively-resolved leaf members.
   const annotated = all.map((s) =>
@@ -84,6 +89,8 @@ export async function createSkill(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
   if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
 
   const name = pathParam(event, 'name');
   let body: unknown;
@@ -94,14 +101,14 @@ export async function createSkill(
   }
 
   // Force org scope (ignore any client-supplied scope) and parse the rest.
-  const candidate = { ...(body as Record<string, unknown>), scope: orgScope(principal.org) };
+  const candidate = { ...(body as Record<string, unknown>), scope: orgScope(org) };
   const parsed = skillSchema.safeParse(candidate);
   if (!parsed.success) return badRequest(parsed.error.message);
   const skill: Skill = parsed.data;
 
   if (name) {
     // PUT /skills/:name — update; preserve the existing createdBy stamp.
-    const existing = await deps.repo.getSkill(orgScope(principal.org), name);
+    const existing = await deps.repo.getSkill(orgScope(org), name);
     skill.createdBy = existing?.createdBy ?? skill.createdBy;
   } else {
     // POST — stamp authorship from the principal.
@@ -120,7 +127,9 @@ export async function getSkill(
   if (!principal) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const skill = await deps.repo.getSkill(orgScope(principal.org), name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return notFound();
+  const skill = await deps.repo.getSkill(orgScope(org), name);
   if (!skill) return notFound();
   return ok({ skill });
 }
@@ -139,7 +148,9 @@ export async function getUsage(
   if (!principal) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const count = await usageCount(deps.repo, principal.org, name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return ok({ name, count: 0 });
+  const count = await usageCount(deps.repo, org, name);
   return ok({ name, count });
 }
 
@@ -152,7 +163,9 @@ export async function deleteSkill(
   if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  await deps.repo.deleteSkill(orgScope(principal.org), name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+  await deps.repo.deleteSkill(orgScope(org), name);
   return ok({ deleted: true });
 }
 
@@ -176,7 +189,9 @@ export async function addMember(
   const member = (body as { member?: unknown })?.member;
   if (typeof member !== 'string' || !member) return badRequest('missing member');
 
-  const bundle = await deps.repo.getSkill(orgScope(principal.org), name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+  const bundle = await deps.repo.getSkill(orgScope(org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
@@ -202,7 +217,9 @@ export async function removeMember(
   const member = pathParam(event, 'member');
   if (!name || !member) return badRequest('missing name or member');
 
-  const bundle = await deps.repo.getSkill(orgScope(principal.org), name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+  const bundle = await deps.repo.getSkill(orgScope(org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
@@ -225,12 +242,14 @@ export async function dissolveBundle(
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
 
-  const bundle = await deps.repo.getSkill(orgScope(principal.org), name);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+  const bundle = await deps.repo.getSkill(orgScope(org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
   const members = bundle.members;
-  await deps.repo.deleteSkill(orgScope(principal.org), name);
+  await deps.repo.deleteSkill(orgScope(org), name);
   return ok({ dissolved: true, members });
 }
 

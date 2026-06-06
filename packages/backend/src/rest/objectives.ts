@@ -15,6 +15,7 @@ import {
   unauthorized,
 } from './runtime.js';
 import { isAdmin } from './scopeauth.js';
+import { effectiveOrg } from './membership.js';
 
 /**
  * REST: objectives (U10) — the org-global RCDO tree with cached roll-ups.
@@ -40,7 +41,11 @@ export async function listObjectives(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
-  const nodes = await deps.repo.listObjectives(principal.org);
+  // Data follows membership: scope by the effective org (profile.org, claim
+  // fallback). An org-less caller has no objectives to show.
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return ok({ tree: buildTree([]), nodes: [] });
+  const nodes = await deps.repo.listObjectives(org);
   return ok({ tree: buildTree(nodes), nodes });
 }
 
@@ -53,7 +58,9 @@ export async function getObjective(
   const id = pathParam(event, 'id');
   if (!id) return badRequest('missing objective id');
 
-  const node = await deps.repo.getObjective(principal.org, id);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return notFound();
+  const node = await deps.repo.getObjective(org, id);
   if (!node) return notFound();
 
   // The roll-up projection computes the node's cached % org-wide; this view just
@@ -75,10 +82,12 @@ export async function createObjective(
   } catch {
     return badRequest('invalid JSON body');
   }
-  // The org is always the caller's org — never a client-supplied one.
+  // The org is always the caller's EFFECTIVE org — never a client-supplied one.
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
   const parsed = objectiveNodeSchema.safeParse({
     ...(body as Record<string, unknown>),
-    org: principal.org,
+    org,
   });
   if (!parsed.success) return badRequest(parsed.error.message);
   const node: ObjectiveNode = parsed.data;
@@ -95,7 +104,9 @@ export async function deleteObjective(
   if (!isAdmin(event)) return forbidden();
   const id = pathParam(event, 'id');
   if (!id) return badRequest('missing objective id');
-  await deps.repo.deleteObjective(principal.org, id);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+  await deps.repo.deleteObjective(org, id);
   return ok({ deleted: true });
 }
 

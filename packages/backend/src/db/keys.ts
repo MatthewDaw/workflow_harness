@@ -86,6 +86,13 @@ export const objectiveKey = (org: string, path: string): PrimaryKey => ({
 });
 
 /**
+ * The org's own record (name + creator + password salt/hash). It shares the org
+ * partition with the objective tree (`RCDO#…`) and the DoD (`CONFIG#DOD`) under
+ * a fixed meta SK, so one org's data is a single partition.
+ */
+export const orgKey = (name: string): PrimaryKey => ({ PK: `ORG#${name}`, SK: 'META' });
+
+/**
  * The org-wide Definition of Done (plan-mapping feature 1). A single record per
  * org — it lives in the org partition under a fixed meta SK, alongside the RCDO
  * tree (`RCDO#…`). Advisory config that `/update-progress` reports against.

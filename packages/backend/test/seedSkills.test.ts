@@ -33,15 +33,31 @@ const ORG = 'acme';
 // The `hq-*` files are product skills (bundle members); the non-`hq-` files are
 // standalone catalog skills that must NOT join the starter bundle.
 const HQ_FILES: SeedSkillFile[] = [
-  { name: 'hq-update-progress', description: 'push completion to GitHub', body: '# hq-update-progress\nbody' },
-  { name: 'hq-weekly-update', description: 'weekly report to HQ', body: '# hq-weekly-update\nbody' },
+  {
+    name: 'hq-update-progress',
+    description: 'push completion to GitHub',
+    body: '# hq-update-progress\nbody',
+  },
+  {
+    name: 'hq-weekly-update',
+    description: 'weekly report to HQ',
+    body: '# hq-weekly-update\nbody',
+  },
   { name: 'hq-startforge', description: 'open a forge boundary', body: '# hq-startforge\nbody' },
   { name: 'hq-endforge', description: 'distill an agent', body: '# hq-endforge\nbody' },
-  { name: 'hq-optimize-agent', description: 'refine an agent prompt', body: '# hq-optimize-agent\nbody' },
+  {
+    name: 'hq-optimize-agent',
+    description: 'refine an agent prompt',
+    body: '# hq-optimize-agent\nbody',
+  },
 ];
 const STANDALONE_FILES: SeedSkillFile[] = [
   { name: 'gstack', description: 'headless browser QA', body: '# gstack\nbody' },
-  { name: 'compound-engineering', description: 'install the CE plugin', body: '# compound-engineering\nbody' },
+  {
+    name: 'compound-engineering',
+    description: 'install the CE plugin',
+    body: '# compound-engineering\nbody',
+  },
 ];
 const FILES: SeedSkillFile[] = [...HQ_FILES, ...STANDALONE_FILES];
 // Manifest: only the product skills belong to command-hq-starter.
@@ -58,12 +74,11 @@ describe('buildSeedSkills', () => {
     const skills = records.filter((r) => r.kind === 'skill');
     const bundles = records.filter((r) => r.kind === 'bundle');
 
-    // Every file is seeded as a standalone catalog skill...
+    // Every file is seeded as a catalog skill...
     expect(skills).toHaveLength(FILES.length);
     expect(bundles).toHaveLength(1);
 
     for (const s of skills) {
-      expect(s.scope).toEqual({ tier: 'org', id: ORG });
       expect(s.source).toBe('built-in');
       expect(s.createdBy).toEqual({ userId: 'system', name: 'system' });
       expect(s.body.length).toBeGreaterThan(0);
@@ -77,6 +92,27 @@ describe('buildSeedSkills', () => {
     expect(bundle.members).not.toContain('gstack');
     expect(bundle.members).not.toContain('compound-engineering');
   });
+
+  it('seeds only seeded-bundle members at org scope; non-members go user-narrow', () => {
+    const GRANT = 'grant-owner';
+    const records = buildSeedSkills(ORG, FILES, MANIFEST, GRANT);
+    const orgScoped = records
+      .filter((r) => r.kind === 'skill' && r.scope.tier === 'org')
+      .map((r) => r.name);
+    const userScoped = records.filter((r) => r.kind === 'skill' && r.scope.tier === 'user');
+
+    // The org-wide default is EXACTLY the command-hq-starter members.
+    expect(orgScoped.sort()).toEqual(HQ_FILES.map((f) => f.name).sort());
+
+    // The non-bundle skills are NOT in the org default — they seed at the grant
+    // owner's user scope so a fresh org cannot see them.
+    expect(orgScoped).not.toContain('gstack');
+    expect(orgScoped).not.toContain('compound-engineering');
+    expect(userScoped.map((s) => s.name).sort()).toEqual(['compound-engineering', 'gstack']);
+    for (const s of userScoped) {
+      expect(s.scope).toEqual({ tier: 'user', id: GRANT });
+    }
+  });
 });
 
 describe('seedSkills', () => {
@@ -84,11 +120,15 @@ describe('seedSkills', () => {
     await seedSkills(repo, ORG, FILES, MANIFEST);
     await seedSkills(repo, ORG, FILES, MANIFEST);
 
+    // The org catalog (no viewer) holds only the org-default set: the starter
+    // bundle members + the bundle record. The non-member skills seeded at the
+    // grant owner's user scope are NOT in the org-only listing.
     const stored = await repo.listSkills(ORG);
-    // N skills + 1 bundle, no duplicates from the second run.
-    expect(stored).toHaveLength(FILES.length + 1);
+    expect(stored).toHaveLength(HQ_FILES.length + 1);
     const names = stored.map((s) => s.name).sort();
     expect(names).toContain(STARTER_BUNDLE_NAME);
+    expect(names).not.toContain('gstack');
+    expect(names).not.toContain('compound-engineering');
   });
 
   it('makes the bundle resolve for any user in the org with its members flattened', async () => {

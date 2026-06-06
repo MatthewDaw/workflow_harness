@@ -40,6 +40,43 @@ export function parsePrd(md: string | undefined): {
   return { goal, supportingOutcomeIds: [...soIds] };
 }
 
+/** Strip a document fragment down to clean, single-line display text. */
+function stripToText(s: string): string {
+  return s
+    .replace(/<[^>]+>/g, ' ') // drop any inline HTML tags
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extract a project goal for the project card from a PRD-style document. The
+ * repo-root `PRD.md` convention (`Goal:` / first `#` heading) is handled by
+ * {@link parsePrd}; this additionally recognizes the `docs/PRD.{md,html}`
+ * Project Requirements convention, where the goal is written as a
+ * `Product goal:` paragraph — markdown bold or an HTML `<strong>` label. We
+ * capture the rest of that paragraph, strip tags/entities, and collapse it to a
+ * single line. Returns undefined when no goal label is present, so callers fall
+ * back to "no goal yet" rather than surfacing a document title.
+ */
+export function parseGoal(doc: string | undefined): string | undefined {
+  if (!doc || !doc.trim()) return undefined;
+  // Drop leading YAML frontmatter so a `completion:` block isn't mistaken for content.
+  const body = doc.replace(/^﻿?---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, '');
+  // Find a "(Product )?goal:" label at a line/tag/emphasis boundary and capture
+  // the rest of its paragraph (up to a blank line, </p>, or the next block).
+  const m = body.match(
+    /(?:^|>|\n)\s*(?:#+\s*)?(?:\*{1,2}|_{1,2}|<strong>|<b>)?\s*(?:product\s+)?goal\s*:\s*(?:<\/strong>|<\/b>|\*{1,2}|_{1,2})?\s*([\s\S]*?)(?:<\/p>|\r?\n\s*\r?\n|\r?\n\s*#|$)/i,
+  );
+  if (!m?.[1]) return undefined;
+  return stripToText(m[1]) || undefined;
+}
+
 /**
  * Parse `PROGRESS.md` for a completion percentage. Accepts `Progress: 42%`,
  * `42% complete`, or a bare `42%`. Returns undefined when no percentage is

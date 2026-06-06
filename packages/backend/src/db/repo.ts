@@ -17,14 +17,18 @@ import type {
   SessionProjection,
   SessionVector,
   Skill,
+  UserProfile,
   WeeklyUpdate,
 } from '@harness/shared';
-import { DEFAULT_DEFINITION_OF_DONE, orgScope, projectSchema } from '@harness/shared';
-import type { z } from 'zod';
+import {
+  DEFAULT_DEFINITION_OF_DONE,
+  orgScope,
+  projectSchema,
+  resolveScoped,
+  userProfileSchema,
+  userScope,
+} from '@harness/shared';
 import * as k from './keys.js';
-
-/** The pre-parse shape of a Project (enabledSkills/enabledAgents optional via defaults). */
-type ProjectInput = z.input<typeof projectSchema>;
 
 /**
  * A live WebSocket connection in the registry. Daemon connections also carry the
@@ -56,6 +60,20 @@ export interface InstanceRecord {
 }
 
 /**
+ * The stored ORG item. It carries the password salt + hash so a join can verify
+ * the typed secret. This shape is INTERNAL to the repo and is NEVER returned to
+ * a client — handlers project it down to the public `Org` DTO (no password
+ * fields) before serializing.
+ */
+export interface OrgRecord {
+  name: string;
+  createdBy: string;
+  createdAt: number;
+  passwordSalt: string;
+  passwordHash: string;
+}
+
+/**
  * Intent-named access layer over the single `harness` table. Handlers depend on
  * this, never on raw DynamoDB commands. The DynamoDBDocumentClient is injected
  * so it can be mocked in tests.
@@ -66,33 +84,79 @@ export class Repo {
     private readonly table: string = k.tableName(),
   ) {}
 
-  // --- Projects -----------------------------------------------------------
+  // --- Users (profiles) + org membership ---------------------------------
+  //
+  // The PROFILE record (`USER#<id> / PROFILE`) is the SOURCE OF TRUTH for org
+  // membership: `profile.org` unset means the user has no org and must onboard.
+  // (Membership used to ride on the Cognito token claim, so everyone always had
+  // an org; moving it here lets a user genuinely be org-less.)
 
-  async putProject(p: Project): Promise<void> {
+  /** A user's PROFILE record, or undefined when they have never been seen. */
+  async getUser(userId: string): Promise<UserProfile | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.userKey(userId) }),
+    );
+    if (!res.Item) return undefined;
+    // Parse through the schema to strip table PK/SK attributes; fall back to the
+    // raw item on a parse miss, mirroring getProject's tolerance of legacy rows.
+    const parsed = userProfileSchema.safeParse(res.Item);
+    return parsed.success ? parsed.data : (res.Item as UserProfile);
+  }
+
+  /** Upsert a user's full PROFILE record. */
+  async putUser(profile: UserProfile): Promise<void> {
     await this.doc.send(
       new PutCommand({
         TableName: this.table,
-        Item: { ...k.projectKey(p.id), ...p, ...k.projectOwnerIndex(p.ownerUserId, p.id) },
+        Item: { ...k.userKey(profile.userId), ...profile },
       }),
     );
   }
 
   /**
-   * Create a Project only if one does not already exist (conditional PutItem).
-   * Mirrors `putProject`'s Item but guards on `attribute_not_exists(PK)`, so a
-   * later session for the same repo never clobbers a curated name/progress/
-   * framing. Called on each daemon `session.start`, so it must be idempotent: a
-   * ConditionalCheckFailedException is swallowed and reported as `created:false`.
+   * Set (or change) the user's org membership, the write that ends onboarding.
+   * Upsert: load any existing profile and merge so a name/admin flag set earlier
+   * is preserved unless explicitly overridden. The org CREATOR passes
+   * `{ admin: true }`; a joiner leaves it unset.
    */
-  async ensureProject(input: ProjectInput): Promise<{ created: boolean }> {
-    // Parse so the org-catalog opt-in arrays (enabledSkills/enabledAgents) and
-    // other defaults are filled in for callers that supply only the core fields.
-    const p: Project = projectSchema.parse(input);
+  async setUserOrg(
+    userId: string,
+    org: string,
+    opts: { name?: string; admin?: boolean } = {},
+  ): Promise<void> {
+    const existing = await this.getUser(userId);
+    await this.putUser({
+      userId,
+      org,
+      name: opts.name ?? existing?.name,
+      admin: opts.admin ?? existing?.admin,
+    });
+  }
+
+  // --- Organizations -----------------------------------------------------
+  //
+  // The ORG record lives in the org partition (`ORG#<name> / META`) beside the
+  // objective tree + DoD. It stores the password salt/hash so a join can verify
+  // the typed secret; getOrg returns the internal shape and the handler strips
+  // the password fields before responding.
+
+  /** The stored org record (with password fields), or undefined if no such org. */
+  async getOrg(name: string): Promise<OrgRecord | undefined> {
+    const res = await this.doc.send(new GetCommand({ TableName: this.table, Key: k.orgKey(name) }));
+    return res.Item as OrgRecord | undefined;
+  }
+
+  /**
+   * Create an org exactly once. The conditional write fails if the org name is
+   * already taken (names are the join key, so they must be unique); we surface
+   * that as `{ created: false }` rather than throwing, mirroring appendEvent.
+   */
+  async createOrg(rec: OrgRecord): Promise<{ created: boolean }> {
     try {
       await this.doc.send(
         new PutCommand({
           TableName: this.table,
-          Item: { ...k.projectKey(p.id), ...p, ...k.projectOwnerIndex(p.ownerUserId, p.id) },
+          Item: { ...k.orgKey(rec.name), ...rec },
           ConditionExpression: 'attribute_not_exists(PK)',
         }),
       );
@@ -103,6 +167,17 @@ export class Repo {
       }
       throw err;
     }
+  }
+
+  // --- Projects -----------------------------------------------------------
+
+  async putProject(p: Project): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.projectKey(p.id), ...p, ...k.projectOwnerIndex(p.ownerUserId, p.id) },
+      }),
+    );
   }
 
   async getProject(projectId: string): Promise<Project | undefined> {
@@ -214,8 +289,7 @@ export class Repo {
       new UpdateCommand({
         TableName: this.table,
         Key: k.projectKey(projectId),
-        UpdateExpression:
-          'SET progressPct = :p, framingReadAt = :r, framingStale = :s',
+        UpdateExpression: 'SET progressPct = :p, framingReadAt = :r, framingStale = :s',
         ConditionExpression: 'attribute_exists(PK)',
         ExpressionAttributeValues: {
           ':p': Math.max(0, Math.min(100, progressPct)),
@@ -463,14 +537,32 @@ export class Repo {
     await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.skillKey(scope, name) }));
   }
 
-  /** The org catalog of agents (org-only; the 3-tier scope is retired). */
-  async listAgents(org: string): Promise<Agent[]> {
-    return this.listScoped<Agent>(orgScope(org), 'AGENT#');
+  /**
+   * The catalog of agents visible to a viewer. With no `userId` this is the
+   * org-only catalog (back-compat with every existing caller/test). With a
+   * `userId` it merges the org scope AND the user scope, so user-scoped agents
+   * are included and a user-scoped item SHADOWS an org-scoped one of the same
+   * name (resolveScoped: narrowest scope wins).
+   */
+  async listAgents(org: string, userId?: string): Promise<Agent[]> {
+    const orgAgents = await this.listScoped<Agent>(orgScope(org), 'AGENT#');
+    if (userId === undefined) return orgAgents;
+    const userAgents = await this.listScoped<Agent>(userScope(userId), 'AGENT#');
+    return resolveScoped([...orgAgents, ...userAgents], { org, userId });
   }
 
-  /** The org catalog of skills (org-only; the 3-tier scope is retired). */
-  async listSkills(org: string): Promise<Skill[]> {
-    return this.listScoped<Skill>(orgScope(org), 'SKILL#');
+  /**
+   * The catalog of skills visible to a viewer. With no `userId` this is the
+   * org-only catalog (back-compat with every existing caller/test). With a
+   * `userId` it merges the org scope AND the user scope, so user-scoped skills
+   * are included and a user-scoped item SHADOWS an org-scoped one of the same
+   * name (resolveScoped: narrowest scope wins).
+   */
+  async listSkills(org: string, userId?: string): Promise<Skill[]> {
+    const orgSkills = await this.listScoped<Skill>(orgScope(org), 'SKILL#');
+    if (userId === undefined) return orgSkills;
+    const userSkills = await this.listScoped<Skill>(userScope(userId), 'SKILL#');
+    return resolveScoped([...orgSkills, ...userSkills], { org, userId });
   }
 
   private async listScoped<T>(scope: ScopeRef, skPrefix: string): Promise<T[]> {
@@ -546,10 +638,7 @@ export class Repo {
    * is left intact, since a skill may be enabled directly or brought by another
    * agent. Returns the updated Project.
    */
-  async removeAgentFromProject(
-    projectId: string,
-    agentName: string,
-  ): Promise<Project | undefined> {
+  async removeAgentFromProject(projectId: string, agentName: string): Promise<Project | undefined> {
     const project = await this.getProject(projectId);
     if (!project) return undefined;
     project.enabledAgents = (project.enabledAgents ?? []).filter((a) => a !== agentName);

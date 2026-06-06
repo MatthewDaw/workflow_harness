@@ -46,25 +46,10 @@ export async function ingest(
 
   const conn = await deps.repo.getConnection(connectionId);
 
-  // 1b. Register the repo as a Project on its first session announcement. The
-  //     daemon emits `session.start` carrying the projectId (a slug of the repo
-  //     folder) and, when available, a human-readable `repo` display name (the
-  //     git "owner/repo" or repo folder name). We prefer that real name for both
-  //     the Project's name and repo, falling back to the projectId slug for
-  //     older daemons that omit it. Only for authenticated daemon connections
-  //     (conn?.userId present), and idempotent: ensureProject is a conditional
-  //     create that never clobbers an existing project's curated
-  //     name/progress/framing on later sessions.
-  if (envelope.event.kind === 'session.start' && conn?.userId) {
-    const displayName = envelope.event.repo ?? envelope.event.projectId;
-    await deps.repo.ensureProject({
-      id: envelope.event.projectId,
-      name: displayName,
-      repo: displayName,
-      ownerUserId: conn.userId,
-      liveSessionCount: 0,
-    });
-  }
+  // A repo is NOT auto-connected as a Project on session.start. Connecting a
+  // repo is an explicit user action via the "Connect repo" button in the web UI
+  // (POST /projects). The daemon's session.start still carries a projectId so
+  // sessions group under an already-connected project, but it never creates one.
 
   // 2. Append (idempotent on duplicate seq).
   const { stored } = await deps.repo.appendEvent(envelope);

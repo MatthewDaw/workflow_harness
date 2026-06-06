@@ -28,7 +28,7 @@ progress against the actual requirements</em>, with the Project Requirements tab
 specifically reading from <code>docs/PRD.md</code> and Detailed Requirements from
 <code>docs/plans/</code>.</p>
 <p>What already exists (built + tested) — see
-<a href="./01-plan-mapping.md">01-plan-mapping.md</a>:</p>
+<a href="./plan_mapping.html">01-plan-mapping.md</a>:</p>
 <ul>
 <li><code>/hq-update-progress</code> already audits <code>docs/plans/**</code>, computes a code-vs-docs
 <code>completion:</code> per doc, writes the frontmatter, commits/pushes, and emits a
@@ -56,7 +56,7 @@ fallback to today&#39;s sources so repos without <code>docs/PRD.md</code> don&#3
 <li>Any HQ web <strong>button</strong> or <strong>remote trigger</strong> of the skill — explicitly dropped
 for now (the skill stays local-only).</li>
 <li>The enforced prod-E2E verified-completion gate (already deferred in
-<a href="./01-plan-mapping.md">01-plan-mapping.md</a>).</li>
+<a href="./plan_mapping.html">01-plan-mapping.md</a>).</li>
 <li><code>completion:</code> frontmatter integrity (hand-editable) — unchanged.</li>
 </ul>
 <hr>
@@ -125,7 +125,7 @@ high-level requirements body, so the re-pointed tab has something real to render
 </ul>
 <p><strong>Approach:</strong> Author a concise high-level requirements doc (the &quot;what management
 writes&quot; altitude — the five features from
-<a href="../command-hq-overview.md">command-hq-overview.md</a>, as outcome-level bullets, not
+<a href="../specs_overview.html">command-hq-overview.md</a>, as outcome-level bullets, not
 the detailed breakdown). Seed content from the existing <code>docs/st6_prd.md</code>
 inspiration where useful, but keep it product-requirement prose, not a plan. Start
 the file with a <code>---\ncompletion: 0\n---</code> frontmatter block (the placeholder;
@@ -133,7 +133,7 @@ the file with a <code>---\ncompletion: 0\n---</code> frontmatter block (the plac
 (it remains the cited inspiration) or the repo-root <code>PRD.md</code> (Project Overview).</p>
 <p><strong>Patterns to follow:</strong> the frontmatter convention used by every <code>docs/plans/</code>
 doc; the high-level-vs-detailed split described in
-<a href="./01-plan-mapping.md">01-plan-mapping.md</a> (&quot;The three altitudes&quot;).</p>
+<a href="./plan_mapping.html">01-plan-mapping.md</a> (&quot;The three altitudes&quot;).</p>
 <p><strong>Test scenarios:</strong> Test expectation: none — content authoring (a markdown doc,
 no behavior). Verified indirectly by U2&#39;s parser tests reading a <code>docs/PRD.md</code>
 fixture.</p>

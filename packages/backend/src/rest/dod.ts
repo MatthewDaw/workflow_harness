@@ -11,6 +11,7 @@ import {
   unauthorized,
 } from './runtime.js';
 import { isAdmin } from './scopeauth.js';
+import { effectiveOrg } from './membership.js';
 
 /**
  * REST: org Definition of Done (plan-mapping feature 1).
@@ -38,7 +39,10 @@ export async function getDod(
 ): Promise<APIGatewayProxyResultV2> {
   const principal = principalOf(event);
   if (!principal) return unauthorized();
-  const dod = await deps.repo.getOrgDod(principal.org);
+  const org = await effectiveOrg(event, deps.repo);
+  // An org-less caller gets the default floor (getOrgDod defaults when unset).
+  if (!org) return ok({ dod: await deps.repo.getOrgDod('') });
+  const dod = await deps.repo.getOrgDod(org);
   return ok({ dod });
 }
 
@@ -59,7 +63,9 @@ export async function putDod(
   const parsed = definitionOfDoneSchema.safeParse(body ?? {});
   if (!parsed.success) return badRequest(parsed.error.message);
   const dod: DefinitionOfDone = parsed.data;
-  await deps.repo.putOrgDod(principal.org, dod);
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+  await deps.repo.putOrgDod(org, dod);
   return ok({ dod });
 }
 

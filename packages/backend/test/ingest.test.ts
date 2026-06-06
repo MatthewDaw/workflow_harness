@@ -297,46 +297,24 @@ describe('event ingestion', () => {
   });
 });
 
-describe('session.start registers the repo as a Project', () => {
+describe('session.start does NOT auto-connect the repo as a Project', () => {
   const PROJECT_ID = 'weekly-compass'; // matches startEvent.projectId
 
-  it('creates the Project, owned by the daemon connection user (falls back to slug when repo absent)', async () => {
+  it('ingests the session without creating a Project (connect is an explicit UI action)', async () => {
     await seedDaemonConn();
     await ingest(wsEvent(env(0, startEvent)), deps());
 
-    const proj = await repo.getProject(PROJECT_ID);
-    expect(proj).toMatchObject({
-      id: PROJECT_ID,
-      name: PROJECT_ID,
-      repo: PROJECT_ID,
-      ownerUserId: OWNER,
-    });
-
-    // And it shows in the user's Projects list (GET /projects via GSI1).
-    const list = await repo.listProjectsForUser(OWNER);
-    expect(list.map((p) => p.id)).toContain(PROJECT_ID);
+    // The session projection is recorded...
+    expect(await repo.getSessionById(startEvent.sessionId)).toBeDefined();
+    // ...but the repo is not auto-connected: no Project, nothing in the list.
+    expect(await repo.getProject(PROJECT_ID)).toBeUndefined();
+    expect(await repo.listProjectsForUser(OWNER)).toHaveLength(0);
   });
 
-  it('uses the real repo display name for the Project name + repo when present', async () => {
+  it('leaves an already-connected Project untouched on session.start', async () => {
     await seedDaemonConn();
-    const withRepo: Event = { ...startEvent, repo: 'acme/weekly-compass' };
-    await ingest(wsEvent(env(0, withRepo)), deps());
 
-    const proj = await repo.getProject(PROJECT_ID);
-    // id stays the slug (the stable grouping key); name + repo get the real name.
-    expect(proj).toMatchObject({
-      id: PROJECT_ID,
-      name: 'acme/weekly-compass',
-      repo: 'acme/weekly-compass',
-      ownerUserId: OWNER,
-    });
-  });
-
-  it('does not clobber or duplicate the Project on a second session.start', async () => {
-    await seedDaemonConn();
-    await ingest(wsEvent(env(0, startEvent)), deps());
-
-    // Curate the project (as the Projects UI would) before a later session.
+    // The repo was connected via the UI (POST /projects → putProject).
     await repo.putProject({
       id: PROJECT_ID,
       name: 'Weekly Compass',
@@ -346,26 +324,14 @@ describe('session.start registers the repo as a Project', () => {
       liveSessionCount: 0,
     });
 
-    // A second session for the same repo announces session.start again.
-    const second: Event = { ...startEvent, sessionId: 's-2' };
-    await ingest(wsEvent(env(0, second), 'daemon-conn'), deps());
+    await ingest(wsEvent(env(0, startEvent), 'daemon-conn'), deps());
 
-    // The curated name/progress survive (ensureProject was a no-op create).
+    // The curated Project survives unchanged.
     const proj = await repo.getProject(PROJECT_ID);
     expect(proj?.name).toBe('Weekly Compass');
     expect(proj?.progressPct).toBe(42);
-
-    // Still exactly one project for the user.
     const list = await repo.listProjectsForUser(OWNER);
     expect(list.filter((p) => p.id === PROJECT_ID)).toHaveLength(1);
-  });
-
-  it('does not create a Project when the connection is unknown (unauthenticated)', async () => {
-    // No seedDaemonConn(): getConnection returns undefined.
-    await ingest(wsEvent(env(0, startEvent)), deps());
-
-    expect(await repo.getProject(PROJECT_ID)).toBeUndefined();
-    expect(await repo.listProjectsForUser(OWNER)).toHaveLength(0);
   });
 });
 

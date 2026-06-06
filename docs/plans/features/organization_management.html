@@ -1,0 +1,129 @@
+---
+status: active
+type: feature
+created: 2026-06-06
+completion: 90
+feature: organization-management
+---
+
+<h1>Organization Management (onboarding — create or join an org on first sign-in)</h1>
+<p>Membership in an organization is now a real, DB-backed fact a user can lack. On
+first sign-in a user with no org is forced through an <strong>OrgGate</strong> to either
+<strong>create</strong> an org (name + password) or <strong>join</strong> an existing one (exact name +
+password) before the app renders. From then on every org-scoped read/write is keyed
+to the org the user chose — objectives, the Definition of Done, and the skills/agents
+catalog — and the catalog stays partitionable by org id <em>and</em> by user id.</p>
+<h2>Problem frame</h2>
+<p>Until now a user&#39;s org came entirely from the Cognito token claim <code>custom:org</code>, and
+a pre-token-generation Lambda defaults a missing claim to <code>personasearch</code>
+(<code>infra/lib/auth-stack.ts</code>). The consequence: <strong>every account always &quot;had&quot; an
+org</strong>, so no one was ever genuinely unaffiliated and there was no onboarding step —
+a fresh Google sign-in was silently authorized into one shared org. That is fine for
+a single-tenant demo but wrong the moment two organizations share the deployment:
+there is no membership decision, no per-org password gate, and no way for a user to
+say &quot;I belong here, not there.&quot; We make membership <strong>DB-driven</strong> via the user&#39;s
+PROFILE record so a user can have <em>no</em> org and must onboard, and so the org they
+end up in is a recorded choice rather than a token default.</p>
+<h2>Key decisions</h2>
+<ul>
+<li><strong>Membership lives on the PROFILE record, not the token claim.</strong> The source of
+truth is <code>USER#&lt;uid&gt;/PROFILE.org</code>. The Cognito <code>custom:org</code> claim is kept only as a
+back-compat fallback (see <code>effectiveOrg</code>); a user with no profile org is treated as
+genuinely org-less and routed into onboarding.</li>
+<li><strong><code>GET /me</code> drives the OrgGate.</strong> After login the web calls <code>GET /me</code>; when it
+returns <code>org: null</code> the OrgGate intercepts and forces create/join <em>before</em> the
+app renders any org-scoped screen. There is no way to skip past it into the app.</li>
+<li><strong>Create org = name + password.</strong> The password is <strong>scrypt-hashed</strong> (salt +
+hash, never the plaintext) into the <code>ORG#&lt;name&gt;/META</code> record via a <strong>conditional
+create</strong>, so a name collision is a clean <code>409</code> rather than an overwrite. The creator
+becomes the org <strong>admin</strong> (their PROFILE gets <code>admin: true</code> alongside <code>org</code>).</li>
+<li><strong>Join org = EXACT name + password.</strong> The user must type the existing org&#39;s name
+exactly; the password is verified against the stored scrypt hash. Any failure —
+unknown name <em>or</em> wrong password — returns a single generic <code>403</code> with one message,
+so the endpoint can&#39;t be used to <strong>enumerate</strong> which org names exist.</li>
+<li><strong><code>effectiveOrg(event, repo) = profile.org ?? token-claim-org</code>.</strong> This threads the
+chosen org through every org-scoped handler in one place. The token fallback is
+deliberate: it keeps existing handler tests (which seed no profile) passing and lets
+device-token / wrapper traffic — which carries the claim but no onboarding flow —
+keep resolving an org, while real onboarded web users get the org they picked.</li>
+<li><strong>Data partitions by org id AND user id.</strong> Org-global state lives under
+<code>ORG#&lt;org&gt;</code> (objectives <code>RCDO#…</code>, the DoD <code>CONFIG#DOD</code>, and the new org record
+<code>META</code>). The skills/agents catalog is keyed <code>SCOPE#org#&lt;id&gt;</code> / <code>SCOPE#user#&lt;id&gt;</code>
+(<code>scopeId</code>/<code>agentKey</code>/<code>skillKey</code> in <code>db/keys.ts</code>), so the catalog is already
+partitionable by org id <em>and</em> by user id — onboarding just supplies the org id every
+query scopes to.</li>
+</ul>
+<h2>Actors</h2>
+<ul>
+<li><strong>New user (no org)</strong> — signs in for the first time; <code>GET /me</code> returns
+<code>org: null</code>; the OrgGate forces a create-or-join choice before anything else loads.</li>
+<li><strong>Org creator</strong> — supplies a new name + password, lands the <code>ORG#&lt;name&gt;/META</code>
+record, and <strong>becomes the org admin</strong> in the same step.</li>
+<li><strong>Joining user</strong> — supplies an existing org&#39;s exact name + password and, on a
+match, has their PROFILE org set; a mismatch is one generic <code>403</code>.</li>
+<li><strong>Org admin</strong> — the creator (and anyone later granted admin); admin-gated writes
+(the catalog REST) are authorized against this flag.</li>
+</ul>
+<h2>User flow</h2>
+<ul>
+<li><strong>F1 — Sign in.</strong> The user authenticates (Google federated sign-in, as today).</li>
+<li><strong>F2 — Resolve membership.</strong> The web calls <code>GET /me</code>, which reads the PROFILE
+record and returns <code>org: string | null</code>.</li>
+<li><strong>F3 — OrgGate (only when <code>org</code> is null).</strong> The user must <strong>create</strong> (name +
+password → <code>POST /orgs</code>) or <strong>join</strong> (exact name + password → <code>POST /orgs/join</code>).
+On success the PROFILE&#39;s <code>org</code> (and, for a creator, <code>admin</code>) is set.</li>
+<li><strong>F4 — App renders org-scoped.</strong> With <code>profile.org</code> set, <code>effectiveOrg</code> resolves
+the chosen org and every subsequent read/write is scoped to it.</li>
+</ul>
+<h2>Data model</h2>
+<p>The org record lives in the same <code>ORG#&lt;org&gt;</code> partition that already holds
+objectives (<code>RCDO#…</code>) and the Definition of Done (<code>CONFIG#DOD</code>), under SK <code>META</code>:</p>
+<pre><code>ORG#&lt;name&gt; / META = {
+  name,                 // the org&#39;s exact name (also the partition id)
+  createdBy,            // { userId, name } of the creator
+  createdAt,            // ISO timestamp
+  passwordSalt,         // scrypt salt — never returned to clients
+  passwordHash          // scrypt hash  — never returned to clients
+}
+</code></pre>
+<p>Membership hangs off the existing user PROFILE record
+(<code>USER#&lt;uid&gt;/PROFILE</code>, <code>userKey(userId)</code>):</p>
+<pre><code>USER#&lt;uid&gt; / PROFILE = {
+  userId,
+  name?,                // display name, if known
+  org?,                 // the chosen org — null/absent until onboarded
+  admin?                // true for the org creator
+}
+</code></pre>
+<blockquote>
+<p>The <code>passwordSalt</code>/<code>passwordHash</code> fields are <strong>server-only</strong>: they are written
+on create, read only to verify a join, and <strong>never serialized back to any client</strong>.
+The DTO returned by <code>GET /me</code> exposes only <code>{ userId, name?, org, admin? }</code>.</p>
+</blockquote>
+<h2>REST contract</h2>
+<ul>
+<li><strong><code>GET /me</code></strong> → <code>200 { userId, name?, org: string | null, admin? }</code>. The
+<code>org: null</code> case is what the OrgGate keys on.</li>
+<li><strong><code>POST /orgs { name, password }</code></strong> →
+<code>201 { org, admin: true }</code> on create (creator becomes admin);
+<code>409</code> if the org name already exists (conditional-create collision);
+<code>400</code> on a missing/invalid name or password.</li>
+<li><strong><code>POST /orgs/join { name, password }</code></strong> →
+<code>200 { org, admin }</code> on an exact-name + correct-password match;
+<code>403 &#39;invalid organization name or password&#39;</code> — one generic message for both an
+unknown name and a wrong password (no enumeration);
+<code>400</code> on a missing/invalid body.</li>
+</ul>
+<p>All three set or read the PROFILE <code>org</code> field, which is the single fact
+<code>effectiveOrg</code> consults to scope the rest of the API.</p>
+<h2>Status</h2>
+<ul>
+<li><strong>Built:</strong> DB-driven membership on the PROFILE record; <code>GET /me</code> returning
+<code>org: null</code> for un-onboarded users; <code>POST /orgs</code> (scrypt-hashed, conditional-create,
+<code>409</code> on collision, creator-as-admin) and <code>POST /orgs/join</code> (exact name + password,
+one generic <code>403</code>); the web OrgGate that forces create/join on <code>org: null</code>;
+<code>effectiveOrg(event, repo)</code> scoping org data by the chosen org with the token-claim
+fallback for back-compat + device tokens.</li>
+<li><strong>Open:</strong> richer membership management (invite links, multiple admins, leave/
+remove, org rename); rate-limiting the join endpoint; password rotation.</li>
+</ul>

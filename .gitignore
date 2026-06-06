@@ -33,3 +33,4 @@ npm/claude-plus/bin/claude-plus
 npm/claude-plus/bin/claude-plus.exe
 
 .claude/worktrees/
+.claude/settings.local.json

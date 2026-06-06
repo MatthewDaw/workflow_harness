@@ -22,6 +22,12 @@ export function deriveOrg(username: string): string {
  */
 export function createMockClient(initialUser: AuthUser | null = null): AuthClient {
   let current: AuthUser | null = initialUser;
+  // Subscribers to auth-state changes. The real Cognito client emits an Amplify
+  // Hub event when an OAuth (Google) redirect completes; AuthProvider listens for
+  // that to flip the login gate. The mock emits the same way so the Google path
+  // updates the UI without a real IdP.
+  const listeners = new Set<() => void>();
+  const emit = () => listeners.forEach((cb) => cb());
 
   return {
     async getCurrentUser() {
@@ -32,20 +38,27 @@ export function createMockClient(initialUser: AuthUser | null = null): AuthClien
         throw new Error('username and password are required');
       }
       current = { userId: `user-${username}`, username, org: deriveOrg(username) };
+      emit();
       return current;
     },
     async signInWithGoogle() {
-      // No real IdP in the mock; sign in as the wireframe user.
+      // No real IdP in the mock; sign in as the wireframe user. Unlike Cognito
+      // (which navigates away and resolves the user on redirect return),
+      // AuthProvider's Google path does not call setUser itself — it waits for
+      // onChange. So we must notify listeners here or the gate never flips.
       current = { userId: 'user-google', username: 'matt', org: deriveOrg('matt') };
+      emit();
     },
     async signOut() {
       current = null;
+      emit();
     },
     async getIdToken() {
       return current ? `mock-token-${current.userId}` : null;
     },
-    onChange() {
-      return () => {};
+    onChange(cb) {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
     },
   };
 }

@@ -18,11 +18,34 @@ import { AuthProvider } from '../auth/AuthProvider.js';
 import { createMockClient } from '../auth/mockClient.js';
 import type { AuthUser } from '../auth/authClient.js';
 
+/** The `GET /me` body the stub serves. `org: null` forces the OrgGate. */
+export interface MeResponse {
+  userId: string;
+  name?: string;
+  org: string | null;
+  admin?: boolean;
+}
+
 /**
  * Seed data the fake REST API serves. The fixture fetch below maps URL paths to
  * these arrays so RTK Query endpoints resolve real DTOs in tests — no network.
  */
 export interface SeedData {
+  /**
+   * The `GET /me` response (org-onboarding). Defaults to a MEMBER so existing
+   * gate tests sail through the OrgGate to Objectives. Pass a fixed object to
+   * force onboarding (`{ org: null }`), or a function to script a sequence —
+   * e.g. return null until createOrg is called, then a member — so a test can
+   * watch the gate flip. May return a partial; missing fields are defaulted.
+   */
+  me?: Partial<MeResponse> | (() => Partial<MeResponse>);
+  /**
+   * Override responses for arbitrary `METHOD path` keys (e.g. 'POST orgs',
+   * 'POST orgs/join'). The value is the JSON body to serve (status 200) or a
+   * `{ status, body }` pair to drive error paths (403/409/400). A function is
+   * called per request so tests can sequence/branch responses.
+   */
+  routes?: Record<string, RouteResponse>;
   projects?: Project[];
   sessions?: SessionProjection[];
   /** Stored event history per session, keyed by sessionId, served as backfill. */
@@ -42,6 +65,19 @@ export interface SeedData {
 }
 
 const MATT: AuthUser = { userId: 'user-matt', username: 'matt', org: 'acme' };
+
+/** Default `GET /me` member so existing tests reach Objectives past the OrgGate. */
+const DEFAULT_ME: MeResponse = { userId: 'dev', name: 'Dev', org: 'gmail.com', admin: true };
+
+/**
+ * A `routes` override value: either a raw JSON body (served 200), or a
+ * `{ status, body }` pair to drive non-200 paths. Wrapping in a function lets a
+ * test return different responses on successive calls.
+ */
+export type RouteResponse =
+  | unknown
+  | { status: number; body: unknown }
+  | (() => unknown | { status: number; body: unknown });
 
 /** Install a fetch stub that answers the base API routes from `seed`. */
 export function installFetchStub(seed: SeedData) {
@@ -65,17 +101,38 @@ export function installFetchStub(seed: SeedData) {
   }
   vi.stubGlobal('Request', StubRequest);
 
-  const handler = (input: RequestInfo | URL): Response => {
+  const handler = (input: RequestInfo | URL, method: string): Response => {
     const url = typeof input === 'string' ? input : (input as { url: string }).url;
     const afterApi = url.replace(/^.*\/api\/?/, '');
     const [pathPart, queryPart = ''] = afterApi.split('?');
     const path = pathPart ?? '';
     const query = new URLSearchParams(queryPart);
-    const json = (body: unknown) =>
+    const json = (body: unknown, status = 200) =>
       new Response(JSON.stringify(body), {
-        status: 200,
+        status,
         headers: { 'content-type': 'application/json' },
       });
+
+    // Per-test route overrides (org-onboarding): keyed `METHOD path`. Resolved
+    // first so a test can answer POST orgs / POST orgs/join with success or an
+    // error body, and can pass a function to sequence responses.
+    const override = seed.routes?.[`${method} ${path}`];
+    if (override !== undefined) {
+      const resolved = typeof override === 'function' ? (override as () => unknown)() : override;
+      if (resolved && typeof resolved === 'object' && 'status' in resolved && 'body' in resolved) {
+        const { status, body } = resolved as { status: number; body: unknown };
+        return json(body, status);
+      }
+      return json(resolved);
+    }
+
+    // The signed-in principal + real org membership (org-onboarding). Defaults to
+    // a member so the OrgGate passes through; tests pass `me` to force onboarding
+    // or to script null→member as the gate flips after create/join.
+    if (path === 'me') {
+      const raw = typeof seed.me === 'function' ? seed.me() : seed.me;
+      return json({ ...DEFAULT_ME, ...(raw ?? {}) });
+    }
 
     if (path === 'projects') return json(seed.projects ?? []);
     if (path === 'objectives') return json(seed.objectives ?? []);
@@ -130,7 +187,12 @@ export function installFetchStub(seed: SeedData) {
   };
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (input: RequestInfo | URL) => handler(input)),
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      // fetchBaseQuery calls fetch(request); the method lives on the Request
+      // (our StubRequest preserves it) — fall back to init.method / GET.
+      const method = ((input as { method?: string }).method ?? init?.method ?? 'GET').toUpperCase();
+      return handler(input, method);
+    }),
   );
 }
 

@@ -1,12 +1,22 @@
-import { orgScope, skillSchema, type Skill } from '@harness/shared';
+import { orgScope, userScope, skillSchema, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 
 /**
  * Org-scope seed for the skills that ship bundled with Command HQ + claude+
  * (U22). A fresh deploy starts with an empty registry, so the Skills tab shows
  * nothing until something registers skills. This seed writes the repo's
- * `.claude/skills/` set into HQ at **org scope, grouped as one bundle**, so every
- * user in the org sees them out of the box — no device connected, no sync run.
+ * `.claude/skills/` set into HQ so every user in the org sees the product
+ * starter bundle out of the box — no device connected, no sync run.
+ *
+ * NOT every repo `.claude/skills/<name>` belongs in the org-wide default. Only
+ * skills that are MEMBERS of a seeded bundle (the `command-hq-starter` members)
+ * — plus the bundle record itself — seed at ORG scope (what every new account
+ * sees). The remaining `.claude/skills/<name>` folders ship in the repo but are
+ * NOT part of the org default; they would otherwise leak into every brand-new
+ * account's catalog. We keep their SKILL.md in the repo and seed them at the
+ * NARROWER user scope of a designated grant owner, so accounts granted that
+ * owner can see them while a fresh org cannot. The grant owner is configurable
+ * (see `DEFAULT_GRANT_OWNER` / the call sites' `SEED_GRANT_OWNER` env var).
  *
  * The builder is pure (no I/O) so it is trivially unit-tested; `seedSkills`
  * upserts the records through the existing `Repo.putSkill`, which makes the seed
@@ -28,6 +38,15 @@ export interface SeedSkillFile {
  */
 export const STARTER_BUNDLE_NAME = 'command-hq-starter';
 
+/**
+ * Default owner of the user-scoped grant for non-bundle skills. A fresh org
+ * never sees these (they are not at org scope); only an account whose userId is
+ * this owner does. The call sites override it from `SEED_GRANT_OWNER` so a deploy
+ * can grant them to a real account; `'system'` is the inert default (matches the
+ * seed's `createdBy`), so a vanilla seed parks them where no human account lands.
+ */
+export const DEFAULT_GRANT_OWNER = 'system';
+
 /** One bundle's declaration in the manifest: a human description + its members. */
 export interface BundleSpec {
   description: string;
@@ -44,27 +63,42 @@ export interface BundleSpec {
 export type BundleManifest = Record<string, BundleSpec>;
 
 /**
- * Build the org-scope `Skill[]` to seed: one `kind:'skill'` record per file, plus
- * one `kind:'bundle'` record per manifest entry. A bundle's `members` are the
+ * Build the seed `Skill[]`: one `kind:'skill'` record per file, plus one
+ * `kind:'bundle'` record per manifest entry. A bundle's `members` are the
  * manifest's declared members, intersected with the skills that actually exist
  * (so a stale manifest reference is dropped, not stored as a dangling member).
- * Skills not named by any bundle are still seeded — just standalone. Everything is
- * `source:'built-in'`. Parsing each through `skillSchema` applies defaults and
- * guards the shape.
+ *
+ * Scope is the gate on what a brand-new account sees. A skill is at ORG scope
+ * (the org-wide default) only if it is a MEMBER of a seeded bundle — i.e. it is
+ * named by some bundle in the manifest. Every other file (`compound-engineering`,
+ * `gstack`, `playwright-cli` — folders that no bundle lists) is seeded at the
+ * narrower USER scope of `grantOwner`, so it stays registered (its SKILL.md
+ * stays in the repo) but is invisible to a fresh org. Bundle records themselves
+ * are always org-scoped. Everything is `source:'built-in'`. Parsing each through
+ * `skillSchema` applies defaults and guards the shape.
  */
 export function buildSeedSkills(
   org: string,
   files: SeedSkillFile[],
   manifest: BundleManifest = {},
+  grantOwner: string = DEFAULT_GRANT_OWNER,
 ): Skill[] {
-  const scope = orgScope(org);
+  const orgRef = orgScope(org);
+  const grantRef = userScope(grantOwner);
   const createdBy = { userId: 'system', name: 'system' } as const;
   const known = new Set(files.map((f) => f.name));
+
+  // The org-wide default = the union of every seeded bundle's (existing) members.
+  // A skill in this set seeds at org scope; anything else is granted user-narrow.
+  const orgDefault = new Set<string>();
+  for (const spec of Object.values(manifest)) {
+    for (const m of spec.members) if (known.has(m)) orgDefault.add(m);
+  }
 
   const skills = files.map((f) =>
     skillSchema.parse({
       name: f.name,
-      scope,
+      scope: orgDefault.has(f.name) ? orgRef : grantRef,
       kind: 'skill',
       description: f.description,
       source: 'built-in',
@@ -76,7 +110,7 @@ export function buildSeedSkills(
   const bundles = Object.entries(manifest).map(([name, spec]) =>
     skillSchema.parse({
       name,
-      scope,
+      scope: orgRef,
       kind: 'bundle',
       description: spec.description,
       source: 'built-in',
@@ -98,8 +132,9 @@ export async function seedSkills(
   org: string,
   files: SeedSkillFile[],
   manifest: BundleManifest = {},
+  grantOwner: string = DEFAULT_GRANT_OWNER,
 ): Promise<Skill[]> {
-  const records = buildSeedSkills(org, files, manifest);
+  const records = buildSeedSkills(org, files, manifest, grantOwner);
   for (const record of records) {
     await repo.putSkill(record);
   }

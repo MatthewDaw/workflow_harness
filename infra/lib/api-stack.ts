@@ -142,6 +142,9 @@ export class ApiStack extends cdk.Stack {
     const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
     const deviceFn = makeFn('RestDeviceFn', 'rest_device');
     const dodFn = makeFn('RestDodFn', 'rest_dod');
+    // Membership / org onboarding (GET /me, POST /orgs, POST /orgs/join). Reads
+    // + writes the PROFILE + ORG records, so it needs read-write.
+    const orgsFn = makeFn('RestOrgsFn', 'rest_orgs');
     grantReadWrite(projectsFn);
     // Sessions handler writes too: shutdown/kill marks a session done in the
     // projection (authoritative terminate, incl. ghost sessions with no daemon).
@@ -152,6 +155,7 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(weeklyFn);
     grantReadWrite(deviceFn);
     grantReadWrite(dodFn);
+    grantReadWrite(orgsFn);
 
     const region = cdk.Stack.of(this).region;
     const jwtIssuer = `https://cognito-idp.${region}.amazonaws.com/${props.userPool.userPoolId}`;
@@ -240,6 +244,13 @@ export class ApiStack extends cdk.Stack {
 
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
     r('/dod', [M.GET, M.PUT], dodFn, 'Dod');
+
+    // Membership / org onboarding. All three inherit the default Cognito JWT
+    // authorizer — a brand-new user still has a valid token (their PROFILE just
+    // has no org yet), so /me/orgs are authenticated but org-membership-agnostic.
+    r('/me', [M.GET], orgsFn, 'Me');
+    r('/orgs', [M.POST], orgsFn, 'Orgs');
+    r('/orgs/join', [M.POST], orgsFn, 'OrgsJoin');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
 
     // Weekly routes accept EITHER a Cognito ID token (web) OR the claude+ wrapper
@@ -249,8 +260,20 @@ export class ApiStack extends cdk.Stack {
     // (rest/bearerAuth.ts: device token OR Cognito), still enforcing project
     // ownership. This is what lets `/hq-weekly-update` publish from the PTY.
     r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly', new HttpNoneAuthorizer());
-    r('/projects/{pid}/weekly/{week}', [M.GET, M.PUT], weeklyFn, 'WeeklyByWeek', new HttpNoneAuthorizer());
-    r('/projects/{pid}/weekly/{week}/publish', [M.POST], weeklyFn, 'WeeklyPublish', new HttpNoneAuthorizer());
+    r(
+      '/projects/{pid}/weekly/{week}',
+      [M.GET, M.PUT],
+      weeklyFn,
+      'WeeklyByWeek',
+      new HttpNoneAuthorizer(),
+    );
+    r(
+      '/projects/{pid}/weekly/{week}/publish',
+      [M.POST],
+      weeklyFn,
+      'WeeklyPublish',
+      new HttpNoneAuthorizer(),
+    );
 
     // ---- Device-auth (claude+ device-code login) ------------------------------
     // start/poll are PUBLIC: the CLI hits them before it has any token. They must

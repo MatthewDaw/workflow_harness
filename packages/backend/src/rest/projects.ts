@@ -16,6 +16,7 @@ import {
   unauthorized,
 } from './runtime.js';
 import { isAdmin } from './scopeauth.js';
+import { effectiveOrg } from './membership.js';
 
 /**
  * REST: projects (U8).
@@ -48,7 +49,10 @@ export function ownerRepoOf(repo: string): string {
 }
 
 /** Adapt the platform `fetch` to the client's minimal `FetchLike` shape. */
-const fetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) =>
+const fetchLike = (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
+) =>
   fetch(url, init).then((r) => ({
     status: r.status,
     ok: r.ok,
@@ -136,11 +140,15 @@ export async function createProject(
     return badRequest('invalid JSON body');
   }
 
-  // The owner is always the caller — never trust a client-supplied owner.
+  // The owner is always the caller — never trust a client-supplied owner. The
+  // org is stamped from the creator's EFFECTIVE org so the project follows their
+  // membership (used for future org partitioning); undefined when org-less.
+  const org = await effectiveOrg(event, deps.repo);
   const parsed = projectSchema.safeParse({
     liveSessionCount: 0,
     ...(body as Record<string, unknown>),
     ownerUserId: principal.userId,
+    ...(org ? { org } : {}),
   });
   if (!parsed.success) return badRequest(parsed.error.message);
 
@@ -225,7 +233,10 @@ export async function refreshProject(
     });
     const updated = await deps.repo.getProject(project.id);
     return ok({
-      project: { ...(updated ?? project), liveSessionCount: await liveCount(deps.repo, project.id) },
+      project: {
+        ...(updated ?? project),
+        liveSessionCount: await liveCount(deps.repo, project.id),
+      },
       stale: false,
     });
   } catch {
@@ -446,7 +457,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   if (method === 'DELETE' && hasId) return deleteProjectHandler(event, deps);
-  if (method === 'POST' && hasId && rawPath.endsWith('/refresh')) return refreshProject(event, deps);
+  if (method === 'POST' && hasId && rawPath.endsWith('/refresh'))
+    return refreshProject(event, deps);
   if (method === 'GET' && hasId && /\/requirements$/.test(rawPath))
     return getProjectRequirements(event, deps);
   if (method === 'GET' && hasId && /\/docs\/content$/.test(rawPath))

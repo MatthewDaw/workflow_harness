@@ -27,7 +27,7 @@ the local registry in sync (<code>wrapper/internal/config/</code>): each agent o
 content-hashed <code>Item</code>; drift is push/pull/reconciled. <strong>As built, the wrapper reads
 the union of <code>~/.claude</code> (the user&#39;s own) and the isolated <code>~/.claude+</code>
 (product-bundled) when computing drift, but only ever materializes pulled items
-into <code>~/.claude+</code></strong> — see <a href="./04-claude-cli-wrapper.md">04</a> (isolated config root).
+into <code>~/.claude+</code></strong> — see <a href="./claude_cli_wrapper.html">04</a> (isolated config root).
 HQ shows the product-bundled skills out of the box via the org-scope
 <code>command-hq-starter</code> seed (<code>packages/backend/src/seed/skills.ts</code>,
 <code>infra/scripts/seed-skills.mjs</code>), independent of any connected device.</p>
@@ -58,13 +58,13 @@ enabled directly or brought by another agent).</li>
 <li><strong>No promotion / demotion.</strong> The scope-change endpoint
 (<code>changeAgentScope</code>/<code>changeSkillScope</code>) is <strong>retired</strong> (returns <code>410 Gone</code> / route
 removed); there is no tier to elevate or demote between.</li>
-<li>AgentForge (<a href="./05-agentforge.md">feature 5</a>) registers its distilled agents into
+<li>AgentForge (<a href="./agentforge.html">feature 5</a>) registers its distilled agents into
 the <strong>org catalog</strong>; an admin then enables them per project.</li>
 </ul>
 <p>A connected repo materializes <strong>only the linked project&#39;s</strong> enabled sets into
 <code>~/.claude+</code>: the wrapper fetches the full org catalog, then keeps just the items
 named in that project&#39;s <code>enabledSkills</code> / <code>enabledAgents</code> — see
-<a href="./04-claude-cli-wrapper.md">04</a> (isolated config root). Because an agent&#39;s skills were union-added into
+<a href="./claude_cli_wrapper.html">04</a> (isolated config root). Because an agent&#39;s skills were union-added into
 <code>enabledSkills</code> when it was enabled, no extra expansion is needed at sync time.</p>
 <h2>Active sessions — show and steer</h2>
 <ul>
@@ -80,7 +80,7 @@ must own the target session).
 inbound control <code>payload</code> is decoded as an <strong>object</strong> (<code>transport/wsclient.go</code> →
 <code>msg.Payload.Text</code>) and applied by <code>transport/control.go</code>&#39;s <code>Receiver</code>, which
 supports <code>inject</code>/<code>pause</code>/<code>interrupt</code>/<code>shutdown</code> (SIGTERM + force fallback)/<code>kill</code>.
-The <strong>control gateway</strong> is described in <a href="./06-platform-architecture.md">platform</a>.</li>
+The <strong>control gateway</strong> is described in <a href="./platform_architecture.html">platform</a>.</li>
 </ul>
 <h2>Open questions</h2>
 <ul>

@@ -4,6 +4,7 @@ import {
   attributeCommits,
   buildFraming,
   parseCompletionFrontmatter,
+  parseGoal,
   type RawCommit,
 } from './history.js';
 
@@ -174,8 +175,11 @@ export class GitHubApp {
    * Read the project framing (U7) with progress sourced the new way: prefer
    * `docs/PRD.md`'s `completion:` frontmatter (the Project Requirements headline),
    * fall back to the top `docs/plans/` doc's `completion:`, then the legacy
-   * `PROGRESS.md %`, finally 0. Goal + owned Supporting Outcomes still come from
-   * the repo-root `PRD.md`. Read-only; no writes to GitHub anywhere.
+   * `PROGRESS.md %`, finally 0. The goal comes from the `docs/PRD.{md,html}`
+   * Project Requirements doc (the same file the detail screen renders) so the
+   * card matches what's plainly visible there; the legacy repo-root `PRD.md`
+   * goal is only a fallback. Owned Supporting Outcomes still come from the
+   * repo-root `PRD.md`. Read-only; no writes to GitHub anywhere.
    */
   async readFramingWithCompletion(): Promise<ProjectFraming> {
     const [framing, docs, prdMd] = await Promise.all([
@@ -188,7 +192,11 @@ export class GitHubApp {
     const topCompletion = docs[0]?.completion;
     const prdCompletion = parseCompletionFrontmatter(prdMd);
     const progressPct = prdCompletion ?? topCompletion ?? framing.progressPct ?? 0;
-    return { ...framing, progressPct };
+    // Goal source of truth is the `docs/PRD.{md,html}` Project Requirements doc
+    // (what the detail screen renders); the legacy repo-root `PRD.md` goal is
+    // only a fallback for older repos that still carry it.
+    const goal = parseGoal(prdMd) ?? framing.goal;
+    return { ...framing, goal, progressPct };
   }
 
   /**
@@ -221,10 +229,9 @@ export class GitHubApp {
   /** The latest commit SHA on the default branch (the cache key for U8). */
   async latestCommitSha(): Promise<string | undefined> {
     const token = await this.installationToken();
-    const res = await this.fetchImpl(
-      `${GITHUB_API}/repos/${this.cfg.repo}/commits?per_page=1`,
-      { headers: this.headers(token) },
-    );
+    const res = await this.fetchImpl(`${GITHUB_API}/repos/${this.cfg.repo}/commits?per_page=1`, {
+      headers: this.headers(token),
+    });
     if (!res.ok) throw new Error(`latestCommitSha failed: ${res.status}`);
     const body = (await res.json()) as { sha?: string }[];
     return body?.[0]?.sha;
