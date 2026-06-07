@@ -137,15 +137,16 @@ func (d *Daemon) entry() Entry {
 		}
 	}
 	return Entry{
-		Repo:     d.repoRoot,
-		RepoName: repoName,
-		Host:     hostName(),
-		Sessions: d.mux.Count(),
-		State:    StateRunning,
-		Started:  d.started,
-		Sock:     d.sock,
-		PID:      os.Getpid(),
-		Version:  ProtocolVersion,
+		Repo:      d.repoRoot,
+		RepoName:  repoName,
+		Host:      hostName(),
+		Sessions:  d.mux.Count(),
+		State:     StateRunning,
+		Started:   d.started,
+		Sock:      d.sock,
+		PID:       os.Getpid(),
+		Version:   ProtocolVersion,
+		Dangerous: os.Getenv("CLAUDE_PLUS_DANGEROUS") != "",
 	}
 }
 

@@ -40,6 +40,13 @@ type Entry struct {
 	// a freshly-built client detect an incompatible (older/newer build) daemon
 	// from the registry alone, and pick the stale entry out for replacement.
 	Version int `json:"version"`
+	// Dangerous records whether the daemon was started in dangerous mode
+	// (CLAUDE_PLUS_DANGEROUS set, propagated from
+	// `claude+ --dangerously-skip-permissions`), in which case every claude child
+	// it spawns runs with --dangerously-skip-permissions. A launch that REQUESTS
+	// dangerous mode must not reuse a daemon recorded with Dangerous=false — its
+	// children would silently lack the flag. See EnsureDaemon.
+	Dangerous bool `json:"dangerous,omitempty"`
 }
 
 // Uptime returns the entry's uptime relative to now.

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"time"
@@ -17,17 +18,27 @@ import (
 // disconnect.
 func EnsureDaemon(repoRoot string) (Entry, error) {
 	if e, ok, err := Find(repoRoot); err == nil && ok {
-		// Only reuse a daemon that is alive AND speaks our ProtocolVersion. An
-		// older/newer-build daemon that lingered across a rebuild still answers a
-		// ping (so the old `alive` check happily reused it) but would dead-end the
-		// attach handshake on a version mismatch — the exact lifecycle bug. Treat
-		// such a daemon as stale: kill it and respawn a fresh, compatible one.
-		if compatible(e.Sock) {
+		// Reuse a daemon only when it is alive, speaks our ProtocolVersion, AND
+		// already matches the requested permission posture. An older/newer-build
+		// daemon that lingered across a rebuild still answers a ping (so the old
+		// `alive` check happily reused it) but would dead-end the attach handshake
+		// on a version mismatch — the exact lifecycle bug. Separately, a daemon
+		// started WITHOUT dangerous mode would spawn children lacking
+		// --dangerously-skip-permissions, so a launch that requests dangerous mode
+		// must not silently reuse it. Either way: kill it and respawn a fresh,
+		// matching daemon.
+		comp := compatible(e.Sock)
+		if reuseDaemon(comp, wantDangerous(), e.Dangerous) {
 			return e, nil
 		}
-		// Stale or incompatible record: retire the daemon (kill its PID so a
-		// wedged old image can no longer hold the port) and its record, then
-		// respawn below.
+		// A compatible-but-non-dangerous daemon is being retired solely to honor
+		// the dangerous-mode upgrade; tell the user so the restart isn't silent.
+		if comp && wantDangerous() && !e.Dangerous {
+			fmt.Fprintln(os.Stderr, "claude+: restarting daemon in dangerous mode (--dangerously-skip-permissions)")
+		}
+		// Stale, incompatible, or wrong permission posture: retire the daemon
+		// (kill its PID so a wedged old image can no longer hold the port) and its
+		// record, then respawn below.
 		stopStale(e)
 	}
 
@@ -47,6 +58,29 @@ func EnsureDaemon(repoRoot string) (Entry, error) {
 	}
 	return Entry{}, os.ErrDeadlineExceeded
 }
+
+// reuseDaemon reports whether an existing daemon entry can be reused as-is for a
+// new launch. A daemon is reusable only when it speaks our protocol (compatible)
+// AND its permission posture already satisfies the launch: a launch that wants
+// dangerous mode cannot reuse a daemon started without it, because that daemon's
+// claude children would lack --dangerously-skip-permissions. (The reverse — a
+// plain launch finding a dangerous daemon — is intentionally left reusable: the
+// mode is fixed at start and we never downgrade a running daemon out from under
+// existing sessions.)
+func reuseDaemon(compatible, wantDangerous, entryDangerous bool) bool {
+	if !compatible {
+		return false
+	}
+	if wantDangerous && !entryDangerous {
+		return false
+	}
+	return true
+}
+
+// wantDangerous reports whether this launch requested dangerous mode, carried
+// from `claude+ --dangerously-skip-permissions` via CLAUDE_PLUS_DANGEROUS (set
+// in main before any EnsureDaemon call).
+func wantDangerous() bool { return os.Getenv("CLAUDE_PLUS_DANGEROUS") != "" }
 
 // spawnDaemon launches a fresh detached daemon for repoRoot. It is a package
 // var so lifecycle tests can substitute an in-process daemon (the real

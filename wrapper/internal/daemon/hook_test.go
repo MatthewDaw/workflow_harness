@@ -9,9 +9,11 @@ import (
 	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
-// collectEvents subscribes to the daemon's event bus and returns a snapshot
+// collectEnvelopes subscribes to the daemon's event bus and returns a snapshot
 // accessor plus the sink id (so callers can assert on published envelopes).
-func collectEvents(d *Daemon, id string) func() []event.Envelope {
+// (Distinct from collectEvents, which snapshots the unwrapped event.Event; the
+// two share a package on non-Windows builds so the names must not collide.)
+func collectEnvelopes(d *Daemon, id string) func() []event.Envelope {
 	var mu sync.Mutex
 	var got []event.Envelope
 	d.AddEventSink(id, func(env event.Envelope) {
@@ -37,7 +39,7 @@ func TestHookEventReachesDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	snapshot := collectEvents(d, "hooktest")
+	snapshot := collectEnvelopes(d, "hooktest")
 
 	raw := `{"hook_event_name":"Notification","session_id":"` + s.ID + `","message":"need a decision"}`
 	if err := SendHook(repo, []byte(raw)); err != nil {
@@ -68,7 +70,7 @@ func TestUserPromptSubmitHookRenamesSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	snapshot := collectEvents(d, "hooktest")
+	snapshot := collectEnvelopes(d, "hooktest")
 
 	prompt := "fix the login bug in the cursor flow"
 	raw := `{"hook_event_name":"UserPromptSubmit","session_id":"` + s.ID + `","prompt":"` + prompt + `"}`
@@ -104,7 +106,7 @@ func TestResumeHookRenamesTabByPinnedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	snapshot := collectEvents(d, "hooktest")
+	snapshot := collectEnvelopes(d, "hooktest")
 
 	// session_id is a foreign (resumed) id; claude_plus_session is the real tab.
 	prompt := "wire up the billing webhook handler"
@@ -138,7 +140,7 @@ func TestHookMalformedPayloadDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	snapshot := collectEvents(d, "hooktest")
+	snapshot := collectEnvelopes(d, "hooktest")
 
 	// Malformed JSON, then a PostToolUse (maps to no status change).
 	if err := SendHook(repo, []byte("{not json")); err != nil {
