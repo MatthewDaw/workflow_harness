@@ -90,6 +90,15 @@ export function applyEvent(
       next.name = ev.name;
       if (ev.summary !== undefined) next.summary = ev.summary;
       break;
+    case 'session.topic':
+      // The topic evolves as focus drifts; the stable slug `name` must NEVER
+      // change here (title-thrash guard). We fold the topic + rolling
+      // description into their own fields and stamp the title source.
+      next.topic = ev.topicLabel;
+      if (ev.description !== undefined) next.description = ev.description;
+      next.summaryUpdatedAt = env.ts;
+      next.titleSource = 'topic';
+      break;
     case 'user.msg':
     case 'assistant.msg':
       next.tokens = base.tokens + ev.tokens;

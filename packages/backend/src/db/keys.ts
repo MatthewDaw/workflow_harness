@@ -68,6 +68,24 @@ export const eventPrefix = (sessionId: string): { PK: string; skPrefix: string }
   skPrefix: 'EVT#',
 });
 
+/**
+ * A learning mined from a correction turn (topic-focus logging). Unlike events
+ * (keyed under the session), learnings live under their PROJECT partition so a
+ * project's whole corpus is one `begins_with(SK, 'LEARN#')` read. The SK carries
+ * `sessionId#turnId`, which both groups a session's learnings together and makes
+ * `(sessionId, turnId)` the idempotency key — a re-emitted learning overwrites
+ * the same item.
+ */
+export const learningKey = (projectId: string, sessionId: string, turnId: string): PrimaryKey => ({
+  PK: `PROJ#${projectId}`,
+  SK: `LEARN#${sessionId}#${turnId}`,
+});
+
+export const learningPrefix = (projectId: string): { PK: string; skPrefix: string } => ({
+  PK: `PROJ#${projectId}`,
+  skPrefix: 'LEARN#',
+});
+
 export const agentKey = (scope: ScopeRef, name: string): PrimaryKey => ({
   PK: `SCOPE#${scopeId(scope)}`,
   SK: `AGENT#${name}`,

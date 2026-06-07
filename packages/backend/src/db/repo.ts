@@ -11,6 +11,7 @@ import type {
   DefinitionOfDone,
   DeviceAuth,
   Envelope,
+  LearningRecord,
   ObjectiveNode,
   Project,
   ScopeRef,
@@ -807,6 +808,41 @@ export class Repo {
       }),
     );
     return (res.Items ?? []) as SessionVector[];
+  }
+
+  // --- Session learnings (topic-focus logging) ---------------------------
+
+  /**
+   * Persist a learning mined from a correction turn. Stored under the owning
+   * PROJECT partition so a project's whole corpus is one partition read. The put
+   * is UNCONDITIONAL: the SK is `LEARN#<sessionId>#<turnId>`, so re-emitting the
+   * same `(sessionId, turnId)` overwrites the same item rather than duplicating
+   * (idempotency is by key, not a conditional write).
+   */
+  async putLearning(rec: LearningRecord): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.learningKey(rec.projectId, rec.sessionId, rec.turnId), ...rec },
+      }),
+    );
+  }
+
+  /**
+   * All learnings for a project, across every session, in one partition read
+   * (`begins_with(SK, 'LEARN#')`). They come back sorted by the SK, so a
+   * session's learnings group together and order deterministically by turnId.
+   */
+  async listLearnings(projectId: string): Promise<LearningRecord[]> {
+    const { PK, skPrefix } = k.learningPrefix(projectId);
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+      }),
+    );
+    return (res.Items ?? []) as LearningRecord[];
   }
 
   // --- Device-auth (wrapper device-code login) ---------------------------

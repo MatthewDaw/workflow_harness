@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { sessionStatusSchema } from './events.js';
+import { learningStreamSchema, sessionStatusSchema } from './events.js';
 import { scopeRefSchema } from './scope.js';
 
 /** Read/write DTOs for the core entities. These shape the REST API surface. */
@@ -140,6 +140,14 @@ export const sessionProjectionSchema = z.object({
   name: z.string().min(1),
   /** The first prompt the user typed (from the UserPromptSubmit hook); shown in the Sessions list. */
   summary: z.string().optional(),
+  /** The session's current topic, relabeled as focus drifts (from `session.topic`); distinct from the stable `name`. */
+  topic: z.string().optional(),
+  /** A rich, self-contained summary of the current topic, rolled forward as it evolves (from `session.topic`). */
+  description: z.string().optional(),
+  /** Epoch ms of the last topic/description fold; lets clients show how fresh the rolling summary is. */
+  summaryUpdatedAt: z.number().int().nonnegative().optional(),
+  /** Where the displayed title came from: the stable slug, an AI rename, a manual user rename, or the evolving topic. */
+  titleSource: z.enum(['slug', 'ai', 'user', 'topic']).optional(),
   host: z.string().min(1),
   /** The claude+ instance hosting this session; used to route control frames. */
   instanceId: z.string().optional(),
@@ -377,6 +385,32 @@ export const sessionVectorSchema = z.object({
   createdAt: z.number().int().nonnegative(),
 });
 export type SessionVector = z.infer<typeof sessionVectorSchema>;
+
+/**
+ * A persisted learning mined from a correction turn (topic-focus logging). The
+ * `session.learning` event is appended as one of these records under the owning
+ * PROJECT partition, so a project's whole corpus is one partition read. It is
+ * NOT folded into the session projection. `(sessionId, turnId)` is the
+ * idempotency key (the storage SK) — a re-emitted learning overwrites in place.
+ * `docRef` is set only on the `doc` stream; `ts`/`seq` carry the envelope's
+ * transport stamps for ordering/observability.
+ */
+export const learningRecordSchema = z.object({
+  projectId: z.string().min(1),
+  sessionId: z.string().min(1),
+  segmentId: z.string().min(1),
+  topicLabel: z.string().min(1),
+  stream: learningStreamSchema,
+  text: z.string().min(1),
+  /** Present only on the `doc` stream: the nearest feature doc contradicted. */
+  docRef: z.string().optional(),
+  turnId: z.string().min(1),
+  /** Envelope epoch-ms timestamp the learning was emitted. */
+  ts: z.number().int().nonnegative(),
+  /** Envelope per-session monotonic seq, for ordering/observability. */
+  seq: z.number().int().nonnegative(),
+});
+export type LearningRecord = z.infer<typeof learningRecordSchema>;
 
 /** A session ranked by similarity to a Forge query (U27). */
 export const scoredSessionSchema = z.object({

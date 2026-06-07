@@ -54,6 +54,38 @@ export async function ingest(
   // 2. Append (idempotent on duplicate seq).
   const { stored } = await deps.repo.appendEvent(envelope);
 
+  // 2b. A `session.learning` is an append record, NOT a projection fold: it
+  //     carries no projectId (post-start events don't), so we resolve the owning
+  //     project from the session pointer and persist it under the project
+  //     partition. Idempotency is by SK (LEARN#<sessionId>#<turnId>) — a re-emit
+  //     overwrites in place. A learning whose session has no pointer (start never
+  //     arrived / unknown session) is dropped gracefully rather than throwing.
+  //     We then return early so it never folds into the projection or fans out.
+  if (envelope.event.kind === 'session.learning') {
+    const ev = envelope.event;
+    const projection = await deps.repo.getSessionById(ev.sessionId);
+    if (projection) {
+      await deps.repo.putLearning({
+        projectId: projection.projectId,
+        sessionId: ev.sessionId,
+        segmentId: ev.segmentId,
+        topicLabel: ev.topicLabel,
+        stream: ev.stream,
+        text: ev.text,
+        ...(ev.docRef !== undefined ? { docRef: ev.docRef } : {}),
+        turnId: ev.turnId,
+        ts: envelope.ts,
+        seq: envelope.seq,
+      });
+    } else {
+      console.warn('ingest: session.learning dropped, no session pointer', {
+        connectionId,
+        sessionId: ev.sessionId,
+      });
+    }
+    return { statusCode: 200, body: JSON.stringify({ stored }) };
+  }
+
   // 3. Update the projection atomically (U6 lost-update fix). A naive
   //    read-modify-write loses concurrent updates when two events for the same
   //    session interleave; instead we read, fold, and conditionally write,
