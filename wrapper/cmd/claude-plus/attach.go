@@ -87,6 +87,14 @@ func runShell(c *daemon.Client, instance string) error {
 	screen := shell.NewScreen(w, h, os.Stdout)
 	comp := shell.NewCompositor(screen, instance)
 
+	// Label the top bar with the signed-in identity (decoded from the local
+	// device token), or "not signed in" when there are no credentials.
+	if id, ok := loadIdentity(); ok {
+		comp.SetIdentity(id.Name, id.Org, true)
+	} else {
+		comp.SetIdentity("", "", false)
+	}
+
 	// Seed the sub-tab row from the attach ack, and size the hosted PTY to the
 	// body region so claude renders at the framed size.
 	applySessions(comp, c.Sessions)

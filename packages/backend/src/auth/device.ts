@@ -85,9 +85,9 @@ export async function startDeviceAuth(
  */
 export async function approveDeviceAuth(
   repo: Repo,
-  args: { deviceCode: string; userId: string; org: string },
+  args: { deviceCode: string; userId: string; org: string; name?: string },
 ): Promise<{ approved: boolean }> {
-  return repo.approveDeviceAuth(args.deviceCode, args.userId, args.org);
+  return repo.approveDeviceAuth(args.deviceCode, args.userId, args.org, { name: args.name });
 }
 
 /**
@@ -115,7 +115,7 @@ export function normalizeUserCode(input: string): string {
  */
 export async function approveDeviceAuthByUserCode(
   repo: Repo,
-  args: { userCode: string; userId: string; org: string },
+  args: { userCode: string; userId: string; org: string; name?: string },
   opts: DeviceFlowOptions = {},
 ): Promise<{ approved: boolean }> {
   const now = opts.now ?? Date.now;
@@ -127,7 +127,7 @@ export async function approveDeviceAuthByUserCode(
   // condition below is the defense-in-depth backstop.
   const record = await repo.getDeviceAuth(deviceCode);
   if (!record || now() >= record.expiresAt) return { approved: false };
-  return repo.approveDeviceAuth(deviceCode, args.userId, args.org, now());
+  return repo.approveDeviceAuth(deviceCode, args.userId, args.org, { now: now(), name: args.name });
 }
 
 export async function pollDeviceAuth(
@@ -157,7 +157,7 @@ export async function pollDeviceAuth(
     throw new Error('approved device-auth record missing identity');
   }
   const token = await signDeviceToken(
-    { userId: record.userId, org: record.org },
+    { userId: record.userId, org: record.org, ...(record.name ? { name: record.name } : {}) },
     { secret: opts.secret },
   );
   return { status: 'token', token };

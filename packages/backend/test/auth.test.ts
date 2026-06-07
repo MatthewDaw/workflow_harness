@@ -182,6 +182,19 @@ describe('device token verification', () => {
     await expect(verifyDeviceToken(token, { secret: wrong })).rejects.toThrow();
   });
 
+  it('carries the display name in the payload (for the wrapper status line)', async () => {
+    const token = await signDeviceToken(
+      { userId: 'matt', org: 'acme', name: 'Matthew' },
+      { secret: SECRET },
+    );
+    // The wrapper reads the name claim straight from the (base64url) payload —
+    // mirror that here rather than going through verifyDeviceToken (which only
+    // returns userId + org).
+    const payload = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8'));
+    expect(payload.name).toBe('Matthew');
+    expect(payload.org).toBe('acme');
+  });
+
   it('rejects an expired token', async () => {
     const token = await signDeviceToken(
       { userId: 'matt', org: 'acme' },

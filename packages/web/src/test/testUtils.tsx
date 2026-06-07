@@ -24,6 +24,8 @@ export interface MeResponse {
   name?: string;
   org: string | null;
   admin?: boolean;
+  /** Every org the user belongs to (header switcher). */
+  orgs?: string[];
 }
 
 /**
@@ -60,6 +62,8 @@ export interface SeedData {
   docContent?: Record<string, string>;
   /** HQ-owned high-level requirements markdown, keyed by projectId (U10). */
   requirements?: Record<string, string>;
+  /** Example wireframe HTML from docs/wireframe.html, keyed by projectId. */
+  wireframe?: Record<string, string>;
   /** Org-wide Definition of Done (plan-mapping feature 1). */
   dod?: DefinitionOfDone;
 }
@@ -182,6 +186,9 @@ export function installFetchStub(seed: SeedData) {
 
     const requirements = /^projects\/([^/]+)\/requirements$/.exec(path);
     if (requirements) return json({ markdown: seed.requirements?.[requirements[1]!] ?? '' });
+
+    const wireframe = /^projects\/([^/]+)\/wireframe$/.exec(path);
+    if (wireframe) return json({ html: seed.wireframe?.[wireframe[1]!] ?? '' });
 
     return json([]);
   };

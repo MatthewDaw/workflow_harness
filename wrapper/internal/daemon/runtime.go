@@ -40,6 +40,20 @@ type Runtime struct {
 	// triggered the one-shot skills auto-sync (so it runs once per NEW session).
 	syncedMu       sync.Mutex
 	syncedSessions map[string]bool
+
+	// termMu guards terminated, the set of sessions that have been force-shut-down
+	// (HQ shutdown/kill) or have otherwise left the mux. emit consults it to
+	// suppress any late revival event (a straggling 'active'/message/heartbeat from
+	// a survivor or an in-flight hook), so a force-shut row cannot bounce back to
+	// life. The terminal 'done' event itself is always allowed through.
+	termMu     sync.Mutex
+	terminated map[string]bool
+
+	// repointCh carries (tabID, liveID) repoint requests from the daemon's
+	// ingestHook (a post-/resume id divergence) to captureLoop, which owns the
+	// per-tab tailers. Buffered + non-blocking send so a hook never blocks on a
+	// busy capture loop.
+	repointCh chan [2]string
 }
 
 // emit wraps a captured event in an envelope and fans it to local subscribers
@@ -47,6 +61,15 @@ type Runtime struct {
 // by the transcript tailer and the hook receiver (U18), so hook-sourced and
 // tailer-sourced events are sequenced and delivered identically.
 func (rt *Runtime) emit(sid string, e event.Event) {
+	// Tombstone gate: once a session is terminated, suppress every later event for
+	// it EXCEPT its own terminal status.change -> done. This stops a survivor's
+	// straggling 'active'/message or a heartbeat — or a late in-flight hook — from
+	// reviving a force-shut-down row (BUG 1). The done event must still pass so HQ
+	// retires the live row.
+	isDone := e.Kind == event.KindStatusChange && e.To == event.StatusDone
+	if !isDone && rt.isTerminated(sid) {
+		return
+	}
 	env := event.Envelope{
 		V: 1, InstanceID: rt.instanceID, Host: rt.host,
 		TS: time.Now().UnixMilli(), Seq: rt.seq.Next(sid), Event: e,
@@ -55,6 +78,25 @@ func (rt *Runtime) emit(sid string, e event.Event) {
 	if rt.client != nil {
 		_ = rt.client.Send(env) // HQ, when configured
 	}
+}
+
+// markTerminated tombstones a session id so emit suppresses any subsequent
+// (non-done) event for it. Called at every teardown site BEFORE the terminal
+// done is emitted (recv.Terminated and the captureLoop left-the-mux branch).
+func (rt *Runtime) markTerminated(id string) {
+	rt.termMu.Lock()
+	if rt.terminated == nil {
+		rt.terminated = map[string]bool{}
+	}
+	rt.terminated[id] = true
+	rt.termMu.Unlock()
+}
+
+// isTerminated reports whether a session has been tombstoned.
+func (rt *Runtime) isTerminated(id string) bool {
+	rt.termMu.Lock()
+	defer rt.termMu.Unlock()
+	return rt.terminated[id]
 }
 
 // heartbeatInterval is how often the runtime emits a session.heartbeat for each
@@ -78,6 +120,14 @@ func (rt *Runtime) heartbeatLoop() {
 			return
 		case <-tk.C:
 			for _, v := range rt.d.mux.List() {
+				// Liveness gate: a dead/zombie child can linger in mux.List() on
+				// Windows ConPTY (no PTY EOF to drive removal), so heartbeating every
+				// listed id would keep a corpse looking "live". Skip any session whose
+				// child has actually exited or been closed (BUG 2).
+				s := rt.d.mux.Get(v.ID)
+				if s == nil || !s.Alive() {
+					continue
+				}
 				rt.emit(v.ID, event.SessionHeartbeat(v.ID))
 			}
 		}
@@ -145,10 +195,24 @@ func trimCR(s string) string {
 func StartRuntime(d *Daemon, instanceID string) *Runtime {
 	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{}),
 		instanceID: instanceID, host: hostName(),
-		syncedSessions: map[string]bool{}}
+		syncedSessions: map[string]bool{},
+		terminated:     map[string]bool{},
+		repointCh:      make(chan [2]string, 16)}
 
 	// Route hook-shim events through the same emit path as the tailer (U18).
 	d.SetHookIngestor(rt.emit)
+
+	// Repoint the tab's transcript tailer when a post-/resume hook reveals a
+	// diverged live id (BUG 2). ingestHook fires this BEFORE remapping the id; we
+	// hand the request off to captureLoop (which owns the tailers) via a
+	// non-blocking send so a hook never blocks on a busy loop — a dropped request
+	// is harmless, the next hook re-requests the same repoint.
+	d.SetTranscriptRepointer(func(tab, live string) {
+		select {
+		case rt.repointCh <- [2]string{tab, live}:
+		default:
+		}
+	})
 
 	// Install the managed hooks block in ~/.claude/settings.json so Claude Code
 	// forwards lifecycle events to `claude+ __hook` (which delivers them to this
@@ -164,6 +228,11 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 			// emit a terminal status.change -> done so HQ drops it from the live
 			// list and the row the user clicked actually disappears (#1, #2).
 			recv.Terminated = func(sessionID string) {
+				// Tombstone BEFORE emitting done: any later straggler event for this id
+				// (a survivor's 'active', a late hook) is then suppressed by emit, so a
+				// force-shut row cannot bounce back to life (BUG 1). The done itself is
+				// exempt from suppression.
+				rt.markTerminated(sessionID)
 				rt.emit(sessionID, event.StatusChange(sessionID, event.StatusActive, event.StatusDone))
 			}
 			rt.client = transport.NewClient(cfg.URL, cfg.Token, instanceID, buf, recv.Handle)
@@ -331,6 +400,12 @@ func (rt *Runtime) captureLoop(instanceID string) {
 	// rt.stop. announced records which sessions have been announced to HQ.
 	tailStops := map[string]chan struct{}{}
 	announced := map[string]bool{}
+	// tailers holds each tab's live Tailer so a post-/resume repoint request can
+	// switch its watched file. transcriptID records the file id each tab is
+	// currently tailing (initialized to the tab id); a repoint only fires on a
+	// genuine divergence (live id != the currently-watched id).
+	tailers := map[string]*capture.Tailer{}
+	transcriptID := map[string]string{}
 	tk := time.NewTicker(time.Second)
 	defer tk.Stop()
 	host := rt.host
@@ -353,6 +428,18 @@ func (rt *Runtime) captureLoop(instanceID string) {
 		case <-rt.stop:
 			closeAllTails()
 			return
+		case req := <-rt.repointCh:
+			// A post-/resume id divergence: repoint tab req[0]'s tailer at the live
+			// transcript req[1] so streaming continues from the new file. Only act on
+			// a genuine divergence (we are not already tailing that id) and only when
+			// the tab actually has a running tailer.
+			tab, live := req[0], req[1]
+			if t, ok := tailers[tab]; ok && transcriptID[tab] != live {
+				if path, err := capture.TranscriptPath(rt.d.repoRoot, live); err == nil {
+					t.Repoint(path)
+					transcriptID[tab] = live
+				}
+			}
 		case <-tk.C:
 			live := map[string]bool{}
 			for _, v := range rt.d.mux.List() {
@@ -405,6 +492,10 @@ func (rt *Runtime) captureLoop(instanceID string) {
 					OnExchange(onExchange)
 				stop := make(chan struct{})
 				tailStops[sid] = stop
+				// Track the tailer + the file id it is currently watching (its own tab
+				// id) so a later post-/resume divergence can repoint it (BUG 2).
+				tailers[sid] = t
+				transcriptID[sid] = sid
 				go t.Run(500*time.Millisecond, stop)
 			}
 			// Clean up state for sessions that have ended: stop their tailer
@@ -422,12 +513,18 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				if !live[id] {
 					close(ch)
 					delete(tailStops, id)
+					delete(tailers, id)
+					delete(transcriptID, id)
 				}
 			}
 			// Emit done for every announced session that has left the mux, even one
-			// whose tailer never started, so no live row is ever orphaned.
+			// whose tailer never started, so no live row is ever orphaned. Tombstone
+			// the id FIRST so any straggling event after it left the mux (a survivor
+			// or a late hook) is suppressed and cannot revive the row (BUG 1); the
+			// done emit itself is exempt from that suppression.
 			for id := range announced {
 				if !live[id] {
+					rt.markTerminated(id)
 					emit(id, event.StatusChange(id, event.StatusActive, event.StatusDone))
 					delete(announced, id)
 					rt.forgetSkillSync(id)

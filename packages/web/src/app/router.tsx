@@ -7,6 +7,7 @@ import {
   ProjectRequirements,
   ProjectRequirementsFull,
 } from '../screens/ProjectDetail/ProjectRequirements.js';
+import { ProjectWireframeFull } from '../screens/ProjectDetail/ProjectWireframe.js';
 import { DetailedRequirements } from '../screens/ProjectDetail/DetailedRequirements.js';
 import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
@@ -20,6 +21,7 @@ import { Skills } from '../screens/Skills/Skills.js';
 import { SkillBundle } from '../screens/Skills/SkillBundle.js';
 import { Weekly } from '../screens/Weekly/Weekly.js';
 import { LinkDevice } from '../screens/LinkDevice/LinkDevice.js';
+import { Organizations } from '../screens/Organizations/Organizations.js';
 
 /**
  * Route table mirroring wireframe.html (U19). Objectives is the first nav item
@@ -40,6 +42,7 @@ export function AppRoutes() {
           {/* U12: two-tier requirements routes. */}
           <Route path="requirements" element={<ProjectRequirements />} />
           <Route path="requirements/full" element={<ProjectRequirementsFull />} />
+          <Route path="requirements/wireframe" element={<ProjectWireframeFull />} />
           <Route path="detailed-requirements" element={<DetailedRequirements />} />
           <Route path="weekly" element={<ProjectWeekly />} />
           <Route path="sessions" element={<ProjectSessions />} />
@@ -56,6 +59,7 @@ export function AppRoutes() {
         <Route path="skills" element={<Skills />} />
         <Route path="skills/:bundleName" element={<SkillBundle />} />
         <Route path="weekly" element={<Weekly />} />
+        <Route path="organizations" element={<Organizations />} />
         <Route path="link-device" element={<LinkDevice />} />
 
         <Route path="*" element={<Navigate to="/objectives" replace />} />

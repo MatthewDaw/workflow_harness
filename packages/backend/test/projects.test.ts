@@ -11,6 +11,7 @@ import {
   getProjectDocContent,
   getProjectDocs,
   getProjectRequirements,
+  getProjectWireframe,
   handler,
   listProjects,
   refreshProject,
@@ -128,7 +129,7 @@ describe('GET /projects/:id', () => {
  * every read throw (simulating GitHub unreachable / token expired).
  */
 function stubGithub(opts: { failing?: boolean } = {}) {
-  const calls = { listDocs: 0, readDoc: 0, framing: 0, readPrd: 0 };
+  const calls = { listDocs: 0, readDoc: 0, framing: 0, readPrd: 0, readWireframe: 0 };
   const app = {
     async readFramingWithCompletion() {
       calls.framing++;
@@ -149,6 +150,11 @@ function stubGithub(opts: { failing?: boolean } = {}) {
       calls.readPrd++;
       if (opts.failing) throw new Error('github unreachable');
       return '# Project Requirements\n\n- ship the thing';
+    },
+    async readWireframe() {
+      calls.readWireframe++;
+      if (opts.failing) throw new Error('github unreachable');
+      return '<!doctype html><title>WF</title><body>wireframe body</body>';
     },
   } as unknown as GitHubApp;
   return { app, calls };
@@ -375,6 +381,70 @@ describe('GET /projects/:id/requirements (docs/PRD.md)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 404 });
+  });
+});
+
+// --- Project wireframe: read-only from docs/wireframe.html ----------------
+
+describe('GET /projects/:id/wireframe (docs/wireframe.html)', () => {
+  it('serves docs/wireframe.html read-only from GitHub', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const { app, calls } = stubGithub();
+    const res = await getProjectWireframe(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      depsWith(app),
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ html: string }>(res as { body: string }).html).toContain('wireframe body');
+    expect(calls.readWireframe).toBe(1);
+  });
+
+  it("serves empty html + stale when the project isn't GitHub-connected", async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await getProjectWireframe(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      { repo, githubFor: () => undefined },
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const body = bodyOf<{ html: string; stale: boolean }>(res as { body: string });
+    expect(body.html).toBe('');
+    expect(body.stale).toBe(true);
+  });
+
+  it('serves empty html + stale (never 500) when GitHub is unreachable', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const { app } = stubGithub({ failing: true });
+    const res = await getProjectWireframe(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      depsWith(app),
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const body = bodyOf<{ html: string; stale: boolean }>(res as { body: string });
+    expect(body.html).toBe('');
+    expect(body.stale).toBe(true);
+  });
+
+  it("404s another user's project wireframe (no enumeration)", async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const { app } = stubGithub();
+    const res = await getProjectWireframe(
+      httpEvent({ method: 'GET', userId: ALICE, path: { id: 'weekly-compass' } }),
+      depsWith(app),
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('routes GET /projects/:id/wireframe through the handler', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await handler(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { id: 'weekly-compass' },
+        rawPath: '/projects/weekly-compass/wireframe',
+      }),
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
   });
 });
 

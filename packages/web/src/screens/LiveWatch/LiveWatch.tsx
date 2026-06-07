@@ -65,17 +65,54 @@ export function LiveWatch() {
   const { sessionId = '' } = useParams();
   const dispatch = useDispatch();
   const { user } = useAuth();
-  const { data: session, isLoading } = useGetSessionQuery(sessionId, { skip: !sessionId });
+  const {
+    data: session,
+    isLoading,
+    isFetching: sessionFetching,
+    refetch: refetchSession,
+  } = useGetSessionQuery(sessionId, { skip: !sessionId });
   // Backfill the stored event history on open so the feed shows the full
   // conversation immediately instead of "waiting for activity…". The live WS
   // stream (below) appends everything thereafter; the slice merges both by seq.
-  const { data: backfill } = useGetSessionEventsQuery(
-    { id: sessionId, limit: 300 },
-    { skip: !sessionId },
-  );
+  const {
+    data: backfill,
+    isFetching: eventsFetching,
+    refetch: refetchEvents,
+  } = useGetSessionEventsQuery({ id: sessionId, limit: 300 }, { skip: !sessionId });
+
+  // Manual re-pull for when the live WS lags or drops (e.g. a slow-syncing
+  // session): re-read both the projection and the stored event page. The seed
+  // effect below folds the fresh events in by seq, so this never duplicates rows.
+  const refreshing = sessionFetching || eventsFetching;
+  const refresh = () => {
+    if (!sessionId) return;
+    void refetchSession();
+    void refetchEvents();
+  };
   const [sendControl] = useSendControlMutation();
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState<string | null>(null);
+  const [steerError, setSteerError] = useState<string | null>(null);
+
+  // Run a control action and report the REAL outcome. The control POST can fail
+  // (502 "daemon offline" when the owning daemon isn't connected, or 500 when the
+  // backend can't reach the WS management API) — surface that instead of always
+  // claiming success, which previously made a no-op send look like it had worked.
+  const runControl = async (action: 'inject' | 'pause' | 'interrupt', text?: string) => {
+    setSteerError(null);
+    try {
+      await sendControl({ sessionId, action, text }).unwrap();
+      return true;
+    } catch (err) {
+      const status = (err as { status?: number | string })?.status;
+      setSteerError(
+        status === 502
+          ? 'daemon offline — the session’s claude+ isn’t connected'
+          : `couldn’t reach the session (${status ?? 'error'})`,
+      );
+      return false;
+    }
+  };
   const events = useSelector((state: RootState) => selectSessionEvents(state, sessionId));
 
   // Seed the backfilled page into the live slice once it arrives. Re-seeding is
@@ -124,9 +161,21 @@ export function LiveWatch() {
                   · {session.projectId} · #{session.sessionId}
                 </span>
               </div>
-              <Pill variant={session.status === 'done' ? 'good' : 'live'}>
-                {session.status === 'done' ? 'replay' : 'streaming'}
-              </Pill>
+              <div className="flex items-center gap-1.5">
+                <Pill variant={session.status === 'done' ? 'good' : 'live'}>
+                  {session.status === 'done' ? 'replay' : 'streaming'}
+                </Pill>
+                <button
+                  type="button"
+                  className="hq-btn"
+                  onClick={refresh}
+                  disabled={refreshing}
+                  aria-label="Refresh session"
+                  data-testid="live-refresh"
+                >
+                  {refreshing ? '↻ syncing…' : '↻ refresh'}
+                </button>
+              </div>
             </div>
             <div
               ref={feedRef}
@@ -184,9 +233,12 @@ export function LiveWatch() {
                   disabled={!canSteer || message.trim() === ''}
                   onClick={() => {
                     const text = message;
-                    void sendControl({ sessionId, action: 'inject', text });
-                    setSent(text);
-                    setMessage('');
+                    void runControl('inject', text).then((okSend) => {
+                      if (okSend) {
+                        setSent(text);
+                        setMessage('');
+                      }
+                    });
                   }}
                 >
                   send
@@ -196,7 +248,7 @@ export function LiveWatch() {
                   className="hq-btn"
                   disabled={!canSteer}
                   onClick={() => {
-                    void sendControl({ sessionId, action: 'pause' });
+                    void runControl('pause');
                   }}
                 >
                   ⏸ pause
@@ -206,13 +258,18 @@ export function LiveWatch() {
                   className="hq-btn"
                   disabled={!canSteer}
                   onClick={() => {
-                    void sendControl({ sessionId, action: 'interrupt' });
+                    void runControl('interrupt');
                   }}
                 >
                   ⤓ interrupt
                 </button>
               </div>
-              {sent && (
+              {steerError && (
+                <div className="mt-2 text-[11px] text-live" role="alert">
+                  {steerError}
+                </div>
+              )}
+              {sent && !steerError && (
                 <div className="mt-2 text-[11px] text-good" role="status">
                   injected: {sent}
                 </div>

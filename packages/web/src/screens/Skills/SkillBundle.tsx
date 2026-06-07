@@ -6,7 +6,8 @@ import {
   useRemoveBundleMemberMutation,
   useDissolveBundleMutation,
 } from '../../api/baseApi.js';
-import { Pill, ScreenHeader } from '../../components/primitives.js';
+import { ScreenHeader } from '../../components/primitives.js';
+import { SkillCard } from '../../components/SkillCard.js';
 import { SkillCombobox } from '../../components/SkillCombobox.js';
 
 /**
@@ -74,32 +75,35 @@ export function SkillBundle() {
             </div>
           </div>
           <div className="hq-hr" />
-          {bundle.members.map((m) => {
-            const member = skills.find((s) => s.name === m);
-            const isNested = member?.kind === 'bundle';
-            return (
-              <div
-                key={m}
-                className="flex items-center justify-between border-b border-line2 py-1.5 text-[13px]"
-                data-testid={`member-${m}`}
-              >
-                <span>
-                  <Pill variant="skill" className="mr-1.5">
-                    {isNested ? `▤ ${m}` : m}
-                  </Pill>
-                  {isNested && <Pill>nested bundle</Pill>}
-                </span>
-                <button
-                  type="button"
-                  className="hq-btn"
-                  data-testid={`remove-member-${m}`}
-                  onClick={() => onRemove(m)}
-                >
-                  ✕ remove
-                </button>
-              </div>
-            );
-          })}
+          {/* A bundle is just a sub-directory: its members render as the SAME
+              catalog cards as the top-level Skills grid (nested bundles stay
+              clickable and drill in), each with a remove affordance. */}
+          <div className="grid grid-cols-3 gap-3.5">
+            {bundle.members.map((m) => {
+              const member = skills.find((s) => s.name === m);
+              return (
+                <div key={m} className="flex flex-col gap-1.5" data-testid={`member-${m}`}>
+                  {member ? (
+                    <SkillCard skill={member} />
+                  ) : (
+                    // A member whose skill record isn't in the catalog (dangling
+                    // reference) still needs a card + a way to eject it.
+                    <div className="hq-box bg-paper text-xs text-mut" data-testid={`skill-card-${m}`}>
+                      {m} <span className="text-faint">· missing from catalog</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="hq-btn self-start"
+                    data-testid={`remove-member-${m}`}
+                    onClick={() => onRemove(m)}
+                  >
+                    ✕ remove
+                  </button>
+                </div>
+              );
+            })}
+          </div>
 
           <div className="hq-hr" />
           <DissolveControl count={bundle.members.length} onConfirm={onDissolve} />

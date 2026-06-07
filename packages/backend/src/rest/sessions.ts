@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { controlActionSchema } from '@harness/shared';
+import { controlActionSchema, type SessionStatus } from '@harness/shared';
 import { z } from 'zod';
 import type { Repo } from '../db/repo.js';
 import {
@@ -58,6 +58,23 @@ export function isSessionLive(
 }
 
 /**
+ * The status to PRESENT for a session, accounting for read-time freshness. The
+ * daemon heartbeats every live session (~20s); when its process is closed without
+ * sending a termination signal (the terminal was quit, the laptop slept), the
+ * heartbeats stop. So any non-`done` session that has gone silent past the stale
+ * window is no longer running and is presented as `done` — a ghost is never shown
+ * as active/needs_input/idle. Non-destructive: the stored projection is unchanged
+ * (a heartbeat or `done` event still reconciles it), this only fixes the view.
+ */
+export function effectiveStatus(
+  session: { status: string; lastEventAt: number },
+  now: number,
+): SessionStatus {
+  if (session.status === 'done') return 'done';
+  return now - session.lastEventAt > STALE_WINDOW_MS ? 'done' : (session.status as SessionStatus);
+}
+
+/**
  * Body of POST /sessions/{id}/control. The sessionId is the path param; the body
  * carries the ControlAction + payload (matching the web's `sendControl`, which
  * posts `{ action, payload }`).
@@ -109,7 +126,11 @@ export async function listSessions(
     isSessionLive(s, now) ? 1 : 0;
   sessions.sort((a, b) => liveRank(b) - liveRank(a) || b.lastEventAt - a.lastEventAt);
 
-  return ok({ sessions });
+  // Present a silent/ghost session (daemon stopped heartbeating) as `done` so it
+  // never shows as active/needs_input/idle once its process is gone.
+  const presented = sessions.map((s) => ({ ...s, status: effectiveStatus(s, now) }));
+
+  return ok({ sessions: presented });
 }
 
 export async function getSession(
@@ -123,6 +144,9 @@ export async function getSession(
 
   const session = await deps.repo.getSessionById(id);
   if (!session || session.ownerUserId !== principal.userId) return notFound();
+  // Present a ghost (silent daemon) as done here too, so the detail view agrees
+  // with the list rather than showing a long-dead session as still active.
+  const presented = { ...session, status: effectiveStatus(session, Date.now()) };
 
   const limitParam = queryParam(event, 'limit');
   const limit = limitParam ? Number(limitParam) : DEFAULT_EVENT_PAGE;
@@ -131,7 +155,7 @@ export async function getSession(
     limit: Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_EVENT_PAGE,
   });
 
-  return ok({ session, events });
+  return ok({ session: presented, events });
 }
 
 /**

@@ -62,9 +62,15 @@ export type CreatedBy = z.infer<typeof createdBySchema>;
  */
 export const userProfileSchema = z.object({
   userId: z.string().min(1),
-  name: z.string().optional(),
+  /** The ACTIVE org — the one the app is currently scoped to. */
   org: z.string().optional(),
+  name: z.string().optional(),
+  /** `true` when the user is an admin of the ACTIVE org (derived from adminOrgs). */
   admin: z.boolean().optional(),
+  /** Every org the user has joined or created — the set they can switch between. */
+  orgs: z.array(z.string()).optional(),
+  /** The subset of `orgs` the user is an admin of (an org's creator). */
+  adminOrgs: z.array(z.string()).optional(),
 });
 export type UserProfile = z.infer<typeof userProfileSchema>;
 
@@ -90,17 +96,20 @@ export const meResponseSchema = z.object({
   name: z.string().optional(),
   org: z.string().nullable(),
   admin: z.boolean().optional(),
+  /** Every org the user belongs to, so the header can offer a switcher. */
+  orgs: z.array(z.string()).default([]),
 });
 export type MeResponse = z.infer<typeof meResponseSchema>;
 
 /**
  * Request validation for org create/join. An org name must be typed EXACTLY to
  * join, so it is trimmed (no leading/trailing whitespace surprises) and capped.
- * The password floor (>= 6 chars) is enforced here so both create and join
- * reject obviously-empty secrets before any hashing/compare.
+ * The password is deliberately UNRESTRICTED — no length or complexity floor —
+ * so users can pick whatever shared secret they like; it only has to be present
+ * (the field is required) so create/join always have something to hash/compare.
  */
 export const orgNameSchema = z.string().trim().min(1).max(64);
-export const orgPasswordSchema = z.string().min(6).max(200);
+export const orgPasswordSchema = z.string();
 
 export const createOrgRequestSchema = z.object({
   name: orgNameSchema,
@@ -113,6 +122,16 @@ export const joinOrgRequestSchema = z.object({
   password: orgPasswordSchema,
 });
 export type JoinOrgRequest = z.infer<typeof joinOrgRequestSchema>;
+
+/**
+ * Switch the ACTIVE org to one the user has ALREADY joined. No password — this
+ * is not a join, just flipping which membership the app is scoped to; the server
+ * still verifies the target is in the caller's `orgs` set.
+ */
+export const switchOrgRequestSchema = z.object({
+  org: orgNameSchema,
+});
+export type SwitchOrgRequest = z.infer<typeof switchOrgRequestSchema>;
 
 /** The current-state projection of a session, derived from its event stream. */
 export const sessionProjectionSchema = z.object({
@@ -303,6 +322,9 @@ export const deviceAuthSchema = z.object({
   /** Populated once approved: the identity the minted token is scoped to. */
   userId: z.string().min(1).optional(),
   org: z.string().min(1).optional(),
+  /** The approver's display name, carried into the minted token for the wrapper's
+   * status line (username @ org). Optional for back-compat with older records. */
+  name: z.string().min(1).optional(),
 });
 export type DeviceAuth = z.infer<typeof deviceAuthSchema>;
 

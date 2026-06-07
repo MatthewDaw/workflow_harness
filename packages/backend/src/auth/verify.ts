@@ -42,7 +42,9 @@ export async function signDeviceToken(
   opts: { expiresIn?: string; secret?: Uint8Array } = {},
 ): Promise<string> {
   const secret = opts.secret ?? deviceTokenSecret();
-  return new SignJWT({ org: principal.org })
+  // `name` is carried so the wrapper can show the signed-in username in its status
+  // line (the org rides alongside); both are display-only — authz uses sub + org.
+  return new SignJWT({ org: principal.org, ...(principal.name ? { name: principal.name } : {}) })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(principal.userId)
     .setIssuer(DEVICE_TOKEN_ISSUER)

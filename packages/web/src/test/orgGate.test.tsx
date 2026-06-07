@@ -55,6 +55,33 @@ describe('org gate', () => {
     await waitFor(() => expect(screen.getByTestId('objectives-screen')).toBeInTheDocument());
   });
 
+  it('switches the active org from the header menu and reloads under it', async () => {
+    // Two memberships; /me reports the active one and flips after the switch POST.
+    let switched = false;
+    installFetchStub({
+      me: () =>
+        switched ? { org: 'beta', orgs: ['acme', 'beta'] } : { org: 'acme', orgs: ['acme', 'beta'] },
+      routes: {
+        'POST me/org': () => {
+          switched = true;
+          return { org: 'beta', admin: false };
+        },
+      },
+    });
+    render(<App store={makeStore()} authClient={createMockClient(null)} router={memoryRouter} />);
+
+    await signIn();
+
+    // The header shows the active org ('acme') as the switcher trigger; open it.
+    await userEvent.click(await screen.findByRole('button', { name: /^acme/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'beta' }));
+
+    // After switching, the header reflects the new active org.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^beta/i })).toBeInTheDocument(),
+    );
+  });
+
   it('shows a generic error when joining with a bad name/password (403)', async () => {
     installFetchStub({
       me: { org: null },

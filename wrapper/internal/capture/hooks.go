@@ -20,6 +20,13 @@ type HookEvent struct {
 	SessionID     string `json:"session_id"`
 	Message       string `json:"message"` // Notification text
 	Prompt        string `json:"prompt"`  // UserPromptSubmit: the prompt the user typed
+	// PinnedSessionID is the launch session id of the tab the daemon keys on,
+	// injected by the hook shim from the child's CLAUDE_PLUS_SESSION env (see
+	// cmd/claude-plus runHook). It is NOT a Claude Code field. After an in-session
+	// /resume, Claude's live session_id diverges from the id we launched with, so
+	// the daemon routes hooks by this stable tab id when present and falls back to
+	// SessionID otherwise.
+	PinnedSessionID string `json:"claude_plus_session"`
 }
 
 // settingsHook is the shape of one hook entry in settings.json.

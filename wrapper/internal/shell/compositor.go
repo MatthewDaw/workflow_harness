@@ -91,6 +91,13 @@ type Compositor struct {
 	costUSD  float64
 	degraded bool
 
+	// Signed-in identity for the top status line. `loggedIn` gates the label:
+	// when false we render "not signed in"; when true we render "user @ org"
+	// (falling back to just the org if no display name is known).
+	loggedIn bool
+	userName string
+	orgName  string
+
 	// streamEvents is the bounded live event feed rendered on the Stream tab
 	// (oldest first, newest at the bottom). Fed from the daemon's event bus via
 	// FeedEvent — the terminal counterpart to the desktop Stream panel.
@@ -191,6 +198,16 @@ func (c *Compositor) focusedIDLocked() string {
 }
 
 // SetStatus updates the token/cost readout.
+// SetIdentity records the signed-in user/org shown at the top of the frame.
+// `loggedIn` false renders a "not signed in" hint regardless of name/org.
+func (c *Compositor) SetIdentity(name, org string, loggedIn bool) {
+	c.mu.Lock()
+	c.userName = name
+	c.orgName = org
+	c.loggedIn = loggedIn
+	c.mu.Unlock()
+}
+
 func (c *Compositor) SetStatus(tokens int, costUSD float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -487,7 +504,27 @@ func (c *Compositor) renderTabBar(w int) {
 		ind = "● HQ offline"
 		indFG = colAmber
 	}
-	c.screen.SetString(w-len(ind)-1, rowTabBar, ind, indFG, vt.DefaultBG, false, false)
+	indX := w - len(ind) - 1
+	c.screen.SetString(indX, rowTabBar, ind, indFG, vt.DefaultBG, false, false)
+
+	// Signed-in identity sits just left of the HQ indicator: "user @ org" when
+	// logged in (or just the org when no display name is known), else a dim
+	// "not signed in" hint.
+	idLabel := "not signed in"
+	idFG := colDim
+	if c.loggedIn {
+		if c.userName != "" {
+			idLabel = c.userName + " @ " + c.orgName
+		} else {
+			idLabel = c.orgName
+		}
+		idFG = colText
+	}
+	idX := indX - len(idLabel) - 2
+	// Don't draw the identity if it would collide with the tab labels on the left.
+	if idX > x {
+		c.screen.SetString(idX, rowTabBar, idLabel, idFG, vt.DefaultBG, false, false)
+	}
 }
 
 func (c *Compositor) renderSubTabs(w int) {

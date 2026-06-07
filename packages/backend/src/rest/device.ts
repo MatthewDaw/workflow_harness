@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda
 import { startDeviceAuth, pollDeviceAuth, approveDeviceAuthByUserCode } from '../auth/device.js';
 import type { Repo } from '../db/repo.js';
 import { badRequest, defaultRepo, ok, parseBody, principalOf, unauthorized } from './runtime.js';
+import { effectiveOrg } from './membership.js';
 
 /**
  * REST: device-code login for the claude+ wrapper (`claude+ login`).
@@ -61,10 +62,15 @@ export async function deviceApprove(
   }
   const userCode = body?.userCode;
   if (!userCode) return badRequest('userCode required');
+  // Bind the device to the approver's ACTIVE membership org (not the raw token
+  // claim) so `claude+ login` adopts whatever org they are currently in, and carry
+  // their display name so the wrapper can show "name @ org".
+  const org = (await effectiveOrg(event, deps.repo)) ?? principal.org;
   const result = await approveDeviceAuthByUserCode(deps.repo, {
     userCode,
     userId: principal.userId,
-    org: principal.org,
+    org,
+    name: principal.name,
   });
   return ok(result);
 }

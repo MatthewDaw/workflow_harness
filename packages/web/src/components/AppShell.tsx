@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthProvider.js';
 import { wsConnect, wsDisconnect } from '../ws/liveActions.js';
 import type { RootState } from '../app/store.js';
 import { Emblem } from './Emblem.js';
+import { OrgSwitcher } from './OrgSwitcher.js';
 
 /**
  * The Command HQ chrome: brand + top nav, promoted from wireframe.html's
@@ -58,6 +59,10 @@ export function AppShell() {
               </NavLink>
             ))}
             <span className="ml-auto flex items-center gap-2.5 text-xs text-cream/70">
+              <OrgSwitcher />
+              <span aria-hidden className="text-cream/30">
+                /
+              </span>
               <span className="text-cream/80" title="Signed in">
                 {user?.username ?? 'me'}
               </span>

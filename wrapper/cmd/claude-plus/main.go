@@ -16,6 +16,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -199,11 +200,43 @@ func runHook() {
 	if err != nil || len(raw) == 0 {
 		return
 	}
+	// Tag the payload with the pinned launch session id (the tab the daemon keys
+	// on). After an in-session /resume, Claude's live session_id diverges from the
+	// id we launched with, so without this the daemon can't map the hook back to
+	// its tab — auto-naming and status routing would silently miss and the tab
+	// would stay on the "session" placeholder. The hook shim inherits
+	// CLAUDE_PLUS_SESSION from the PTY launch (see pty.DefaultSpawn).
+	raw = tagPinnedSession(raw)
 	repo, err := resolveRepoRoot()
 	if err != nil {
 		return
 	}
 	_ = daemon.SendHook(repo, raw)
+}
+
+// tagPinnedSession injects the child's CLAUDE_PLUS_SESSION (the pinned tab id)
+// into the hook JSON as "claude_plus_session". It is a no-op when the env is
+// unset or the payload is not a JSON object, returning the raw bytes unchanged
+// so an unexpected shape is still forwarded verbatim.
+func tagPinnedSession(raw []byte) []byte {
+	pinned := os.Getenv("CLAUDE_PLUS_SESSION")
+	if pinned == "" {
+		return raw
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw
+	}
+	b, err := json.Marshal(pinned)
+	if err != nil {
+		return raw
+	}
+	m["claude_plus_session"] = b
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // resolveRepoRoot walks up from cwd to the nearest .git directory; falls back to

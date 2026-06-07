@@ -1,0 +1,254 @@
+---
+status: active
+type: feature
+created: 2026-06-06
+completion: 0
+feature: topic-focus-logging
+---
+
+<h1>Feature — Topic-Focus Logging (capture what a session is working on, as it drifts)</h1>
+<p>As we log Claude messages, also log <strong>what the session is actually focused on</strong> —
+segmenting one conversation into <strong>topics</strong> and relabeling the current topic as focus
+drifts — and mine the manual <strong>correction</strong> turns into structured <strong>learnings</strong>. The
+learnings sharpen two agents over time: the <strong>implementing agent</strong> (so it one-shots vague
+prompts like "build a login page" to completion) and the <strong>doc-writing agent</strong> (so it asks
+better questions up front). End state: less correction needed.</p>
+
+<blockquote>
+<p><strong>Where it runs.</strong> The Claude API is stateless and stores nothing retrievable, so
+capture happens client-side; summarization runs <strong>wrapper-side on the dev&#39;s own Claude
+subscription</strong> over the local transcript JSONL the daemon already tails
+(<code>wrapper/internal/capture/jsonl.go</code>). No backend API key, no server-side LLM, no
+embeddings. Only small distilled records ship to HQ.</p>
+<p><strong>Builds on existing auto-titling.</strong> The daemon already runs a one-shot headless
+<code>claude -p</code> to title a session from its first exchange (<code>internal/title/</code>, spawned as a
+goroutine inside <code>Runtime.captureLoop</code>; see <a href="./claude_cli_wrapper.html">04 — CLI wrapper</a>).
+That gives the <strong>stable slug</strong>. Topic-focus logging is a new <strong>evolving layer on top</strong> — the
+slug never changes (no title thrash); the <em>topic</em> and a rolling <em>description</em> update as the
+work moves. The judge reuses the title runner&#39;s spawn pattern and lives in the <strong>same
+layer</strong> (<code>captureLoop</code>), not in <code>daemon.go</code>.</p>
+</blockquote>
+
+<h2>Decisions (confirmed 2026-06-06)</h2>
+<p>Four author calls surfaced by review, now decided.</p>
+<ul>
+<li><strong>D1 — Correction-turn timing.</strong> Detect the correction on <code>UserPromptSubmit</code> (the
+prompt that <strong>opens</strong> the turn), then run the judge on that turn&#39;s subsequent <code>Stop</code> after
+draining the tailer.</li>
+<li><strong>D2 — Secret/PII handling.</strong> Regex-scrub common secret patterns + hard length caps
+(<code>impl_learning</code> ≤ 500 chars, <code>doc_question</code> ≤ 300) before emit; no separate user opt-in for v1.</li>
+<li><strong>D3 — Cost ceilings.</strong> Gate thresholds Jaccard τ ≈ 0.3, debounce ≥ 3 turns or ≥ 1500
+tokens; per-session cap 50 judge calls; daemon-wide concurrency cap (token bucket) of 2 concurrent
+judge spawns shared across tabs. (Tunable per the Open Questions.)</li>
+<li><strong>D4 — Learnings read authz.</strong> Owner-only for v1 (mirror <code>ownedProject()</code> in
+<code>rest/projects.ts</code>); revisit org-visibility later.</li>
+</ul>
+
+<h2>What we capture</h2>
+<ul>
+<li><strong>Topic segments.</strong> A session is split into topic segments; the current topic is
+relabeled when focus drifts. Topic labels are <strong>session-local</strong> — never reconciled against
+anything outside the session.</li>
+<li><strong>Rich descriptions.</strong> Each topic carries a <strong>self-contained description</strong> (not a
+3-word label) — feature/domain, what was built, what went wrong, the resolution — written so a
+later phase can search/cluster on it. Enforced at capture; expensive to retrofit.</li>
+<li><strong>Two learning streams (additive).</strong> Every correction turn yields an
+<strong>implementing-agent learning</strong> (<code>impl_learning</code>: a convention/fix), <em>unconditionally</em>.
+When a correction <strong>clearly contradicts</strong> the nearest doc, it <em>additionally</em> yields a
+<strong>doc-writing-agent learning</strong> (<code>doc_question</code>: a question to ask up front). The doc
+comparison never diverts a learning away from the impl stream. Works with <strong>zero docs</strong>.
+<em>(Terminology: <code>impl_learning</code> and <code>doc_question</code> are the two learning-stream payloads;
+"doc learning" = a <code>doc_question</code>.)</em></li>
+</ul>
+
+<h2>Requirements</h2>
+<ul>
+<li><strong>R1</strong> Segment a session into topics and relabel the current topic on drift, without renaming the stable slug.</li>
+<li><strong>R2</strong> On every correction turn, extract an <code>impl_learning</code> — where "every correction" means every turn the gate identifies as a correction (the correction cue must fire independently of file-churn, so same-file and no-edit corrections are not missed).</li>
+<li><strong>R3</strong> On a high-confidence contradiction with the nearest doc, <em>additionally</em> extract a <code>doc_question</code>.</li>
+<li><strong>R4</strong> Each topic carries a rich, self-contained, search-ready description.</li>
+<li><strong>R5</strong> Persist topic, rolling description, and routed learnings into HQ; surface topics <em>within</em> the session UI.</li>
+<li><strong>R6</strong> Everything works with no documentation present.</li>
+<li><strong>R7</strong> Summarization runs wrapper-side on the dev&#39;s subscription (headless Haiku), gated and rate-capped so cost is bounded, off the turn&#39;s critical path.</li>
+<li><strong>R8</strong> Expose stored learnings via a read endpoint — the hand-off stub for the deferred optimize loop.</li>
+</ul>
+
+<h2>Key design decisions</h2>
+<ul>
+<li><strong>Judge in <code>Runtime.captureLoop</code>, off the critical path.</strong> The gate/judge needs the
+per-tab tailer state, transcript path, <code>repoRoot</code>, <code>projectID</code>, and the emit closure — all of
+which live in <code>captureLoop</code> (<code>internal/daemon/runtime.go</code>), where the proven
+<code>title.Generate</code> goroutine already runs. <code>daemon.go</code> <code>ingestHook</code> only has the
+<code>SessionID</code>; it forwards the <code>Stop</code>/<code>UserPromptSubmit</code> signal into <code>captureLoop</code>, which
+owns the gate. The model call is spawned on a goroutine (never blocks the turn).</li>
+<li><strong>Turn-cycle ordering (D1).</strong> Correction-smell is evaluated on <code>UserPromptSubmit</code> (the
+opening prompt); the judge runs on that turn&#39;s subsequent <code>Stop</code>, <em>after</em> the tailer has
+flushed the turn&#39;s <code>tool_use</code> rows (drain/Poll before computing the gate, to avoid an
+empty/stale file set).</li>
+<li><strong>Headless Haiku, isolated subprocess (D2/security).</strong> Reuse the <code>internal/title/</code>
+<code>claude -p</code> spawn (own auth, <code>claude-haiku-4-5</code>), but: (a) set a dedicated
+<strong><code>CLAUDE_PLUS_JUDGE=1</code></strong> env and add a skip-check for it in <code>runHook</code>
+(<code>cmd/claude-plus/main.go</code>) so the judge&#39;s own hooks never re-enter the daemon (prevents
+phantom sessions and a <code>Stop</code>→judge→<code>Stop</code> recursion); (b) build the child env
+<strong>explicitly</strong> (PATH, HOME, CLAUDE_CONFIG_DIR only) — do <strong>not</strong> inherit <code>os.Environ()</code> /
+<code>CLAUDE_PLUS_DANGEROUS</code>.</li>
+<li><strong>Injection-safe prompt.</strong> The transcript slice and doc content are untrusted; wrap them
+in explicit <code>&lt;transcript&gt;</code>/<code>&lt;doc&gt;</code> delimiters the system prompt marks as data-not-instructions,
+and validate the verdict against a strict schema before persisting.</li>
+<li><strong>Files-touched via JSONL re-parse (A4).</strong> The touched-file set comes from re-parsing the
+raw JSONL <code>tool_use</code> <code>input.file_path</code> of <strong>write-class tools</strong>
+(Edit/Write/MultiEdit/NotebookEdit), accumulated as per-session state in the tailer — <strong>not</strong>
+from <code>tool.call</code> <code>argsSummary</code> (single field, truncated). Bash-driven edits are not reliably
+captured; this is an accepted limitation of the lexical gate.</li>
+<li><strong>Cheap, embedding-free gate.</strong> Spend a judge call only on: a <strong>file-path Jaccard</strong>
+shift below τ (lexical TextTiling), a <strong>correction cue</strong> (fires independently of Jaccard), or a
+<strong>cadence/debounce floor</strong> — subject to the per-session and concurrency caps (D3).</li>
+<li><strong>Two new events, additive — with deploy ordering.</strong> <code>session.topic</code> folds into the
+projection; <code>session.learning</code> is an append record. Both added to the TS discriminated union
+(<code>packages/shared/src/events.ts</code>), the Go <code>event</code> package, and the golden fixture (Go json
+tags must mirror the Zod optional/required choices, with new golden rows). <strong>Because
+<code>parseEnvelope</code> hard-rejects unknown kinds, the backend (shared schema + Lambda) must deploy
+before any wrapper emits the new kinds</strong> — or ingest must tolerate-and-drop unknown kinds.</li>
+<li><strong>Idempotent learnings.</strong> Derive the <code>session.learning</code> seq from a <strong>stable turn id /
+transcript offset</strong> (not a free counter) so a judge retry or a mid-turn daemon restart can&#39;t
+write duplicates; dedupe on <code>(sessionId, turnId)</code> at ingest.</li>
+<li><strong>Observable failure.</strong> The "parse-once-retry-else-no-op" fallback is safe for the topic
+but <strong>silently drops a learning</strong>; emit a parse-failure marker (counter/log) so learning loss
+is observable, not invisible. Extract JSON via a fenced-block/first-balanced-object parse, not raw
+stdout.</li>
+<li><strong>Contradiction = explicit reversal, not staleness.</strong> Emit <code>contradicts_doc</code> only when
+the doc makes an explicit claim the correction reverses (not mere absence or a stale doc), and
+only when the nearest-doc heuristic has evidence the doc actually covers the touched file (else
+treat as no doc). Bias toward not-a-contradiction.</li>
+<li><strong>Carried context for self-contained descriptions.</strong> The judge receives the <strong>current
+rolling description + prior <code>topic_label</code></strong> as carried state and <em>updates</em> rather than
+regenerates it — so a faithful description survives a topic spanning more turns than the bounded
+slice. Known limit: detail outside the slice relies on the carried description.</li>
+<li><strong>Learnings under the project partition.</strong> <code>PK=PROJ#&lt;projectId&gt;</code>,
+<code>SK=LEARN#&lt;sessionId&gt;#&lt;turnId&gt;</code>, read in one <code>begins_with(SK,&#39;LEARN#&#39;)</code>; swept by the
+existing <code>deleteProject()</code> bulk-delete (no separate cleanup).</li>
+<li><strong>Title-thrash guard + debounce attribution.</strong> The slug never changes; topic/description
+evolve debounced. A new segment opens on a <em>confirmed</em> <code>same_topic:false</code>; during the debounce
+window, hold the turn&#39;s learnings/description delta pending and attribute to the correct segment
+once the switch resolves (avoids description bleed across the boundary).</li>
+<li><strong>Checkpoint store (C6).</strong> Per-session topic/cadence/debounce state is checkpointed to a
+small JSON file under the claude+ config dir keyed by tab session id (written after each fold,
+loaded on <code>captureLoop</code> start). Acceptable alt: ephemeral state with a documented cold-start.</li>
+</ul>
+
+<h2>How it works (turn cycle)</h2>
+<p><strong>On <code>UserPromptSubmit</code>:</strong> mark whether this opening prompt smells like a correction
+(cheap cue, independent of file churn) and stash it on the session&#39;s gate state.</p>
+<p><strong>On <code>Stop</code>:</strong> keep today&#39;s <code>status.change → idle</code> immediately (do not wait on the
+judge). Drain the tailer so the turn&#39;s <code>tool_use</code> rows are flushed, then run the cheap gate
+(Jaccard shift on the touched-file set, the stashed correction cue, or the cadence floor),
+subject to the caps. If it fires, build inputs — bounded position-aware transcript slice (JSONL
+tail), files-touched set, nearest doc (only if it covers a touched file; else none), and the
+carried topic state (label + rolling description) — and spawn the isolated headless Haiku judge on
+a goroutine. Parse + schema-validate the verdict (retry once; on failure emit a parse-failure
+marker and keep the current topic). Fold: open a new segment on a confirmed <code>same_topic:false</code>
+(debounced, pending-attribution); always append <code>impl_learning</code>; append <code>doc_question</code> iff
+<code>contradicts_doc</code>; update the rolling description. Scrub + length-cap the output fields (D2), then
+emit <code>session.topic</code> and any <code>session.learning</code> via the existing emit path. Checkpoint state.</p>
+<p>Verdict shape (directional): <code>{ same_topic, topic_label, description, is_correction,
+contradicts_doc, impl_learning?, doc_question? }</code>.</p>
+
+<h2>Security &amp; privacy</h2>
+<ul>
+<li><strong>Subprocess isolation</strong> — explicit child env (no <code>os.Environ()</code>, no
+<code>CLAUDE_PLUS_DANGEROUS</code>); <code>CLAUDE_PLUS_JUDGE=1</code> skip in <code>runHook</code> so the judge never spawns a
+phantom session or recurses.</li>
+<li><strong>Prompt injection</strong> — untrusted transcript/doc content delimited as data; verdict
+strictly schema-validated before persistence.</li>
+<li><strong>Secret/PII (D2)</strong> — regex-scrub + hard length caps on <code>impl_learning</code>/<code>doc_question</code>
+before they leave the machine; the "transcript stays local, only distilled records ship" boundary
+is enforced by this filter, not just asserted. Learnings cascade-delete with the project.</li>
+<li><strong>Cost/DoS (D3)</strong> — concrete gate thresholds + per-session cap + daemon-wide concurrency
+cap shared across tabs; judge cost tracked separately from interactive session cost.</li>
+<li><strong>Authz (D4)</strong> — the read endpoint inherits the same Cognito JWT authorizer and
+owner-check as the other <code>/projects/:id/*</code> routes.</li>
+</ul>
+
+<h2>Web UI</h2>
+<p>Two surfaces, kept deliberately simple for v1:</p>
+<ul>
+<li><strong>Sessions table</strong> (<code>packages/web/src/screens/Sessions/SessionsTable.tsx</code>) — the topic
+column replaces the frozen first-prompt column: <strong>topic label</strong> primary, the stable slug shown
+muted/secondary (so a user who navigated by slug isn&#39;t disoriented). Description is
+<strong>line-clamped to 2 lines</strong> with a hover tooltip. Before any topic exists, show a muted
+<em>"Untitled"</em> placeholder; topic updates arrive silently via the existing live WebSocket
+(staleness during the debounce window is acceptable, not surfaced).</li>
+<li><strong>Session detail</strong> — single-column: a <strong>topic timeline</strong> (chronological vertical list;
+each row = topic label + relative open-time + one-line clamped description; a new row appears only
+when a new segment opens, an in-place relabel updates the latest row), then two stacked labeled
+sections <strong>"Implementation learnings"</strong> and <strong>"Doc-writing learnings"</strong> (the doc section shows
+a zero-state, not hidden, since it&#39;s empty in the common case). Empty states: timeline <em>"No topic
+segments yet"</em>; impl <em>"No corrections logged this session"</em>; doc <em>"No doc loaded — doc learnings
+appear when a correction contradicts a loaded doc"</em>.</li>
+</ul>
+
+<h2>Build outline</h2>
+<ol>
+<li><strong>Event contract</strong> — add <code>session.topic</code> + <code>session.learning</code> (with their resolved
+payload fields, incl. the distinct <code>description</code> field) to <code>packages/shared/src/events.ts</code>, the
+Go <code>event</code> package (constructors + <code>Validate</code> cases + json tags mirroring Zod), and the golden
+fixture. <em>Co-ship with step 2 and deploy the backend before the wrapper emits.</em></li>
+<li><strong>Projection + DTO</strong> — extend <code>sessionProjectionSchema</code> (<code>packages/shared/src/dto.ts</code>:
+<code>topic</code>, a <strong>distinct</strong> <code>description</code>, <code>summaryUpdatedAt</code>, <code>titleSource</code>) and fold
+<code>session.topic</code> in <code>packages/backend/src/ws/projection.ts</code> (leave <code>name</code>).</li>
+<li><strong>Learnings store + ingest</strong> — <code>learningKey</code> in <code>packages/backend/src/db/keys.ts</code> +
+put/list in <code>repo.ts</code>; add a <code>session.learning</code> case to the per-kind ingest dispatch
+(<code>packages/backend/src/ws/event.ts</code> / <code>streamConsumer.ts</code>), resolving project via the existing
+<code>sessionPointerKey</code>, with <code>(sessionId, turnId)</code> dedupe.</li>
+<li><strong>Read endpoint + infra</strong> — <code>GET /projects/:id/learnings?stream=impl|doc</code> in
+<strong><code>packages/backend/src/rest/projects.ts</code></strong> (not <code>sessions.ts</code> — the <code>/projects</code> prefix
+routes there), owner-checked; add the route + table-read grant in <code>infra/lib/api-stack.ts</code>;
+typed client in <code>packages/web/src/api/baseApi.ts</code>.</li>
+<li><strong>Judge runner</strong> — new <code>wrapper/internal/judge/</code> on the <code>internal/title/</code> spawn pattern,
+with the isolated env + <code>CLAUDE_PLUS_JUDGE=1</code> (+ the <code>runHook</code> skip), the injection-safe prompt,
+fenced-JSON extraction, schema validation, and the parse-failure marker.</li>
+<li><strong>Gate + wiring + fold</strong> — in <code>internal/daemon/runtime.go</code> (<code>captureLoop</code>): the
+correction-cue on <code>UserPromptSubmit</code>, the <code>Stop</code> gate (drain tailer → Jaccard/cue/cadence,
+caps), the structured-state fold (debounce attribution, scrub/cap, checkpoint), and emit. Expose
+files-touched + harvest the native title from <code>internal/capture/jsonl.go</code>. <em>Depends on steps 1
+(event kinds) and 5 (judge interface).</em></li>
+<li><strong>Web</strong> — implement the Sessions-table + session-detail spec above. <em>Depends on steps 2
+and 4.</em></li>
+</ol>
+
+<h2>Scope &amp; deferred</h2>
+<ul>
+<li><strong>In scope (v1):</strong> within-session topic segmentation + relabel on drift; correction mining
+into impl/doc learnings; rich descriptions; wrapper-side headless Haiku judge with a cheap gate +
+caps; the two events; projection/DTO fields; project-partition learnings table; the read endpoint;
+within-session UI. Docs-optional throughout.</li>
+<li><strong>Deferred — agent improvement loop.</strong> Feeding the stored learnings into
+<code>hq-optimize-agent</code> to actually edit the two agents (see <a href="./agentforge.html">05 — AgentForge</a>).</li>
+<li><strong>Deferred — cross-session semantic search.</strong> The agent-builder searching stored
+descriptions for similar topics. Server-side embeddings / Forge vector retrieval / OpenSearch were
+<strong>removed</strong> (see <a href="./platform_architecture.html">platform</a>, "No server-side embeddings"), so
+this would be reintroduced <strong>client-side</strong>. v1 only guarantees the descriptions are rich enough
+to feed it.</li>
+<li><strong>Out of scope:</strong> verbatim transcript upload to HQ; any backend-side LLM call; cross-session
+topic grouping in the UI.</li>
+</ul>
+
+<h2>Open questions (deferred to implementation)</h2>
+<ul>
+<li>Exact <code>claude -p</code> flags / structured-output mechanism for reliably parseable JSON on Haiku.</li>
+<li>Transcript-slice exact byte/token bounds (latest prompt + tail of last assistant turn + file list).</li>
+<li>Nearest-doc "covers this file" heuristic specifics, incl. a doc-mtime staleness guard.</li>
+<li>Tuning of the D3 gate-threshold numbers against real sessions (the defaults are starting points).</li>
+</ul>
+
+<h2>Status</h2>
+<ul>
+<li><strong>Planned</strong> — not started; reviewed (6-persona doc review applied). The closest existing
+capability is one-shot LLM session <strong>titling</strong> (<code>internal/title/</code>, built; see
+<a href="./claude_cli_wrapper.html">04</a>); this feature reuses that headless-<code>claude -p</code> pattern and
+adds the evolving topic + learning-capture layer on top.</li>
+<li><strong>Build on:</strong> the <code>Stop</code>/<code>UserPromptSubmit</code> hook plumbing, <code>Runtime.captureLoop</code> +
+emit path (<code>internal/daemon/runtime.go</code>), the transcript tailer (<code>internal/capture/jsonl.go</code>),
+the dual-declared event contract + golden fixture, the single-table session store
+(<code>packages/backend/src/db/</code>), and the Sessions UI.</li>
+</ul>

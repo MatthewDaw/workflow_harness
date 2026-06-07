@@ -49,6 +49,11 @@ type Daemon struct {
 
 	hookMu     sync.Mutex
 	hookIngest func(sessID string, e event.Event) // set by the Runtime; routes hook events through emit
+	// repointHook, when set by the Runtime, is notified (tabID, liveID) just BEFORE
+	// ingestHook remaps a post-/resume hook's divergent live session_id back to the
+	// stable tab id. The Runtime uses it to repoint the tab's transcript tailer at
+	// the live <liveId>.jsonl so a resumed conversation keeps streaming.
+	repointHook func(tabID, liveID string)
 
 	stopCh chan struct{}
 }
@@ -236,6 +241,16 @@ func (d *Daemon) SetHookIngestor(fn func(sessID string, e event.Event)) {
 	d.hookMu.Unlock()
 }
 
+// SetTranscriptRepointer registers the callback ingestHook invokes — before it
+// remaps a post-/resume hook's divergent live id to the tab id — so the Runtime
+// can repoint the tab's transcript tailer at the live <liveId>.jsonl. Until set
+// (no Runtime), a resume divergence is simply not repointed.
+func (d *Daemon) SetTranscriptRepointer(fn func(tabID, liveID string)) {
+	d.hookMu.Lock()
+	d.repointHook = fn
+	d.hookMu.Unlock()
+}
+
 // ingestHook parses a Claude Code hook payload, maps it to a status.change event
 // (via the capture layer), and publishes it. Malformed payloads and no-op hook
 // kinds (PostToolUse) are dropped silently — the daemon stays stable and the
@@ -248,15 +263,44 @@ func (d *Daemon) ingestHook(raw string) {
 	if err := json.Unmarshal([]byte(raw), &h); err != nil || h.SessionID == "" {
 		return
 	}
+	// Before remapping, detect a post-/resume id divergence: the hook carries the
+	// live transcript id in SessionID and the stable tab id in PinnedSessionID.
+	// When they differ, claude has begun writing a NEW transcript at <liveId>.jsonl
+	// and the tab's tailer (keyed on the tab id) is now watching a frozen file —
+	// so notify the repoint hook with (tabID, liveID) so the Runtime repoints that
+	// tailer at the live file. This MUST happen before the remap below overwrites
+	// SessionID with the tab id.
+	liveID := h.SessionID
+	d.hookMu.Lock()
+	repoint := d.repointHook
+	d.hookMu.Unlock()
+	if h.PinnedSessionID != "" && liveID != "" && liveID != h.PinnedSessionID && repoint != nil {
+		repoint(h.PinnedSessionID, liveID)
+	}
+	// Route every hook to the TAB id — the pinned launch session the mux and HQ
+	// key on. After an in-session /resume, Claude's live session_id changes to the
+	// resumed conversation's id, but the hook shim tags the payload with the
+	// original CLAUDE_PLUS_SESSION; without this remap the lookups below would miss
+	// and the tab would never auto-name (it would stay on the "session" placeholder)
+	// nor update its status. Falls back to the live id when the tag is absent.
+	if h.PinnedSessionID != "" {
+		h.SessionID = h.PinnedSessionID
+	}
 	// UserPromptSubmit fires on every prompt the user submits, but ApplyAutoName
-	// is idempotent: only the FIRST turn renames the session. When it does, emit a
-	// session.rename carrying both the derived slug name and the (trimmed, capped)
-	// raw first prompt as the summary. This is the authoritative auto-name path;
-	// the transcript tailer's onFirst remains a fallback. We do NOT fall through to
-	// MapHook for this kind (UserPromptSubmit carries no status transition).
+	// is idempotent: only the FIRST turn renames the session. A freshly spawned tab
+	// that immediately /resume-s an older conversation has not consumed its first
+	// turn, so the next prompt typed after the resume is what names it — exactly the
+	// "regenerate the slug on the next message turn" behavior. When it renames, emit
+	// a session.rename carrying both the derived slug and the (trimmed, capped) raw
+	// prompt as the summary, then push a fresh session list so attached CLI clients'
+	// sub-tab row updates at once (the emit alone only feeds the Stream panel, not
+	// SetSubs). This is the authoritative auto-name path; the transcript tailer's
+	// onFirst remains a fallback. We do NOT fall through to MapHook for this kind
+	// (UserPromptSubmit carries no status transition).
 	if h.HookEventName == "UserPromptSubmit" {
 		if renamed, name := d.mux.ApplyAutoName(h.SessionID, h.Prompt); renamed {
 			d.emitSession(h.SessionID, event.SessionRenameWithSummary(h.SessionID, name, firstPromptSummary(h.Prompt)))
+			d.broadcastSessList()
 		}
 		return
 	}

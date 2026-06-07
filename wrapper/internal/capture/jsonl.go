@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/workflow-harness/claude-plus/internal/event"
@@ -86,7 +87,11 @@ type FirstExchangeSink func(sessID, userText, assistantText string)
 // a monotonic byte offset so it never double-emits a previously-seen line, and
 // it tolerates a partial trailing line (it only emits complete lines).
 type Tailer struct {
-	sessID        string
+	sessID string
+	// mu guards path, offset and leftover: Poll advances them on the tailer
+	// goroutine while Repoint rewrites them from another goroutine (the daemon,
+	// on a post-/resume id divergence).
+	mu            sync.Mutex
 	path          string
 	offset        int64
 	leftover      []byte
@@ -116,6 +121,12 @@ func (t *Tailer) OnExchange(fn FirstExchangeSink) *Tailer {
 // corresponding events. Safe to call repeatedly (the daemon polls on a ticker
 // or on inotify wake).
 func (t *Tailer) Poll() error {
+	// Hold mu for the whole Poll body so a concurrent Repoint cannot swap the
+	// path/offset out from under an in-flight read (which would corrupt the
+	// offset). Poll is short and only opens/reads a local file, so this is cheap.
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	f, err := os.Open(t.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -135,9 +146,11 @@ func (t *Tailer) Poll() error {
 		if len(chunk) > 0 && chunk[len(chunk)-1] != '\n' {
 			// Partial trailing line: stash it, rewind the offset, stop. The next
 			// Poll re-reads from here once the line is complete.
+			t.leftover = append(t.leftover[:0], chunk...)
 			t.offset -= int64(len(chunk))
 			break
 		}
+		t.leftover = nil
 		if len(chunk) > 0 {
 			t.handleLine(strings.TrimRight(string(chunk), "\n"))
 		}
@@ -146,6 +159,24 @@ func (t *Tailer) Poll() error {
 		}
 	}
 	return nil
+}
+
+// Repoint switches the watched file to path and rewinds to its start, while
+// keeping sessID unchanged so emitted events stay keyed on the stable tab id.
+//
+// Why: after an in-session /resume, Claude's live session_id diverges from the
+// launch/tab id and it begins writing a NEW transcript at <liveId>.jsonl — the
+// original <tabId>.jsonl freezes. The daemon learns the live id from the hook
+// and repoints this tailer at the live file so streaming continues. Starting the
+// new file fresh (offset 0) is safe: downstream sequence numbers keep advancing
+// and HQ's (sessionId, seq) store key dedupes any overlap, so a re-read of rows
+// shared between the two files cannot create duplicates.
+func (t *Tailer) Repoint(path string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.path = path
+	t.offset = 0
+	t.leftover = nil
 }
 
 // Run polls the transcript on an interval until stop is closed.

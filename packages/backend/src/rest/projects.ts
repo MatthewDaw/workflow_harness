@@ -339,6 +339,34 @@ export async function getProjectRequirements(
   }
 }
 
+/**
+ * GET /projects/:id/wireframe — the project's example UI wireframe, read
+ * read-only from `docs/wireframe.html` on GitHub. Returns `{ html }`, with an
+ * empty string when the file is absent (the Project Requirements tab then shows
+ * no wireframe preview). GitHub unreachable / not connected degrades to
+ * `{ html: '', stale: true }` rather than a 500, mirroring the requirements
+ * endpoint's failure posture.
+ */
+export async function getProjectWireframe(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await ownedProject(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+
+  const make = deps.githubFor ?? defaultGithubFor;
+  const app = make(project);
+  if (!app) return ok({ html: '', stale: true });
+
+  try {
+    const html = await app.readWireframe();
+    return ok({ html: html ?? '' });
+  } catch {
+    return ok({ html: '', stale: true });
+  }
+}
+
 // --- Project opt-in: enable/disable org-catalog skills + agents ----------
 //
 // Auth gate for all four: org admin OR the project's owner. The skill/agent name
@@ -461,6 +489,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     return refreshProject(event, deps);
   if (method === 'GET' && hasId && /\/requirements$/.test(rawPath))
     return getProjectRequirements(event, deps);
+  if (method === 'GET' && hasId && /\/wireframe$/.test(rawPath))
+    return getProjectWireframe(event, deps);
   if (method === 'GET' && hasId && /\/docs\/content$/.test(rawPath))
     return getProjectDocContent(event, deps);
   if (method === 'GET' && hasId && /\/docs$/.test(rawPath)) return getProjectDocs(event, deps);

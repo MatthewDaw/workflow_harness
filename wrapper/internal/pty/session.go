@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,6 +39,22 @@ type Session struct {
 
 	cmd *pty.Cmd
 	pt  pty.Pty // the pseudo-terminal (master/console)
+
+	// waited is closed by the single watcher goroutine (started in newSession)
+	// once the child's cmd.Wait() returns. Close/Shutdown wait on this instead of
+	// calling cmd.Wait() themselves — there must be exactly ONE Wait caller, or
+	// the second concurrent Wait panics. nil for test-constructed sessions with no
+	// child (no watcher is started), in which case awaitExit returns immediately.
+	waited chan struct{}
+	// exited records that the child process has actually exited. It is set by the
+	// watcher and read concurrently by Alive (atomic so it needs no lock), so the
+	// daemon's heartbeat loop can stop treating a dead-but-not-yet-removed child
+	// (a ConPTY child that lingers in mux.List without an EOF) as live.
+	exited atomic.Bool
+	// onExit is invoked exactly once when the child actually exits (from the
+	// watcher goroutine). The mux wires this to onSessionExit so the EOF path and
+	// the Wait path converge on the same idempotent removeLocked bookkeeping.
+	onExit func(id string)
 
 	mu         sync.RWMutex
 	status     Status
@@ -103,8 +120,11 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 	}
 }
 
-// newSession starts a claude child under a PTY with the given dimensions.
-func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Session, error) {
+// newSession starts a claude child under a PTY with the given dimensions. onExit
+// is invoked exactly once when the child process actually exits (see the watcher
+// goroutine below); pass nil to opt out. The mux passes m.onSessionExit so the
+// Wait path and the EOF/pump path both funnel into the same removal bookkeeping.
+func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc, onExit func(id string)) (*Session, error) {
 	spec := spawn(repoRoot, id)
 
 	// Point the real claude launch at the stable isolated config root ~/.claude+
@@ -145,10 +165,26 @@ func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc) (*Se
 	}
 	// Size the pseudo-terminal once the child is attached.
 	_ = pt.Resize(cols, rows)
-	return &Session{
+	s := &Session{
 		ID: id, Name: name,
 		cmd: c, pt: pt, status: StatusActive, cols: cols, rows: rows,
-	}, nil
+		onExit: onExit,
+		waited: make(chan struct{}),
+	}
+	// The SINGLE owner of the child's Wait(). It reaps the process exactly once,
+	// flips the exited flag, closes waited (so Close/Shutdown can block on the
+	// real exit instead of double-Waiting), and finally fans the exit out via
+	// onExit. Close/Shutdown must NOT call cmd.Wait() — a second concurrent Wait
+	// panics; they wait on this channel instead.
+	go func() {
+		_ = c.Wait()
+		s.exited.Store(true)
+		close(s.waited)
+		if s.onExit != nil {
+			s.onExit(s.ID)
+		}
+	}()
+	return s, nil
 }
 
 // Write sends bytes to the session's PTY stdin (used by focus input + inject).
@@ -304,7 +340,10 @@ func (s *Session) Shutdown(timeout time.Duration) error {
 	}
 	s.closed = true
 	s.status = StatusDone
-	proc := s.cmd.Process
+	var proc *os.Process
+	if s.cmd != nil {
+		proc = s.cmd.Process
+	}
 	pt := s.pt
 	s.mu.Unlock()
 
@@ -321,32 +360,40 @@ func (s *Session) Shutdown(timeout time.Duration) error {
 	}
 
 	// Try graceful terminate. A non-nil error from Signal means SIGTERM is not
-	// deliverable here (Windows), so go straight to the force path.
+	// deliverable here (Windows), so go straight to the force path. The watcher
+	// goroutine owns cmd.Wait(); we observe the exit via the waited channel.
 	if proc.Signal(syscall.SIGTERM) == nil {
-		done := make(chan error, 1)
-		go func() { done <- s.cmd.Wait() }()
 		select {
-		case <-done:
+		case <-s.waited:
 			// Exited within the grace window.
 			closePTY()
 			return nil
 		case <-time.After(timeout):
-			// Ignored SIGTERM — escalate to a force kill.
+			// Ignored SIGTERM — escalate to a force kill of the whole tree.
 		}
-		_ = proc.Kill()
-		<-done // reap the in-flight Wait so the child is not left a zombie
+		killTree(proc.Pid)
+		_ = proc.Kill() // safety net for the top process
+		s.awaitExit(timeout)
 		closePTY()
 		return nil
 	}
 
-	// Force path (graceful unsupported): kill now, mirroring Close's order.
+	// Force path (graceful unsupported, e.g. Windows): kill the whole process
+	// tree now — the real claude is a node launcher plus a worker under ConPTY, so
+	// killing only the PTY top process leaves a survivor that keeps writing the
+	// transcript and firing hooks (which would revive the row). Then wait on the
+	// watcher's exit rather than calling cmd.Wait() ourselves.
 	closePTY()
+	killTree(proc.Pid)
 	_ = proc.Kill()
-	_ = s.cmd.Wait()
+	s.awaitExit(timeout)
 	return nil
 }
 
-// Close terminates the child process and closes the PTY.
+// Close force-terminates the child process tree and closes the PTY. Like
+// Shutdown it is idempotent (the closed guard) and never calls cmd.Wait() — the
+// watcher goroutine started in newSession is the single Wait owner; Close kills
+// the tree and blocks on the watcher's waited channel (with a short timeout).
 func (s *Session) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -355,10 +402,51 @@ func (s *Session) Close() error {
 	}
 	s.closed = true
 	s.status = StatusDone
-	s.mu.Unlock()
-	_ = s.pt.Close()
-	if s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
+	var proc *os.Process
+	if s.cmd != nil {
+		proc = s.cmd.Process
 	}
-	return s.cmd.Wait()
+	s.mu.Unlock()
+
+	_ = s.pt.Close()
+	if proc != nil {
+		// Kill the whole descendant tree, not just the PTY top process, so no
+		// survivor (the node worker under ConPTY) keeps writing the transcript or
+		// firing hooks and revives a force-shut-down session.
+		killTree(proc.Pid)
+		_ = proc.Kill() // safety net for the top process
+	}
+	// Do NOT call cmd.Wait(): the watcher owns it. Block on its completion with a
+	// short timeout so Close stays bounded even if the OS is slow to reap.
+	s.awaitExit(5 * time.Second)
+	return nil
+}
+
+// Alive reports whether the session's child is still running. It is false once
+// the child has actually exited (the watcher set exited) OR the session has been
+// closed/shut down. The daemon's heartbeat loop uses this so a dead-but-not-yet-
+// removed child (a ConPTY child that lingers in mux.List without an EOF) is not
+// reported as live.
+func (s *Session) Alive() bool {
+	if s.exited.Load() {
+		return false
+	}
+	s.mu.RLock()
+	closed := s.closed
+	s.mu.RUnlock()
+	return !closed
+}
+
+// awaitExit blocks until the watcher signals the child has exited (waited
+// closed) or the timeout elapses, whichever comes first. It returns immediately
+// when there is no watcher (waited is nil) — i.e. a test-constructed session
+// with no real child.
+func (s *Session) awaitExit(timeout time.Duration) {
+	if s.waited == nil {
+		return
+	}
+	select {
+	case <-s.waited:
+	case <-time.After(timeout):
+	}
 }

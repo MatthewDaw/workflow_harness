@@ -245,10 +245,12 @@ export class ApiStack extends cdk.Stack {
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
     r('/dod', [M.GET, M.PUT], dodFn, 'Dod');
 
-    // Membership / org onboarding. All three inherit the default Cognito JWT
-    // authorizer — a brand-new user still has a valid token (their PROFILE just
-    // has no org yet), so /me/orgs are authenticated but org-membership-agnostic.
+    // Membership / org onboarding. All inherit the default Cognito JWT authorizer
+    // — a brand-new user still has a valid token (their PROFILE just has no org
+    // yet), so these are authenticated but org-membership-agnostic. POST /me/org
+    // switches the active org among the ones the caller has already joined.
     r('/me', [M.GET], orgsFn, 'Me');
+    r('/me/org', [M.POST], orgsFn, 'MeOrgSwitch');
     r('/orgs', [M.POST], orgsFn, 'Orgs');
     r('/orgs/join', [M.POST], orgsFn, 'OrgsJoin');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');

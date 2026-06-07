@@ -1,7 +1,13 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { createOrgRequestSchema, joinOrgRequestSchema } from '@harness/shared';
+import type { z } from 'zod';
+import {
+  createOrgRequestSchema,
+  joinOrgRequestSchema,
+  switchOrgRequestSchema,
+} from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { hashOrgPassword, verifyOrgPassword } from '../auth/orgPassword.js';
+import { seedStarterForOrg } from '../seed/starter.js';
 import {
   badRequest,
   created,
@@ -35,6 +41,20 @@ export interface OrgsDeps {
 }
 
 /**
+ * Turn a Zod parse failure into ONE short, human-readable sentence for the UI —
+ * never the raw issue JSON. The form only has two fields, so we name them
+ * directly and fall back to the first issue's own message for anything else.
+ */
+function validationMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return 'Please check your input and try again.';
+  if (issue.path[0] === 'name') return 'Please enter an organization name.';
+  if (issue.path[0] === 'password') return 'Please enter a password.';
+  if (issue.path[0] === 'org') return 'Please choose an organization.';
+  return issue.message;
+}
+
+/**
  * GET /me — the caller's identity and effective membership for the OrgGate.
  * `org` is read from the PROFILE only (no token fallback): a user whose profile
  * has no org genuinely has none and must onboard, even though their Cognito token
@@ -53,6 +73,9 @@ export async function getMe(
     name: principal.name ?? profile?.name,
     org: profile?.org ?? null,
     admin: isAdmin(event) || profile?.admin === true,
+    // Every org the user can switch between (legacy single-org profiles read as a
+    // one-element set so the switcher still works for them).
+    orgs: profile?.orgs ?? (profile?.org ? [profile.org] : []),
   });
 }
 
@@ -76,7 +99,7 @@ export async function createOrg(
     return badRequest('invalid JSON body');
   }
   const parsed = createOrgRequestSchema.safeParse(body ?? {});
-  if (!parsed.success) return badRequest(parsed.error.message);
+  if (!parsed.success) return badRequest(validationMessage(parsed.error));
   const { name, password } = parsed.data;
 
   const { salt, hash } = hashOrgPassword(password);
@@ -93,6 +116,16 @@ export async function createOrg(
 
   // The creator is the first admin and is now a member of the org.
   await deps.repo.setUserOrg(principal.userId, name, { name: principal.name, admin: true });
+
+  // Pre-load the product starter bundle so the new org's Skills tab isn't empty.
+  // Best-effort: a seeding hiccup must never fail org creation (the catalog can be
+  // re-seeded later), so we swallow + log any error.
+  try {
+    await seedStarterForOrg(deps.repo, name);
+  } catch (err) {
+    console.warn(`[orgs] starter-skill seed failed for org '${name}':`, err);
+  }
+
   return created({ org: name, admin: true });
 }
 
@@ -117,7 +150,7 @@ export async function joinOrg(
     return badRequest('invalid JSON body');
   }
   const parsed = joinOrgRequestSchema.safeParse(body ?? {});
-  if (!parsed.success) return badRequest(parsed.error.message);
+  if (!parsed.success) return badRequest(validationMessage(parsed.error));
   const { name, password } = parsed.data;
 
   const org = await deps.repo.getOrg(name);
@@ -133,12 +166,43 @@ export async function joinOrg(
   return ok({ org: name, admin: existing?.admin === true });
 }
 
+/**
+ * POST /me/org — switch the ACTIVE org to another one the caller has already
+ * joined. No password (this is not a join, just changing which membership the
+ * app is scoped to); the repo verifies membership and 403s otherwise. The web
+ * resets its whole cache on success so every dataset re-reads under the new org.
+ */
+export async function switchOrg(
+  event: APIGatewayProxyEventV2,
+  deps: OrgsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const parsed = switchOrgRequestSchema.safeParse(body ?? {});
+  if (!parsed.success) return badRequest(validationMessage(parsed.error));
+  const { org } = parsed.data;
+
+  const { switched } = await deps.repo.switchActiveOrg(principal.userId, org);
+  if (!switched) return json(403, { error: 'you are not a member of that organization' });
+
+  const profile = await deps.repo.getUser(principal.userId);
+  return ok({ org, admin: profile?.admin === true });
+}
+
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: OrgsDeps = { repo: defaultRepo() };
   const method = event.requestContext.http.method;
   const path = event.requestContext.http.path ?? event.rawPath ?? '';
 
-  // Order matters: /orgs/join is more specific than /orgs.
+  // Order matters: the more specific suffixes are checked before bare /orgs.
+  if (method === 'POST' && path.endsWith('/me/org')) return switchOrg(event, deps);
   if (method === 'POST' && path.endsWith('/join')) return joinOrg(event, deps);
   if (method === 'POST') return createOrg(event, deps);
   return getMe(event, deps); // GET /me

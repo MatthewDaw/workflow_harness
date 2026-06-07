@@ -7,6 +7,7 @@ import { Bar, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
 import { parseCompletion } from '../../lib/frontmatter.js';
 import { extractCompliance } from '../../lib/compliance.js';
+import { WireframePreview } from './ProjectWireframe.js';
 
 /**
  * Project Requirements sub-tab (U10): the project's HIGH-LEVEL requirements,
@@ -59,6 +60,8 @@ export function ProjectRequirements() {
           <MarkdownView markdown={report} />
         </div>
       )}
+
+      <WireframePreview />
 
       <div className="hq-box bg-paper">
         {isLoading ? (

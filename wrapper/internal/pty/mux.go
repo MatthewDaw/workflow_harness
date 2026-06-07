@@ -132,7 +132,13 @@ func (m *Mux) Spawn(name string) (*Session, error) {
 		name = "session"
 	}
 	name = Disambiguate(name, m.takenNames())
-	s, err := newSession(id, name, m.repoRoot, m.cols, m.rows, m.spawn)
+	// Pass onSessionExit as the watcher's onExit so the child's real exit (Wait
+	// returning) drives the same removal bookkeeping as the pump's EOF path. Both
+	// converge through removeLocked, which is idempotent, so a double-trigger
+	// (watcher + pump) for the same id is a harmless no-op. onSessionExit takes
+	// m.mu, but it runs on the watcher goroutine and Close never holds m.mu, so
+	// there is no lock-ordering deadlock.
+	s, err := newSession(id, name, m.repoRoot, m.cols, m.rows, m.spawn, m.onSessionExit)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err

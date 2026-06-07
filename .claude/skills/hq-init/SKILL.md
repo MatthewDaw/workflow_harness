@@ -1,16 +1,18 @@
 ---
 name: hq-init
 description: >-
-  Run inside the claude+ PTY to scaffold the three GitHub-side files Command HQ
+  Run inside the claude+ PTY to scaffold the GitHub-side files Command HQ
   reads for a project: `docs/PRD.html` (the Project Overview goal + Project
   Requirements body + bar, with `completion:` frontmatter and a `Product goal:`
   line), `docs/plans/specs_overview.html` (the Detailed Requirements headline,
-  with `completion:` frontmatter), and `docs/plans/features/example_feature.html`
-  (a template feature doc). It writes placeholder files only where they are
-  missing — it never overwrites existing content — then commits and pushes them
-  with the developer's own git/gh so a freshly connected repo stops showing the
-  "needs files" / 0% empty state. Use when the user says "/hq-init", "init",
-  "scaffold the HQ files", or connects a repo that has no PRD/plan docs yet.
+  with `completion:` frontmatter), `docs/plans/features/example_feature.html`
+  (a template feature doc), and `docs/wireframe.html` (an example UI wireframe
+  previewed on the Project Requirements tab). It writes placeholder files only
+  where they are missing — it never overwrites existing content — then commits
+  and pushes them with the developer's own git/gh so a freshly connected repo
+  stops showing the "needs files" / 0% empty state. Use when the user says
+  "/hq-init", "init", "scaffold the HQ files", or connects a repo that has no
+  PRD/plan docs yet.
 ---
 
 # /hq-init
@@ -19,9 +21,9 @@ Bootstrapper for the **GitHub side** of a Command HQ project. HQ reads a repo
 through a read-only GitHub App; if the files it expects are absent, the Project
 Overview, Project Requirements, and Detailed Requirements tabs render their
 empty states (no goal, no Project Requirements body, no requirement docs, bar at
-`0%`). This skill creates **placeholders** for exactly three files so a new repo
-shows up cleanly, then hands off to [[hq-update-progress]] (which computes and
-pushes the real `completion:` numbers later).
+`0%`, no wireframe preview). This skill creates **placeholders** for four files
+so a new repo shows up cleanly, then hands off to [[hq-update-progress]] (which
+computes and pushes the real `completion:` numbers later).
 
 It is the **complement** of [[hq-update-progress]]: this one creates the files,
 that one keeps their numbers current. Neither calls an HQ endpoint — both push
@@ -34,9 +36,9 @@ shells out to `git` and `gh` with the developer's own credentials. It is
 **idempotent and non-destructive**: it only writes a file that does not already
 exist, and prints what it skipped.
 
-## The three files (and nothing else)
+## The four files (and nothing else)
 
-This skill scaffolds **only** these three files. There is no repo-root `PRD.md`
+This skill scaffolds **only** these four files. There is no repo-root `PRD.md`
 and no `PROGRESS.md` — everything HQ needs lives under `docs/`.
 
 | HQ surface | Repo file | What's parsed |
@@ -45,11 +47,14 @@ and no `PROGRESS.md` — everything HQ needs lives under `docs/`.
 | **Project Requirements** (body **and** bar) | `docs/PRD.html` | the high-level requirements prose → the read-only body; `completion:` frontmatter → `progressPct`. |
 | **Detailed Requirements** (headline + bar fallback) | `docs/plans/specs_overview.html` | the top-of-tree overview doc; its `completion:` frontmatter is the Detailed Requirements headline number. |
 | **Detailed Requirements** (per-feature) | `docs/plans/features/*.html` | each feature doc + its `completion:` frontmatter badge; `example_feature.html` is the seed template. |
+| **Project Requirements** (wireframe preview) | `docs/wireframe.html` | the full HTML file is served verbatim → a scaled preview on the Project Requirements tab that links to a full-screen `requirements/wireframe` route. |
 
 The backend parsing lives in `packages/backend/src/github/history.ts`
 (`parseGoal`, `parseCompletionFrontmatter`) and `app.ts`
 (`readFramingWithCompletion`, which reads `docs/PRD.{md,html}` for both the goal
-and the bar). HQ reads `.md` or `.html`; we scaffold `.html`.
+and the bar; `readWireframe`, which serves `docs/wireframe.html` to the
+`/projects/:id/wireframe` endpoint). HQ reads `.md` or `.html`; we scaffold
+`.html`.
 
 ## Steps
 
@@ -128,27 +133,71 @@ and the bar). HQ reads `.md` or `.html`; we scaffold `.html`.
    </ul>
    ```
 
-5. **Report what was created vs. skipped**, then **commit + push.** Stage only
+5. **Scaffold `docs/wireframe.html`** (the example UI wireframe previewed on the
+   Project Requirements tab) **only if missing.** It is a standalone, fully
+   self-contained HTML document (inline `<style>`, no external assets — HQ serves
+   it verbatim into a sandboxed iframe, so external CSS/JS/links won't load). No
+   frontmatter is needed; it is not parsed for `completion:`. Keep it small but
+   real so the preview shows something:
+
+   ```html
+   <!doctype html>
+   <html lang="en">
+   <head>
+     <meta charset="utf-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1" />
+     <title><Project Name> — Wireframe</title>
+     <style>
+       body { margin: 0; font-family: system-ui, sans-serif; color: #1a1a1a; background: #f6f6f4; }
+       header { padding: 16px 24px; background: #1a1a1a; color: #fff; font-weight: 600; }
+       main { display: grid; grid-template-columns: 200px 1fr; gap: 16px; padding: 24px; }
+       nav a { display: block; padding: 8px 12px; border-radius: 6px; color: #444; text-decoration: none; }
+       nav a.on { background: #e8e8e4; color: #000; font-weight: 600; }
+       .card { background: #fff; border: 1px solid #e2e2dd; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+     </style>
+   </head>
+   <body>
+     <header><Project Name></header>
+     <main>
+       <nav>
+         <a class="on" href="#">Overview</a>
+         <a href="#">Requirements</a>
+         <a href="#">Sessions</a>
+       </nav>
+       <section>
+         <div class="card"><h2>Replace this wireframe</h2><p>Sketch the primary screen for this project here.</p></div>
+         <div class="card">A second placeholder block.</div>
+       </section>
+     </main>
+   </body>
+   </html>
+   ```
+
+   (Replace it with the project's real wireframe — for example, move an existing
+   `wireframe.html` from the repo root into `docs/wireframe.html`.)
+
+6. **Report what was created vs. skipped**, then **commit + push.** Stage only
    the files this skill created. Commit with a message like
    `chore(hq): scaffold Command HQ project files via /hq-init` (include the
    repo's Co-Authored-By trailer). Push to the current branch's upstream with
    `git push` (use `gh` only if auth/PR is needed). Never use the GitHub Contents
    API — push with the dev's own git so HQ's next read sees the new SHA.
 
-6. **Tell the user the manual follow-up:** replace the placeholder goal /
+7. **Tell the user the manual follow-up:** replace the placeholder goal /
    requirements text in `docs/PRD.html`, the feature list in
-   `docs/plans/specs_overview.html`, and the seed `example_feature.html` (copy it
-   per real feature), then run **[[hq-update-progress]]** to compute real
-   `completion:` numbers.
+   `docs/plans/specs_overview.html`, the seed `example_feature.html` (copy it
+   per real feature), and the placeholder `docs/wireframe.html`, then run
+   **[[hq-update-progress]]** to compute real `completion:` numbers.
 
 ## What HQ does after this
 
 Nothing is posted. On the next project refresh (`POST /projects/:id/refresh` or
 connect-time read), the backend fetches the repo via the read-only GitHub App,
 reads `docs/PRD.html` (goal via `parseGoal` + Project Requirements body + bar via
-`completion:`), and walks the `docs/plans/` tree (`specs_overview.html` headline +
-`features/*.html`), so the three surfaces leave their empty states. HQ never
-writes back.
+`completion:`), walks the `docs/plans/` tree (`specs_overview.html` headline +
+`features/*.html`), and serves `docs/wireframe.html` to the Project Requirements
+wireframe preview, so those surfaces leave their empty states. HQ never writes
+back.
 
 ## Worked example (against a fresh repo)
 
@@ -166,22 +215,25 @@ Expected behavior on a repo with no HQ files:
    `completion: 0`.
 4. No `docs/plans/features/*.html` → write `example_feature.html` with
    `completion: 0`.
-5. Print:
+5. No `docs/wireframe.html` → write the placeholder wireframe.
+6. Print:
 
    ```
    hq-init — scaffolded:
      created  docs/PRD.html                              (completion: 0)
      created  docs/plans/specs_overview.html             (completion: 0)
      created  docs/plans/features/example_feature.html   (completion: 0)
+     created  docs/wireframe.html                        (example wireframe)
      skipped  (none already present)
 
    Next:
      - Replace placeholder text in docs/PRD.html, docs/plans/specs_overview.html,
        and docs/plans/features/example_feature.html (copy it per real feature),
-       then run /hq-update-progress for real numbers.
+       swap docs/wireframe.html for the real wireframe, then run
+       /hq-update-progress for real numbers.
    ```
 
-6. `git add docs/PRD.html docs/plans/specs_overview.html docs/plans/features/example_feature.html
+7. `git add docs/PRD.html docs/plans/specs_overview.html docs/plans/features/example_feature.html docs/wireframe.html
    && git commit -m "chore(hq): scaffold Command HQ project files via /hq-init"
    && git push`.
 
@@ -194,9 +246,10 @@ nothing).
 
 Test expectation: none — SKILL.md authoring. The skill is verified by running it
 in a repo with no HQ files: it creates `docs/PRD.html`,
-`docs/plans/specs_overview.html`, and `docs/plans/features/example_feature.html`
-(each with `completion: 0`), pushes them, and re-running it creates nothing
-(idempotent). After an HQ refresh the Overview shows the `Product goal:`, the
-Project Requirements tab renders `docs/PRD.html` read-only, the Detailed
-Requirements tab lists the overview + example feature, and the bars read `0%`
-instead of the empty state.
+`docs/plans/specs_overview.html`, `docs/plans/features/example_feature.html`
+(each with `completion: 0`), and `docs/wireframe.html`, pushes them, and
+re-running it creates nothing (idempotent). After an HQ refresh the Overview
+shows the `Product goal:`, the Project Requirements tab renders `docs/PRD.html`
+read-only plus a wireframe preview that links to the full-screen
+`requirements/wireframe` route, the Detailed Requirements tab lists the overview
++ example feature, and the bars read `0%` instead of the empty state.

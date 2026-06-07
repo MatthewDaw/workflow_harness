@@ -88,6 +88,46 @@ func TestUserPromptSubmitHookRenamesSession(t *testing.T) {
 	})
 }
 
+// TestResumeHookRenamesTabByPinnedSession is the regression proof for the
+// stale-"session"-tab-after-/resume bug. After an in-session /resume, Claude's
+// live session_id is the RESUMED conversation's id, which differs from the id
+// the tab was launched with (the mux key). The hook shim tags the payload with
+// the pinned CLAUDE_PLUS_SESSION; the daemon must route the auto-name to THAT tab
+// id, not the live id, so the next prompt typed after the resume names the tab.
+// Without the remap, ApplyAutoName(liveID) finds no session and the tab stays on
+// the "session" placeholder.
+func TestResumeHookRenamesTabByPinnedSession(t *testing.T) {
+	d, repo := startTestDaemon(t)
+	defer d.Stop()
+
+	s, err := d.Mux().Spawn("")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	snapshot := collectEvents(d, "hooktest")
+
+	// session_id is a foreign (resumed) id; claude_plus_session is the real tab.
+	prompt := "wire up the billing webhook handler"
+	raw := `{"hook_event_name":"UserPromptSubmit",` +
+		`"session_id":"00000000-resumed-foreign-id",` +
+		`"claude_plus_session":"` + s.ID + `",` +
+		`"prompt":"` + prompt + `"}`
+	if err := SendHook(repo, []byte(raw)); err != nil {
+		t.Fatalf("SendHook: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		for _, env := range snapshot() {
+			e := env.Event
+			if e.Kind == event.KindSessionRename && e.SessionID == s.ID &&
+				e.Name != "" && e.Summary == prompt {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // TestHookMalformedPayloadDropped is the U18 edge case: a malformed payload (and
 // a no-op hook kind) produce no event and leave the daemon stable.
 func TestHookMalformedPayloadDropped(t *testing.T) {

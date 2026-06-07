@@ -46,9 +46,11 @@ export const SESSIONS_CACHE_ARG = 'all' as const;
 export interface Me {
   userId: string;
   name?: string;
-  /** null = no membership yet → OrgGate forces create/join. */
+  /** The ACTIVE org. null = no membership yet → OrgGate forces create/join. */
   org: string | null;
   admin?: boolean;
+  /** Every org the user belongs to, for the header switcher. */
+  orgs?: string[];
 }
 
 /** A node in the project's detailed-requirements doc tree (U11). */
@@ -70,6 +72,13 @@ export interface ProjectDocContent {
 /** Project requirements markdown, sourced read-only from GitHub `docs/PRD.md`. */
 export interface ProjectRequirements {
   markdown: string;
+  stale?: boolean;
+}
+
+/** Project wireframe HTML, sourced read-only from GitHub `docs/wireframe.html`. */
+export interface ProjectWireframe {
+  /** Raw HTML of the wireframe; empty string when the file is absent. */
+  html: string;
   stale?: boolean;
 }
 
@@ -195,6 +204,24 @@ export const baseApi = createApi({
             'Dod',
           ]),
         );
+      },
+    }),
+
+    /**
+     * Switch the ACTIVE org to another one the user has already joined (no
+     * password). Switching swaps EVERY org-scoped dataset, so on success we reset
+     * the whole API cache — a clean wipe is the most reliable way to guarantee no
+     * stale tenant data lingers — and /me + all screens re-read under the new org.
+     */
+    switchOrg: build.mutation<{ org: string; admin: boolean }, { org: string }>({
+      query: (body) => ({ url: 'me/org', method: 'POST', body }),
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        try {
+          await queryFulfilled;
+        } catch {
+          return; // not a member / bad request → active org unchanged
+        }
+        dispatch(baseApi.util.resetApiState());
       },
     }),
 
@@ -350,6 +377,13 @@ export const baseApi = createApi({
     getProjectRequirements: build.query<ProjectRequirements, string>({
       query: (projectId) => `projects/${projectId}/requirements`,
       transformResponse: unwrapOne<ProjectRequirements>('requirements'),
+      providesTags: (_r, _e, id) => [{ type: 'Requirements', id }],
+    }),
+
+    /** Project wireframe HTML from GitHub `docs/wireframe.html` (read-only). */
+    getProjectWireframe: build.query<ProjectWireframe, string>({
+      query: (projectId) => `projects/${projectId}/wireframe`,
+      transformResponse: unwrapOne<ProjectWireframe>('wireframe'),
       providesTags: (_r, _e, id) => [{ type: 'Requirements', id }],
     }),
 
@@ -538,6 +572,7 @@ export const {
   useGetMeQuery,
   useCreateOrgMutation,
   useJoinOrgMutation,
+  useSwitchOrgMutation,
   useGetProjectsQuery,
   useGetProjectQuery,
   useCreateProjectMutation,
@@ -557,6 +592,7 @@ export const {
   useGetProjectDocsQuery,
   useGetProjectDocContentQuery,
   useGetProjectRequirementsQuery,
+  useGetProjectWireframeQuery,
   useSaveAgentMutation,
   useEnableProjectSkillMutation,
   useDisableProjectSkillMutation,

@@ -114,10 +114,12 @@ export class Repo {
   }
 
   /**
-   * Set (or change) the user's org membership, the write that ends onboarding.
-   * Upsert: load any existing profile and merge so a name/admin flag set earlier
-   * is preserved unless explicitly overridden. The org CREATOR passes
-   * `{ admin: true }`; a joiner leaves it unset.
+   * Add `org` to the user's membership set and make it the ACTIVE org — the write
+   * that ends onboarding (create/join). Upsert + accumulate: the org is unioned
+   * into `orgs` (so a user builds up the set they can switch between) and into
+   * `adminOrgs` when `{ admin: true }` (an org's creator). Legacy single-`org`
+   * profiles are migrated forward (their old org seeds the set). `admin` is kept
+   * as a denormalized "admin of the ACTIVE org" flag for the simple reads.
    */
   async setUserOrg(
     userId: string,
@@ -125,12 +127,35 @@ export class Repo {
     opts: { name?: string; admin?: boolean } = {},
   ): Promise<void> {
     const existing = await this.getUser(userId);
+    const orgs = new Set(existing?.orgs ?? (existing?.org ? [existing.org] : []));
+    orgs.add(org);
+    const adminOrgs = new Set(
+      existing?.adminOrgs ?? (existing?.admin && existing?.org ? [existing.org] : []),
+    );
+    if (opts.admin) adminOrgs.add(org);
     await this.putUser({
       userId,
       org,
       name: opts.name ?? existing?.name,
-      admin: opts.admin ?? existing?.admin,
+      admin: adminOrgs.has(org),
+      orgs: [...orgs],
+      adminOrgs: [...adminOrgs],
     });
+  }
+
+  /**
+   * Flip the ACTIVE org to one the user has already joined (no password — a
+   * member is just changing context). Returns `{ switched: false }` when the user
+   * has no profile or is not a member of `org`, so the handler can 403 without
+   * leaking whether the org exists. `admin` is recomputed for the new active org.
+   */
+  async switchActiveOrg(userId: string, org: string): Promise<{ switched: boolean }> {
+    const existing = await this.getUser(userId);
+    const orgs = existing?.orgs ?? (existing?.org ? [existing.org] : []);
+    if (!existing || !orgs.includes(org)) return { switched: false };
+    const adminOrgs = existing.adminOrgs ?? (existing.admin && existing.org ? [existing.org] : []);
+    await this.putUser({ ...existing, org, admin: adminOrgs.includes(org), orgs, adminOrgs });
+    return { switched: true };
   }
 
   // --- Organizations -----------------------------------------------------
@@ -837,26 +862,37 @@ export class Repo {
     deviceCode: string,
     userId: string,
     org: string,
-    now: number = Date.now(),
+    opts: { now?: number; name?: string } = {},
   ): Promise<{ approved: boolean }> {
+    const now = opts.now ?? Date.now();
+    // The display name is optional; only set it when present so the minted device
+    // token (and the wrapper's status line) can show the approver's username.
+    const names: Record<string, string> = { '#s': 'status' };
+    const values: Record<string, unknown> = {
+      ':approved': 'approved',
+      ':pending': 'pending',
+      ':u': userId,
+      ':o': org,
+      ':now': now,
+    };
+    let setExpr = 'SET #s = :approved, userId = :u, org = :o';
+    if (opts.name) {
+      setExpr += ', #n = :n';
+      names['#n'] = 'name';
+      values[':n'] = opts.name;
+    }
     try {
       await this.doc.send(
         new UpdateCommand({
           TableName: this.table,
           Key: k.deviceAuthKey(deviceCode),
-          UpdateExpression: 'SET #s = :approved, userId = :u, org = :o',
+          UpdateExpression: setExpr,
           // Expiry is part of the guard so a stale pointer (under DynamoDB TTL
           // lag) can't approve a timed-out record — defense in depth beneath the
           // app-layer check in approveDeviceAuthByUserCode.
           ConditionExpression: 'attribute_exists(PK) AND #s = :pending AND expiresAt > :now',
-          ExpressionAttributeNames: { '#s': 'status' },
-          ExpressionAttributeValues: {
-            ':approved': 'approved',
-            ':pending': 'pending',
-            ':u': userId,
-            ':o': org,
-            ':now': now,
-          },
+          ExpressionAttributeNames: names,
+          ExpressionAttributeValues: values,
         }),
       );
       return { approved: true };

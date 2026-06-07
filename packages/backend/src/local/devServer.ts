@@ -200,8 +200,10 @@ interface Route {
 const ROUTES: Route[] = [
   { re: /^\/device\/(?:start|poll|approve)$/, handler: deviceHandler },
 
-  // Membership / org onboarding. /me + /orgs(/join) reach the orgs handler;
-  // placed before the generic resource routes (order matters in this table).
+  // Membership / org onboarding. /me + /me/org (switch) + /orgs(/join) reach the
+  // orgs handler; placed before the generic resource routes (order matters), and
+  // /me/org before /me so the bare-/me route does not shadow it.
+  { re: /^\/me\/org$/, handler: orgsHandler },
   { re: /^\/me$/, handler: orgsHandler },
   { re: /^\/orgs\/join$/, handler: orgsHandler },
   { re: /^\/orgs$/, handler: orgsHandler },
@@ -219,6 +221,7 @@ const ROUTES: Route[] = [
     handler: projectsHandler,
   },
   { re: /^\/projects\/(?<id>[^/]+)\/requirements$/, handler: projectsHandler },
+  { re: /^\/projects\/(?<id>[^/]+)\/wireframe$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/refresh$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/docs\/content$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/docs$/, handler: projectsHandler },
@@ -465,6 +468,11 @@ async function seedDevSkills(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  // Expose the repo's skills dir so the orgs handler's starter-seed (POST /orgs)
+  // can fall back to reading SKILL.md from disk in local dev — including REAL mode,
+  // where a freshly created org has no template catalog to clone from yet.
+  process.env.HQ_REPO_SKILLS_DIR ??= SKILLS_DIR;
+
   if (REAL_MODE) {
     // Real deployed table via the ambient AWS credentials. Do NOT install the
     // in-memory mock and do NOT seed dev skills — production data is read/written

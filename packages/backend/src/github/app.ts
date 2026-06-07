@@ -172,6 +172,15 @@ export class GitHubApp {
   }
 
   /**
+   * Read `docs/wireframe.html` — the project's example UI wireframe, shown as a
+   * preview on the Project Requirements tab and full-screen at its own route.
+   * Returns undefined on 404 so callers treat it as absent (no preview shown).
+   */
+  async readWireframe(): Promise<string | undefined> {
+    return this.readFile('docs/wireframe.html');
+  }
+
+  /**
    * Read the project framing (U7) with progress sourced the new way: prefer
    * `docs/PRD.md`'s `completion:` frontmatter (the Project Requirements headline),
    * fall back to the top `docs/plans/` doc's `completion:`, then the legacy

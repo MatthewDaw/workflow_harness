@@ -1,15 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { Skill } from '@harness/shared';
 import { useGetSkillsQuery } from '../../api/baseApi.js';
-import { Pill, ScreenHeader } from '../../components/primitives.js';
+import { ScreenHeader } from '../../components/primitives.js';
+import { SkillCard, authorOf } from '../../components/SkillCard.js';
 
 const ANY_AUTHOR = '__any__';
-
-/** The author/creator of a skill — its createdBy name, falling back to source. */
-function authorOf(s: Skill): string {
-  return s.createdBy?.name ?? s.source ?? 'system';
-}
 
 /** Names that are members of any resolved bundle (transitive leaves preferred). */
 function bundleMemberNames(skills: Skill[]): Set<string> {
@@ -94,45 +89,6 @@ export function Skills() {
         {catalog.map((s) => (
           <SkillCard key={s.name} skill={s} />
         ))}
-      </div>
-    </div>
-  );
-}
-
-function SkillCard({ skill }: { skill: Skill }) {
-  if (skill.kind === 'bundle') {
-    const memberCount = (skill.resolvedMembers ?? skill.members).length;
-    return (
-      <Link
-        to={`/skills/${skill.name}`}
-        className="hq-box block border-l-[3px] border-l-[#6f8fb5] bg-paper no-underline text-ink"
-        data-testid={`skill-card-${skill.name}`}
-      >
-        <div className="flex items-center justify-between">
-          <span>
-            <Pill variant="skill" className="font-semibold">
-              ▤ {skill.name}
-            </Pill>{' '}
-            <Pill>bundle</Pill>
-          </span>
-          <span className="text-[11px] text-faint">{memberCount} skills ›</span>
-        </div>
-        <div className="my-1.5 text-xs text-mut">{skill.description}</div>
-        <div className="mt-1.5 text-[11px] text-faint" data-testid={`skill-author-${skill.name}`}>
-          by {authorOf(skill)}
-        </div>
-      </Link>
-    );
-  }
-  return (
-    <div className="hq-box bg-paper" data-testid={`skill-card-${skill.name}`}>
-      <div className="flex justify-between">
-        <Pill variant="skill">{skill.name}</Pill>
-        <span className="text-[11px] text-faint">{skill.source}</span>
-      </div>
-      <div className="my-1.5 text-xs text-mut">{skill.description}</div>
-      <div className="mt-1.5 text-[11px] text-faint" data-testid={`skill-author-${skill.name}`}>
-        by {authorOf(skill)}
       </div>
     </div>
   );
