@@ -70,8 +70,8 @@ export type BundleManifest = Record<string, BundleSpec>;
  *
  * Scope is the gate on what a brand-new account sees. A skill is at ORG scope
  * (the org-wide default) only if it is a MEMBER of a seeded bundle — i.e. it is
- * named by some bundle in the manifest. Every other file (`compound-engineering`,
- * `gstack`, `playwright-cli` — folders that no bundle lists) is seeded at the
+ * named by some bundle in the manifest. Every other file (`gstack`,
+ * `playwright-cli` — folders that no bundle lists) is seeded at the
  * narrower USER scope of `grantOwner`, so it stays registered (its SKILL.md
  * stays in the repo) but is invisible to a fresh org. Bundle records themselves
  * are always org-scoped. Everything is `source:'built-in'`. Parsing each through

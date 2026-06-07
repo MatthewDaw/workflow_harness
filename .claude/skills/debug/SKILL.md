@@ -200,3 +200,7 @@ git diff
 ```
 
 Remember: This command helps you investigate without burning the primary window's context. Perfect for when you hit an issue during manual testing and need to dig into logs, database, or git state.
+
+## Human approval
+
+Before any irreversible or outward-facing action (committing, pushing, deleting, or running destructive commands), request human approval by calling the `mcp__humanlayer-approvals__request_permission` tool and wait for it to be granted. For example, ask for approval right before running mutating reproduction steps that change database or service state. Only call this tool when it is available; if it is not present in this environment, proceed normally without it and do not raise an error.

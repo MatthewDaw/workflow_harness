@@ -84,3 +84,7 @@ If the plan has existing checkmarks:
 - Verify previous work only if something seems off
 
 Remember: You're implementing a solution, not just checking boxes. Keep the end goal in mind and maintain forward momentum.
+
+## Human approval
+
+Before any irreversible or outward-facing action (committing, pushing, deleting, or running destructive commands), request human approval by calling the `mcp__humanlayer-approvals__request_permission` tool and wait for it to be granted. For example, ask for approval right before applying changes that touch many files or external systems. Only call this tool when it is available; if it is not present in this environment, proceed normally without it and do not raise an error.

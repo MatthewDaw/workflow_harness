@@ -44,3 +44,7 @@ You are tasked with creating git commits for the changes made during this sessio
 - Group related changes together
 - Keep commits focused and atomic when possible
 - The user trusts your judgment - they asked you to commit
+
+## Human approval
+
+Before any irreversible or outward-facing action (committing, pushing, deleting, or running destructive commands), request human approval by calling the `mcp__humanlayer-approvals__request_permission` tool and wait for it to be granted. For example, ask for approval right before creating the commit (and again before any push). Only call this tool when it is available; if it is not present in this environment, proceed normally without it and do not raise an error.

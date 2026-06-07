@@ -10,9 +10,9 @@ depth: deep
 
 ## Summary
 
-Import **everything HumanLayer ships** — all 27 of its bundled slash-commands and all 6 of its research subagents — into the Command HQ org catalog as the canonical engineering workflow, replacing whatever currently fills that role. Commands become HQ **skills** (the wrapper has no `commands/` concept — only `skills/` and `agents/` materialize), subagents become HQ **agents**, and the set ships as a new `humanlayer-ace` bundle registered to a **single org** (initially `test org`) via a dedicated scoped seed script — deliberately kept **out** of the shared `.claude/skills/bundles.json` so it never propagates org-wide. The seeder is extended to register **agents** (today it seeds skills only; agents are REST-only), establishing a repo-managed agent convention that parallels skills.
+Import **everything HumanLayer ships** — all 27 of its bundled slash-commands and all 6 of its research subagents — into the Command HQ org catalog as the canonical engineering workflow, replacing whatever currently fills that role. Commands become HQ **skills** (the wrapper has no `commands/` concept — only `skills/` and `agents/` materialize), subagents become HQ **agents**, and the set ships as a new `humanlayer-ace` bundle registered to a **single org** (initially `test org`) via a dedicated scoped seed script — deliberately kept **out** of the shared `.claude/skills/bundles.json` so it never propagates org-wide. A new pure `buildSeedAgents` builder plus a **dedicated scoped script** (`seed-humanlayer-agents.mjs`, parallel to the skills one and likewise kept out of `starter.ts`/`seed-all-orgs.mjs`) registers the **agents** for the same single org, establishing a repo-managed agent convention that parallels skills.
 
-HumanLayer's human-in-the-loop **approvals MCP** already works locally in `claude+` (registered in `~/.claude+/.claude.json`), so HITL is dogfoodable today. Its *org-wide distribution* is the only piece that waits on the in-flight MCP-servers catalog (`docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md`) — and that is a clean consuming seam, not a blocker. This plan ships the full workflow layer independently; approvals distribution slots in as a thin follow-up.
+HumanLayer's human-in-the-loop **approvals MCP** already works locally in `claude+` (registered in `~/.claude+/.claude.json`), so HITL is dogfoodable today. The MCP-servers catalog (`docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md`) has since **landed** — `mcpServerSchema`, REST, repo methods, and the wrapper's `~/.claude+/.mcp.json` merge are all done — so single-org distribution is now **in scope** here: register `humanlayer-approvals` as a scoped MCP-server record (`infra/scripts/register-humanlayer-approvals-mcp.mjs`) and attach it per-project (`enabledMcpServers`) or via `agent.mcpServers`. Only *org-wide* rollout stays out of scope, consistent with the test-org-only containment rule.
 
 The third-party `compound-engineering` plugin is **unrelated** to this work and is removed as part of the cleanup, not treated as a source.
 
@@ -51,14 +51,14 @@ HumanLayer's commands cross-reference each other by name (e.g. `oneshot` launche
 ### KTD3 — Model pins survive on agents, not on skills
 `skillSchema` (`packages/shared/src/dto.ts:207-237`) has **no `model` field**, so the `model: opus` pin on planning/research commands is dropped — those skills run at the session's model. `agentSchema` (`dto.ts:182-204`) **does** carry `model` (and `tools`), and per KTD8 those fields now *render* into the materialized subagent's frontmatter rather than being stored-but-discarded — so the 6 subagents keep AND apply their `sonnet` pin and declared `tools`. This is an accepted fidelity loss for the command (skill) layer only (see Risks R2); the workflow still functions, it just isn't model-pinned per skill.
 
-### KTD4 — Extend the seeder to register agents
-The seed registers skills only (`buildSeedSkills`/`seedSkills`, `packages/backend/src/seed/skills.ts`); agents are REST-only today and the repo has no `.claude/agents/` directory. To make the 6 agents reproducible and repo-managed (not one-off REST calls), add a parallel `buildSeedAgents`/`seedAgents` that reads `.claude/agents/*.md`, parses frontmatter (`name`, `description`, `tools`, `model`) plus body, and emits `agentSchema` records (`prompt` = body, `tools` = parsed list, `skills` = `[]`). This is the meatiest backend change and the only net-new mechanism; everything else reuses existing paths.
+### KTD4 — Dedicated scoped agent seeder (parallel to skills, test-org-only)
+The disk seed registers skills only (`buildSeedSkills`, `packages/backend/src/seed/skills.ts`); agents are otherwise REST-only. The 6 agents are now **vendored into `.claude/agents/`** (KTD2/U2). To make their registration reproducible and repo-managed (not one-off REST calls) **without** leaking org-wide, add a pure `buildSeedAgents(org, files)` (`packages/backend/src/seed/agents.ts`) that parses each agent file's frontmatter (`name`, `description`, `tools`, `model`) + body and emits `agentSchema` records (`prompt` = body, `tools` = parsed list, `skills` = `[]`), and drive it from a **dedicated scoped script** `infra/scripts/seed-humanlayer-agents.mjs` — keyed on `SEED_ORG`, parallel to `seed-humanlayer-ace.mjs`, and deliberately **NOT** wired into `starter.ts` / `seed-all-orgs.mjs` (those propagate org-wide; test-org-only). This is the only net-new backend mechanism; everything else reuses existing paths.
 
 ### KTD5 — Register `humanlayer-ace` to a single org (not org-wide); keep the platform bundle
-The imported skills are grouped into a new `humanlayer-ace` bundle and registered at **org scope for one org** (initially `test org`) via a dedicated script (`infra/scripts/seed-humanlayer-ace.mjs`). Crucially it does **not** add the bundle to the shared `.claude/skills/bundles.json`: that manifest feeds both the `acme` template's clone-on-create (`starter.ts`) and the every-org backfill (`seed-all-orgs.mjs`), either of which would push the set org-wide. Keeping it out of the manifest — and registering only against the explicit target org — contains it to that org's catalog and nowhere else. The script reuses the canonical `buildSeedSkills` builder (parity-safe) with an in-memory manifest. The existing `command-hq-starter` platform bundle (forge/weekly/progress/skill-authoring) **stays** untouched. The 6 agents register at org scope for the same org (agents have no bundle concept; `addAgentToProject` unions their declared skills on opt-in — `repo.ts:640`). *(Status: the 27 skills + bundle are already registered to `org#test org`; see U4.)*
+The imported skills are grouped into a new `humanlayer-ace` bundle and registered at **org scope for one org** (initially `test org`) via a dedicated script (`infra/scripts/seed-humanlayer-ace.mjs`). Crucially it does **not** add the bundle to the shared `.claude/skills/bundles.json`: that manifest feeds both the `acme` template's clone-on-create (`starter.ts`) and the every-org backfill (`seed-all-orgs.mjs`), either of which would push the set org-wide. Keeping it out of the manifest — and registering only against the explicit target org — contains it to that org's catalog and nowhere else. The script reuses the canonical `buildSeedSkills` builder (parity-safe) with an in-memory manifest. The existing `command-hq-starter` platform bundle (forge/weekly/progress/skill-authoring) **stays** untouched. The 6 agents register at org scope for the same org via their own dedicated scoped script (KTD4 / U3; agents have no bundle concept; `addAgentToProject` unions their declared skills on opt-in — `repo.ts:640`). *(Status: the 27 skills + bundle are already registered to `org#test org`; see U4.)*
 
-### KTD6 — Approvals: local now, org-distributed via the MCP catalog seam
-The `humanlayer-approvals` MCP (`command: humanlayer`, `args: ["mcp","claude_approvals"]`) is already registered at `~/.claude+/.claude.json` top-level `mcpServers`, so `claude+` sessions can call `mcp__humanlayer-approvals__request_permission` today. High-stakes skills (`commit`, `implement_plan`, `create_worktree`, `debug`) get a small shared approval directive referencing that tool by name, degrading gracefully when it is absent. **Org-wide distribution** is explicitly deferred to consume `docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md` (its KTD6 merges catalog MCP servers into `~/.claude+/.mcp.json`; its agent union-on-add attaches servers via agents) — once that ships, register `humanlayer-approvals` as a catalog MCP record and attach it. This plan is **not blocked** on that work.
+### KTD6 — Approvals: local now, single-org catalog registration in scope (MCP catalog DONE)
+The `humanlayer-approvals` MCP (transport `stdio`; `command: humanlayer`, `args: ["mcp","claude_approvals"]`, `env: {}`) is already registered at `~/.claude+/.claude.json` top-level `mcpServers`, so `claude+` sessions can call `mcp__humanlayer-approvals__request_permission` today. High-stakes skills (`commit`, `implement_plan`, `create_worktree`, `debug`) get a small shared approval directive referencing that tool by name, degrading gracefully when it is absent. The MCP-servers catalog (`docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md`) has **landed** — `mcpServerSchema` (discriminated union on `transport`), `packages/backend/src/rest/mcpServers.ts`, `mcpServerKey`/`putMcpServer`, and the wrapper merge into `~/.claude+/.mcp.json` are all done; agents can declare `mcpServers[]`, and adding an agent to a project unions them into the project's `enabledMcpServers`. So catalog registration is now **in scope** for a single org via a dedicated scoped script (`infra/scripts/register-humanlayer-approvals-mcp.mjs`), with project opt-in (`enabledMcpServers`) or `agent.mcpServers` attachment. **Org-wide distribution stays out of scope** (test-org-only). See U9.
 
 ### KTD7 — Remove the `compound-engineering` installer skill
 It is an installer for an unrelated third-party plugin and has no role once HumanLayer is the workflow. Delete `.claude/skills/compound-engineering/` and scrub its references from seed comments and the user-grant fallback list (`packages/backend/src/seed/skills.ts`, `starter.ts`).
@@ -75,8 +75,8 @@ An HQ agent is **not** a bare prompt — it is a structured record (`name`, `des
 | HumanLayer source | HQ catalog record | Materialized at | Registration path |
 |---|---|---|---|
 | `commands/<cmd>.md` (description, model) | Skill (`kind:skill`, body=full md) | `~/.claude+/skills/<cmd>/SKILL.md` | seeder (extended bundle) |
-| `agents/<name>.md` (name, desc, tools, model) | Agent (name, **description**, model, tools[], prompt) | `~/.claude+/agents/<name>.md` = **frontmatter (name/description/tools/model) + prompt** (rendered, KTD8) | seeder (**new** `seedAgents`) |
-| approvals MCP (stdio) | *(MCP catalog record — plan 001)* | `~/.claude+/.mcp.json` | deferred follow-up |
+| `.claude/agents/<name>.md` (name, desc, tools, model) | Agent (name, **description**, model, tools[], prompt) | `~/.claude+/agents/<name>.md` = **frontmatter (name/description/tools/model) + prompt** (rendered, KTD8) | dedicated scoped `seed-humanlayer-agents.mjs` (new `buildSeedAgents`) |
+| approvals MCP (stdio) | MCP-server catalog record (transport `stdio`, **DONE**) | `~/.claude+/.mcp.json` (wrapper merge) | dedicated scoped `register-humanlayer-approvals-mcp.mjs` (single org) |
 
 ### Registration + materialization data flow
 
@@ -85,11 +85,13 @@ flowchart LR
   subgraph repo[".claude/ in repo"]
     S[skills/*/SKILL.md<br/>27 imported]
     A[agents/*.md<br/>6 imported]
-    B[seed-humanlayer-ace.mjs<br/>scoped to one org]
+    B[seed-humanlayer-ace.mjs<br/>scoped skills→one org]
+    BA[seed-humanlayer-agents.mjs<br/>scoped agents→one org]
+    BM[register-humanlayer-approvals-mcp.mjs<br/>scoped MCP→one org]
   end
-  subgraph seed["seeder (extended)"]
-    SS[seedSkills]
-    SA[seedAgents — NEW]
+  subgraph seed["dedicated scoped seeders"]
+    SS[buildSeedSkills]
+    SA[buildSeedAgents — NEW]
   end
   DB[(DynamoDB<br/>org catalog)]
   subgraph hq["HQ web / REST"]
@@ -99,20 +101,21 @@ flowchart LR
   subgraph cfg["~/.claude+"]
     CS[skills/*/SKILL.md]
     CA[agents/*.md]
-    CM[".mcp.json<br/>(approvals — via plan 001)"]
+    CM[".mcp.json<br/>(approvals — MCP catalog, DONE)"]
   end
   SESS[claude+ session]
 
   S --> SS --> DB
   A --> SA --> DB
   B --> SS
+  BA --> SA
+  BM --> DB
   DB --> P --> W
-  W --> CS & CA
-  CM -. "deferred: MCP catalog" .-> SESS
-  CS & CA --> SESS
+  W --> CS & CA & CM
+  CS & CA & CM --> SESS
 ```
 
-The only novel edge is `seedAgents` (NEW); every other edge already exists for skills. The dashed approvals edge is owned by plan 001 and consumed later. Note the `W --> CA` edge: the wrapper materializes each agent as a **rendered subagent file** — frontmatter (`name`/`description`/`tools`/`model`) **+ prompt**, hashed over that same rendered string (KTD8) — not a bare prompt; this is what makes the stored `model`/`tools` actually take effect on disk.
+The only novel mechanism is `buildSeedAgents` (NEW); every other edge already exists for skills. The MCP catalog has **landed**, so the `humanlayer-approvals` record reaches `~/.claude+/.mcp.json` through the same project opt-in → wrapper merge path the skills/agents use — `register-humanlayer-approvals-mcp.mjs` writes the single-org record (U9). Note the `W --> CA` edge: the wrapper materializes each agent as a **rendered subagent file** — frontmatter (`name`/`description`/`tools`/`model`) **+ prompt**, hashed over that same rendered string (KTD8) — not a bare prompt; this is what makes the stored `model`/`tools` actually take effect on disk.
 
 ---
 
@@ -129,23 +132,24 @@ The only novel edge is `seedAgents` (NEW); every other edge already exists for s
     research_codebase/SKILL.md
     validate_plan/SKILL.md
     ... (27 total, original snake_case names)
-    bundles.json            # UNCHANGED — humanlayer-ace deliberately NOT added here
-infra/scripts/
-  seed-humanlayer-ace.mjs   # NEW: scoped registration to one org (test org)
-  agents/                   # NEW repo-managed agents directory
+    bundles.json                       # UNCHANGED — humanlayer-ace deliberately NOT added here
+  agents/                              # repo-managed agents directory (vendored, kebab names)
     codebase-analyzer.md
     codebase-locator.md
     codebase-pattern-finder.md
     thoughts-analyzer.md
     thoughts-locator.md
     web-search-researcher.md
+infra/scripts/
+  seed-humanlayer-ace.mjs              # scoped SKILLS registration to one org (test org)
+  seed-humanlayer-agents.mjs           # NEW: scoped AGENTS registration to one org (parallel to ace)
+  register-humanlayer-approvals-mcp.mjs # NEW: scoped MCP registration to one org (approvals)
 packages/backend/src/seed/
-  agents.ts                 # NEW: buildSeedAgents / seedAgents
-  skills.ts                 # scrub compound-engineering grant reference
-  starter.ts                # seed agents into new orgs
+  agents.ts                            # NEW: buildSeedAgents (pure builder; mirrors buildSeedSkills)
+  skills.ts                            # compound-engineering grant reference scrubbed (DONE)
 ```
 
-The per-unit Files lists remain authoritative; the implementer may adjust layout if a better one emerges.
+The agent and MCP seeders are **dedicated scoped scripts** keyed on `SEED_ORG` — deliberately NOT wired into `starter.ts` / `seed-all-orgs.mjs` (those propagate org-wide; test-org-only). The per-unit Files lists remain authoritative; the implementer may adjust layout if a better one emerges.
 
 ---
 
@@ -160,28 +164,29 @@ The per-unit Files lists remain authoritative; the implementer may adjust layout
 **Patterns to follow:** Frontmatter shape and folded-description style of existing skills (`.claude/skills/hq-init/SKILL.md`); the minimal parser the seed relies on (`infra/scripts/seed-skills.mjs` `parseFrontmatter`).
 **Test scenarios:** Test expectation: none — content import, no behavior. Verified structurally in U7 (every SKILL.md parses through `parseFrontmatter` yielding a non-empty `name` + `description`).
 
-### U2. Vendor the 6 subagents as repo-managed agent files
+### U2. Vendor the 6 subagents as repo-managed agent files *(DONE)*
 **Goal:** Establish `.claude/agents/` and populate it with the 6 research subagents, frontmatter intact.
 **Requirements:** Adopts HumanLayer's research subagents (KTD2, KTD4, KTD8).
 **Dependencies:** U8 (the agent record + render contract must exist before agent files are vendored against it).
 **Files:** `.claude/agents/{codebase-analyzer,codebase-locator,codebase-pattern-finder,thoughts-analyzer,thoughts-locator,web-search-researcher}.md`.
-**Approach:** Copy each subagent file verbatim, preserving `name`, `description`, `tools`, `model` frontmatter and body. Keep kebab names (KTD2) — the imported skills reference these exact names. This directory is new; it is the source the extended seeder reads in U3.
+**Approach:** The 6 subagents are **vendored into `.claude/agents/`** (repo root, alongside `.claude/skills/`) verbatim, preserving `name` + `description` + `tools` + `model` frontmatter and body. Kebab names are kept (KTD2) — the imported skills reference these exact names. This directory is the source the dedicated agent seeder reads in U3. *(Status: all 6 files present at `.claude/agents/*.md`.)*
 **Patterns to follow:** The agent record shape in `packages/backend/test/agents.test.ts:37-39` (`{ name, scope, model, prompt, skills, tools }`).
 **Test scenarios:** Test expectation: none — content vendoring. Frontmatter parse is exercised by U3's tests.
 
-### U3. Extend the seeder to register agents
-**Goal:** Agents seed from `.claude/agents/*.md` the way skills seed from `.claude/skills/*`, so the 6 subagents land in the org catalog reproducibly.
-**Requirements:** KTD4 — durable, repo-managed agent registration.
+### U3. Dedicated scoped agent seeder (parallel to the skills one)
+**Goal:** Agents seed from `.claude/agents/*.md` the way the ACE skills seed from `.claude/skills/*` — through a **dedicated scoped script** keyed on `SEED_ORG`, so the 6 subagents land in **one** org's catalog reproducibly and **never propagate org-wide**.
+**Requirements:** KTD4 — durable, repo-managed agent registration. TEST-ORG-ONLY containment (mirrors the skills seeder).
 **Dependencies:** U8, U2.
-**Files:** `packages/backend/src/seed/agents.ts` (new), `packages/backend/src/seed/starter.ts` (seed agents on `POST /orgs`), `infra/scripts/seed-skills.mjs` and `infra/scripts/seed-all-orgs.mjs` (read+register agents alongside skills), `packages/backend/test/seedAgents.test.ts` (new).
-**Approach:** Add a pure `buildSeedAgents(org, files)` mirroring `buildSeedSkills` (`seed/skills.ts:80-123`): parse each agent file's frontmatter (`name`, `description`, `tools` → string[], `model`) + body, emit `agentSchema.parse({ name, scope: orgScope(org), model, description, prompt: body, tools, skills: [] })` with `createdBy:{userId:'system',name:'system'}`. The seeder ALSO parses and seeds `description` from the source agent file frontmatter (it already parses `tools`/`model`) so the materialized subagent carries its delegation trigger (KTD8); a source file lacking `description` defaults to `''` (schema default). Add `seedAgents(repo, org, files)` upserting via `repo.putAgent` (idempotent, matching `seedSkills`). Wire into the disk + clone seed scripts and into `seedStarterForOrg` so new orgs get the agents at org scope. Reuse the scripts' existing `parseFrontmatter`, extended to also surface `tools`/`model`/`description`.
-**Patterns to follow:** `buildSeedSkills`/`seedSkills` purity + idempotency (`seed/skills.ts`); `seedStarterForOrg` clone-then-disk fallback (`starter.ts:118-132`); `putAgent` semantics (`packages/backend/src/db/repo.ts`).
+**Files:** `packages/backend/src/seed/agents.ts` (new pure builder), `infra/scripts/seed-humanlayer-agents.mjs` (new dedicated scoped script, parallel to `seed-humanlayer-ace.mjs`), `packages/backend/test/seedAgents.test.ts` (new). **Deliberately NOT** `starter.ts`, `seed-skills.mjs`, or `seed-all-orgs.mjs` — wiring into those would push the agents into the acme template clone / every-org backfill (org-wide), which the test-org-only rule forbids.
+**Approach:** Add a pure `buildSeedAgents(org, files)` mirroring `buildSeedSkills` (`seed/skills.ts:80-123`): parse each agent file's frontmatter (`name`, `description`, `tools` → string[], `model`) + body, emit `agentSchema.parse({ name, scope: orgScope(org), model, description, prompt: body, tools, skills: [] })` with `createdBy:{userId:'system',name:'system'}`. It parses `description` from the source frontmatter (alongside `tools`/`model`) so the materialized subagent carries its delegation trigger (KTD8); a source file lacking `description` defaults to `''` (schema default). The dedicated script `seed-humanlayer-agents.mjs` reads ONLY the 6 vendored `.claude/agents/*.md` files (explicit list, like `ACE_SKILLS` in the ace script), imports the compiled `buildSeedAgents` + `agentKey` from `packages/backend/dist` for record/key parity, and upserts each at org scope for the REQUIRED `SEED_ORG` (idempotent). It supports `SEED_DRY_RUN=1` (report-only, no writes) and refuses to run without `SEED_ORG`, exactly like `seed-humanlayer-ace.mjs`. Run: `SEED_ORG="test org" SEED_DRY_RUN=1 node infra/scripts/seed-humanlayer-agents.mjs` to preview; drop `SEED_DRY_RUN` to write. A human runs the real registration later.
+**Patterns to follow:** `seed-humanlayer-ace.mjs` end-to-end (required `SEED_ORG`, explicit member list, in-process `parseFrontmatter`, compiled-`dist` builder/key import, `SEED_DRY_RUN` gate, per-record `PutCommand`); `buildSeedSkills` purity + idempotency (`seed/skills.ts`); `putAgent`/`agentKey` semantics (`packages/backend/src/db/{repo,keys}.ts`).
 **Test scenarios:**
 - Happy path: `buildSeedAgents` over the 6 files yields 6 org-scoped records; `model`/`tools`/`description` parsed correctly (e.g. `web-search-researcher` → `tools:[WebSearch,WebFetch,TodoWrite,Read,Grep,Glob,LS]`, `model:'sonnet'`, non-empty `description`); `prompt` equals the file body; `skills:[]`.
 - Description seeding: a source file's frontmatter `description` is carried onto the record verbatim; a file lacking `description` yields `description:''` (schema default, no crash).
 - Edge: a file missing `tools` frontmatter → `tools:[]` (not crash); missing `model` → record rejected by `agentSchema` (model is min-1) — assert the builder surfaces/skips rather than writing an invalid record.
-- Idempotency: running `seedAgents` twice writes one record per agent (second run converges).
-- Integration: `seedStarterForOrg` on a fresh org registers both the starter skills **and** the 6 ACE agents at org scope; `repo.listAgents(org)` returns them.
+- Containment: the builder/script target only the explicit `SEED_ORG`; nothing reads or writes `bundles.json`, `starter.ts`, or `seed-all-orgs.mjs`, so a different org's catalog is unchanged.
+- Idempotency: running the seeder twice writes one record per agent (second run converges).
+- Dry-run: `SEED_DRY_RUN=1` reports 6 records and writes nothing.
 
 ### U4. Bundle the skills and register them to a single org
 **Goal:** The 27 skills form a `humanlayer-ace` bundle registered at org scope for **one** org (initially `test org`), not org-wide; the platform bundle is untouched.
@@ -196,21 +201,21 @@ The per-unit Files lists remain authoritative; the implementer may adjust layout
 - Edge: a manifest member with no matching SKILL.md is dropped from the bundle's stored `members` (existing `known.has` filter) — assert no dangling member.
 - Regression: `command-hq-starter` members and scope are unchanged by the addition.
 
-### U5. Approval directive in high-stakes skills + document the distribution seam
-**Goal:** High-stakes skills request human approval via the already-registered approvals tool; the org-distribution seam is documented for the follow-up.
+### U5. Approval directive in high-stakes skills *(DONE)*
+**Goal:** High-stakes skills request human approval via the already-registered approvals tool, degrading gracefully when it is absent.
 **Requirements:** KTD6.
 **Dependencies:** U1.
-**Files:** `.claude/skills/{commit,implement_plan,create_worktree,debug}/SKILL.md` (append directive), `docs/plans/2026-06-07-002-feat-humanlayer-ace-workflow-plan.md` (this doc's Deferred section already records the seam).
-**Approach:** Append a short, shared "Human approval" directive to the four high-stakes skill bodies instructing the agent, before irreversible/outward-facing actions, to call `mcp__humanlayer-approvals__request_permission` when that tool is available and to proceed normally when it is not (graceful degradation — keeps the skill usable in non-`claude+` contexts). Do **not** hard-code a `--permission-prompt-tool` launch flag or edit the wrapper here; session-wide enforcement and org distribution are owned by the MCP-catalog follow-up (plan 001).
+**Files:** `.claude/skills/{commit,implement_plan,create_worktree,debug}/SKILL.md` (directive appended — all 4 present).
+**Approach:** A short, shared "Human approval" directive is appended to the four high-stakes skill bodies instructing the agent, before irreversible/outward-facing actions, to call `mcp__humanlayer-approvals__request_permission` when that tool is available and to proceed normally when it is not (graceful degradation — keeps the skill usable in non-`claude+` contexts). No `--permission-prompt-tool` launch flag or wrapper edit here; catalog registration of the approvals MCP for the single org is owned by U9 (the MCP catalog has landed). *(Status: directive verified in all 4 SKILL.md bodies via `request_permission`.)*
 **Patterns to follow:** Tool naming `mcp__<server>__<tool>` from the registered server `humanlayer-approvals`; the soft/optional phrasing used by existing skills when a capability may be absent.
 **Test scenarios:** Test expectation: none — instructional content. Behavior verified manually in U7 (a high-stakes action in a `claude+` session triggers a `request_permission` prompt; the same skill run where the tool is absent proceeds without error).
 
-### U6. Remove the compound-engineering installer skill
+### U6. Remove the compound-engineering installer skill + scrub seed comments *(DONE)*
 **Goal:** The unrelated third-party installer is gone and the catalog no longer references it.
 **Requirements:** KTD7.
 **Dependencies:** none (independent; sequence anytime).
-**Files:** delete `.claude/skills/compound-engineering/` (and its `SKILL.md`); edit `packages/backend/src/seed/skills.ts` and `packages/backend/src/seed/starter.ts` to remove `compound-engineering` from comments/examples of the user-granted built-ins list.
-**Approach:** Delete the directory; scrub the references so the documented grant set (`gstack`, `playwright-cli`) no longer names it. No bundle lists it today, so no manifest edit is required.
+**Files:** `.claude/skills/compound-engineering/` (deleted); `packages/backend/src/seed/{skills,starter}.ts` (`compound-engineering` references scrubbed from the user-granted built-ins comments/examples).
+**Approach:** The directory is removed and the seed references are scrubbed so the documented grant set (`gstack`, `playwright-cli`) no longer names it. No bundle listed it, so no manifest edit was required. *(Status: `.claude/skills/compound-engineering/` absent; `grep compound-engineering packages/backend/src/seed/` returns nothing.)*
 **Patterns to follow:** The existing grant-owner comment block (`seed/skills.ts:74-78`).
 **Test scenarios:**
 - Regression: after a fresh seed, the catalog contains **no** record named `compound-engineering` at any scope; `gstack`/`playwright-cli` grants are unaffected.
@@ -218,14 +223,14 @@ The per-unit Files lists remain authoritative; the implementer may adjust layout
 ### U7. End-to-end verification in a claude+ session
 **Goal:** Prove the imported workflow registers, syncs, and runs — including a live approval prompt.
 **Requirements:** Validates KTD1–KTD6 end to end.
-**Dependencies:** U1–U6.
+**Dependencies:** U1–U6, U9.
 **Files:** none (verification only); optionally `docs/plans/...-002-...-plan.md` checkboxes.
-**Approach:** Seed locally (`npm run build -w @harness/backend && SEED_ORG=<org> node infra/scripts/seed-skills.mjs`), opt a test project into the `humanlayer-ace` bundle and the 6 agents, run `claude+ sync-skills` (`/hq-update-skills`), and confirm `~/.claude+/skills/*` and `~/.claude+/agents/*` materialize. Smoke-test the workflow: `research_codebase` fans out to `codebase-locator`/`codebase-analyzer`; `create_plan` → `implement_plan`; and a high-stakes `commit` triggers the approvals prompt.
+**Approach:** Seed locally against the test org (`npm run build -w @harness/backend`, then the dedicated scoped scripts: `SEED_ORG="test org" node infra/scripts/seed-humanlayer-ace.mjs` for skills + bundle, `… seed-humanlayer-agents.mjs` for the 6 agents, `… register-humanlayer-approvals-mcp.mjs` for the approvals MCP). Opt a test project into the `humanlayer-ace` bundle, the 6 agents, and the `humanlayer-approvals` MCP (`enabledMcpServers`), run `claude+ sync-skills` (`/hq-update-skills`), and confirm `~/.claude+/skills/*`, `~/.claude+/agents/*`, and the `humanlayer-approvals` entry in `~/.claude+/.mcp.json` materialize. Smoke-test the workflow: `research_codebase` fans out to `codebase-locator`/`codebase-analyzer`; `create_plan` → `implement_plan`; and a high-stakes `commit` triggers the approvals prompt.
 **Patterns to follow:** The sync/opt-in procedure documented in `.claude/skills/hq-add-skill/SKILL.md` (registration → per-project opt-in → `sync-skills`).
 **Test scenarios:**
 - Integration: opted-in project session lists all 27 skills + 6 agents; a research command actually dispatches the subagents; the approval prompt fires for a high-stakes action and is absent (no crash) when the MCP is unregistered.
 
-### U8. Make agents first-class — description field + frontmatter render
+### U8. Make agents first-class — description field + frontmatter render *(DONE)*
 **Goal:** An HQ agent becomes a *structured record* that renders to a valid Claude Code subagent file. Today the wrapper writes only the raw `prompt` to `~/.claude+/agents/<name>.md` with **no frontmatter**, so the stored `model` and `tools` are silently discarded and there is no `description` at all. After this unit an agent carries a `description`, and materializing it produces a real subagent file with `name`/`description`/`tools`/`model` frontmatter — mirroring how a skill already materializes as its full `SKILL.md` (KTD8).
 **Requirements:** KTD8 — agents are structured records rendered to subagent frontmatter. This is a foundational data-model fix the agent-import path depends on.
 **Dependencies:** none. **Sequences first** (before U2/U3/U4).
@@ -256,18 +261,32 @@ The per-unit Files lists remain authoritative; the implementer may adjust layout
 - Push round-trip stability: render → push-parse → render again yields a byte-identical file (no double frontmatter, `prompt` free of the `---` block).
 - Web editor: the AgentEditor exposes a `description` field whose value is included in the saved payload.
 
+### U9. Register the `humanlayer-approvals` MCP for a single org
+**Goal:** The approvals MCP that already works locally is registered as a **catalog** record for one org (`test org`), so projects/agents in that org can opt into it and have it materialize into `~/.claude+/.mcp.json` — no longer just a hand-placed local entry.
+**Requirements:** KTD6. Consumes the **now-landed** MCP-servers catalog (`docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md`). TEST-ORG-ONLY containment.
+**Dependencies:** U4 (the ACE skills/bundle exist to attach approvals to); the MCP catalog (DONE: `mcpServerSchema`, `rest/mcpServers.ts`, `mcpServerKey`/`putMcpServer`, wrapper `.mcp.json` merge).
+**Files:** `infra/scripts/register-humanlayer-approvals-mcp.mjs` (new dedicated scoped script). **Deliberately NOT** `starter.ts` / `seed-all-orgs.mjs` / `bundles.json` — single-org only.
+**Approach:** A dedicated scoped script parallel to `seed-humanlayer-ace.mjs`: it requires `SEED_ORG`, imports the compiled `mcpServerKey` (and any builder) from `packages/backend/dist`, and upserts ONE `mcpServerSchema` record — `{ name: 'humanlayer-approvals', transport: 'stdio', command: 'humanlayer', args: ['mcp','claude_approvals'], env: {} }` at org scope (the tool surfaces in-session as `mcp__humanlayer-approvals__request_permission`). It supports `SEED_DRY_RUN=1` and refuses without `SEED_ORG`. After registration, attach it per project via `enabledMcpServers` (project opt-in) or via an ACE agent's `mcpServers[]` (adding the agent to a project unions the server into `enabledMcpServers`). A human runs the real write later. Org-wide rollout is explicitly NOT done here.
+**Patterns to follow:** `seed-humanlayer-ace.mjs` (required `SEED_ORG`, compiled-`dist` key import, `SEED_DRY_RUN` gate, per-record `PutCommand`); `mcpServerSchema` / `mcpServerKey` / `putMcpServer` (`packages/shared/src/dto.ts`, `packages/backend/src/db/{keys,repo}.ts`); the wrapper's catalog-MCP → `~/.claude+/.mcp.json` merge.
+**Test scenarios:**
+- Happy path: after running, a single `humanlayer-approvals` MCP-server record (transport `stdio`, the exact `command`/`args`/`env`) exists at org scope for the target org.
+- Containment: a different org's catalog has no such record; `bundles.json`/`starter.ts`/`seed-all-orgs.mjs` are untouched.
+- Dry-run: `SEED_DRY_RUN=1` reports the one record and writes nothing.
+- Attach + materialize (covered in U7): an opted-in project's session shows `humanlayer-approvals` in `~/.claude+/.mcp.json` and the `request_permission` tool resolves.
+
 ---
 
 ## Scope Boundaries
 
 ### In scope
 - Importing all 27 HumanLayer commands as skills and all 6 subagents as agents.
-- Extending the seeder to register agents (new mechanism).
+- A **dedicated scoped agent seeder** (`seed-humanlayer-agents.mjs` + `buildSeedAgents`), parallel to the skills seeder and likewise kept out of `starter.ts`/`seed-all-orgs.mjs` (new mechanism, test-org-only).
 - A `humanlayer-ace` bundle registered to a single org (`test org`), not org-wide; removal of the `compound-engineering` installer.
 - Referencing the already-local approvals tool from high-stakes skills.
+- **Single-org registration of the `humanlayer-approvals` MCP** as a catalog record (`register-humanlayer-approvals-mcp.mjs`, U9), consuming the now-landed MCP-servers catalog, with project (`enabledMcpServers`) / agent (`mcpServers[]`) opt-in.
 
 ### Deferred to Follow-Up Work
-- **Org-wide approvals distribution.** Register `humanlayer-approvals` as a catalog MCP-server record and attach it to ACE projects/agents, consuming `docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md` (its `.mcp.json` merge + agent union-on-add). Until then approvals work via the existing local `~/.claude+` registration. Includes the optional `--permission-prompt-tool` launch-flag enforcement at the wrapper.
+- **Org-wide approvals distribution.** U9 registers `humanlayer-approvals` for a single org; pushing it to **all** orgs (template clone / every-org backfill) is out of scope under the test-org-only rule. Also defers the optional `--permission-prompt-tool` launch-flag enforcement at the wrapper.
 - **Prune thoughts/Linear-coupled duplicates.** The `_nt`/`_generic` command variants and the `thoughts-*` agents exist because of HumanLayer's `thoughts/` and Linear coupling, which this plan does not integrate (see Risks R1). Once the workflow is live, consider collapsing the redundant planning/research variants and dropping the thoughts agents — a catalog-curation pass, not part of the initial "import everything" landing.
 - **Per-skill model pinning.** If the lost `opus` pins on planning/research skills matter, add a model field to skills or split those into agents — out of scope here (KTD3).
 
@@ -298,12 +317,13 @@ The new `buildSeedAgents` parses richer frontmatter (`tools` list, `model`) than
 
 1. **U8 sequences first.** It fixes the agent data-model + render contract (schema `description`, frontmatter materialization, hash parity) that the agent-import and agent-seed units build against. No dependencies; land it before U2/U3/U4.
 2. **U1, U6** are independent and can land in parallel with U8 (content + deletion).
-3. **U2** depends on U8 (vendors agent files against the corrected record/render contract).
-4. **U3** depends on U8 + U2 (needs the agent files and the `description` field to seed); it is the only seed-heavy unit.
-5. **U4** depends on U8 + U1 + U3 (bundle references skills; the scoped registration consumes the imported skill files).
-6. **U5** depends on U1 (edits skill bodies).
-7. **U7** depends on all; it is the acceptance gate.
-8. **Approvals org-distribution** depends on `docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md` shipping — tracked as Deferred, not on this plan's critical path.
+3. **U2** depends on U8 (vendors agent files against the corrected record/render contract). *(DONE)*
+4. **U3** depends on U8 + U2 (needs the agent files and the `description` field to seed) — a **dedicated scoped script** (`seed-humanlayer-agents.mjs`), not wired into `starter.ts`/`seed-all-orgs.mjs`.
+5. **U4** depends on U8 + U1 + U3 (bundle references skills; the scoped registration consumes the imported skill files). *(DONE: 27 skills + bundle in `org#test org`.)*
+6. **U5** depends on U1 (edits skill bodies). *(DONE)*
+7. **U9** depends on U4 + the landed MCP catalog — a dedicated scoped script registering the approvals MCP for the single org; in scope, not deferred.
+8. **U7** depends on all (incl. U9); it is the acceptance gate.
+9. **Org-wide** approvals/skill/agent distribution stays out of scope under the test-org-only rule.
 
 ---
 
@@ -314,4 +334,5 @@ The new `buildSeedAgents` parses richer frontmatter (`tools` list, `model`) than
 - HQ catalog mechanics: `packages/shared/src/dto.ts:174-237` (agent/skill schemas), `packages/backend/src/rest/{skills,agents}.ts` (admin-gated CRUD, org-scope forcing), `packages/backend/src/seed/{skills,starter}.ts` (seeding), `packages/backend/src/db/repo.ts:605-696` (project opt-in, agent union-on-add).
 - Wrapper materialization: `wrapper/internal/config/{overlay,remote,claude}.go` (skills/agents only; `ApplyPulled` writes bodies; no `commands/` dir).
 - Registration procedure: `.claude/skills/hq-add-skill/SKILL.md`, `.claude/skills/hq-create-skill/SKILL.md`.
-- Consuming seam: `docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md` (MCP-server catalog; KTD6 `.mcp.json` merge, agent union-on-add).
+- MCP-server catalog (**landed**): `mcpServerSchema` (`packages/shared/src/dto.ts`, discriminated union on `transport`), `packages/backend/src/rest/mcpServers.ts`, `mcpServerKey`/`putMcpServer` (`packages/backend/src/db/{keys,repo}.ts`), wrapper merge into `~/.claude+/.mcp.json`; plan `docs/plans/2026-06-07-001-feat-mcp-servers-tab-plan.md`.
+- Dedicated scoped seeders (the test-org-only pattern): `infra/scripts/seed-humanlayer-ace.mjs` (skills/bundle), and its siblings `seed-humanlayer-agents.mjs` (agents) and `register-humanlayer-approvals-mcp.mjs` (approvals MCP).

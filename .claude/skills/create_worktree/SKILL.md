@@ -44,3 +44,7 @@ command to run:
 incorporate any user feedback then:
 
 4. launch implementation session: `humanlayer launch --model opus -w ~/wt/humanlayer/ENG-XXXX "/implement_plan at $FILEPATH and when you are done implementing and all tests pass, read ./claude/commands/commit.md and create a commit, then read ./claude/commands/describe_pr.md and create a PR, then add a comment to the Linear ticket with the PR link"`
+
+## Human approval
+
+Before any irreversible or outward-facing action (creating worktrees/branches, committing, pushing, deleting, or running destructive commands), request human approval by calling the `mcp__humanlayer-approvals__request_permission` tool and wait for it to be granted. For example, ask for approval right before creating the branch and worktree. Only call this tool when it is available; if it is not present in this environment, proceed normally without it and do not raise an error.

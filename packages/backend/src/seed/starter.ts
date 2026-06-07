@@ -23,7 +23,7 @@ import {
  *     org is seeded yet.
  *
  * Only the ORG-scoped records (the starter bundle + its members) are copied — the
- * user-granted built-ins (compound-engineering, gstack, playwright-cli) are NOT
+ * user-granted built-ins (gstack, playwright-cli) are NOT
  * part of a new org's default. Idempotent: `putSkill` upserts by key.
  */
 
