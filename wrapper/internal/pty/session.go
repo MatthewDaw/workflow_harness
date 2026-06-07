@@ -95,6 +95,38 @@ type CmdSpec struct {
 // substitute a fake command without a real claude install.
 type SpawnFunc func(repoRoot, sessionID string) CmdSpec
 
+// toResumeSpec rewrites a fresh CmdSpec (as produced by a SpawnFunc) into a
+// RESUME launch: it replaces a leading `--session-id <id>` pair with `--resume
+// <id>` so the child reattaches to the EXISTING Claude conversation instead of
+// starting a new one. This is the chosen seam for Part B's cross-restart resume:
+//
+//   - The injectable SpawnFunc signature (and every test fake) stays UNCHANGED —
+//     resume is a post-transform on whatever spec the spawn func returned, so a
+//     fake spawn (e.g. `cat`/`echo`) keeps working as-is and is never forced to
+//     understand resume.
+//   - DefaultSpawn's fresh `--session-id` behavior is left fully intact; resume
+//     mode is opt-in per launch (mux.SpawnResumed), not a change to the default.
+//   - CLAUDE_PLUS_DANGEROUS, Isolate, Dir and Env are preserved because we only
+//     touch the leading id flag and leave the rest of the spec alone.
+//
+// If the spec does not begin with `--session-id <id>` (a fake/test spec, or a
+// future spawn func that names the id differently), toResumeSpec prepends
+// `--resume <id>` so the child still resumes; it never drops the caller's args.
+func toResumeSpec(spec CmdSpec, sessionID string) CmdSpec {
+	args := spec.Args
+	if len(args) >= 2 && args[0] == "--session-id" && args[1] == sessionID {
+		// Swap the fresh id flag for the resume flag, keeping any trailing flags
+		// (e.g. --dangerously-skip-permissions) the spawn func appended.
+		rest := append([]string(nil), args[2:]...)
+		spec.Args = append([]string{"--resume", sessionID}, rest...)
+		return spec
+	}
+	// No recognizable `--session-id <id>` lead (test/fake spec): resume by
+	// prepending the flag without discarding the caller's own args.
+	spec.Args = append([]string{"--resume", sessionID}, append([]string(nil), args...)...)
+	return spec
+}
+
 // DefaultSpawn launches the real `claude` CLI in the repo root. When the daemon
 // runs in dangerous mode — CLAUDE_PLUS_DANGEROUS is set, propagated from
 // `claude+ --dangerously-skip-permissions` — every spawned child inherits
@@ -124,8 +156,15 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 // is invoked exactly once when the child process actually exits (see the watcher
 // goroutine below); pass nil to opt out. The mux passes m.onSessionExit so the
 // Wait path and the EOF/pump path both funnel into the same removal bookkeeping.
-func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc, onExit func(id string)) (*Session, error) {
+//
+// When resume is true the produced CmdSpec is rewritten to launch `claude
+// --resume <id>` (see toResumeSpec) so the child reattaches to the existing
+// conversation across a daemon restart, rather than starting a fresh one.
+func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc, resume bool, onExit func(id string)) (*Session, error) {
 	spec := spawn(repoRoot, id)
+	if resume {
+		spec = toResumeSpec(spec, id)
+	}
 
 	// Point the real claude launch at the stable isolated config root ~/.claude+
 	// (U21), so bundled skills + claude+ history stay out of the user's personal
@@ -262,6 +301,36 @@ func (s *Session) Status() Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.status
+}
+
+// SeedNaming restores a resumed session's naming state from the persistence
+// store (see daemon/sessions_store.go). It sets the displayed Name and the
+// firstSet/titleSet/manualName latches under s.mu so the capture layer's later
+// auto-name (MaybeName) and auto-title (ApplyTitle) do NOT clobber the name the
+// session already carried before the daemon restarted. An empty name leaves the
+// current Name untouched (the latches are still applied), so a partially-named
+// session keeps whatever it had. Call this immediately after SpawnResumed,
+// before the session can observe any new transcript turns.
+func (s *Session) SeedNaming(name string, firstSet, titleSet, manualName bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name != "" {
+		s.Name = name
+	}
+	s.firstSet = firstSet
+	s.titleSet = titleSet
+	s.manualName = manualName
+}
+
+// NamingState returns the session's current display name and its three naming
+// latches (firstSet, titleSet, manualName) under the lock. The daemon's
+// cross-restart resume store snapshots these so a restart can SeedNaming them
+// back and the capture layer's auto-name/auto-title do not clobber a name the
+// session already carried (Part B). It mirrors SeedNaming's field set.
+func (s *Session) NamingState() (name string, firstSet, titleSet, manualName bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Name, s.firstSet, s.titleSet, s.manualName
 }
 
 // MaybeName applies a provisional auto-name from the first user turn exactly

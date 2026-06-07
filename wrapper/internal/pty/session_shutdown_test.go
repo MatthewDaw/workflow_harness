@@ -20,7 +20,7 @@ func TestSessionShutdownTerminates(t *testing.T) {
 		return CmdSpec{Name: "sleep", Args: []string{"60"}}
 	}
 
-	s, err := newSession("sd1", "sd1", "", 80, 24, spawn, nil)
+	s, err := newSession("sd1", "sd1", "", 80, 24, spawn, false, nil)
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
 	}

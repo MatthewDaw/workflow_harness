@@ -60,6 +60,32 @@ func (s *Seq) Next(sessID string) int64 {
 	return n
 }
 
+// Peek returns the NEXT seq that would be handed out for sid WITHOUT consuming
+// it (0 if the session has never been seen). It supports resume seq-reconciliation
+// and persistence: the daemon reads the about-to-be-used seq to record alongside
+// the transcript offset (so offset+nextSeq describe the same moment) without
+// perturbing the counter — calling Peek must never make Next skip a value.
+func (s *Seq) Peek(sid string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.next[sid]
+}
+
+// SeedFloor raises the next seq for sid to at least n (next[sid] = max(next[sid], n)),
+// never lowering it. It supports cross-restart resume: a resumed session's new
+// envelopes MUST carry seqs strictly greater than every seq HQ has already seen,
+// or HQ folds them as stale. On startup the daemon seeds the floor above both the
+// persisted NextSeq and 1 + the max seq of any still-unacked envelope in the ring
+// buffer (those replay with their ORIGINAL seqs), so Next() can only ever produce
+// values beyond anything previously delivered or still buffered.
+func (s *Seq) SeedFloor(sid string, n int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n > s.next[sid] {
+		s.next[sid] = n
+	}
+}
+
 // ControlHandler applies an inbound control frame (defined in control.go).
 type ControlHandler func(ControlFrame)
 

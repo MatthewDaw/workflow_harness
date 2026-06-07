@@ -54,6 +54,14 @@ type Daemon struct {
 	// stable tab id. The Runtime uses it to repoint the tab's transcript tailer at
 	// the live <liveId>.jsonl so a resumed conversation keeps streaming.
 	repointHook func(tabID, liveID string)
+	// killHook, when set by the Runtime, is invoked with a session id the moment a
+	// USER intentionally ends it from an attached client (FrameKill). It is the
+	// signal the Runtime uses to distinguish a user-intent end — which must REMOVE
+	// the session from the cross-restart resume store so the next daemon start does
+	// NOT --resume a conversation the user deliberately killed — from a restart or
+	// crash, which must preserve the session for continuity. The control path
+	// (recv.Terminated, HQ kill/shutdown) is threaded separately in the Runtime.
+	killHook func(sessID string)
 	// topicHook, when set by the Runtime, forwards a turn-cycle signal (Stop /
 	// UserPromptSubmit) for a tab into captureLoop, which owns the topic-focus gate
 	// + judge (U6). ingestHook only has the SessionID; the gate needs the per-tab
@@ -247,6 +255,27 @@ func (d *Daemon) SetHookIngestor(fn func(sessID string, e event.Event)) {
 	d.hookMu.Lock()
 	d.hookIngest = fn
 	d.hookMu.Unlock()
+}
+
+// SetKillHook registers the callback FrameKill invokes when a user intentionally
+// ends a session from an attached client. The Runtime uses it to remove the
+// session from the cross-restart resume store (so a deliberately-killed session
+// is not --resume-d on the next daemon start). Until set (no Runtime) a kill is
+// simply not propagated to the store.
+func (d *Daemon) SetKillHook(fn func(sessID string)) {
+	d.hookMu.Lock()
+	d.killHook = fn
+	d.hookMu.Unlock()
+}
+
+// notifyKill invokes the user-kill hook if one is wired. Best-effort.
+func (d *Daemon) notifyKill(sessID string) {
+	d.hookMu.Lock()
+	fn := d.killHook
+	d.hookMu.Unlock()
+	if fn != nil {
+		fn(sessID)
+	}
 }
 
 // SetTranscriptRepointer registers the callback ingestHook invokes — before it
@@ -514,6 +543,10 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 			// Force-close one session and ack this client with a fresh list so the
 			// row disappears immediately. Killing the last session leaves the list
 			// empty (no auto-spawn on a later empty transition — only at attach).
+			// Notify the Runtime FIRST so it records the user-intent end and drops the
+			// session from the cross-restart resume store before the mux removal races
+			// the capture loop's left-mux branch.
+			d.notifyKill(f.SessID)
 			d.mux.Kill(f.SessID)
 			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
 		case FrameShutdown:

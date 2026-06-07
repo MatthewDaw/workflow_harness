@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/workflow-harness/claude-plus/internal/diag"
 )
 
 // EnsureDaemon finds the daemon for repoRoot, or spawns a detached one and waits
@@ -78,7 +80,36 @@ func RunDaemon(repoRoot string) error {
 		return err
 	}
 	instanceID := repoKey(repoRoot) + "@" + hostName()
-	rt := StartRuntime(d, instanceID)
-	defer rt.Stop()
+
+	// Part B cross-restart resume: load the persisted session store and, for each
+	// session recorded before the daemon last stopped, recreate it under the SAME
+	// id via `claude --resume <TabID>` and restore its naming latches — BEFORE the
+	// runtime's capture loop starts, so the resumed sessions are already live in the
+	// mux when captureLoop announces them. The store is then handed to the runtime,
+	// which seeds each resumed session's tailer offset + seq floor from it and keeps
+	// persisting (offset, NextSeq, name) as the conversation streams.
+	store, err := Load(repoRoot)
+	if err != nil {
+		// A store load failure must never block the daemon; run without resume.
+		store = nil
+	}
+	if store != nil {
+		for _, ps := range store.Sessions() {
+			s, serr := d.Mux().SpawnResumed(ps.TabID, ps.Name)
+			if serr != nil {
+				diag.Logf("resume: SpawnResumed %s failed: %v", ps.TabID, serr)
+				continue
+			}
+			s.SeedNaming(ps.Name, ps.FirstSet, ps.TitleSet, ps.ManualName)
+		}
+	}
+
+	rt := StartRuntimeWithStore(d, instanceID, store)
+	defer func() {
+		rt.Stop()
+		if store != nil {
+			store.Stop()
+		}
+	}()
 	return d.Serve()
 }

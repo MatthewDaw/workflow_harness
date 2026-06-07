@@ -19,7 +19,7 @@ func TestSessionPTYEcho(t *testing.T) {
 		return CmdSpec{Name: "sh", Args: []string{"-c", "echo " + marker}}
 	}
 
-	s, err := newSession("t1", "t1", "", 80, 24, spawn, nil)
+	s, err := newSession("t1", "t1", "", 80, 24, spawn, false, nil)
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
 	}

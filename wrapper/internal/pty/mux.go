@@ -138,7 +138,38 @@ func (m *Mux) Spawn(name string) (*Session, error) {
 	// (watcher + pump) for the same id is a harmless no-op. onSessionExit takes
 	// m.mu, but it runs on the watcher goroutine and Close never holds m.mu, so
 	// there is no lock-ordering deadlock.
-	s, err := newSession(id, name, m.repoRoot, m.cols, m.rows, m.spawn, m.onSessionExit)
+	s, err := newSession(id, name, m.repoRoot, m.cols, m.rows, m.spawn, false, m.onSessionExit)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	m.sessions = append(m.sessions, s)
+	m.focusIdx = len(m.sessions) - 1
+	m.mu.Unlock()
+
+	go m.pump(s)
+	return s, nil
+}
+
+// SpawnResumed recreates a persisted session under the SAME id by launching
+// `claude --resume <id>` (resume mode of the injectable spawn seam), so the
+// child reattaches to the existing Claude conversation after a daemon restart
+// and HQ keeps streaming it as the same logical session. Unlike Spawn it does
+// NOT mint a new id and does NOT disambiguate the name — the id and name are
+// authoritative restored values from the store. It wires onExit exactly like
+// Spawn (so a resume-failure exit drives the same removal/done bookkeeping the
+// integrator's onExit watcher relies on), appends in insertion order to
+// preserve sub-tab order, focuses the session, and starts the shared pump. The
+// caller is expected to follow up with SeedNaming (to restore the naming
+// latches) and to seed the session's tailer offset + Seq from the store.
+func (m *Mux) SpawnResumed(id, name string) (*Session, error) {
+	if name == "" {
+		name = "session"
+	}
+	m.mu.Lock()
+	// Reuse newSession (single Wait-owner watcher + onExit wiring) in resume mode
+	// so we never duplicate the lifecycle/pump logic; only the launch args differ.
+	s, err := newSession(id, name, m.repoRoot, m.cols, m.rows, m.spawn, true, m.onSessionExit)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err

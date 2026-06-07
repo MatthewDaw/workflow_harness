@@ -33,6 +33,33 @@ type Runtime struct {
 	instanceID string
 	host       string
 
+	// store is the cross-restart resume persistence (Part B): the ordered list of
+	// {TabID, Name, naming latches, TranscriptOffset, NextSeq} the daemon reloads on
+	// start to `claude --resume <TabID>` each prior session and keep HQ streaming it
+	// as the SAME logical session. captureLoop upserts it on first announce, marks it
+	// dirty on rename/title, and records (offset, nextSeq) after each advancing Poll;
+	// it is flushed synchronously on graceful stop. A session is REMOVED only on a
+	// user-intent end (FrameKill / control kill+shutdown) — never on restart/crash, so
+	// a resumed conversation survives. nil when no store was provided.
+	store *SessionsStore
+
+	// resumeIDs is the set of session ids restored via SpawnResumed on this start. A
+	// resumed session's tailer is seeded to the persisted TranscriptOffset (so it
+	// never re-emits an already-streamed line) instead of starting at offset 0;
+	// resumeOffset carries that per-id starting offset. A FRESH (non-resumed) session
+	// keeps the offset-0 default. resumeUsed records which resumed ids have had their
+	// offset consumed so a later same-id reuse does not wrongly re-seed.
+	resumeIDs     map[string]bool
+	resumeOffset  map[string]int64
+	resumeStarted map[string]time.Time
+
+	// userKilledMu guards userKilled, the set of session ids a user (or HQ control)
+	// intentionally ended. captureLoop's left-the-mux branch removes such ids from the
+	// resume store; a session that left the mux for any OTHER reason (notably a daemon
+	// restart, which never runs this loop) is preserved for continuity.
+	userKilledMu sync.Mutex
+	userKilled   map[string]bool
+
 	// cfgSrc is HQ's effective (org+user+project resolved) skills/agents source,
 	// set when an HQ REST base is configured. Used both for the drift meter and
 	// the per-session skills auto-sync (#1). nil when HQ REST is unconfigured.
@@ -150,6 +177,202 @@ func (rt *Runtime) isTerminated(id string) bool {
 	return rt.terminated[id]
 }
 
+// markUserKilled records that a session was intentionally ended by the user
+// (FrameKill) or HQ control (kill/shutdown via recv.Terminated). captureLoop's
+// left-the-mux branch consults this to decide whether to REMOVE the session from
+// the cross-restart resume store: a user-intent end removes it (so it is not
+// --resume-d on the next start); any other departure preserves it for continuity.
+func (rt *Runtime) markUserKilled(id string) {
+	rt.userKilledMu.Lock()
+	if rt.userKilled == nil {
+		rt.userKilled = map[string]bool{}
+	}
+	rt.userKilled[id] = true
+	rt.userKilledMu.Unlock()
+}
+
+// isUserKilled reports whether a session was intentionally ended by user/control.
+func (rt *Runtime) isUserKilled(id string) bool {
+	rt.userKilledMu.Lock()
+	defer rt.userKilledMu.Unlock()
+	return rt.userKilled[id]
+}
+
+// removeFromStore deletes a session from the resume store and marks it dirty
+// (best-effort, nil-store safe). Called only on a user-intent end so a
+// deliberately-killed session is not resumed on the next daemon start.
+func (rt *Runtime) removeFromStore(id string) {
+	if rt.store != nil {
+		rt.store.Remove(id)
+	}
+}
+
+// reconcileResumeSeqs seeds the per-session seq floor so a resumed session's NEW
+// envelopes carry seqs strictly greater than (a) the persisted NextSeq from the
+// store AND (b) 1 + the max seq of any still-unacked envelope in the ring buffer
+// (those replay with their ORIGINAL seqs on reconnect). Without this a resumed
+// session could re-use a seq HQ already folded (or one about to be replayed),
+// which HQ dedupes/drops as stale — the exact correctness failure Part B guards.
+// It is safe to call with a nil buffer (then only the store floor applies) and a
+// nil store (then only the buffer floor applies).
+func (rt *Runtime) reconcileResumeSeqs(buf *transport.RingBuffer) {
+	// Max seq per session still pending (un-acked) in the ring buffer.
+	maxBuffered := map[string]int64{}
+	if buf != nil {
+		if pending, err := buf.Pending(); err == nil {
+			for _, env := range pending {
+				sid := env.Event.SessionID
+				if env.Seq > maxBuffered[sid] {
+					maxBuffered[sid] = env.Seq
+				}
+			}
+		}
+	}
+	// Seed the floor for every persisted session and for any session that has a
+	// buffered envelope (even one not in the store, e.g. a ghost), so Next() can
+	// only ever produce values beyond anything previously delivered or buffered.
+	floors := map[string]int64{}
+	if rt.store != nil {
+		for _, ps := range rt.store.Sessions() {
+			if ps.NextSeq > floors[ps.TabID] {
+				floors[ps.TabID] = ps.NextSeq
+			}
+		}
+	}
+	for sid, m := range maxBuffered {
+		if m+1 > floors[sid] {
+			floors[sid] = m + 1
+		}
+	}
+	for sid, n := range floors {
+		rt.seq.SeedFloor(sid, n)
+	}
+}
+
+// upsertSession writes the session's current naming state into the resume store,
+// preserving any already-persisted TranscriptOffset/NextSeq for the id (so a
+// first-announce upsert does not clobber a resumed session's offset/seq). It
+// marks the store dirty (debounced flush). nil-store safe.
+func (rt *Runtime) upsertSession(id string) {
+	if rt.store == nil {
+		return
+	}
+	s := rt.d.mux.Get(id)
+	if s == nil {
+		return
+	}
+	name, firstSet, titleSet, manualName := s.NamingState()
+	// Preserve existing offset/seq for the id if present (e.g. a resumed session).
+	var off, nextSeq int64
+	for _, ps := range rt.store.Sessions() {
+		if ps.TabID == id {
+			off, nextSeq = ps.TranscriptOffset, ps.NextSeq
+			break
+		}
+	}
+	rt.store.Upsert(PersistedSession{
+		TabID:            id,
+		Name:             name,
+		ManualName:       manualName,
+		FirstSet:         firstSet,
+		TitleSet:         titleSet,
+		TranscriptOffset: off,
+		NextSeq:          nextSeq,
+	})
+}
+
+// recordOffset persists a tailer's advanced byte offset together with the
+// session's current next seq (Seq.Peek, which reads without consuming) as ONE
+// unit — so TranscriptOffset and NextSeq always describe the same moment — plus
+// the latest naming state. It only writes (and marks dirty) when the offset or
+// seq actually advanced, so an idle session does not churn the store. The
+// debounced flusher coalesces the dirty marks into at most one Save per ~2s.
+func (rt *Runtime) recordOffset(id string, off int64) {
+	if rt.store == nil {
+		return
+	}
+	// Find the existing entry to detect an advance and to preserve naming if the
+	// session has since left the mux.
+	var prev *PersistedSession
+	for _, ps := range rt.store.Sessions() {
+		if ps.TabID == id {
+			cp := ps
+			prev = &cp
+			break
+		}
+	}
+	nextSeq := rt.seq.Peek(id)
+	if prev != nil && prev.TranscriptOffset == off && prev.NextSeq == nextSeq {
+		return // nothing advanced — do not churn the store
+	}
+	name, firstSet, titleSet, manualName := prev.naming()
+	if s := rt.d.mux.Get(id); s != nil {
+		name, firstSet, titleSet, manualName = s.NamingState()
+	}
+	rt.store.Upsert(PersistedSession{
+		TabID:            id,
+		Name:             name,
+		ManualName:       manualName,
+		FirstSet:         firstSet,
+		TitleSet:         titleSet,
+		TranscriptOffset: off,
+		NextSeq:          nextSeq,
+	})
+}
+
+// checkResumeFailures implements the Part B resume-failure fallback: if a
+// session restored via SpawnResumed exits within resumeFailWindow of spawn, the
+// `claude --resume <id>` child failed to reattach (e.g. the conversation no
+// longer exists). Treat it as a dead resume: tombstone + emit done for the old
+// id, drop it from the store, and spawn a FRESH session in its place — sequenced
+// done-before-start so HQ retires the old row before the new one appears.
+func (rt *Runtime) checkResumeFailures() {
+	if rt.store == nil || len(rt.resumeStarted) == 0 {
+		return
+	}
+	now := time.Now()
+	for id, started := range rt.resumeStarted {
+		s := rt.d.mux.Get(id)
+		alive := s != nil && s.Alive()
+		if alive {
+			// Survived the window: it is a healthy resume; stop watching it.
+			if now.Sub(started) >= resumeFailWindow {
+				delete(rt.resumeStarted, id)
+			}
+			continue
+		}
+		// Child is gone (or never registered). Only treat an exit WITHIN the window as
+		// a resume FAILURE; an exit after the window is a normal end handled by the
+		// left-mux branch.
+		if now.Sub(started) >= resumeFailWindow {
+			delete(rt.resumeStarted, id)
+			continue
+		}
+		delete(rt.resumeStarted, id)
+		// done-before-start: retire the failed-resume row, then spawn fresh.
+		rt.markTerminated(id)
+		rt.emit(id, event.StatusChange(id, event.StatusActive, event.StatusDone))
+		rt.removeFromStore(id)
+		if _, err := rt.d.mux.Spawn(""); err != nil {
+			diag.Logf("resume fallback: spawn fresh after failed resume of %s: %v", id, err)
+		}
+	}
+}
+
+// naming reads the naming fields off a PersistedSession (nil-safe), so
+// recordOffset can preserve them when the live session is already gone.
+func (ps *PersistedSession) naming() (name string, firstSet, titleSet, manualName bool) {
+	if ps == nil {
+		return "", false, false, false
+	}
+	return ps.Name, ps.FirstSet, ps.TitleSet, ps.ManualName
+}
+
+// resumeFailWindow bounds how soon after SpawnResumed a child exit counts as a
+// failed resume (vs. a normal later end). A `claude --resume` against a missing
+// conversation fails fast; a healthy resume keeps running well past this.
+const resumeFailWindow = 3 * time.Second
+
 // heartbeatInterval is how often the runtime emits a session.heartbeat for each
 // live session. Comfortably below the backend's 60s stale window so a genuinely
 // alive idle session always refreshes before it would be considered stale.
@@ -244,13 +467,46 @@ func trimCR(s string) string {
 // transport is gated on credentials. The returned Runtime is stopped on daemon
 // shutdown.
 func StartRuntime(d *Daemon, instanceID string) *Runtime {
+	return StartRuntimeWithStore(d, instanceID, nil)
+}
+
+// StartRuntimeWithStore is StartRuntime plus the Part B cross-restart resume
+// store. When store is non-nil the runtime: (1) seeds the per-session seq floor
+// from the persisted NextSeq and the ring buffer's max un-acked seq BEFORE any
+// event is emitted (so a resumed session's new seqs strictly exceed everything HQ
+// already saw or will replay); (2) seeds each resumed session's tailer offset
+// from the persisted TranscriptOffset (so it never re-emits an already-streamed
+// line); (3) upserts the store on first announce, marks it dirty on rename/title
+// and after each advancing Poll, and flushes it synchronously on graceful stop;
+// (4) removes a session from the store only on a user-intent end. The caller
+// (RunDaemon) is expected to have already SpawnResumed + SeedNaming each persisted
+// session against d.Mux() so they are live in the mux when captureLoop announces
+// them. nil store reproduces the exact pre-Part-B StartRuntime behavior.
+func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *Runtime {
 	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{}),
 		instanceID: instanceID, host: hostName(),
+		store:          store,
 		syncedSessions: map[string]bool{},
 		terminated:     map[string]bool{},
+		userKilled:     map[string]bool{},
+		resumeIDs:      map[string]bool{},
+		resumeOffset:   map[string]int64{},
+		resumeStarted:  map[string]time.Time{},
 		repointCh:      make(chan [2]string, 16),
 		topicCh:        make(chan daemonTopicSignal, 64),
 		judgeLimit:     topic.NewLimiter(2)}
+
+	// Seed resume metadata from the store: which ids are resumed (so their tailer
+	// starts at the persisted offset, not 0) and a watcher start time per id (so the
+	// resume-failure fallback can tell an early child exit from a normal later exit).
+	if store != nil {
+		now := time.Now()
+		for _, ps := range store.Sessions() {
+			rt.resumeIDs[ps.TabID] = true
+			rt.resumeOffset[ps.TabID] = ps.TranscriptOffset
+			rt.resumeStarted[ps.TabID] = now
+		}
+	}
 
 	// Checkpoint store for per-session topic state, under the claude+ config dir
 	// (C6). Best-effort: an unavailable config dir leaves topicStore nil and the
@@ -293,14 +549,33 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 	// settings file must never block daemon startup, so errors are ignored.
 	installHooks()
 
+	// Register the user-kill hook so an attached client's FrameKill records the
+	// user-intent end (and removes the session from the resume store). The control
+	// path (recv.Terminated) does the same below.
+	d.SetKillHook(func(sessID string) {
+		rt.markUserKilled(sessID)
+		rt.removeFromStore(sessID)
+	})
+
 	if cfg, ok := loadHQConfig(); ok {
 		home, _ := os.UserHomeDir()
 		if buf, err := transport.OpenRingBuffer(filepath.Join(home, ".claude-plus", "outbound.jsonl")); err == nil {
+			// Part B seq reconciliation: BEFORE the client replays the buffer (which
+			// re-sends un-acked envelopes with their ORIGINAL seqs) and BEFORE the
+			// capture loop emits anything, raise each resumed session's seq floor above
+			// both the persisted NextSeq and 1 + the max buffered seq, so new envelopes
+			// strictly exceed everything HQ has seen or will replay.
+			rt.reconcileResumeSeqs(buf)
 			recv := d.NewControlReceiver()
 			// When HQ force-shuts-down a session (or a ghost from a dead daemon),
 			// emit a terminal status.change -> done so HQ drops it from the live
 			// list and the row the user clicked actually disappears (#1, #2).
 			recv.Terminated = func(sessionID string) {
+				// A force shutdown/kill is a user-intent end: record it and drop the
+				// session from the resume store so the next daemon start does NOT
+				// --resume a conversation HQ deliberately terminated.
+				rt.markUserKilled(sessionID)
+				rt.removeFromStore(sessionID)
 				// Tombstone BEFORE emitting done: any later straggler event for this id
 				// (a survivor's 'active', a late hook) is then suppressed by emit, so a
 				// force-shut row cannot bounce back to life (BUG 1). The done itself is
@@ -311,6 +586,11 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 			rt.client = transport.NewClient(cfg.URL, cfg.Token, instanceID, buf, recv.Handle)
 			go rt.client.Run()
 		}
+	} else {
+		// No HQ client (local-only daemon): there is no ring buffer to scan, but the
+		// store's persisted NextSeq must still floor the seq generator so a resumed
+		// session never re-uses a seq for local subscribers either.
+		rt.reconcileResumeSeqs(nil)
 	}
 
 	// Per-session transcript tailers feed the envelope stream (local bus + HQ).
@@ -504,6 +784,14 @@ func (rt *Runtime) captureLoop(instanceID string) {
 	for {
 		select {
 		case <-rt.stop:
+			// Part B graceful stop: flush the resume store synchronously so the final
+			// (offset, NextSeq, name) of every live session is durable BEFORE the
+			// process exits — a daemon restart then resumes from exactly here. This is
+			// a graceful stop, NOT a user-intent end, so sessions are PRESERVED in the
+			// store (not removed): they will be --resume-d on the next start.
+			if rt.store != nil {
+				_ = rt.store.FlushNow()
+			}
 			closeAllTails()
 			return
 		case req := <-rt.repointCh:
@@ -555,6 +843,12 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				if !announced[v.ID] {
 					announced[v.ID] = true
 					emit(v.ID, event.SessionStart(v.ID, projectID, host, v.Name, "", repoName))
+					// Part B: upsert the resume store on first announce so a brand-new
+					// session is persisted for cross-restart resume immediately, even
+					// before it writes any transcript. A resumed session is already in
+					// the store; Upsert is replace-by-id, so this just refreshes its
+					// name/latches and is harmless.
+					rt.upsertSession(v.ID)
 				}
 				// Auto-sync HQ's effective skills/agents for this user+project on
 				// each NEW session so freshly-scoped skills appear locally (best
@@ -595,6 +889,17 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				}
 				t := capture.NewTailer(sid, path, func(e event.Event) { emit(sid, e) }, onFirst).
 					OnExchange(onExchange)
+				// Part B: a resumed session's transcript was partly tailed+emitted
+				// before the restart. `claude --resume <id>` APPENDS to the same
+				// <id>.jsonl without rewriting prior rows, so seed the tailer at the
+				// persisted offset — it replays nothing already streamed (no duplicate)
+				// yet emits every new turn exactly once (no dropped event). A FRESH
+				// (non-resumed) session keeps the offset-0 default. Consume the offset
+				// once so a later same-id reuse does not wrongly re-seed.
+				if rt.resumeIDs[sid] {
+					t.SetOffset(rt.resumeOffset[sid])
+					delete(rt.resumeIDs, sid)
+				}
 				stop := make(chan struct{})
 				tailStops[sid] = stop
 				// Track the tailer + the file id it is currently watching (its own tab
@@ -603,6 +908,17 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				transcriptID[sid] = sid
 				go t.Run(500*time.Millisecond, stop)
 			}
+			// Part B: record each live tailer's advanced offset + next seq into the
+			// resume store as ONE unit (so offset and NextSeq always describe the same
+			// moment). This only marks the store dirty — the debounced flusher writes
+			// at most once per ~2s, so this is NOT an fsync per event. Resume-failure
+			// fallback: a resumed child that exits within ~3s of spawn is treated as a
+			// failed resume — emit done, drop it from the store, and spawn a FRESH
+			// session in its place (done-before-start).
+			for id, t := range tailers {
+				rt.recordOffset(id, t.Offset())
+			}
+			rt.checkResumeFailures()
 			// Clean up state for sessions that have ended: stop their tailer
 			// goroutine and forget their announce/sync markers so the maps don't
 			// grow without bound (leak #11). A reused id (new session) re-announces.
@@ -635,10 +951,27 @@ func (rt *Runtime) captureLoop(instanceID string) {
 			// done emit itself is exempt from that suppression.
 			for id := range announced {
 				if !live[id] {
-					rt.markTerminated(id)
-					emit(id, event.StatusChange(id, event.StatusActive, event.StatusDone))
+					// If this id was already retired earlier in this same cycle — a
+					// failed resume handled by checkResumeFailures (tombstoned + done
+					// emitted + fresh session spawned) — don't emit a SECOND done; just
+					// finish the bookkeeping. isTerminated implies a done was already
+					// sent (every markTerminated call site emits one).
+					if !rt.isTerminated(id) {
+						rt.markTerminated(id)
+						emit(id, event.StatusChange(id, event.StatusActive, event.StatusDone))
+					}
 					delete(announced, id)
 					rt.forgetSkillSync(id)
+					// Part B: REMOVE from the resume store ONLY on a user-intent end
+					// (FrameKill / control kill+shutdown, recorded via markUserKilled), so
+					// a deliberately-killed session is not --resume-d next start. A
+					// session that left the mux for any OTHER reason is preserved for
+					// continuity. NOTE: a daemon restart/crash does not run this loop at
+					// all (the process is gone), so this branch only ever fires for an
+					// in-process departure.
+					if rt.isUserKilled(id) {
+						rt.removeFromStore(id)
+					}
 				}
 			}
 		}

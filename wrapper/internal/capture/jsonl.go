@@ -161,6 +161,38 @@ func (t *Tailer) Poll() error {
 	return nil
 }
 
+// SetOffset seeds the tailer's starting byte offset so a resumed session skips
+// past the bytes already tailed+emitted before a daemon restart and never
+// re-emits a line HQ already saw (Part B cross-restart resume). It is the ONE
+// resume seam in the capture layer: the daemon calls it once, immediately after
+// constructing the tailer for a persisted/resumed session and before Run, with
+// the TranscriptOffset loaded from sessions_store.json.
+//
+// Why the persisted offset (not 0, not live EOF): `claude --resume <id>` with
+// the SAME launch id APPENDS to the same <id>.jsonl and does not rewrite prior
+// rows, so the byte prefix written before the daemon died is immutable. Starting
+// at the persisted offset replays nothing (no duplicates) yet emits every new
+// turn exactly once (no dropped events). Offset 0 would re-read the whole prior
+// conversation and re-emit it with fresh, higher seqs (HQ folds it as a flood of
+// duplicate activity); live EOF would skip rows appended-but-not-yet-persisted
+// before the crash (dropped events). It is mutex-guarded so it is safe to call
+// from the daemon goroutine before the tailer's own Poll goroutine starts.
+func (t *Tailer) SetOffset(off int64) {
+	t.mu.Lock()
+	t.offset = off
+	t.leftover = nil
+	t.mu.Unlock()
+}
+
+// Offset returns the tailer's current byte offset (the boundary of what has been
+// tailed+emitted). The daemon snapshots it after each advancing Poll to persist
+// alongside the next seq, so offset+nextSeq always describe the same moment.
+func (t *Tailer) Offset() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.offset
+}
+
 // Repoint switches the watched file to path and rewinds to its start, while
 // keeping sessID unchanged so emitted events stay keyed on the stable tab id.
 //
