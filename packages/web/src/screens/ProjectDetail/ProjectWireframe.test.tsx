@@ -13,6 +13,7 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: [],
   enabledAgents: [],
+  enabledMcpServers: [],
 };
 
 const WF = '<!doctype html><title>WF</title><body>hello wireframe</body>';

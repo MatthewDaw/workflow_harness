@@ -207,6 +207,201 @@ func TestReconcileBodyErrorNonFatal(t *testing.T) {
 	}
 }
 
+// mcpRemoteItem builds the RemoteItem + canonical body for an MCP server exactly
+// as remote.Fetch would, so a test can drive the same round-trip the daemon does.
+func mcpRemoteItem(t *testing.T, s remoteMcpServer) (RemoteItem, string) {
+	t.Helper()
+	entry, err := entryForRemote(s)
+	if err != nil {
+		t.Fatalf("entryForRemote: %v", err)
+	}
+	canon, err := canonicalEntry(entry)
+	if err != nil {
+		t.Fatalf("canonicalEntry: %v", err)
+	}
+	return RemoteItem{Kind: KindMcp, Name: s.Name, Scope: "org", Hash: hashContent(canon)}, string(canon)
+}
+
+// TestMcpRoundTripInSync is the characterization test (U8 execution note): an HQ
+// record -> canonical entry -> ApplyPulled into an empty .mcp.json -> ReadLocal
+// -> Diff must report in_sync (hash parity). Both stdio and http are exercised.
+func TestMcpRoundTripInSync(t *testing.T) {
+	cases := []remoteMcpServer{
+		{Name: "fs", Transport: "stdio", Command: "npx", Args: []string{"-y", "server-fs"}, Env: map[string]string{"K": "v"}},
+		{Name: "remote", Transport: "http", URL: "https://api.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer t"}},
+	}
+	for _, s := range cases {
+		t.Run(s.Name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+
+			ri, body := mcpRemoteItem(t, s)
+			if err := ApplyPulled(ri, body); err != nil {
+				t.Fatalf("ApplyPulled: %v", err)
+			}
+			local, err := ReadLocal()
+			if err != nil {
+				t.Fatalf("ReadLocal: %v", err)
+			}
+			report := Diff(local, []RemoteItem{ri})
+			if !report.InSync() {
+				t.Fatalf("round-trip should be in sync, got %+v (rows=%+v)", report, report.Rows)
+			}
+		})
+	}
+}
+
+// TestMcpApplyPulledMergesPreservingUnrelated proves ApplyPulled into a .mcp.json
+// that already holds an unrelated server and an unrelated top-level key preserves
+// both (merge, not overwrite).
+func TestMcpApplyPulledMergesPreservingUnrelated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	plus, err := plusDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(plus, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{"mcpServers":{"existing":{"type":"stdio","command":"old"}},"topKey":42}`
+	if err := os.WriteFile(filepath.Join(plus, mcpFileName), []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ri, body := mcpRemoteItem(t, remoteMcpServer{Name: "added", Transport: "stdio", Command: "new"})
+	if err := ApplyPulled(ri, body); err != nil {
+		t.Fatalf("ApplyPulled: %v", err)
+	}
+
+	mf, err := parseMcpFile(filepath.Join(plus, mcpFileName))
+	if err != nil {
+		t.Fatalf("parseMcpFile: %v", err)
+	}
+	if _, ok := mf.McpServers["existing"]; !ok {
+		t.Error("unrelated server 'existing' was lost on merge")
+	}
+	if _, ok := mf.McpServers["added"]; !ok {
+		t.Error("pulled server 'added' was not written")
+	}
+	if _, ok := mf.Extra["topKey"]; !ok {
+		t.Error("unrelated top-level key 'topKey' was lost on merge")
+	}
+}
+
+// TestMcpDriftClassifies proves a locally edited entry hashes as differs, an
+// HQ-only server is needs_pull, and a local-only one is needs_push.
+func TestMcpDriftClassifies(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	plus, _ := plusDir()
+	if err := os.MkdirAll(plus, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// On disk: "drifty" (will differ from HQ) and "local-only" (needs push).
+	onDisk := `{"mcpServers":{
+		"drifty":{"type":"stdio","command":"local-version"},
+		"local-only":{"type":"stdio","command":"x"}
+	}}`
+	if err := os.WriteFile(filepath.Join(plus, mcpFileName), []byte(onDisk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	driftyRemote, _ := mcpRemoteItem(t, remoteMcpServer{Name: "drifty", Transport: "stdio", Command: "hq-version"})
+	hqOnly, _ := mcpRemoteItem(t, remoteMcpServer{Name: "hq-only", Transport: "stdio", Command: "z"})
+
+	local, err := ReadLocal()
+	if err != nil {
+		t.Fatalf("ReadLocal: %v", err)
+	}
+	report := Diff(local, []RemoteItem{driftyRemote, hqOnly})
+	if report.Differs != 1 {
+		t.Errorf("want 1 differ, got %d (%+v)", report.Differs, report.Rows)
+	}
+	if report.NeedsPull != 1 {
+		t.Errorf("want 1 needs_pull, got %d", report.NeedsPull)
+	}
+	if report.NeedsPush != 1 {
+		t.Errorf("want 1 needs_push, got %d", report.NeedsPush)
+	}
+}
+
+// TestMcpReconcilePullIdempotent proves a needs_pull MCP server is written by
+// Reconcile and a second run is a no-op (idempotent), via a fake remote.
+func TestMcpReconcilePullIdempotent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	ri, body := mcpRemoteItem(t, remoteMcpServer{Name: "fs", Transport: "stdio", Command: "npx", Args: []string{"-y", "s"}})
+	rem := newFakeRemote()
+	rem.items = append(rem.items, ri)
+	rem.bodies[string(KindMcp)+"/fs"] = body
+
+	local, _ := ReadLocal()
+	report := Diff(local, mustFetch(t, rem))
+	pulled, _, errs := Reconcile(report, rem, local)
+	if pulled != 1 || len(errs) != 0 {
+		t.Fatalf("reconcile pull = %d errs %v, want 1/none", pulled, errs)
+	}
+
+	after, err := ComputeDrift(rem)
+	if err != nil {
+		t.Fatalf("ComputeDrift: %v", err)
+	}
+	if !after.InSync() {
+		t.Fatalf("after pull should be in sync, got %+v", after)
+	}
+
+	// Second reconcile actuates nothing.
+	local2, _ := ReadLocal()
+	report2 := Diff(local2, mustFetch(t, rem))
+	p2, _, e2 := Reconcile(report2, rem, local2)
+	if p2 != 0 || len(e2) != 0 {
+		t.Fatalf("second reconcile should be a no-op, got pulled %d errs %v", p2, e2)
+	}
+}
+
+// TestReadLocalMcpMalformedNonFatal proves a malformed .mcp.json surfaces as a
+// single Err item (not a panic) and does NOT blank the agent/skill items read
+// alongside it.
+func TestReadLocalMcpMalformedNonFatal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	// A good agent alongside a broken .mcp.json.
+	seedLocalAgent(t, "builder", "# builder\nbody")
+	if err := os.WriteFile(filepath.Join(home, ".claude", mcpFileName), []byte("{ broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := ReadLocal()
+	if err != nil {
+		t.Fatalf("ReadLocal should not error on malformed .mcp.json: %v", err)
+	}
+	var sawAgent, sawMcpErr bool
+	for _, it := range items {
+		if it.Kind == KindAgent && it.Name == "builder" && it.Err == "" {
+			sawAgent = true
+		}
+		if it.Kind == KindMcp && it.Err != "" {
+			sawMcpErr = true
+		}
+	}
+	if !sawAgent {
+		t.Error("the good agent must survive a malformed .mcp.json")
+	}
+	if !sawMcpErr {
+		t.Error("malformed .mcp.json should surface as an Err item")
+	}
+}
+
 func mustFetch(t *testing.T, src RemoteSource) []RemoteItem {
 	t.Helper()
 	r, err := src.Fetch()

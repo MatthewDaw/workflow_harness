@@ -37,6 +37,14 @@ export const projectSchema = z.object({
    * Defaults to [].
    */
   enabledAgents: z.array(z.string()).default([]),
+  /**
+   * MCP servers this project has opted into (server names from the org catalog).
+   * A connected repo materializes exactly these (plus the servers brought by
+   * enabledAgents via union-on-add) into the daemon's ~/.claude+/.mcp.json.
+   * Defaults to [], which keeps legacy project records (written before MCP
+   * servers existed) valid.
+   */
+  enabledMcpServers: z.array(z.string()).default([]),
 });
 export type Project = z.infer<typeof projectSchema>;
 
@@ -182,8 +190,22 @@ export const agentSchema = z.object({
   scope: scopeRefSchema,
   model: z.string().min(1),
   prompt: z.string().default(''),
+  /**
+   * Delegation trigger — the human-readable cue the orchestrator uses to decide
+   * WHEN to spawn this agent. Renders to the materialized subagent file's
+   * `description:` frontmatter. Defaults to '' for back-compat with agent
+   * records (and tests) written before this field existed.
+   */
+  description: z.string().default(''),
   skills: z.array(z.string()).default([]),
   tools: z.array(z.string()).default([]),
+  /**
+   * MCP servers this agent declares (server names from the org catalog). Adding
+   * the agent to a project unions these (plain names — no bundles) into the
+   * project's `enabledMcpServers`. Defaults to [] for back-compat with agent
+   * records written before MCP servers existed.
+   */
+  mcpServers: z.array(z.string()).default([]),
   /** Authorship stamp set on create; optional on read for back-compat. */
   createdBy: createdBySchema.optional(),
 });
@@ -199,6 +221,65 @@ export const scopeChangeSchema = z.object({
   scope: scopeRefSchema,
 });
 export type ScopeChange = z.infer<typeof scopeChangeSchema>;
+
+/**
+ * The transports an MCP server can speak. `stdio` launches a local subprocess
+ * (the daemon spawns `command args` with `env`); `http`/`sse` are remote
+ * transports addressed by `url` with static `headers`. This is the
+ * discriminator for `mcpServerSchema`.
+ */
+export const MCP_TRANSPORTS = ['stdio', 'http', 'sse'] as const;
+export const mcpTransportSchema = z.enum(MCP_TRANSPORTS);
+export type McpTransport = z.infer<typeof mcpTransportSchema>;
+
+/**
+ * An MCP server in the org catalog — the third pillar of a Claude setup
+ * alongside skills and agents. Unlike a skill (a freeform `body`), this is a
+ * STRUCTURED record: a `transport` discriminator with per-transport fields. The
+ * wrapper reconstructs it into a `~/.claude+/.mcp.json` entry; there is no
+ * separate body. Org-only and flat — there is no bundle concept.
+ *
+ * SECURITY: `env`/`headers` values (API keys, tokens) are stored in DynamoDB as
+ * PLAINTEXT and served to any authed org member — the same trust model skills'
+ * bodies already use. This is a deliberate v1 simplification; KMS / env-ref
+ * resolution is a documented follow-up. Never log these values.
+ */
+export const mcpServerSchema = z.discriminatedUnion('transport', [
+  z.object({
+    name: z.string().min(1),
+    /** Catalog scope. Org-only today, but kept as a full `scopeRefSchema` for
+     * parity with skills/agents (every existing org-scoped record validates). */
+    scope: scopeRefSchema,
+    transport: z.literal('stdio'),
+    /** The executable the daemon spawns for a local (stdio) server. */
+    command: z.string().min(1),
+    /** Arguments passed to `command`. Defaults to []. */
+    args: z.array(z.string()).default([]),
+    /** Environment variables for the subprocess (plaintext secrets — see note). */
+    env: z.record(z.string()).default({}),
+    /** Authorship stamp set on create; optional on read for back-compat. */
+    createdBy: createdBySchema.optional(),
+  }),
+  z.object({
+    name: z.string().min(1),
+    scope: scopeRefSchema,
+    transport: z.literal('http'),
+    /** The remote endpoint URL the daemon connects to. */
+    url: z.string().url(),
+    /** Static request headers (plaintext secrets — see note). Defaults to {}. */
+    headers: z.record(z.string()).default({}),
+    createdBy: createdBySchema.optional(),
+  }),
+  z.object({
+    name: z.string().min(1),
+    scope: scopeRefSchema,
+    transport: z.literal('sse'),
+    url: z.string().url(),
+    headers: z.record(z.string()).default({}),
+    createdBy: createdBySchema.optional(),
+  }),
+]);
+export type McpServer = z.infer<typeof mcpServerSchema>;
 
 export const SKILL_KINDS = ['skill', 'bundle'] as const;
 export const skillKindSchema = z.enum(SKILL_KINDS);

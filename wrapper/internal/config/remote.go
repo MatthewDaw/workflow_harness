@@ -60,9 +60,107 @@ func NewHTTPRemoteSource(baseURL, token, projectID string) *HTTPRemoteSource {
 }
 
 type remoteAgent struct {
-	Name   string `json:"name"`
-	Scope  scope  `json:"scope"`
-	Prompt string `json:"prompt"`
+	Name string `json:"name"`
+	Scope scope `json:"scope"`
+	// Description, Tools, and Model are the structured fields HQ stores for an
+	// agent. They were previously decoded-but-discarded (only Prompt was
+	// materialized); renderAgentFile now folds them into YAML frontmatter so a
+	// pulled agent is a valid Claude Code subagent file, not a bare prompt.
+	Description string   `json:"description"`
+	Tools       []string `json:"tools"`
+	Model       string   `json:"model"`
+	Prompt      string   `json:"prompt"`
+}
+
+// renderAgentFile materializes a remoteAgent into the on-disk Claude Code
+// subagent format: a YAML frontmatter block (name/description, plus tools and
+// model only when set) followed by the prompt body and exactly one trailing
+// newline. This is the SAME string the wrapper hashes in Fetch, so a freshly
+// pulled agent reads back in-sync (hash parity), mirroring how a skill's body
+// is the full SKILL.md text.
+//
+// Omission rules per the shared contract: the `tools:` line is dropped when
+// Tools is empty; the `model:` line is dropped when Model is "" (note that the
+// literal "inherit" is a real value and IS emitted).
+func renderAgentFile(a remoteAgent) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("name: " + a.Name + "\n")
+	b.WriteString("description: " + a.Description + "\n")
+	if len(a.Tools) > 0 {
+		b.WriteString("tools: " + strings.Join(a.Tools, ", ") + "\n")
+	}
+	if a.Model != "" {
+		b.WriteString("model: " + a.Model + "\n")
+	}
+	b.WriteString("---\n")
+	// Exactly one trailing newline after the prompt: strip any the prompt already
+	// carries, then add one. An empty prompt yields just the frontmatter + newline.
+	b.WriteString(strings.TrimRight(a.Prompt, "\n"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+// parseAgentFile splits a materialized agent file back into its structured
+// frontmatter fields and the body WITHOUT frontmatter. It is the inverse of
+// renderAgentFile and exists for the Push round-trip: a local agent file now
+// carries frontmatter, so Push must NOT send the whole thing as `prompt` (that
+// would double-wrap on the next materialize). The wrapper has no other YAML
+// frontmatter parser (skills push their body verbatim), and adding a YAML
+// dependency for four flat string/list fields is overkill — so this is a tiny
+// purpose-built parser for exactly the keys renderAgentFile writes.
+//
+// If the file has no leading `---` frontmatter block (e.g. a legacy bare-prompt
+// agent authored before this change), the whole text is returned as the body
+// with empty structured fields — that prompt still round-trips losslessly.
+func parseAgentFile(content string) (name, description, model string, tools []string, body string) {
+	// Normalize CRLF so a Windows-authored file parses identically (hashContent
+	// already normalizes line endings for hashing).
+	norm := strings.ReplaceAll(content, "\r\n", "\n")
+	if !strings.HasPrefix(norm, "---\n") {
+		return "", "", "", nil, content
+	}
+	rest := norm[len("---\n"):]
+	end := strings.Index(rest, "\n---\n")
+	if end < 0 {
+		// Tolerate a frontmatter block that ends the file with no body (and no
+		// trailing newline after the closing ---).
+		if strings.HasSuffix(rest, "\n---") {
+			end = len(rest) - len("\n---")
+			body = ""
+		} else {
+			// No closing fence: treat the whole thing as body (malformed; don't lose it).
+			return "", "", "", nil, content
+		}
+	} else {
+		body = rest[end+len("\n---\n"):]
+	}
+	fm := rest[:end]
+	for _, line := range strings.Split(fm, "\n") {
+		key, val, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		switch key {
+		case "name":
+			name = val
+		case "description":
+			description = val
+		case "model":
+			model = val
+		case "tools":
+			if val != "" {
+				for _, t := range strings.Split(val, ",") {
+					if t = strings.TrimSpace(t); t != "" {
+						tools = append(tools, t)
+					}
+				}
+			}
+		}
+	}
+	return name, description, model, tools, body
 }
 
 type remoteSkill struct {
@@ -75,6 +173,23 @@ type remoteSkill struct {
 	// older HQ responses omit it, so we fall back to Description for hashing and
 	// pulling to stay backward compatible.
 	Body string `json:"body"`
+}
+
+// remoteMcpServer is HQ's structured MCP catalog record (GET /mcp-servers). It is
+// a discriminated union on `transport`: `stdio` carries command/args/env;
+// `http`/`sse` carry url/headers. Unlike a skill there is NO body field — the
+// wrapper reconstructs the on-disk .mcp.json entry entirely from these structured
+// fields (KTD1). Decoded permissively (all fields present, irrelevant ones zero)
+// so one struct covers every transport.
+type remoteMcpServer struct {
+	Name      string            `json:"name"`
+	Scope     scope             `json:"scope"`
+	Transport string            `json:"transport"`
+	Command   string            `json:"command"`
+	Args      []string          `json:"args"`
+	Env       map[string]string `json:"env"`
+	URL       string            `json:"url"`
+	Headers   map[string]string `json:"headers"`
 }
 
 type scope struct {
@@ -94,8 +209,9 @@ func (s scope) String() string {
 // names it has explicitly opted into. Old project records (lacking these
 // fields) decode as nil/empty -> nothing materializes (explicit opt-in).
 type remoteProject struct {
-	EnabledSkills []string `json:"enabledSkills"`
-	EnabledAgents []string `json:"enabledAgents"`
+	EnabledSkills     []string `json:"enabledSkills"`
+	EnabledAgents     []string `json:"enabledAgents"`
+	EnabledMcpServers []string `json:"enabledMcpServers"`
 }
 
 // Fetch reads the org catalog (GET /agents, GET /skills, no ?project, no
@@ -113,6 +229,7 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	// effective set is empty (explicit opt-in is required).
 	enabledSkills := map[string]bool{}
 	enabledAgents := map[string]bool{}
+	enabledMcp := map[string]bool{}
 	if h.ProjectID != "" {
 		var proj remoteProject
 		if err := h.getJSON("/projects/"+url.PathEscape(h.ProjectID), &proj); err != nil {
@@ -123,6 +240,9 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		}
 		for _, n := range proj.EnabledAgents {
 			enabledAgents[n] = true
+		}
+		for _, n := range proj.EnabledMcpServers {
+			enabledMcp[n] = true
 		}
 	}
 
@@ -149,8 +269,11 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		if !enabledAgents[a.Name] {
 			continue
 		}
-		bodies[string(KindAgent)+"/"+a.Name] = a.Prompt
-		out = append(out, RemoteItem{Kind: KindAgent, Name: a.Name, Scope: a.Scope.String(), Hash: hashContent([]byte(a.Prompt))})
+		// Materialize the full subagent file (frontmatter + prompt) and hash THAT
+		// same string, so the body ApplyPulled writes reads back in-sync (parity).
+		rendered := renderAgentFile(a)
+		bodies[string(KindAgent)+"/"+a.Name] = rendered
+		out = append(out, RemoteItem{Kind: KindAgent, Name: a.Name, Scope: a.Scope.String(), Hash: hashContent([]byte(rendered))})
 	}
 
 	var skillsResp struct {
@@ -180,6 +303,40 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		}
 		bodies[string(KindSkill)+"/"+s.Name] = content
 		out = append(out, RemoteItem{Kind: KindSkill, Name: s.Name, Scope: s.Scope.String(), Hash: hashContent([]byte(content))})
+	}
+
+	// MCP servers: read the org catalog, intersect with the project's opt-in, and
+	// build the canonical .mcp.json entry FROM the structured fields (there is no
+	// markdown body to fall back on — KTD1). The cached "body" is the canonical
+	// entry JSON, hashed identically here and on the read side so a pulled server
+	// reads back in-sync (Risk R2). A record with an unknown transport is skipped
+	// rather than failing the whole fetch (mirrors the missing-name skip above).
+	var mcpResp struct {
+		McpServers []remoteMcpServer `json:"mcpServers"`
+	}
+	if err := h.getJSON("/mcp-servers", &mcpResp); err != nil {
+		return nil, err
+	}
+	for _, m := range mcpResp.McpServers {
+		if m.Name == "" {
+			continue
+		}
+		if m.Scope.Tier == "org" && m.Scope.ID != "" {
+			orgID = m.Scope.ID
+		}
+		if !enabledMcp[m.Name] {
+			continue
+		}
+		entry, err := entryForRemote(m)
+		if err != nil {
+			continue
+		}
+		canon, err := canonicalEntry(entry)
+		if err != nil {
+			continue
+		}
+		bodies[string(KindMcp)+"/"+m.Name] = string(canon)
+		out = append(out, RemoteItem{Kind: KindMcp, Name: m.Name, Scope: m.Scope.String(), Hash: hashContent(canon)})
 	}
 
 	h.bodiesMu.Lock()
@@ -216,14 +373,75 @@ func (h *HTTPRemoteSource) Push(item Item, body string) error {
 	switch item.Kind {
 	case KindAgent:
 		path = "/agents"
-		payload = map[string]any{"name": item.Name, "scope": scope, "prompt": body, "model": "inherit"}
+		// The local agent file now carries YAML frontmatter (renderAgentFile's
+		// output). Parse it back into structured fields and send `prompt` = the
+		// body WITHOUT frontmatter, so the next materialize does not double-wrap.
+		// Fall back to the on-disk name and "inherit" model when the frontmatter
+		// omits them (legacy bare-prompt files parse to empty fields + full body).
+		_, description, model, tools, promptBody := parseAgentFile(body)
+		if model == "" {
+			model = "inherit"
+		}
+		agentPayload := map[string]any{
+			"name":        item.Name,
+			"scope":       scope,
+			"prompt":      promptBody,
+			"description": description,
+			"model":       model,
+		}
+		if len(tools) > 0 {
+			agentPayload["tools"] = tools
+		}
+		payload = agentPayload
 	case KindSkill:
 		path = "/skills"
 		payload = map[string]any{"name": item.Name, "scope": scope, "kind": "skill", "description": body}
+	case KindMcp:
+		// MCP items are NOT one-file-per-item: Reconcile's needs_push branch hands
+		// us the WHOLE .mcp.json (os.ReadFile(it.Path)), not a single entry. Extract
+		// just this server's entry by name and author the minimal structured payload
+		// to /mcp-servers — never push the whole file (Risk R2).
+		p, mcpPayload, err := h.mcpPushPayload(item.Name, body, scope)
+		if err != nil {
+			return err
+		}
+		path, payload = p, mcpPayload
 	default:
 		return fmt.Errorf("unknown kind %q", item.Kind)
 	}
 	return h.postJSON(path, payload)
+}
+
+// mcpPushPayload extracts a single server entry from a whole .mcp.json body and
+// builds the minimal structured authoring payload for POST /mcp-servers, mapping
+// the on-disk `type` discriminator back to the catalog `transport`. Returns an
+// error if the file is malformed or the named server is absent.
+func (h *HTTPRemoteSource) mcpPushPayload(name, fileBody string, scope map[string]string) (string, any, error) {
+	mf, err := decodeMcpFile([]byte(fileBody))
+	if err != nil {
+		return "", nil, fmt.Errorf("decode .mcp.json for push %q: %w", name, err)
+	}
+	raw, ok := mf.McpServers[name]
+	if !ok {
+		return "", nil, fmt.Errorf("mcp server %q not found in .mcp.json", name)
+	}
+	var entry mcpEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return "", nil, fmt.Errorf("decode mcp entry %q: %w", name, err)
+	}
+	payload := map[string]any{"name": name, "scope": scope, "transport": entry.Type}
+	switch entry.Type {
+	case "stdio":
+		payload["command"] = entry.Command
+		payload["args"] = entry.Args
+		payload["env"] = entry.Env
+	case "http", "sse":
+		payload["url"] = entry.URL
+		payload["headers"] = entry.Headers
+	default:
+		return "", nil, fmt.Errorf("unknown mcp type %q for %q", entry.Type, name)
+	}
+	return "/mcp-servers", payload, nil
 }
 
 // getJSON issues an authenticated GET against the org catalog. It no longer

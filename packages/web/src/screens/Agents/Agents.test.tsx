@@ -11,19 +11,23 @@ const AGENTS: Agent[] = [
   {
     name: 'builder',
     scope: ORG,
+    description: 'Use when building features',
     model: 'claude-sonnet-4',
     prompt: 'Builds features',
     skills: ['gh'],
     tools: [],
+    mcpServers: [],
     createdBy: { userId: 'u-matt', name: 'Matt' },
   },
   {
     name: 'reviewer',
     scope: ORG,
+    description: '',
     model: 'claude-opus-4',
     prompt: '',
     skills: [],
     tools: [],
+    mcpServers: [],
     createdBy: { userId: 'u-sam', name: 'Sam' },
   },
 ];

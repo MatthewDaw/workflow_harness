@@ -12,6 +12,7 @@ import type {
   DeviceAuth,
   Envelope,
   LearningRecord,
+  McpServer,
   ObjectiveNode,
   Project,
   ScopeRef,
@@ -563,6 +564,25 @@ export class Repo {
     await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.skillKey(scope, name) }));
   }
 
+  async putMcpServer(s: McpServer): Promise<void> {
+    await this.doc.send(
+      new PutCommand({ TableName: this.table, Item: { ...k.mcpServerKey(s.scope, s.name), ...s } }),
+    );
+  }
+
+  async getMcpServer(scope: ScopeRef, name: string): Promise<McpServer | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.mcpServerKey(scope, name) }),
+    );
+    return res.Item as McpServer | undefined;
+  }
+
+  async deleteMcpServer(scope: ScopeRef, name: string): Promise<void> {
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.table, Key: k.mcpServerKey(scope, name) }),
+    );
+  }
+
   /**
    * The catalog of agents visible to a viewer. With no `userId` this is the
    * org-only catalog (back-compat with every existing caller/test). With a
@@ -589,6 +609,20 @@ export class Repo {
     if (userId === undefined) return orgSkills;
     const userSkills = await this.listScoped<Skill>(userScope(userId), 'SKILL#');
     return resolveScoped([...orgSkills, ...userSkills], { org, userId });
+  }
+
+  /**
+   * The catalog of MCP servers visible to a viewer. With no `userId` this is the
+   * org-only catalog (the catalog is org-only today — there is no user-scoped MCP
+   * authoring UI). With a `userId` it merges the org scope AND the user scope, so
+   * a user-scoped item SHADOWS an org-scoped one of the same name (resolveScoped:
+   * narrowest scope wins). Mirrors listSkills for parity and future-proofing.
+   */
+  async listMcpServers(org: string, userId?: string): Promise<McpServer[]> {
+    const orgServers = await this.listScoped<McpServer>(orgScope(org), 'MCPSERVER#');
+    if (userId === undefined) return orgServers;
+    const userServers = await this.listScoped<McpServer>(userScope(userId), 'MCPSERVER#');
+    return resolveScoped([...orgServers, ...userServers], { org, userId });
   }
 
   private async listScoped<T>(scope: ScopeRef, skPrefix: string): Promise<T[]> {
@@ -630,12 +664,40 @@ export class Repo {
     return project;
   }
 
+  /** Idempotently enable a catalog MCP server on a project. Returns the updated Project. */
+  async addMcpServerToProject(
+    projectId: string,
+    serverName: string,
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    const enabledMcpServers = project.enabledMcpServers ?? [];
+    if (!enabledMcpServers.includes(serverName)) {
+      project.enabledMcpServers = [...enabledMcpServers, serverName];
+      await this.putProject(project);
+    }
+    return project;
+  }
+
+  /** Disable an MCP server on a project. Returns the updated Project. */
+  async removeMcpServerFromProject(
+    projectId: string,
+    serverName: string,
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    project.enabledMcpServers = (project.enabledMcpServers ?? []).filter((s) => s !== serverName);
+    await this.putProject(project);
+    return project;
+  }
+
   /**
    * Enable an agent on a project AND union the agent's declared skills (bundles
-   * flattened transitively to leaf skills) into `enabledSkills` (de-duped). The
-   * agent + its skills are resolved against the org catalog (`org` from the
-   * caller's principal). Returns updated Project, or undefined if project/agent
-   * is missing.
+   * flattened transitively to leaf skills) into `enabledSkills`, plus the agent's
+   * declared MCP servers (PLAIN names — there are no MCP bundles, so no flatten)
+   * into `enabledMcpServers` — both de-duped. The agent + its skills are resolved
+   * against the org catalog (`org` from the caller's principal). Returns updated
+   * Project, or undefined if project/agent is missing.
    */
   async addAgentToProject(
     projectId: string,
@@ -655,6 +717,10 @@ export class Repo {
     const enabledSkills = new Set(project.enabledSkills ?? []);
     for (const s of brought) enabledSkills.add(s);
     project.enabledSkills = [...enabledSkills];
+    // Union the agent's declared MCP servers (flat plain names — no bundles).
+    const enabledMcpServers = new Set(project.enabledMcpServers ?? []);
+    for (const s of agent.mcpServers ?? []) enabledMcpServers.add(s);
+    project.enabledMcpServers = [...enabledMcpServers];
     await this.putProject(project);
     return project;
   }

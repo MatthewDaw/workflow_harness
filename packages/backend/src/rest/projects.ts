@@ -500,6 +500,42 @@ export async function disableProjectAgent(
   return ok({ project: updated });
 }
 
+/** POST /projects/:projectId/mcp-servers/:name — idempotent enable. */
+export async function enableProjectMcpServer(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, principal } = resolved;
+  const name = pathParam(event, 'name');
+  if (!name) return badRequest('missing mcp server name');
+
+  // The server must exist in the org catalog.
+  const server = await deps.repo.getMcpServer(orgScope(principal.org), name);
+  if (!server) return notFound();
+
+  const updated = await deps.repo.addMcpServerToProject(project.id, name);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
+/** DELETE /projects/:projectId/mcp-servers/:name — disable. */
+export async function disableProjectMcpServer(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+  const name = pathParam(event, 'name');
+  if (!name) return badRequest('missing mcp server name');
+
+  const updated = await deps.repo.removeMcpServerFromProject(project.id, name);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
 /** Routes the verbs/sub-paths by method/path for a single Lambda integration. */
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: ProjectsDeps = { repo: defaultRepo() };
@@ -515,6 +551,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (/\/agents\/[^/]+$/.test(rawPath)) {
     if (method === 'POST') return enableProjectAgent(event, deps);
     if (method === 'DELETE') return disableProjectAgent(event, deps);
+  }
+  if (/\/mcp-servers\/[^/]+$/.test(rawPath)) {
+    if (method === 'POST') return enableProjectMcpServer(event, deps);
+    if (method === 'DELETE') return disableProjectMcpServer(event, deps);
   }
 
   if (method === 'DELETE' && hasId) return deleteProjectHandler(event, deps);

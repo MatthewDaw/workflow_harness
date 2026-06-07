@@ -28,6 +28,12 @@ import { effectiveOrg } from './membership.js';
  *   POST   /agents/:name/scope  — RETIRED (410 Gone)
  *
  * Agents keep `skills[]`. There is no tier elevation/demotion in the org catalog.
+ *
+ * Agents also carry a `description` (delegation trigger) alongside `model`/`tools`.
+ * POST/PUT parse the body through `agentSchema` (so `description` flows through
+ * with a '' default for back-compat), and GET returns the full record. The
+ * wrapper materializes `model`, `tools`, and `description` into the subagent
+ * file's frontmatter; this REST layer stores/serves them unchanged.
  */
 
 export interface AgentsDeps {

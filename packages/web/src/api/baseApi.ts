@@ -5,6 +5,7 @@ import type {
   ObjectiveNode,
   Agent,
   Skill,
+  McpServer,
   Priority,
   WeeklyUpdate,
   ScopeRef,
@@ -123,6 +124,7 @@ export const baseApi = createApi({
     'Objective',
     'Agent',
     'Skill',
+    'McpServer',
     'Weekly',
     'Docs',
     'Requirements',
@@ -353,6 +355,19 @@ export const baseApi = createApi({
       providesTags: ['Skill'],
     }),
 
+    /** Org MCP-server catalog (collapsed model): no projectId, org scope only. */
+    getMcpServers: build.query<McpServer[], void>({
+      query: () => 'mcp-servers',
+      transformResponse: unwrapArray<McpServer>('mcpServers'),
+      providesTags: ['McpServer'],
+    }),
+    /** A single MCP server by name (the editor's load-on-edit). */
+    getMcpServer: build.query<McpServer, string>({
+      query: (name) => `mcp-servers/${encodeURIComponent(name)}`,
+      transformResponse: unwrapOne<McpServer>('mcpServer'),
+      providesTags: (_r, _e, name) => [{ type: 'McpServer', id: name }],
+    }),
+
     getWeekly: build.query<WeeklyUpdate[], string>({
       query: (projectId) => `projects/${projectId}/weekly`,
       transformResponse: unwrapArray<WeeklyUpdate>('weeks'),
@@ -414,6 +429,22 @@ export const baseApi = createApi({
       invalidatesTags: ['Agent'],
     }),
 
+    /**
+     * Create or update an MCP server (the editor's Save; server forces org scope).
+     * Mirrors saveAgent — a single POST handles both create and edit.
+     */
+    saveMcpServer: build.mutation<McpServer, McpServer>({
+      query: (server) => ({ url: 'mcp-servers', method: 'POST', body: server }),
+      transformResponse: unwrapOne<McpServer>('mcpServer'),
+      invalidatesTags: ['McpServer'],
+    }),
+
+    /** Delete an MCP server from the org catalog by name (admin-gated server-side). */
+    deleteMcpServer: build.mutation<{ deleted: boolean }, string>({
+      query: (name) => ({ url: `mcp-servers/${encodeURIComponent(name)}`, method: 'DELETE' }),
+      invalidatesTags: ['McpServer'],
+    }),
+
     // ---- Project opt-in (collapsed org-catalog model) ----
 
     /** Add a skill to a project's enabledSkills (idempotent). */
@@ -430,6 +461,26 @@ export const baseApi = createApi({
     disableProjectSkill: build.mutation<Project, { projectId: string; skillName: string }>({
       query: ({ projectId, skillName }) => ({
         url: `projects/${projectId}/skills/${encodeURIComponent(skillName)}`,
+        method: 'DELETE',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /** Add an MCP server to a project's enabledMcpServers (idempotent). */
+    enableProjectMcpServer: build.mutation<Project, { projectId: string; name: string }>({
+      query: ({ projectId, name }) => ({
+        url: `projects/${projectId}/mcp-servers/${encodeURIComponent(name)}`,
+        method: 'POST',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /** Remove an MCP server from a project's enabledMcpServers. */
+    disableProjectMcpServer: build.mutation<Project, { projectId: string; name: string }>({
+      query: ({ projectId, name }) => ({
+        url: `projects/${projectId}/mcp-servers/${encodeURIComponent(name)}`,
         method: 'DELETE',
       }),
       transformResponse: unwrapOne<Project>('project'),
@@ -606,6 +657,8 @@ export const {
   usePutDodMutation,
   useGetAgentsQuery,
   useGetSkillsQuery,
+  useGetMcpServersQuery,
+  useGetMcpServerQuery,
   useGetWeeklyQuery,
   useGetProjectDocsQuery,
   useGetProjectDocContentQuery,
@@ -613,8 +666,12 @@ export const {
   useGetProjectWireframeQuery,
   useGetProjectLearningsQuery,
   useSaveAgentMutation,
+  useSaveMcpServerMutation,
+  useDeleteMcpServerMutation,
   useEnableProjectSkillMutation,
   useDisableProjectSkillMutation,
+  useEnableProjectMcpServerMutation,
+  useDisableProjectMcpServerMutation,
   useEnableProjectAgentMutation,
   useDisableProjectAgentMutation,
   useAddBundleMemberMutation,

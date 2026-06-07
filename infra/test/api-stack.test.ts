@@ -66,6 +66,34 @@ describe('ApiStack', () => {
     });
   });
 
+  test('routes the MCP servers catalog (collection, by-name verbs, usage)', () => {
+    // The MCP servers catalog mirrors skills MINUS the bundle/scope verbs: a
+    // GET/POST collection, GET/PUT/DELETE by name, and a GET usage sub-route.
+    for (const routeKey of [
+      'GET /mcp-servers',
+      'POST /mcp-servers',
+      'GET /mcp-servers/{name}',
+      'PUT /mcp-servers/{name}',
+      'DELETE /mcp-servers/{name}',
+      'GET /mcp-servers/{name}/usage',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+      });
+    }
+    // No bundle/dissolve/scope verbs leak in (MCP servers are flat, org-only).
+    for (const routeKey of [
+      'POST /mcp-servers/{name}/members',
+      'POST /mcp-servers/{name}/dissolve',
+      'POST /mcp-servers/{name}/scope',
+    ]) {
+      const routes = template.findResources('AWS::ApiGatewayV2::Route', {
+        Properties: { RouteKey: routeKey },
+      });
+      expect(Object.keys(routes)).toHaveLength(0);
+    }
+  });
+
   test('throttles the HTTP API stage to bound public /device/* abuse', () => {
     template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
       DefaultRouteSettings: Match.objectLike({

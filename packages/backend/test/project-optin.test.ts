@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { orgScope, type Agent, type Project, type Skill } from '@harness/shared';
+import { orgScope, type Agent, type McpServer, type Project, type Skill } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import {
   disableProjectAgent,
+  disableProjectMcpServer,
   disableProjectSkill,
   enableProjectAgent,
+  enableProjectMcpServer,
   enableProjectSkill,
   type ProjectsDeps,
 } from '../src/rest/projects.js';
@@ -46,6 +48,7 @@ function project(id: string, owner: string): Project {
     liveSessionCount: 0,
     enabledSkills: [],
     enabledAgents: [],
+    enabledMcpServers: [],
   };
 }
 function skill(name: string): Skill {
@@ -56,6 +59,9 @@ function bundle(name: string, members: string[]): Skill {
 }
 function agent(name: string, skills: string[]): Agent {
   return { name, scope: SCOPE, model: 'opus', prompt: '', skills, tools: [] };
+}
+function mcpServer(name: string): McpServer {
+  return { name, scope: SCOPE, transport: 'stdio', command: 'node', args: [], env: {} };
 }
 
 function ownerEvent(opts: Parameters<typeof httpEvent>[0]) {
@@ -171,6 +177,78 @@ describe('POST /projects/:projectId/agents/:agentName (unions agent skills)', ()
       deps,
     );
     expect(res).toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('POST /projects/:projectId/mcp-servers/:name', () => {
+  it('idempotently enables a catalog server on the project', async () => {
+    await repo.putProject(project(PROJ, MATT));
+    await repo.putMcpServer(mcpServer('filesystem'));
+
+    const ev = ownerEvent({ method: 'POST', path: { projectId: PROJ, name: 'filesystem' } });
+    const first = await enableProjectMcpServer(ev, deps);
+    expect(first).toMatchObject({ statusCode: 200 });
+    expect(
+      bodyOf<{ project: Project }>(first as { body: string }).project.enabledMcpServers,
+    ).toEqual(['filesystem']);
+
+    // Second add is a no-op (idempotent) — still a single entry.
+    const second = await enableProjectMcpServer(ev, deps);
+    expect(
+      bodyOf<{ project: Project }>(second as { body: string }).project.enabledMcpServers,
+    ).toEqual(['filesystem']);
+  });
+
+  it('404s a server that is not in the org catalog', async () => {
+    await repo.putProject(project(PROJ, MATT));
+    const res = await enableProjectMcpServer(
+      ownerEvent({ method: 'POST', path: { projectId: PROJ, name: 'ghost' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('allows an org admin who does not own the project', async () => {
+    await repo.putProject(project(PROJ, ALICE));
+    await repo.putMcpServer(mcpServer('filesystem'));
+    const res = await enableProjectMcpServer(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        org: ORG,
+        admin: true,
+        path: { projectId: PROJ, name: 'filesystem' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+  });
+
+  it('forbids a non-owner non-admin', async () => {
+    await repo.putProject(project(PROJ, ALICE));
+    await repo.putMcpServer(mcpServer('filesystem'));
+    const res = await enableProjectMcpServer(
+      ownerEvent({ method: 'POST', path: { projectId: PROJ, name: 'filesystem' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('DELETE /projects/:projectId/mcp-servers/:name', () => {
+  it('removes a server and returns the hydrated project with enabledMcpServers', async () => {
+    await repo.putProject({
+      ...project(PROJ, MATT),
+      enabledMcpServers: ['filesystem', 'weather'],
+    });
+    const res = await disableProjectMcpServer(
+      ownerEvent({ method: 'DELETE', path: { projectId: PROJ, name: 'filesystem' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(
+      bodyOf<{ project: Project }>(res as { body: string }).project.enabledMcpServers,
+    ).toEqual(['weather']);
   });
 });
 

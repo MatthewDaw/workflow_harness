@@ -12,12 +12,15 @@ import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
 import { ProjectAgents } from '../screens/ProjectDetail/ProjectAgents.js';
 import { ProjectSkills } from '../screens/ProjectDetail/ProjectSkills.js';
+import { ProjectMcpServers } from '../screens/ProjectDetail/ProjectMcpServers.js';
 import { Sessions } from '../screens/Sessions/Sessions.js';
 import { LiveWatch } from '../screens/LiveWatch/LiveWatch.js';
 import { Agents } from '../screens/Agents/Agents.js';
 import { AgentEditor } from '../screens/Agents/AgentEditor.js';
 import { Skills } from '../screens/Skills/Skills.js';
 import { SkillBundle } from '../screens/Skills/SkillBundle.js';
+import { McpServers } from '../screens/McpServers/McpServers.js';
+import { McpServerEditor } from '../screens/McpServers/McpServerEditor.js';
 import { Weekly } from '../screens/Weekly/Weekly.js';
 import { LinkDevice } from '../screens/LinkDevice/LinkDevice.js';
 import { Organizations } from '../screens/Organizations/Organizations.js';
@@ -45,6 +48,7 @@ export function AppRoutes() {
           <Route path="weekly" element={<ProjectWeekly />} />
           <Route path="sessions" element={<ProjectSessions />} />
           <Route path="skills" element={<ProjectSkills />} />
+          <Route path="mcp-servers" element={<ProjectMcpServers />} />
           <Route path="agents" element={<ProjectAgents />} />
         </Route>
 
@@ -56,6 +60,9 @@ export function AppRoutes() {
         <Route path="agents/:name/edit" element={<AgentEditor />} />
         <Route path="skills" element={<Skills />} />
         <Route path="skills/:bundleName" element={<SkillBundle />} />
+        <Route path="mcp-servers" element={<McpServers />} />
+        <Route path="mcp-servers/new" element={<McpServerEditor />} />
+        <Route path="mcp-servers/:name/edit" element={<McpServerEditor />} />
         <Route path="weekly" element={<Weekly />} />
         <Route path="organizations" element={<Organizations />} />
         <Route path="link-device" element={<LinkDevice />} />

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { orgScope, type Agent } from '@harness/shared';
+import { agentSchema, orgScope, type Agent } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import {
   createAgent,
@@ -41,6 +41,20 @@ function agent(name: string, skills: string[] = []): Agent {
 function adminEvent(opts: Parameters<typeof httpEvent>[0]) {
   return httpEvent({ org: ORG, admin: true, ...opts });
 }
+
+describe('agentSchema description default', () => {
+  it("fills description '' when omitted and preserves a provided description", () => {
+    // The agent() helper omits description; it must still validate via default ''.
+    const omitted = agentSchema.parse(agent('builder'));
+    expect(omitted.description).toBe('');
+
+    const provided = agentSchema.parse({
+      ...agent('builder'),
+      description: 'use when refactoring legacy code',
+    });
+    expect(provided.description).toBe('use when refactoring legacy code');
+  });
+});
 
 describe('POST /agents (admin-gated org write + createdBy)', () => {
   it('forbids a non-admin create', async () => {

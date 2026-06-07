@@ -17,6 +17,7 @@ const NAV = [
   { to: '/sessions', label: 'Sessions' },
   { to: '/agents', label: 'Agents' },
   { to: '/skills', label: 'Skills' },
+  { to: '/mcp-servers', label: 'MCP Servers' },
   { to: '/link-device', label: 'Get started' },
 ];
 

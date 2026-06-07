@@ -16,6 +16,7 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: ['gh'],
   enabledAgents: [],
+  enabledMcpServers: [],
 };
 
 const SKILLS: Skill[] = [

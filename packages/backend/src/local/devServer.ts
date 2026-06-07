@@ -19,6 +19,7 @@ import { handler as projectsHandler } from '../rest/projects.js';
 import { handler as sessionsHandler } from '../rest/sessions.js';
 import { handler as agentsHandler } from '../rest/agents.js';
 import { handler as skillsHandler } from '../rest/skills.js';
+import { handler as mcpServersHandler } from '../rest/mcpServers.js';
 import { handler as objectivesHandler } from '../rest/objectives.js';
 import { handler as dodHandler } from '../rest/dod.js';
 import { handler as orgsHandler } from '../rest/orgs.js';
@@ -220,6 +221,10 @@ const ROUTES: Route[] = [
     re: /^\/projects\/(?<projectId>[^/]+)\/agents\/(?<agentName>[^/]+)$/,
     handler: projectsHandler,
   },
+  {
+    re: /^\/projects\/(?<projectId>[^/]+)\/mcp-servers\/(?<name>[^/]+)$/,
+    handler: projectsHandler,
+  },
   { re: /^\/projects\/(?<id>[^/]+)\/requirements$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/wireframe$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/refresh$/, handler: projectsHandler },
@@ -243,6 +248,13 @@ const ROUTES: Route[] = [
   { re: /^\/skills\/(?<name>[^/]+)\/scope$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)$/, handler: skillsHandler },
   { re: /^\/skills$/, handler: skillsHandler },
+
+  // MCP servers mirror the skills catalog routes minus the bundle verbs
+  // (members/dissolve) and the retired scope verb. Most-specific first so
+  // `/usage` is matched before the bare `/{name}` route.
+  { re: /^\/mcp-servers\/(?<name>[^/]+)\/usage$/, handler: mcpServersHandler },
+  { re: /^\/mcp-servers\/(?<name>[^/]+)$/, handler: mcpServersHandler },
+  { re: /^\/mcp-servers$/, handler: mcpServersHandler },
 
   { re: /^\/objectives\/(?<id>[^/]+)$/, handler: objectivesHandler },
   { re: /^\/objectives$/, handler: objectivesHandler },

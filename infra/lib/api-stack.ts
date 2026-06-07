@@ -138,6 +138,10 @@ export class ApiStack extends cdk.Stack {
     const sessionsFn = makeFn('RestSessionsFn', 'rest_sessions');
     const agentsFn = makeFn('RestAgentsFn', 'rest_agents');
     const skillsFn = makeFn('RestSkillsFn', 'rest_skills');
+    // The bundle key mirrors the esbuild entry name (`rest/mcpServers` →
+    // `rest_mcpServers`, see infra/scripts/bundle-backend.mjs) — the convention is
+    // filename-derived (`/`→`_`), exactly like `rest_skills` ↔ rest/skills.ts.
+    const mcpServersFn = makeFn('RestMcpServersFn', 'rest_mcpServers');
     const objectivesFn = makeFn('RestObjectivesFn', 'rest_objectives');
     const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
     const deviceFn = makeFn('RestDeviceFn', 'rest_device');
@@ -151,6 +155,7 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(sessionsFn);
     grantReadWrite(agentsFn);
     grantReadWrite(skillsFn);
+    grantReadWrite(mcpServersFn);
     grantReadWrite(objectivesFn);
     grantReadWrite(weeklyFn);
     grantReadWrite(deviceFn);
@@ -245,6 +250,17 @@ export class ApiStack extends cdk.Stack {
     r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve');
     r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage');
     r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope');
+
+    // MCP servers mirror the skills catalog routes MINUS the bundle verbs
+    // (members/dissolve) and the retired-by-design scope verb — the catalog is a
+    // flat, org-only set (no bundles, no per-server tiering). The project opt-in
+    // route (/projects/{id}/mcp-servers/{name}) is handled by the projects Lambda's
+    // path-based router (rest/projects.ts handler); like the existing skills/agents
+    // project opt-in it is NOT registered as a dedicated API Gateway route here, so
+    // we mirror that and register none.
+    r('/mcp-servers', [M.GET, M.POST], mcpServersFn, 'McpServers');
+    r('/mcp-servers/{name}', [M.GET, M.PUT, M.DELETE], mcpServersFn, 'McpServerByName');
+    r('/mcp-servers/{name}/usage', [M.GET], mcpServersFn, 'McpServerUsage');
 
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
     r('/dod', [M.GET, M.PUT], dodFn, 'Dod');

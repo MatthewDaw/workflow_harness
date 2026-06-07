@@ -5,6 +5,7 @@ import { orgScope } from '@harness/shared';
 import {
   useGetAgentsQuery,
   useGetSkillsQuery,
+  useGetMcpServersQuery,
   useSaveAgentMutation,
 } from '../../api/baseApi.js';
 import { useAuth } from '../../auth/AuthProvider.js';
@@ -23,6 +24,7 @@ export function AgentEditor() {
 
   const { data: agents } = useGetAgentsQuery();
   const { data: skills } = useGetSkillsQuery();
+  const { data: mcpServers } = useGetMcpServersQuery();
   const [saveAgent, { isLoading: saving }] = useSaveAgentMutation();
 
   const existing = useMemo(
@@ -39,10 +41,12 @@ export function AgentEditor() {
     existing ?? {
       name: name ?? '',
       scope: orgScope(org),
+      description: '',
       model: 'claude-sonnet-4',
       prompt: '',
       skills: [],
       tools: [],
+      mcpServers: [],
     };
 
   const set = (patch: Partial<Agent>) => setDraft({ ...agent, ...patch });
@@ -50,6 +54,15 @@ export function AgentEditor() {
   const toggleSkill = (skillName: string) => {
     const has = agent.skills.includes(skillName);
     set({ skills: has ? agent.skills.filter((s) => s !== skillName) : [...agent.skills, skillName] });
+  };
+
+  const toggleMcpServer = (name: string) => {
+    const has = agent.mcpServers.includes(name);
+    set({
+      mcpServers: has
+        ? agent.mcpServers.filter((s) => s !== name)
+        : [...agent.mcpServers, name],
+    });
   };
 
   const onSave = async () => {
@@ -70,6 +83,15 @@ export function AgentEditor() {
       )
     : allSkills;
 
+  const [mcpFilter, setMcpFilter] = useState('');
+  const allMcpServers = mcpServers ?? [];
+  const mq = mcpFilter.trim().toLowerCase();
+  const mcpCatalog = mq
+    ? allMcpServers.filter(
+        (s) => s.name.toLowerCase().includes(mq) || s.transport.toLowerCase().includes(mq),
+      )
+    : allMcpServers;
+
   return (
     <div className="hq-pad" data-testid="agent-editor">
       <ScreenHeader
@@ -85,6 +107,17 @@ export function AgentEditor() {
           value={agent.name}
           disabled={isEdit}
           onChange={(e) => set({ name: e.target.value })}
+        />
+
+        <label className="mt-3 block text-xs font-medium text-mut">
+          Description — when should this agent be invoked? (the delegation trigger)
+        </label>
+        <textarea
+          className="hq-input mt-1 w-full"
+          data-testid="agent-description"
+          rows={2}
+          value={agent.description}
+          onChange={(e) => set({ description: e.target.value })}
         />
 
         <label className="mt-3 block text-xs font-medium text-mut">Model</label>
@@ -148,6 +181,53 @@ export function AgentEditor() {
           <div className="mt-2">
             <span className="text-[11px] text-faint">selected: </span>
             {agent.skills.map((s) => (
+              <Pill key={s} variant="skill" className="mr-1">
+                {s}
+              </Pill>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-3 text-xs font-medium text-mut">MCP servers (catalog)</div>
+        <input
+          className="hq-input mt-1 w-full"
+          data-testid="mcp-filter"
+          placeholder="Filter MCP servers…"
+          value={mcpFilter}
+          onChange={(e) => setMcpFilter(e.target.value)}
+        />
+        <div className="mt-1 flex flex-wrap gap-1.5" data-testid="mcp-catalog">
+          {allMcpServers.length === 0 && (
+            <span className="text-xs text-faint">No MCP servers available.</span>
+          )}
+          {allMcpServers.length > 0 && mcpCatalog.length === 0 && (
+            <span className="text-xs text-faint" data-testid="mcp-filter-empty">
+              No MCP servers match “{mcpFilter}”.
+            </span>
+          )}
+          {mcpCatalog.map((s) => {
+            const on = agent.mcpServers.includes(s.name);
+            return (
+              <button
+                key={s.name}
+                type="button"
+                className={`hq-btn ${on ? 'hq-btn-pri' : ''}`}
+                data-testid={`catalog-mcp-${s.name}`}
+                aria-pressed={on}
+                onClick={() => toggleMcpServer(s.name)}
+              >
+                {on ? '✓ ' : '+ '}
+                {s.name}
+                <span className="ml-1 text-[11px] text-faint">{s.transport}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {agent.mcpServers.length > 0 && (
+          <div className="mt-2">
+            <span className="text-[11px] text-faint">selected: </span>
+            {agent.mcpServers.map((s) => (
               <Pill key={s} variant="skill" className="mr-1">
                 {s}
               </Pill>

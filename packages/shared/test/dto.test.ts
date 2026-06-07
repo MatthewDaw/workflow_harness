@@ -6,7 +6,13 @@ import {
   CONTROL_ACTIONS,
   controlActionSchema,
   controlFrameSchema,
+  mcpServerSchema,
+  MCP_TRANSPORTS,
+  projectSchema,
+  agentSchema,
 } from '../src/dto.js';
+
+const orgScope = { tier: 'org', id: 'acme' } as const;
 
 /**
  * The org-wide Definition of Done (plan-mapping feature 1). Advisory config that
@@ -63,6 +69,117 @@ describe('controlActionSchema', () => {
   it('parses a shutdown control frame with an empty payload default', () => {
     const frame = controlFrameSchema.parse({ sessionId: 's1', action: 'shutdown' });
     expect(frame).toEqual({ sessionId: 's1', action: 'shutdown', payload: {} });
+  });
+});
+
+/**
+ * MCP servers are the structured catalog record (a `transport` discriminated
+ * union), the third pillar alongside skills/agents. stdio defaults args/env;
+ * http/sse require a valid url; an unknown transport fails the union.
+ */
+describe('mcpServerSchema', () => {
+  it('exposes the supported transports', () => {
+    expect(MCP_TRANSPORTS).toEqual(['stdio', 'http', 'sse']);
+  });
+
+  it('parses a valid stdio server and defaults args/env when omitted', () => {
+    const server = mcpServerSchema.parse({
+      name: 'fs',
+      scope: orgScope,
+      transport: 'stdio',
+      command: 'npx',
+    });
+    expect(server).toEqual({
+      name: 'fs',
+      scope: orgScope,
+      transport: 'stdio',
+      command: 'npx',
+      args: [],
+      env: {},
+    });
+  });
+
+  it('round-trips a stdio server with args + env', () => {
+    const server = mcpServerSchema.parse({
+      name: 'fs',
+      scope: orgScope,
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+      env: { TOKEN: 'secret' },
+    });
+    expect(server).toMatchObject({
+      transport: 'stdio',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+      env: { TOKEN: 'secret' },
+    });
+  });
+
+  it('parses a valid http server and defaults headers when omitted', () => {
+    const server = mcpServerSchema.parse({
+      name: 'remote',
+      scope: orgScope,
+      transport: 'http',
+      url: 'https://mcp.example.com/sse',
+    });
+    expect(server).toEqual({
+      name: 'remote',
+      scope: orgScope,
+      transport: 'http',
+      url: 'https://mcp.example.com/sse',
+      headers: {},
+    });
+  });
+
+  it('rejects an http server with a non-URL url', () => {
+    const result = mcpServerSchema.safeParse({
+      name: 'remote',
+      scope: orgScope,
+      transport: 'http',
+      url: 'not-a-url',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an unknown transport', () => {
+    const result = mcpServerSchema.safeParse({
+      name: 'bad',
+      scope: orgScope,
+      transport: 'websocket',
+      url: 'https://mcp.example.com',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a stdio server missing its command', () => {
+    expect(
+      mcpServerSchema.safeParse({ name: 'fs', scope: orgScope, transport: 'stdio' }).success,
+    ).toBe(false);
+  });
+});
+
+/**
+ * Back-compat: project/agent records written before MCP servers existed lack the
+ * new attachment arrays; `.default([])` keeps them valid and fills the field.
+ */
+describe('MCP server attachment back-compat', () => {
+  it('defaults enabledMcpServers to [] for a legacy project', () => {
+    const project = projectSchema.parse({
+      id: 'p1',
+      name: 'Weekly Compass',
+      repo: 'gh/acme/weekly-compass',
+      ownerUserId: 'u1',
+    });
+    expect(project.enabledMcpServers).toEqual([]);
+  });
+
+  it('defaults mcpServers to [] for a legacy agent', () => {
+    const agent = agentSchema.parse({
+      name: 'planner',
+      scope: orgScope,
+      model: 'claude-opus-4-8',
+    });
+    expect(agent.mcpServers).toEqual([]);
   });
 });
 

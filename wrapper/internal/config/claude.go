@@ -7,6 +7,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,11 @@ type Kind string
 const (
 	KindAgent Kind = "agent"
 	KindSkill Kind = "skill"
+	// KindMcp is an MCP server, which (unlike agents/skills) does not live
+	// one-file-per-item: every server is an entry merged into a shared
+	// ~/.claude+/.mcp.json. Diff/Reconcile/DriftReport are kind-generic and need
+	// no change; the difference is confined to ReadLocal/ApplyPulled and mcp.go.
+	KindMcp Kind = "mcp"
 )
 
 // Item is a local ~/.claude definition (an agent or a skill), identified by name
@@ -61,6 +67,10 @@ func ReadLocal() ([]Item, error) {
 	var items []Item
 	items = append(items, readDir(filepath.Join(userDir, "agents"), KindAgent)...)
 	items = append(items, readDir(filepath.Join(userDir, "skills"), KindSkill)...)
+	// MCP servers are not files-per-item: emit one Item per mcpServers entry in
+	// ~/.claude/.mcp.json. A malformed file surfaces as a single Err item (never
+	// a panic) and must not blank the other kinds.
+	items = append(items, readMcpFile(filepath.Join(userDir, mcpFileName))...)
 
 	// Union in the isolated claude+ registry, skipping names already provided by
 	// the user's own registry (~/.claude wins on collision).
@@ -68,10 +78,12 @@ func ReadLocal() ([]Item, error) {
 	for _, it := range items {
 		seen[string(it.Kind)+"/"+it.Name] = true
 	}
-	for _, it := range append(
+	plusItems := append(
 		readDir(filepath.Join(plus, "agents"), KindAgent),
 		readDir(filepath.Join(plus, "skills"), KindSkill)...,
-	) {
+	)
+	plusItems = append(plusItems, readMcpFile(filepath.Join(plus, mcpFileName))...)
+	for _, it := range plusItems {
 		if seen[string(it.Kind)+"/"+it.Name] {
 			continue
 		}
@@ -121,6 +133,33 @@ func readDir(root string, kind Kind) []Item {
 	return out
 }
 
+// readMcpFile reads a .mcp.json file and emits one Item{Kind: KindMcp} per
+// mcpServers entry, with Hash computed from the entry's canonical serialization
+// (so an on-disk server compares equal to its HQ-built twin). Path points at the
+// shared .mcp.json file. An absent file yields nothing. A malformed file surfaces
+// as a SINGLE Err item (named after the file) rather than a panic, and — because
+// it is one item — never blanks the agent/skill items collected alongside it. A
+// per-entry that fails to canonicalize is likewise flagged as an Err item for
+// that server name only.
+func readMcpFile(path string) []Item {
+	mf, err := parseMcpFile(path)
+	if err != nil {
+		return []Item{{Kind: KindMcp, Name: mcpFileName, Path: path, Err: "malformed .mcp.json: " + err.Error()}}
+	}
+	out := make([]Item, 0, len(mf.McpServers))
+	for name, raw := range mf.McpServers {
+		it := Item{Kind: KindMcp, Name: name, Path: path}
+		hash, hErr := canonicalServerHash(raw)
+		if hErr != nil {
+			it.Err = "malformed entry: " + hErr.Error()
+		} else {
+			it.Hash = hash
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
 // ApplyPulled materializes an HQ item into the isolated claude+ tree
 // (~/.claude+): agents land at agents/<name>.md, skills at skills/<name>/SKILL.md.
 // It writes into ~/.claude+, never the user's personal ~/.claude, so pulled
@@ -140,6 +179,17 @@ func ApplyPulled(item RemoteItem, body string) error {
 		path = filepath.Join(dir, "agents", item.Name+".md")
 	case KindSkill:
 		path = filepath.Join(dir, "skills", item.Name, "SKILL.md")
+	case KindMcp:
+		// MCP servers MERGE into .mcp.json rather than overwrite a per-item file:
+		// the body is the canonical on-disk entry JSON (built by remote.Fetch from
+		// the structured HQ record). mergeMcpServer preserves every other server
+		// and unrelated top-level key, and writes the entry canonically so a
+		// re-read hashes identically (idempotent pull).
+		var entry mcpEntry
+		if err := json.Unmarshal([]byte(body), &entry); err != nil {
+			return fmt.Errorf("decode mcp entry %q: %w", item.Name, err)
+		}
+		return mergeMcpServer(filepath.Join(dir, mcpFileName), item.Name, entry)
 	default:
 		return fmt.Errorf("unknown kind %q", item.Kind)
 	}

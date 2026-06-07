@@ -13,6 +13,7 @@ const SUBTABS = [
   { to: 'weekly', label: 'Weekly' },
   { to: 'sessions', label: 'Sessions' },
   { to: 'skills', label: 'Skills' },
+  { to: 'mcp-servers', label: 'MCP Servers' },
   { to: 'agents', label: 'Agents' },
 ];
 

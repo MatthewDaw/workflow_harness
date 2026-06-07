@@ -9,6 +9,7 @@ import type {
   ObjectiveNode,
   Agent,
   Skill,
+  McpServer,
   WeeklyUpdate,
   DefinitionOfDone,
   Envelope,
@@ -56,6 +57,7 @@ export interface SeedData {
   objectives?: ObjectiveNode[];
   agents?: Agent[];
   skills?: Skill[];
+  mcpServers?: McpServer[];
   weekly?: Record<string, WeeklyUpdate[]>;
   /** Detailed-requirements doc tree, keyed by projectId (U11). */
   docs?: Record<string, { path: string; title: string; completion: number }[]>;
@@ -147,6 +149,7 @@ export function installFetchStub(seed: SeedData) {
       return json({ dod: seed.dod ?? { requiresUnitTests: true, requiresProdE2E: false } });
     if (path === 'agents') return json(seed.agents ?? []);
     if (path === 'skills') return json(seed.skills ?? []);
+    if (path === 'mcp-servers') return json(seed.mcpServers ?? []);
     if (path === 'sessions') return json(seed.sessions ?? []);
 
     // Project skill/agent opt-in: return the (seeded) project so the mutation
@@ -157,6 +160,9 @@ export function installFetchStub(seed: SeedData) {
     const projAgent = /^projects\/([^/]+)\/agents\/([^/]+)$/.exec(path);
     if (projAgent)
       return json({ project: (seed.projects ?? []).find((p) => p.id === projAgent[1]) ?? null });
+    const projMcp = /^projects\/([^/]+)\/mcp-servers\/([^/]+)$/.exec(path);
+    if (projMcp)
+      return json({ project: (seed.projects ?? []).find((p) => p.id === projMcp[1]) ?? null });
 
     const proj = /^projects\/([^/]+)$/.exec(path);
     if (proj) return json((seed.projects ?? []).find((p) => p.id === proj[1]) ?? null);

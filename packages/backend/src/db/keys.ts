@@ -96,6 +96,11 @@ export const skillKey = (scope: ScopeRef, name: string): PrimaryKey => ({
   SK: `SKILL#${name}`,
 });
 
+export const mcpServerKey = (scope: ScopeRef, name: string): PrimaryKey => ({
+  PK: `SCOPE#${scopeId(scope)}`,
+  SK: `MCPSERVER#${name}`,
+});
+
 export const scopePartition = (scope: ScopeRef): string => `SCOPE#${scopeId(scope)}`;
 
 export const objectiveKey = (org: string, path: string): PrimaryKey => ({

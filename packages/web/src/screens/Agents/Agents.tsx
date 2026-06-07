@@ -73,6 +73,14 @@ function AgentCard({ agent }: { agent: Agent }) {
         </Link>
         <Pill>{agent.model}</Pill>
       </div>
+      {agent.description && (
+        <div
+          className="my-1.5 text-xs text-ink"
+          data-testid={`agent-description-${agent.name}`}
+        >
+          {agent.description}
+        </div>
+      )}
       {agent.prompt && <div className="my-1.5 text-xs text-mut">{agent.prompt}</div>}
       <div className="my-1.5">
         {agent.skills.map((s) => (

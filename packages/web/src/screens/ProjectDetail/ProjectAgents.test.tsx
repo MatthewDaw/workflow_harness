@@ -16,6 +16,7 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: [],
   enabledAgents: ['reviewer'],
+  enabledMcpServers: [],
 };
 
 const SKILLS: Skill[] = [
@@ -24,8 +25,8 @@ const SKILLS: Skill[] = [
 ];
 
 const AGENTS: Agent[] = [
-  { name: 'builder', scope: ORG, model: 'claude-sonnet-4', prompt: '', skills: ['kit'], tools: [] },
-  { name: 'reviewer', scope: ORG, model: 'claude-opus-4', prompt: '', skills: [], tools: [] },
+  { name: 'builder', scope: ORG, description: '', model: 'claude-sonnet-4', prompt: '', skills: ['kit'], tools: [], mcpServers: [] },
+  { name: 'reviewer', scope: ORG, description: '', model: 'claude-opus-4', prompt: '', skills: [], tools: [], mcpServers: [] },
 ];
 
 interface StubReq {

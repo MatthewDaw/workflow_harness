@@ -132,10 +132,12 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 		w.Header().Set("content-type", "application/json")
 		switch {
 		case r.URL.Path == "/projects/myproj":
-			// Project opts into one skill and one agent (not the whole catalog).
+			// Project opts into one skill, one agent, and one MCP server (not the
+			// whole catalog).
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"enabledSkills": []string{"enabled-skill"},
-				"enabledAgents": []string{"enabled-agent"},
+				"enabledSkills":     []string{"enabled-skill"},
+				"enabledAgents":     []string{"enabled-agent"},
+				"enabledMcpServers": []string{"enabled-mcp"},
 			})
 		case r.URL.Path == "/skills":
 			// Whole org catalog, every item org-scoped.
@@ -147,6 +149,12 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []map[string]any{
 				{"name": "enabled-agent", "scope": map[string]string{"tier": "org", "id": "acme"}, "prompt": "you are enabled"},
 				{"name": "other-agent", "scope": map[string]string{"tier": "org", "id": "acme"}, "prompt": "you are other"},
+			}})
+		case r.URL.Path == "/mcp-servers":
+			// Whole org MCP catalog; only "enabled-mcp" is opted into.
+			_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []map[string]any{
+				{"name": "enabled-mcp", "scope": map[string]string{"tier": "org", "id": "acme"}, "transport": "stdio", "command": "echo", "args": []string{"hi"}},
+				{"name": "other-mcp", "scope": map[string]string{"tier": "org", "id": "acme"}, "transport": "stdio", "command": "nope"},
 			}})
 		default:
 			http.NotFound(w, r)
@@ -168,9 +176,9 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("reconcile errs: %v", errs)
 	}
-	// Only the two opted-in items pull down.
-	if pulled != 2 {
-		t.Fatalf("pulled = %d, want 2 (one enabled skill + one enabled agent)", pulled)
+	// Only the three opted-in items pull down (skill + agent + MCP server).
+	if pulled != 3 {
+		t.Fatalf("pulled = %d, want 3 (one enabled skill + one enabled agent + one enabled mcp)", pulled)
 	}
 	if sawProjectQuery {
 		t.Fatal("catalog GETs must not carry a ?project query param (org-wide catalog)")
@@ -190,6 +198,26 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(plus, "agents", "other-agent.md")); !os.IsNotExist(err) {
 		t.Fatalf("non-opted-in org agent must not materialize (err=%v)", err)
+	}
+
+	// The enabled MCP server merges into ~/.claude+/.mcp.json; the non-opted-in
+	// one must not appear. (MCP servers materialize as entries in a shared file,
+	// not one-file-per-item — so assert on the parsed document.)
+	mcpBytes, err := os.ReadFile(filepath.Join(plus, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("enabled mcp server should materialize .mcp.json: %v", err)
+	}
+	var mcpDoc struct {
+		McpServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(mcpBytes, &mcpDoc); err != nil {
+		t.Fatalf("parse materialized .mcp.json: %v", err)
+	}
+	if _, ok := mcpDoc.McpServers["enabled-mcp"]; !ok {
+		t.Fatalf("enabled mcp server missing from .mcp.json: %s", string(mcpBytes))
+	}
+	if _, ok := mcpDoc.McpServers["other-mcp"]; ok {
+		t.Fatalf("non-opted-in mcp server must not materialize: %s", string(mcpBytes))
 	}
 }
 
@@ -212,6 +240,11 @@ func TestEmptyOptInMaterializesNothing(t *testing.T) {
 			}})
 		case r.URL.Path == "/agents":
 			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []map[string]any{}})
+		case r.URL.Path == "/mcp-servers":
+			// Populated org MCP catalog; empty opt-in must still pull nothing.
+			_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []map[string]any{
+				{"name": "org-mcp", "scope": map[string]string{"tier": "org", "id": "acme"}, "transport": "stdio", "command": "echo"},
+			}})
 		default:
 			http.NotFound(w, r)
 		}
