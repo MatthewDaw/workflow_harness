@@ -1,5 +1,11 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { orgScope, projectSchema, type Project } from '@harness/shared';
+import {
+  LEARNING_STREAMS,
+  orgScope,
+  projectSchema,
+  type LearningStream,
+  type Project,
+} from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { GitHubApp, PublicGitHubReader } from '../github/app.js';
 import {
@@ -367,6 +373,33 @@ export async function getProjectWireframe(
   }
 }
 
+// --- Learnings: read the corrections corpus mined for a project ----------
+
+/**
+ * GET /projects/:id/learnings — the project's mined learnings (topic-focus
+ * logging), read from the project's `LEARN#` partition. An optional
+ * `?stream=impl|doc` filters to one stream; omitted returns both. Records come
+ * back in the repo's deterministic SK order (grouped by session, then turnId).
+ * Authorized exactly like the sibling `/projects/:id` reads: a missing or
+ * not-owned project is a 404 (no enumeration). An empty project returns `[]`.
+ */
+export async function getProjectLearnings(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await ownedProject(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+
+  const stream = queryParam(event, 'stream');
+  if (stream !== undefined && !LEARNING_STREAMS.includes(stream as LearningStream))
+    return badRequest('invalid stream');
+
+  const learnings = await deps.repo.listLearnings(project.id);
+  const filtered = stream ? learnings.filter((l) => l.stream === stream) : learnings;
+  return ok({ learnings: filtered });
+}
+
 // --- Project opt-in: enable/disable org-catalog skills + agents ----------
 //
 // Auth gate for all four: org admin OR the project's owner. The skill/agent name
@@ -491,6 +524,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     return getProjectRequirements(event, deps);
   if (method === 'GET' && hasId && /\/wireframe$/.test(rawPath))
     return getProjectWireframe(event, deps);
+  if (method === 'GET' && hasId && /\/learnings$/.test(rawPath))
+    return getProjectLearnings(event, deps);
   if (method === 'GET' && hasId && /\/docs\/content$/.test(rawPath))
     return getProjectDocContent(event, deps);
   if (method === 'GET' && hasId && /\/docs$/.test(rawPath)) return getProjectDocs(event, deps);

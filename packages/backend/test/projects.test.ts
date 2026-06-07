@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Project, SessionProjection } from '@harness/shared';
+import type { LearningRecord, Project, SessionProjection } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import {
   createProject,
@@ -10,6 +10,7 @@ import {
   getProject,
   getProjectDocContent,
   getProjectDocs,
+  getProjectLearnings,
   getProjectRequirements,
   getProjectWireframe,
   handler,
@@ -464,6 +465,98 @@ describe('handler: PUT /projects/:id/requirements no longer routes to a write', 
     );
     const body = bodyOf<{ markdown?: string; projects?: unknown[] }>(res as { body: string });
     expect(body.markdown).toBeUndefined();
+  });
+});
+
+// --- Learnings: GET /projects/:id/learnings ------------------------------
+
+function learning(over: Partial<LearningRecord> = {}): LearningRecord {
+  return {
+    projectId: 'weekly-compass',
+    sessionId: 's-1',
+    segmentId: 'seg-1',
+    topicLabel: 'reconciliation',
+    stream: 'impl',
+    text: 'prefer decimal money',
+    turnId: 't-1',
+    ts: 1_700_000_000_000,
+    seq: 5,
+    ...over,
+  };
+}
+
+describe('GET /projects/:id/learnings', () => {
+  it('returns all learnings for a project (both streams, default)', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await repo.putLearning(learning({ turnId: 't-1', stream: 'impl' }));
+    await repo.putLearning(learning({ turnId: 't-2', stream: 'doc', docRef: 'docs/plans/a.md' }));
+
+    const res = await getProjectLearnings(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { learnings } = bodyOf<{ learnings: LearningRecord[] }>(res as { body: string });
+    expect(learnings).toHaveLength(2);
+    expect(learnings.map((l) => l.stream).sort()).toEqual(['doc', 'impl']);
+  });
+
+  it('?stream=doc filters to the doc stream only', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await repo.putLearning(learning({ turnId: 't-1', stream: 'impl' }));
+    await repo.putLearning(learning({ turnId: 't-2', stream: 'doc', docRef: 'docs/plans/a.md' }));
+
+    const res = await getProjectLearnings(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { id: 'weekly-compass' },
+        query: { stream: 'doc' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { learnings } = bodyOf<{ learnings: LearningRecord[] }>(res as { body: string });
+    expect(learnings).toHaveLength(1);
+    expect(learnings[0]!.stream).toBe('doc');
+    expect(learnings[0]!.docRef).toBe('docs/plans/a.md');
+  });
+
+  it('returns [] for an empty project (no learnings yet)', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await getProjectLearnings(
+      httpEvent({ method: 'GET', userId: MATT, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ learnings: LearningRecord[] }>(res as { body: string }).learnings).toEqual([]);
+  });
+
+  it("404s another user's project learnings (no enumeration, same authz as sibling reads)", async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await repo.putLearning(learning());
+    const res = await getProjectLearnings(
+      httpEvent({ method: 'GET', userId: ALICE, path: { id: 'weekly-compass' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('routes GET /projects/:id/learnings through the handler', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await repo.putLearning(learning());
+    const res = await handler(
+      httpEvent({
+        method: 'GET',
+        userId: MATT,
+        path: { id: 'weekly-compass' },
+        rawPath: '/projects/weekly-compass/learnings',
+      }),
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ learnings: LearningRecord[] }>(res as { body: string }).learnings).toHaveLength(
+      1,
+    );
   });
 });
 

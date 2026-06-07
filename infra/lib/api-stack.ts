@@ -222,6 +222,10 @@ export class ApiStack extends cdk.Stack {
     r('/projects/{id}/refresh', [M.POST], projectsFn, 'ProjectRefresh');
     r('/projects/{id}/docs', [M.GET], projectsFn, 'ProjectDocs');
     r('/projects/{id}/docs/content', [M.GET], projectsFn, 'ProjectDocContent');
+    // Mined learnings (topic-focus logging) live in the project's LEARN#
+    // partition; projectsFn already has read on the harness table (grantReadWrite
+    // above), so no extra grant is needed.
+    r('/projects/{id}/learnings', [M.GET], projectsFn, 'ProjectLearnings');
 
     r('/sessions', [M.GET], sessionsFn, 'Sessions');
     r('/sessions/{id}', [M.GET], sessionsFn, 'SessionById');

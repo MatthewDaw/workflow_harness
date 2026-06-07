@@ -11,6 +11,8 @@ import type {
   ControlAction,
   DefinitionOfDone,
   Envelope,
+  LearningRecord,
+  LearningStream,
 } from '@harness/shared';
 
 /**
@@ -125,6 +127,7 @@ export const baseApi = createApi({
     'Docs',
     'Requirements',
     'Dod',
+    'Learnings',
   ],
   endpoints: (build) => ({
     /**
@@ -387,6 +390,21 @@ export const baseApi = createApi({
       providesTags: (_r, _e, id) => [{ type: 'Requirements', id }],
     }),
 
+    /**
+     * The project's mined learnings (topic-focus logging), read from the
+     * backend's `/projects/:id/learnings` endpoint. An optional `stream`
+     * (`impl`|`doc`) filters server-side; omitted returns both streams.
+     */
+    getProjectLearnings: build.query<
+      LearningRecord[],
+      { projectId: string; stream?: LearningStream }
+    >({
+      query: ({ projectId, stream }) =>
+        `projects/${projectId}/learnings${stream ? `?stream=${stream}` : ''}`,
+      transformResponse: unwrapArray<LearningRecord>('learnings'),
+      providesTags: (_r, _e, { projectId }) => [{ type: 'Learnings', id: projectId }],
+    }),
+
     // ---- Mutations (U22/U24/U25) ----
 
     /** Create or update an agent (the editor's Save & sync; server forces org scope). */
@@ -593,6 +611,7 @@ export const {
   useGetProjectDocContentQuery,
   useGetProjectRequirementsQuery,
   useGetProjectWireframeQuery,
+  useGetProjectLearningsQuery,
   useSaveAgentMutation,
   useEnableProjectSkillMutation,
   useDisableProjectSkillMutation,
