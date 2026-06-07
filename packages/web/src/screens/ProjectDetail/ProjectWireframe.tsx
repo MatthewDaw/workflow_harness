@@ -27,18 +27,21 @@ export function WireframePreview() {
       </div>
       <Link
         to="wireframe"
-        className="group relative block overflow-hidden rounded border border-line"
+        className="group relative block h-[220px] overflow-hidden rounded border border-line"
         aria-label="Open the full wireframe"
       >
         {/* The preview is a scaled-down snapshot; the overlay swallows clicks so
-            the whole tile behaves as a single link into the full-screen view. */}
+            the whole tile behaves as a single link into the full-screen view. The
+            container height matches the scaled iframe (550px × 0.4 = 220px) so the
+            tile is only as tall as the visible snapshot, with no empty space below.
+            allow-scripts lets the wireframe's own nav/screen script run. */}
         <iframe
           title="Wireframe preview"
           srcDoc={html}
-          sandbox=""
+          sandbox="allow-scripts"
           tabIndex={-1}
           aria-hidden="true"
-          className="pointer-events-none h-[220px] w-full origin-top-left"
+          className="pointer-events-none origin-top-left"
           style={{ width: '250%', height: '550px', transform: 'scale(0.4)' }}
         />
         <span className="absolute inset-0" />
@@ -76,7 +79,7 @@ export function ProjectWireframeFull() {
           <iframe
             title="Wireframe"
             srcDoc={html}
-            sandbox=""
+            sandbox="allow-scripts"
             className="h-[80vh] w-full rounded border-0"
           />
         ) : (

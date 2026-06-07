@@ -56,6 +56,9 @@ describe('ProjectWireframeFull', () => {
     });
     const frame = (await screen.findByTitle('Wireframe')) as HTMLIFrameElement;
     expect(frame.getAttribute('srcdoc')).toContain('hello wireframe');
+    // The wireframe is JS-driven (nav + screen toggling), so the sandbox must
+    // permit scripts or the iframe renders almost nothing.
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
   });
 
   it('shows the empty state when docs/wireframe.html is missing', async () => {
