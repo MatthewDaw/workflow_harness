@@ -196,6 +196,12 @@ func runHook() {
 	if os.Getenv("CLAUDE_PLUS_TITLE") != "" {
 		return
 	}
+	// Likewise skip the internal headless topic-focus judge call (tagged by
+	// internal/judge via CLAUDE_PLUS_JUDGE). Without this the judge's own hooks
+	// re-enter the daemon — a phantom session plus a Stop→judge→Stop recursion.
+	if os.Getenv("CLAUDE_PLUS_JUDGE") != "" {
+		return
+	}
 	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	if err != nil || len(raw) == 0 {
 		return
