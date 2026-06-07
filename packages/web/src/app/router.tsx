@@ -7,7 +7,6 @@ import {
   ProjectRequirements,
   ProjectRequirementsFull,
 } from '../screens/ProjectDetail/ProjectRequirements.js';
-import { ProjectWireframeFull } from '../screens/ProjectDetail/ProjectWireframe.js';
 import { DetailedRequirements } from '../screens/ProjectDetail/DetailedRequirements.js';
 import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
@@ -42,7 +41,6 @@ export function AppRoutes() {
           {/* U12: two-tier requirements routes. */}
           <Route path="requirements" element={<ProjectRequirements />} />
           <Route path="requirements/full" element={<ProjectRequirementsFull />} />
-          <Route path="requirements/wireframe" element={<ProjectWireframeFull />} />
           <Route path="detailed-requirements" element={<DetailedRequirements />} />
           <Route path="weekly" element={<ProjectWeekly />} />
           <Route path="sessions" element={<ProjectSessions />} />
