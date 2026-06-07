@@ -98,6 +98,42 @@ export const sessionHeartbeatEventSchema = z.object({
   sessionId,
 });
 
+// The two learning streams mined from corrections: an implementing-agent
+// convention/fix (`impl`) or a doc-writing-agent question (`doc`).
+export const LEARNING_STREAMS = ['impl', 'doc'] as const;
+export const learningStreamSchema = z.enum(LEARNING_STREAMS);
+export type LearningStream = z.infer<typeof learningStreamSchema>;
+
+// Topic-focus logging: the current topic of a session, relabeled as focus drifts.
+// `segmentId` identifies the topic segment within the session; `description` is a
+// rich, self-contained summary rolled forward as the topic evolves. The backend
+// folds this into the session projection (topic + rolling description), never the
+// stable `name`. Optional fields stay wire-compatible — older daemons never emit
+// this kind, and the Go struct omits empty fields.
+export const sessionTopicEventSchema = z.object({
+  kind: z.literal('session.topic'),
+  sessionId,
+  segmentId: z.string().min(1),
+  topicLabel: z.string().min(1),
+  description: z.string().optional(),
+});
+
+// A single learning mined from a correction turn — an append record, NOT folded
+// into the projection. `turnId` is the idempotency key: (sessionId, turnId)
+// dedupes a learning re-emitted after a judge retry or daemon restart. `docRef`
+// is set only on the `doc` stream (the nearest feature doc contradicted). `text`
+// is truncated to MAX_CONTENT_CHARS by the wrapper.
+export const sessionLearningEventSchema = z.object({
+  kind: z.literal('session.learning'),
+  sessionId,
+  segmentId: z.string().min(1),
+  topicLabel: z.string().min(1),
+  stream: learningStreamSchema,
+  text: z.string().min(1),
+  docRef: z.string().optional(),
+  turnId: z.string().min(1),
+});
+
 export const eventSchema = z.discriminatedUnion('kind', [
   sessionStartEventSchema,
   sessionRenameEventSchema,
@@ -108,6 +144,8 @@ export const eventSchema = z.discriminatedUnion('kind', [
   costTickEventSchema,
   statusChangeEventSchema,
   sessionHeartbeatEventSchema,
+  sessionTopicEventSchema,
+  sessionLearningEventSchema,
 ]);
 export type Event = z.infer<typeof eventSchema>;
 export type EventKind = Event['kind'];

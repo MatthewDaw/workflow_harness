@@ -48,6 +48,8 @@ const (
 	KindCostTick         Kind = "cost.tick"
 	KindStatusChange     Kind = "status.change"
 	KindSessionHeartbeat Kind = "session.heartbeat"
+	KindSessionTopic     Kind = "session.topic"
+	KindSessionLearning  Kind = "session.learning"
 )
 
 // Event is the discriminated union of every event kind. It is modeled as a flat
@@ -94,6 +96,18 @@ type Event struct {
 	// status.change
 	From Status `json:"from,omitempty"`
 	To   Status `json:"to,omitempty"`
+
+	// session.topic / session.learning (topic-focus logging). All omitempty so
+	// they never appear on other kinds, keeping existing golden fixtures byte-stable.
+	SegmentID  string `json:"segmentId,omitempty"`
+	TopicLabel string `json:"topicLabel,omitempty"`
+	// session.topic: rich, self-contained rolling description of the current topic.
+	Description string `json:"description,omitempty"`
+	// session.learning: stream ("impl"|"doc"), docRef (doc stream only), and the
+	// idempotency key turnId. The learning payload reuses the shared Text field.
+	Stream string `json:"stream,omitempty"`
+	DocRef string `json:"docRef,omitempty"`
+	TurnID string `json:"turnId,omitempty"`
 }
 
 // Envelope wraps every event sent from a daemon to HQ. Mirrors envelopeSchema.
@@ -188,6 +202,27 @@ func SessionHeartbeat(sessionID string) Event {
 	return Event{Kind: KindSessionHeartbeat, SessionID: sessionID}
 }
 
+// SessionTopic builds a session.topic event carrying the current topic label and
+// a rich, self-contained rolling description. The backend folds these into the
+// session projection (topic + description), leaving the stable name untouched.
+func SessionTopic(sessionID, segmentID, topicLabel, description string) Event {
+	return Event{
+		Kind: KindSessionTopic, SessionID: sessionID,
+		SegmentID: segmentID, TopicLabel: topicLabel, Description: description,
+	}
+}
+
+// SessionLearning builds a session.learning event — an append record mined from a
+// correction turn. stream is "impl" or "doc"; docRef is set only on the doc
+// stream; turnID is the idempotency key ((sessionId, turnId) dedupes at ingest).
+func SessionLearning(sessionID, segmentID, topicLabel, stream, text, docRef, turnID string) Event {
+	return Event{
+		Kind: KindSessionLearning, SessionID: sessionID,
+		SegmentID: segmentID, TopicLabel: topicLabel, Stream: stream,
+		Text: text, DocRef: docRef, TurnID: turnID,
+	}
+}
+
 // Validate checks that an event has the required fields for its kind. It mirrors
 // the zod refinements on the TS side (non-empty strings, valid statuses, etc.).
 func (e Event) Validate() error {
@@ -225,6 +260,17 @@ func (e Event) Validate() error {
 		}
 	case KindSessionHeartbeat:
 		// Only sessionId is required (checked above).
+	case KindSessionTopic:
+		if e.SegmentID == "" || e.TopicLabel == "" {
+			return fmt.Errorf("session.topic: segmentId and topicLabel required")
+		}
+	case KindSessionLearning:
+		if e.SegmentID == "" || e.TopicLabel == "" || e.Text == "" || e.TurnID == "" {
+			return fmt.Errorf("session.learning: segmentId, topicLabel, text, turnId required")
+		}
+		if e.Stream != "impl" && e.Stream != "doc" {
+			return fmt.Errorf("session.learning: stream must be impl or doc")
+		}
 	default:
 		return fmt.Errorf("unknown event kind %q", e.Kind)
 	}

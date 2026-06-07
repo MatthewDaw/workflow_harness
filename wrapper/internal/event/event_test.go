@@ -32,8 +32,8 @@ func TestGoldenRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &envs); err != nil {
 		t.Fatalf("unmarshal golden: %v", err)
 	}
-	if len(envs) != 9 {
-		t.Fatalf("expected 9 envelopes in golden, got %d", len(envs))
+	if len(envs) != 11 {
+		t.Fatalf("expected 11 envelopes in golden, got %d", len(envs))
 	}
 
 	for i, env := range envs {
@@ -73,6 +73,8 @@ func TestConstructorsValidate(t *testing.T) {
 		CostTick("a91f", 0.04, 0.62, 48000),
 		StatusChange("a91f", StatusActive, StatusNeedsInput),
 		SessionHeartbeat("a91f"),
+		SessionTopic("a91f", "a91f-2", "reconcile-variance", "Reconciling the weekly variance rollup."),
+		SessionLearning("a91f", "a91f-2", "reconcile-variance", "impl", "Zero the opening balance before summing carryover.", "", "a91f-t7"),
 	}
 	for _, e := range events {
 		if err := e.Validate(); err != nil {

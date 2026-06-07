@@ -20,6 +20,8 @@ describe('event envelope schema', () => {
       'cost.tick',
       'status.change',
       'session.heartbeat',
+      'session.topic',
+      'session.learning',
     ] satisfies EventKind[]);
   });
 

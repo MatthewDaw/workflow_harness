@@ -103,5 +103,35 @@
     "ts": 1717200008000,
     "seq": 8,
     "event": { "kind": "session.heartbeat", "sessionId": "a91f" }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200009000,
+    "seq": 9,
+    "event": {
+      "kind": "session.topic",
+      "sessionId": "a91f",
+      "segmentId": "a91f-2",
+      "topicLabel": "reconcile-variance",
+      "description": "Reconciling the weekly variance rollup in weeklyLifecycle.ts; the prior rollup double-counted carryover, fixed by zeroing the opening balance before summing."
+    }
+  },
+  {
+    "v": 1,
+    "instanceId": "inst-0",
+    "host": "matt@mbp",
+    "ts": 1717200010000,
+    "seq": 10,
+    "event": {
+      "kind": "session.learning",
+      "sessionId": "a91f",
+      "segmentId": "a91f-2",
+      "topicLabel": "reconcile-variance",
+      "stream": "impl",
+      "text": "Variance rollups must zero the opening balance before summing carryover, or it double-counts.",
+      "turnId": "a91f-t7"
+    }
   }
 ]
