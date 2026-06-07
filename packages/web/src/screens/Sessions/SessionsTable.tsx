@@ -5,12 +5,6 @@ import { StatusDot } from '../../components/primitives.js';
 import { useSendControlMutation } from '../../api/baseApi.js';
 import { relativeTime, useNow } from '../../lib/time.js';
 
-/** Truncate a first-prompt summary for table display; "—" when absent. */
-function truncate(text: string | undefined, max: number): string {
-  if (!text) return '—';
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
 /** Sort by most recent activity first (newest `lastEventAt` at the top). */
 function sortByRecentActivity(sessions: SessionProjection[]): SessionProjection[] {
   return [...sessions].sort((a, b) => b.lastEventAt - a.lastEventAt);
@@ -33,7 +27,7 @@ export function SessionsTable({ sessions }: { sessions: SessionProjection[] }) {
           <th className="border-b border-line2 p-2 text-left">project</th>
           <th className="border-b border-line2 p-2 text-left">agent</th>
           <th className="border-b border-line2 p-2 text-left">name</th>
-          <th className="border-b border-line2 p-2 text-left">first prompt</th>
+          <th className="border-b border-line2 p-2 text-left">topic</th>
           <th className="border-b border-line2 p-2 text-left">host</th>
           <th className="border-b border-line2 p-2 text-left">last activity</th>
           <th className="border-b border-line2 p-2 text-left">$</th>
@@ -81,11 +75,34 @@ function SessionRow({ session: s, now }: { session: SessionProjection; now: numb
         {s.name}
       </td>
       <td
-        className="border-b border-line2 p-2 text-mut"
-        data-testid={`session-summary-${s.sessionId}`}
-        title={s.summary}
+        className="max-w-[26ch] border-b border-line2 p-2"
+        data-testid={`session-topic-${s.sessionId}`}
       >
-        {truncate(s.summary, 60)}
+        {s.topic ? (
+          <>
+            <div className="truncate" data-testid={`session-topic-label-${s.sessionId}`}>
+              {s.topic}
+              {/* The stable slug stays visible (muted) so a user who navigated by
+                  slug isn't disoriented when the evolving topic takes the lead. */}
+              <span className="ml-1.5 text-faint" data-testid={`session-topic-slug-${s.sessionId}`}>
+                {s.name}
+              </span>
+            </div>
+            {s.description && (
+              <div
+                className="line-clamp-2 text-[11px] text-mut"
+                data-testid={`session-topic-desc-${s.sessionId}`}
+                title={s.description}
+              >
+                {s.description}
+              </div>
+            )}
+          </>
+        ) : (
+          <span className="text-faint" data-testid={`session-topic-untitled-${s.sessionId}`}>
+            Untitled
+          </span>
+        )}
       </td>
       <td className="border-b border-line2 p-2 font-mono text-faint">{s.host}</td>
       <td

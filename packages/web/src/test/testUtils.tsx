@@ -12,6 +12,7 @@ import type {
   WeeklyUpdate,
   DefinitionOfDone,
   Envelope,
+  LearningRecord,
 } from '@harness/shared';
 import { makeStore, type AppStore } from '../app/store.js';
 import { AuthProvider } from '../auth/AuthProvider.js';
@@ -64,6 +65,8 @@ export interface SeedData {
   requirements?: Record<string, string>;
   /** Example wireframe HTML from docs/wireframe.html, keyed by projectId. */
   wireframe?: Record<string, string>;
+  /** Mined topic-focus learnings, keyed by projectId (topic-focus logging). */
+  learnings?: Record<string, LearningRecord[]>;
   /** Org-wide Definition of Done (plan-mapping feature 1). */
   dod?: DefinitionOfDone;
 }
@@ -179,6 +182,14 @@ export function installFetchStub(seed: SeedData) {
       const docPath = query.get('path') ?? '';
       const markdown = seed.docContent?.[`${docContent[1]}::${docPath}`] ?? '';
       return json({ path: docPath, markdown });
+    }
+
+    const learnings = /^projects\/([^/]+)\/learnings$/.exec(path);
+    if (learnings) {
+      const all = seed.learnings?.[learnings[1]!] ?? [];
+      const stream = query.get('stream');
+      // Mirror the backend's optional `?stream=impl|doc` server-side filter.
+      return json(stream ? all.filter((l) => l.stream === stream) : all);
     }
 
     const docs = /^projects\/([^/]+)\/docs$/.exec(path);

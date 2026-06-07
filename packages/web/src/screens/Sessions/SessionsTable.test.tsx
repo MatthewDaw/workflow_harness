@@ -42,25 +42,34 @@ describe('SessionsTable', () => {
     expect(screen.getByTestId('session-activity-a91f')).toHaveTextContent('3h ago');
   });
 
-  it('shows the session name and the first-prompt summary (truncated), with an em dash when absent', () => {
-    const longPrompt =
-      'fix the login bug in the cursor flow that breaks on the second attempt and more text';
+  it('shows the session name and the topic column (label + muted slug + desc tooltip), Untitled when absent', () => {
     renderWithProviders(
       <SessionsTable
         sessions={[
-          session({ sessionId: 'a91f', name: 'fix-login-cursor', summary: longPrompt }),
-          session({ sessionId: 'nosum', name: 'untitled', summary: undefined }),
+          session({
+            sessionId: 'a91f',
+            name: 'fix-login-cursor',
+            topic: 'Login retry bug',
+            description: 'Second-attempt login in the cursor flow fails to re-auth.',
+          }),
+          session({ sessionId: 'notopic', name: 'untitled', topic: undefined }),
         ]}
       />,
     );
     // name column still renders s.name under the existing testid.
     expect(screen.getByTestId('session-name-a91f')).toHaveTextContent('fix-login-cursor');
-    // new first-prompt column renders the (truncated) summary with an ellipsis.
-    const summaryCell = screen.getByTestId('session-summary-a91f');
-    expect(summaryCell).toHaveTextContent('fix the login bug in the cursor flow');
-    expect(summaryCell.textContent?.endsWith('…')).toBe(true);
-    // missing summary falls back to an em dash.
-    expect(screen.getByTestId('session-summary-nosum')).toHaveTextContent('—');
+    // The topic column replaced the first-prompt column: label is primary, the
+    // stable slug shows muted, the rolling description carries a hover tooltip.
+    expect(screen.getByTestId('session-topic-label-a91f')).toHaveTextContent('Login retry bug');
+    expect(screen.getByTestId('session-topic-slug-a91f')).toHaveTextContent('fix-login-cursor');
+    expect(screen.getByTestId('session-topic-desc-a91f')).toHaveAttribute(
+      'title',
+      'Second-attempt login in the cursor flow fails to re-auth.',
+    );
+    // The old first-prompt summary cell is gone.
+    expect(screen.queryByTestId('session-summary-a91f')).toBeNull();
+    // No topic yet falls back to a muted Untitled placeholder.
+    expect(screen.getByTestId('session-topic-untitled-notopic')).toHaveTextContent('Untitled');
   });
 
   it('offers Shut down on live rows but not on done rows', () => {
