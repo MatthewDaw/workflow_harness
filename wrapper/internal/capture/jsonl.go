@@ -312,3 +312,172 @@ func (t *Tailer) firstTurn(text string) {
 		t.onFirst(t.sessID, text)
 	}
 }
+
+// writeClassTools are the tools whose input.file_path names a file the turn
+// actually edited. The topic gate's files-touched set is built from THESE tools'
+// raw JSONL input (not the lossy tool.call argsSummary), so the lexical Jaccard
+// shift reflects real edits. Read tools (Read/Grep/Glob) are excluded — opening a
+// file to look at it is not "working on" it.
+var writeClassTools = map[string]bool{
+	"Edit":         true,
+	"Write":        true,
+	"MultiEdit":    true,
+	"NotebookEdit": true,
+}
+
+// toolUseInput is the subset of a tool_use block's input we read to recover the
+// edited file path. NotebookEdit uses notebook_path; the rest use file_path.
+type toolUseInput struct {
+	FilePath     string `json:"file_path"`
+	NotebookPath string `json:"notebook_path"`
+}
+
+// titleRow is the subset of the native-title control rows Claude Code writes
+// (type "ai-title" / "last-prompt" carry a title under different keys depending
+// on CLI version). HarvestTurn reads whichever is present as a bonus signal — it
+// is never authoritative (the gate/judge own the topic), only a cheap hint.
+type titleRow struct {
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	CustomTitle string `json:"customTitle"`
+	AITitle     string `json:"aiTitle"`
+}
+
+// TurnHarvest is the position-aware re-parse of a session's transcript that the
+// topic gate consumes on Stop. It is computed by re-reading the raw JSONL from a
+// caller-held byte offset (the offset BEFORE the turn began) to end-of-file, so
+// the gate sees exactly the rows the just-finished turn appended.
+type TurnHarvest struct {
+	// FilesTouched is the de-duplicated, write-class file_path set for the turn,
+	// in first-seen order (stable for a Jaccard set and the judge input).
+	FilesTouched []string
+	// LatestUserPrompt is the most recent plain-string user prompt in the slice —
+	// the turn's opening prompt (used for the correction cue and the slice head).
+	LatestUserPrompt string
+	// AssistantTail is the last assistant text block in the slice (the turn's
+	// reply), bounded by the caller before it reaches the judge.
+	AssistantTail string
+	// NativeTitle is Claude Code's own customTitle/aiTitle if present, "" else.
+	NativeTitle string
+	// EndOffset is end-of-file after the harvest, so the caller can advance its
+	// per-session "last harvested offset" for the next turn.
+	EndOffset int64
+}
+
+// HarvestTurn re-parses the raw transcript JSONL from `fromOffset` to EOF and
+// returns the turn's write-class touched-file set, the latest user prompt, the
+// last assistant text, and any native title. It is a pure read (no emit, no
+// tailer state mutation) so the topic gate can call it independently of the
+// streaming Tailer. A missing file yields a zero TurnHarvest with EndOffset =
+// fromOffset (nothing new to read yet).
+func HarvestTurn(path string, fromOffset int64) (TurnHarvest, error) {
+	out := TurnHarvest{EndOffset: fromOffset}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return out, err
+	}
+	defer f.Close()
+	if _, err := f.Seek(fromOffset, io.SeekStart); err != nil {
+		return out, err
+	}
+	seen := map[string]bool{}
+	r := bufio.NewReader(f)
+	for {
+		chunk, rerr := r.ReadBytes('\n')
+		if len(chunk) > 0 && chunk[len(chunk)-1] != '\n' {
+			// Partial trailing line: do not consume it (advance EndOffset only past
+			// complete lines), so the next harvest re-reads it once finished.
+			break
+		}
+		out.EndOffset += int64(len(chunk))
+		if line := strings.TrimSpace(string(chunk)); line != "" {
+			harvestLine(line, seen, &out)
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	return out, nil
+}
+
+// harvestLine folds one raw JSONL row into the running TurnHarvest: write-class
+// tool_use file paths, the latest user prompt, the last assistant text, and any
+// native title row. It mirrors handleLine's schema walk but accumulates rather
+// than emits.
+func harvestLine(line string, seen map[string]bool, out *TurnHarvest) {
+	var row transcriptLine
+	if err := json.Unmarshal([]byte(line), &row); err != nil {
+		return
+	}
+	// Native title control rows: harvest as a bonus signal.
+	if row.Type != "user" && row.Type != "assistant" {
+		var tr titleRow
+		if json.Unmarshal([]byte(line), &tr) == nil {
+			if t := firstNonEmpty(tr.CustomTitle, tr.AITitle, tr.Title); t != "" {
+				out.NativeTitle = t
+			}
+		}
+		return
+	}
+	if len(row.Message) == 0 {
+		return
+	}
+	var msg messageEnvelope
+	if err := json.Unmarshal(row.Message, &msg); err != nil {
+		return
+	}
+	switch row.Type {
+	case "user":
+		if s, ok := asString(msg.Content); ok {
+			if t := strings.TrimSpace(s); t != "" {
+				out.LatestUserPrompt = t
+			}
+			return
+		}
+		for _, b := range parseBlocks(msg.Content) {
+			if b.Type == "text" {
+				if t := strings.TrimSpace(b.Text); t != "" {
+					out.LatestUserPrompt = t
+				}
+			}
+		}
+	case "assistant":
+		for _, b := range parseBlocks(msg.Content) {
+			switch b.Type {
+			case "text":
+				if t := strings.TrimSpace(b.Text); t != "" {
+					out.AssistantTail = t
+				}
+			case "tool_use":
+				if !writeClassTools[b.Name] {
+					continue
+				}
+				var in toolUseInput
+				if json.Unmarshal(b.Input, &in) != nil {
+					continue
+				}
+				p := in.FilePath
+				if p == "" {
+					p = in.NotebookPath
+				}
+				if p == "" || seen[p] {
+					continue
+				}
+				seen[p] = true
+				out.FilesTouched = append(out.FilesTouched, p)
+			}
+		}
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}

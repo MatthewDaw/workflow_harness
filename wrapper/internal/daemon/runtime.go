@@ -14,7 +14,9 @@ import (
 	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/diag"
 	"github.com/workflow-harness/claude-plus/internal/event"
+	"github.com/workflow-harness/claude-plus/internal/judge"
 	"github.com/workflow-harness/claude-plus/internal/title"
+	"github.com/workflow-harness/claude-plus/internal/topic"
 	"github.com/workflow-harness/claude-plus/internal/transport"
 )
 
@@ -54,6 +56,55 @@ type Runtime struct {
 	// per-tab tailers. Buffered + non-blocking send so a hook never blocks on a
 	// busy capture loop.
 	repointCh chan [2]string
+
+	// topicCh carries turn-cycle signals (Stop / UserPromptSubmit) from ingestHook
+	// to captureLoop, which owns the topic-focus gate + judge (U6). Buffered +
+	// non-blocking send so a hook never blocks; a dropped signal is harmless (the
+	// cadence floor re-fires the gate on the next turn).
+	topicCh chan daemonTopicSignal
+
+	// judgeLimit is the daemon-wide concurrency cap on judge spawns shared across
+	// every tab (D3): a token bucket of 2 concurrent headless model calls.
+	judgeLimit *topic.Limiter
+	// topicStore checkpoints per-session topic state under the claude+ config dir,
+	// keyed by tab session id (C6). nil when the config dir is unavailable, in which
+	// case the gate runs on ephemeral in-memory state.
+	topicStore *topic.Store
+}
+
+// daemonTopicSignal mirrors daemon.TopicSignal locally so captureLoop owns a copy
+// it can select on without importing across the hook boundary back into itself.
+type daemonTopicSignal struct {
+	stop   bool // true = Stop; false = UserPromptSubmit
+	tabID  string
+	prompt string
+}
+
+// topicEntry carries a tab's topic state behind a mutex. The gate's synchronous
+// mutations (Gate, LastOffset) run on the capture loop while a prior turn's judge
+// goroutine may still be folding its verdict into the SAME state; the mutex makes
+// those two writers safe (the judge call itself runs OUTSIDE the lock so a slow
+// model never blocks the loop — only the cheap Fold + emit are serialized).
+type topicEntry struct {
+	mu sync.Mutex
+	st *topic.State
+}
+
+// runJudge is the seam captureLoop calls to classify a turn. It defaults to the
+// real headless judge but is a package var so the U6 wiring tests can inject a
+// deterministic stub without spawning a model (mirrors the title/judge runClaude
+// seam). It returns the parsed verdict in the topic package's local shape.
+var runJudge = func(in judge.Input) (topic.Verdict, bool) {
+	v, failed := judge.Judge(in)
+	return topic.Verdict{
+		SameTopic:      v.SameTopic,
+		TopicLabel:     v.TopicLabel,
+		Description:    v.Description,
+		IsCorrection:   v.IsCorrection,
+		ContradictsDoc: v.ContradictsDoc,
+		ImplLearning:   v.ImplLearning,
+		DocQuestion:    v.DocQuestion,
+	}, failed
 }
 
 // emit wraps a captured event in an envelope and fans it to local subscribers
@@ -197,10 +248,32 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 		instanceID: instanceID, host: hostName(),
 		syncedSessions: map[string]bool{},
 		terminated:     map[string]bool{},
-		repointCh:      make(chan [2]string, 16)}
+		repointCh:      make(chan [2]string, 16),
+		topicCh:        make(chan daemonTopicSignal, 64),
+		judgeLimit:     topic.NewLimiter(2)}
+
+	// Checkpoint store for per-session topic state, under the claude+ config dir
+	// (C6). Best-effort: an unavailable config dir leaves topicStore nil and the
+	// gate runs on ephemeral state.
+	if dir, err := config.EnsureConfigDir(); err == nil {
+		if st, err := topic.NewStore(dir); err == nil {
+			rt.topicStore = st
+		}
+	}
 
 	// Route hook-shim events through the same emit path as the tailer (U18).
 	d.SetHookIngestor(rt.emit)
+
+	// Forward turn-cycle signals (Stop / UserPromptSubmit) into captureLoop's topic
+	// gate (U6). Non-blocking send so a hook never blocks on a busy loop; a dropped
+	// signal is harmless (the cadence floor re-fires the gate on the next turn).
+	d.SetTopicHook(func(sig TopicSignal) {
+		ds := daemonTopicSignal{stop: sig.Kind == TopicStop, tabID: sig.TabID, prompt: sig.Prompt}
+		select {
+		case rt.topicCh <- ds:
+		default:
+		}
+	})
 
 	// Repoint the tab's transcript tailer when a post-/resume hook reveals a
 	// diverged live id (BUG 2). ingestHook fires this BEFORE remapping the id; we
@@ -406,6 +479,11 @@ func (rt *Runtime) captureLoop(instanceID string) {
 	// genuine divergence (live id != the currently-watched id).
 	tailers := map[string]*capture.Tailer{}
 	transcriptID := map[string]string{}
+	// topicState holds each tab's carried topic-focus state (label, rolling
+	// description, cadence/debounce counters, checkpoint offset) behind a per-tab
+	// mutex. It is loaded from the checkpoint store the first time a tab is seen (so
+	// a daemon restart resumes mid-session) and re-checkpointed after each fold (C6).
+	topicState := map[string]*topicEntry{}
 	tk := time.NewTicker(time.Second)
 	defer tk.Stop()
 	host := rt.host
@@ -440,6 +518,33 @@ func (rt *Runtime) captureLoop(instanceID string) {
 					transcriptID[tab] = live
 				}
 			}
+		case sig := <-rt.topicCh:
+			// Topic-focus turn-cycle signal (U6). Owned here in captureLoop because the
+			// gate needs the per-tab tailer + transcript path + emit closure that live
+			// in this loop. Lazily load the tab's checkpoint on first sight.
+			te := topicState[sig.tabID]
+			if te == nil {
+				te = &topicEntry{st: rt.loadTopicState(sig.tabID)}
+				topicState[sig.tabID] = te
+			}
+			if !sig.stop {
+				// UserPromptSubmit: stash the correction smell for this turn's Stop (D1).
+				te.mu.Lock()
+				if topic.SmellsLikeCorrection(sig.prompt) {
+					te.st.MarkCorrection()
+				}
+				snap := *te.st
+				te.mu.Unlock()
+				rt.checkpointTopic(sig.tabID, &snap)
+				continue
+			}
+			// Stop: drain the tailer so the turn's tool_use rows are flushed, then run
+			// the gate and (if it fires) spawn the judge on a goroutine. The existing
+			// status.change -> idle (emitted by ingestHook's MapHook path) is untouched.
+			if t, ok := tailers[sig.tabID]; ok {
+				_ = t.Poll()
+			}
+			rt.runTopicGate(sig.tabID, te, emit)
 		case <-tk.C:
 			live := map[string]bool{}
 			for _, v := range rt.d.mux.List() {
@@ -515,6 +620,12 @@ func (rt *Runtime) captureLoop(instanceID string) {
 					delete(tailStops, id)
 					delete(tailers, id)
 					delete(transcriptID, id)
+					// Drop the tab's topic state + checkpoint so the maps don't grow and a
+					// reused id starts fresh (the session has genuinely ended).
+					delete(topicState, id)
+					if rt.topicStore != nil {
+						rt.topicStore.Forget(id)
+					}
 				}
 			}
 			// Emit done for every announced session that has left the mux, even one
@@ -532,6 +643,121 @@ func (rt *Runtime) captureLoop(instanceID string) {
 			}
 		}
 	}
+}
+
+// loadTopicState restores a tab's checkpointed topic state, or a fresh State when
+// no checkpoint exists (C6).
+func (rt *Runtime) loadTopicState(tabID string) *topic.State {
+	if rt.topicStore != nil {
+		if s, ok := rt.topicStore.Load(tabID); ok {
+			return &s
+		}
+	}
+	return &topic.State{}
+}
+
+// checkpointTopic persists a tab's topic state after a fold/stash (C6).
+// Best-effort: a write error is logged and swallowed so it can never block a turn.
+func (rt *Runtime) checkpointTopic(tabID string, st *topic.State) {
+	if rt.topicStore == nil || st == nil {
+		return
+	}
+	if err := rt.topicStore.Save(tabID, *st); err != nil {
+		diag.Logf("topic checkpoint: save %s: %v", tabID, err)
+	}
+}
+
+// runTopicGate runs the cheap gate for a just-finished turn and, if it fires,
+// builds the judge inputs, spawns the judge on a goroutine, folds the verdict, and
+// emits session.topic + any session.learning through the same emit path
+// session.rename uses (U6). It is called on Stop, after the tailer drain.
+//
+// The gate decision + the per-session state mutation happen synchronously under
+// the tab's mutex (cheap), so the cadence/cap counters stay consistent. Only the
+// model call runs on a goroutine OUTSIDE the lock, so the loop is never blocked by
+// a slow judge; the verdict's Fold + emit re-acquire the lock briefly, serializing
+// against the next turn's gate.
+func (rt *Runtime) runTopicGate(tabID string, te *topicEntry, emit func(string, event.Event)) {
+	// Re-parse the raw JSONL from the last-harvested offset to recover the turn's
+	// write-class touched-file set + transcript slice (A4): argsSummary is lossy.
+	path, err := capture.TranscriptPath(rt.d.repoRoot, tabID)
+	if err != nil {
+		return
+	}
+
+	te.mu.Lock()
+	harvest, err := capture.HarvestTurn(path, te.st.LastOffset)
+	if err != nil {
+		te.mu.Unlock()
+		return
+	}
+	te.st.LastOffset = harvest.EndOffset
+
+	turnTokens := tokenEstimate(harvest.LatestUserPrompt, harvest.AssistantTail)
+	decision := te.st.Gate(topic.GateInput{FilesTouched: harvest.FilesTouched, TurnTokens: turnTokens})
+	if !decision.Fire {
+		snap := *te.st
+		te.mu.Unlock()
+		rt.checkpointTopic(tabID, &snap)
+		return
+	}
+	// Daemon-wide concurrency cap (D3): skip this turn's judge when all permits are
+	// in use rather than queueing — the cadence floor re-fires on a later turn.
+	if !rt.judgeLimit.TryAcquire() {
+		snap := *te.st
+		te.mu.Unlock()
+		diag.Logf("topic gate: judge concurrency cap reached, skipping turn for %s", tabID)
+		rt.checkpointTopic(tabID, &snap)
+		return
+	}
+
+	// Snapshot the carried state + inputs for the (out-of-lock) judge call.
+	slice := topic.BuildTranscriptSlice(harvest.LatestUserPrompt, harvest.AssistantTail)
+	files := append([]string(nil), harvest.FilesTouched...)
+	curLabel, curDesc := te.st.TopicLabel, te.st.Description
+	te.mu.Unlock()
+
+	docRef, docContents := topic.NearestDoc(rt.d.repoRoot, files)
+	in := judge.Input{
+		CurrentTopicLabel:  curLabel,
+		CurrentDescription: curDesc,
+		TranscriptSlice:    slice,
+		FilesTouched:       files,
+		NearestDoc:         docContents,
+	}
+
+	go func() {
+		defer diag.Recover("runtime.topicJudge")
+		defer rt.judgeLimit.Release()
+		verdict, parseFailed := runJudge(in)
+		if parseFailed {
+			// Observable failure: keep the current topic, emit nothing, but surface the
+			// dropped learning so loss is visible, not silent.
+			diag.Logf("topic judge: parse failure for %s — kept current topic, dropped learning", tabID)
+			return
+		}
+		te.mu.Lock()
+		res := te.st.Fold(verdict, files, docRef)
+		snap := *te.st
+		te.mu.Unlock()
+		// session.topic always (folds into the projection; never renames the slug).
+		emit(tabID, event.SessionTopic(tabID, res.SegmentID, res.TopicLabel, res.Description))
+		for _, l := range res.Learnings {
+			emit(tabID, event.SessionLearning(tabID, res.SegmentID, res.TopicLabel, l.Stream, l.Text, l.DocRef, res.TurnID))
+		}
+		rt.checkpointTopic(tabID, &snap)
+	}()
+}
+
+// tokenEstimate is the cheap ~4-chars/token heuristic used for the cadence floor's
+// token accounting (the transcript rows carry server usage, but the gate only
+// needs a rough turn size, not an exact count).
+func tokenEstimate(parts ...string) int64 {
+	var n int64
+	for _, p := range parts {
+		n += int64(len(p) / 4)
+	}
+	return n
 }
 
 // projectIDFor derives a stable, readable project id from the repo path (its

@@ -54,6 +54,14 @@ type Daemon struct {
 	// stable tab id. The Runtime uses it to repoint the tab's transcript tailer at
 	// the live <liveId>.jsonl so a resumed conversation keeps streaming.
 	repointHook func(tabID, liveID string)
+	// topicHook, when set by the Runtime, forwards a turn-cycle signal (Stop /
+	// UserPromptSubmit) for a tab into captureLoop, which owns the topic-focus gate
+	// + judge (U6). ingestHook only has the SessionID; the gate needs the per-tab
+	// tailer, transcript path and emit closure that live in captureLoop, so the
+	// signal is forwarded rather than handled here. Stop still maps to its idle
+	// status.change inline (the topic gate is a side channel, never on the turn's
+	// critical path).
+	topicHook func(sig TopicSignal)
 
 	stopCh chan struct{}
 }
@@ -251,6 +259,50 @@ func (d *Daemon) SetTranscriptRepointer(fn func(tabID, liveID string)) {
 	d.hookMu.Unlock()
 }
 
+// TopicSignalKind discriminates the turn-cycle signals ingestHook forwards to the
+// topic gate in captureLoop.
+type TopicSignalKind int
+
+const (
+	// TopicPrompt is a UserPromptSubmit: the gate evaluates the opening prompt's
+	// correction smell and stashes it on the session state (D1).
+	TopicPrompt TopicSignalKind = iota
+	// TopicStop is a Stop: the gate drains the tailer, runs, and (if it fires)
+	// spawns the judge for the just-finished turn.
+	TopicStop
+)
+
+// TopicSignal carries a turn-cycle signal for one tab from ingestHook to the
+// topic gate. Prompt is the opening prompt text (TopicPrompt only).
+type TopicSignal struct {
+	Kind   TopicSignalKind
+	TabID  string
+	Prompt string
+}
+
+// SetTopicHook registers the callback ingestHook uses to forward Stop /
+// UserPromptSubmit signals into captureLoop's topic gate (U6). Until set (no
+// Runtime, or topic-focus disabled), the signals are simply not forwarded and the
+// existing status/auto-name behavior is unchanged.
+func (d *Daemon) SetTopicHook(fn func(sig TopicSignal)) {
+	d.hookMu.Lock()
+	d.topicHook = fn
+	d.hookMu.Unlock()
+}
+
+// forwardTopic forwards a turn-cycle signal to the topic gate if one is wired.
+// Best-effort and non-blocking from the caller's view (the hook itself must never
+// block a Claude Code turn); the Runtime's hook implementation does the
+// non-blocking send onto its own channel.
+func (d *Daemon) forwardTopic(sig TopicSignal) {
+	d.hookMu.Lock()
+	fn := d.topicHook
+	d.hookMu.Unlock()
+	if fn != nil {
+		fn(sig)
+	}
+}
+
 // ingestHook parses a Claude Code hook payload, maps it to a status.change event
 // (via the capture layer), and publishes it. Malformed payloads and no-op hook
 // kinds (PostToolUse) are dropped silently — the daemon stays stable and the
@@ -302,7 +354,17 @@ func (d *Daemon) ingestHook(raw string) {
 			d.emitSession(h.SessionID, event.SessionRenameWithSummary(h.SessionID, name, firstPromptSummary(h.Prompt)))
 			d.broadcastSessList()
 		}
+		// Forward the opening prompt to the topic gate so it can stash a correction
+		// smell for this turn's subsequent Stop (D1). Off the critical path.
+		d.forwardTopic(TopicSignal{Kind: TopicPrompt, TabID: h.SessionID, Prompt: h.Prompt})
 		return
+	}
+	// Forward a Stop to the topic gate so captureLoop drains the tailer and runs the
+	// gate/judge for the just-finished turn (U6). This is in ADDITION to the
+	// status.change -> idle mapping below, which is unchanged — the topic gate is a
+	// side channel and never delays the idle transition.
+	if h.HookEventName == "Stop" {
+		d.forwardTopic(TopicSignal{Kind: TopicStop, TabID: h.SessionID})
 	}
 	// Seed the prior status from the live session so the mapped transition starts
 	// from where the session actually is, not a guess.
