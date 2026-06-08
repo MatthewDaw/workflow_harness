@@ -811,18 +811,31 @@ export class Repo {
   }
 
   private async listScoped<T>(scope: ScopeRef, skPrefix: string): Promise<T[]> {
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.table,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: { ':pk': k.scopePartition(scope), ':sk': skPrefix },
-      }),
-    );
+    // PAGINATE: a DynamoDB Query returns at most 1MB per page, so a single send
+    // silently truncates a large catalog. Skill/MCP records carry whole-directory
+    // `files` maps (SKILL.md + sibling scripts), so ~20 of them already exceed 1MB
+    // — without this loop, `GET /skills` dropped every name past the first page
+    // (e.g. all `hq-*`, which sort after `ce-*`), and the per-project sync then
+    // couldn't see them and pruned them locally. Follow LastEvaluatedKey to the end.
+    const items: Record<string, unknown>[] = [];
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(
+        new QueryCommand({
+          TableName: this.table,
+          KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+          ExpressionAttributeValues: { ':pk': k.scopePartition(scope), ':sk': skPrefix },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
+      );
+      for (const it of res.Items ?? []) items.push(it as Record<string, unknown>);
+      exclusiveStartKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (exclusiveStartKey);
     // The catalog prefix scan (`SKILL#`/`AGENT#`/`MCPSERVER#`) now also matches
     // the versioning side-records (revision snapshots `#r<N>` and TRUE pointers
     // `#TRUE`) that share the same partition + prefix. Return only the live
     // "current" item records, never their history/pointers.
-    return (res.Items ?? []).filter((it) => {
+    return items.filter((it) => {
       const sk = (it as { SK?: string }).SK;
       // An item with no SK attribute (e.g. a projected/mocked row) is kept — only
       // skip rows whose SK is an actual versioning side-record.
