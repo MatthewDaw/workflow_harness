@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"net"
 	"testing"
+
+	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
 // TestAttachRejectsVersionMismatch proves the protocol-version handshake: a
@@ -40,6 +42,43 @@ func TestAttachRejectsVersionMismatch(t *testing.T) {
 	}
 	if d.Mux().Count() != 0 {
 		t.Errorf("mismatch must not spawn a session; count = %d", d.Mux().Count())
+	}
+}
+
+// TestAttachAckIsFirstFrame is a regression test for the lifecycle bug where a
+// daemon that had anything to replay on attach — buffered events, or existing
+// (e.g. resumed) sessions' recent output — could never be attached. attach()
+// registered the output/event sinks BEFORE writing the version-ack, and a sink's
+// IMMEDIATE replay frame carries no protocol Version (parsed as 0). The client's
+// dialSock reads frame #1 as the version-ack, so it saw "protocol v0" and rejected
+// the daemon as an incompatible build. The version-ack MUST be the first frame
+// after a matching hello, before any sink replay.
+func TestAttachAckIsFirstFrame(t *testing.T) {
+	d, err := New(t.TempDir(), longSpawn) // cross-platform dummy child (sleep/ping)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer d.Stop()
+	// Seed the replay buffer so the event sink has a (Version-less) frame to replay
+	// on attach — the exact condition that used to precede and shadow the ack.
+	d.PublishEvent(event.Envelope{V: 1, TS: 1, Event: event.StatusChange("s1", event.StatusIdle, event.StatusActive)})
+
+	cli, srv := net.Pipe()
+	defer cli.Close()
+	go func() {
+		defer srv.Close()
+		d.attach(srv, bufio.NewReader(srv), ProtocolVersion) // matching version
+	}()
+
+	first, err := readFrame(bufio.NewReader(cli))
+	if err != nil {
+		t.Fatalf("read first frame: %v", err)
+	}
+	if first.Type != FrameAck {
+		t.Fatalf("first frame = %q, want %q (the version-ack must precede any sink replay)", first.Type, FrameAck)
+	}
+	if first.Version != ProtocolVersion {
+		t.Fatalf("first frame version = %d, want %d", first.Version, ProtocolVersion)
 	}
 }
 

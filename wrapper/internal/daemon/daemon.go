@@ -510,32 +510,13 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 		_ = writeFrame(conn, f)
 	}
 
-	// Stream every session's output (tagged with its id). The client keeps a
-	// mirror terminal per session and renders the focused one, so switching is
-	// instant and a freshly spawned session is never blank. AddSink also replays
-	// each existing session's recent output, so reattaching renders immediately.
-	// Register the sink BEFORE spawning the initial session so claude's one-time
-	// welcome paint is captured live rather than lost.
-	d.mux.AddSink(clientID, func(sessID string, b []byte) {
-		send(Frame{Type: FrameOutput, SessID: sessID, Data: base64.StdEncoding.EncodeToString(b)})
-	})
-
-	// Subscribe this client to the local event stream (Stream panel). AddEventSink
-	// replays the recent buffer immediately so the panel renders on open.
-	d.AddEventSink(clientID, func(env event.Envelope) {
-		if b, err := env.Marshal(); err == nil {
-			send(Frame{Type: FrameEvent, EvJSON: string(b)})
-		}
-		// Status changes are driven by events, so push a fresh meter snapshot
-		// alongside each forwarded event.
-		st := d.Status()
-		send(Frame{Type: FrameStatus, Status: &st})
-	})
-
-	// Ensure at least one session exists when a client first attaches.
+	// Ensure at least one session exists when a client first attaches. Done BEFORE
+	// the ack and BEFORE the output sink: a spawn failure must be reported as the
+	// FIRST frame (the client reads exactly one frame as the version-ack). No sink
+	// is registered yet, so the new session's one-time welcome paint is buffered by
+	// the mux and replayed by AddSink below — captured, not lost.
 	if d.mux.Count() == 0 {
 		if _, err := d.mux.Spawn(""); err != nil {
-			d.mux.RemoveSink(clientID)
 			// Surface the REAL spawn failure: stamp our ProtocolVersion so the client
 			// (which checks ack.Version before ack.Err) does not misreport this as a
 			// "protocol v0 (incompatible build)" mismatch and discard err.
@@ -569,7 +550,36 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 		// NB: sessions keep running — daemon survives client disconnect.
 	}()
 
+	// The version-ack MUST be the FIRST frame the client reads after its hello: the
+	// client's dialSock treats frame #1 as the version-ack and rejects any Version
+	// mismatch as an "incompatible build". So send it BEFORE registering the output
+	// and event sinks — whose IMMEDIATE replay of existing-session output (e.g. a
+	// resumed daemon's sessions, which carry Version 0) would otherwise be the first
+	// frame and be misread as a "protocol v0" daemon. This was the lifecycle bug: a
+	// daemon that resumed sessions could never be attached.
 	send(Frame{Type: FrameAck, Version: ProtocolVersion, Sessions: d.mux.Count(), List: d.sessInfosFor(clientID)})
+
+	// Stream every session's output (tagged with its id). The client keeps a mirror
+	// terminal per session and renders the focused one, so switching is instant.
+	// AddSink also replays each existing session's recent output, so reattaching
+	// renders immediately — registered AFTER the ack so the replay never precedes
+	// (and is never misread as) the version-ack.
+	d.mux.AddSink(clientID, func(sessID string, b []byte) {
+		send(Frame{Type: FrameOutput, SessID: sessID, Data: base64.StdEncoding.EncodeToString(b)})
+	})
+
+	// Subscribe this client to the local event stream (Stream panel). AddEventSink
+	// replays the recent buffer immediately so the panel renders on open.
+	d.AddEventSink(clientID, func(env event.Envelope) {
+		if b, err := env.Marshal(); err == nil {
+			send(Frame{Type: FrameEvent, EvJSON: string(b)})
+		}
+		// Status changes are driven by events, so push a fresh meter snapshot
+		// alongside each forwarded event.
+		st := d.Status()
+		send(Frame{Type: FrameStatus, Status: &st})
+	})
+
 	initStatus := d.Status()
 	send(Frame{Type: FrameStatus, Status: &initStatus})
 
