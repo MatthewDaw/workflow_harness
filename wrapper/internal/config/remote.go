@@ -178,6 +178,13 @@ type remoteSkill struct {
 	Name        string `json:"name"`
 	Scope       scope  `json:"scope"`
 	Description string `json:"description"`
+	// Kind is "skill" or "bundle". A bundle is not materialized itself; its
+	// `resolvedMembers` (transitively flattened leaf skill names, annotated by the
+	// backend on GET /skills) are expanded into the effective set when the project
+	// has opted into the bundle. `members` is the un-flattened fallback.
+	Kind            string   `json:"kind"`
+	ResolvedMembers []string `json:"resolvedMembers"`
+	Members         []string `json:"members"`
 	// Body is the full SKILL.md text HQ serves on GET /skills and
 	// GET /skills/{name}. When present it is the authoritative SKILL.md content to
 	// materialize locally; older HQ responses omit it, so we fall back to
@@ -259,6 +266,11 @@ type remoteProject struct {
 	EnabledSkills     []string `json:"enabledSkills"`
 	EnabledAgents     []string `json:"enabledAgents"`
 	EnabledMcpServers []string `json:"enabledMcpServers"`
+	// EnabledBundles names the bundles the project opted into. We expand each
+	// bundle's CURRENT members (from the catalog) into the effective skill set at
+	// fetch time, so a project never goes stale when a bundle's membership changes
+	// after opt-in (the snapshot enabledSkills carries can lag; this self-heals it).
+	EnabledBundles []string `json:"enabledBundles"`
 }
 
 // Fetch reads the org catalog (GET /agents, GET /skills, no ?project, no
@@ -277,6 +289,7 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	enabledSkills := map[string]bool{}
 	enabledAgents := map[string]bool{}
 	enabledMcp := map[string]bool{}
+	enabledBundles := map[string]bool{}
 	if h.ProjectID != "" {
 		// The REST handler returns the project NESTED under a "project" key
 		// (`{project, instances, sessions}`); some shapes (and the unit tests) put
@@ -304,6 +317,9 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		}
 		for _, n := range proj.EnabledMcpServers {
 			enabledMcp[n] = true
+		}
+		for _, n := range proj.EnabledBundles {
+			enabledBundles[n] = true
 		}
 	}
 
@@ -349,6 +365,26 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	if err := h.getJSON("/skills", &skillsResp); err != nil {
 		return nil, err
 	}
+	// Expand each ENABLED bundle's CURRENT members into the effective skill set.
+	// The project's `enabledSkills` is a snapshot frozen when the bundle was opted
+	// into; if the bundle's membership later changes, that snapshot goes stale.
+	// Re-flattening the live bundle record here (kind "bundle", carrying the
+	// backend-annotated `resolvedMembers`) self-heals it every sync — so a project
+	// on `command-hq-starter` always gets the current hq-* set, no re-opt-in needed.
+	if len(enabledBundles) > 0 {
+		for _, s := range skillsResp.Skills {
+			if s.Kind != "bundle" || !enabledBundles[s.Name] {
+				continue
+			}
+			members := s.ResolvedMembers
+			if len(members) == 0 {
+				members = s.Members
+			}
+			for _, m := range members {
+				enabledSkills[m] = true
+			}
+		}
+	}
 	for _, s := range skillsResp.Skills {
 		if s.Name == "" {
 			continue
@@ -356,8 +392,13 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		if s.Scope.Tier == "org" && s.Scope.ID != "" {
 			orgID = s.Scope.ID
 		}
-		// Effective set: keep only skills the project has opted into. Skills brought
-		// by an enabled agent are already present here (union-added server-side).
+		// A bundle is a grouping record (no body to materialize); its members are
+		// expanded above. Never write a bundle to disk as a skill.
+		if s.Kind == "bundle" {
+			continue
+		}
+		// Effective set: keep only skills the project has opted into (directly or via
+		// an enabled bundle/agent, both union-added above / server-side).
 		if !enabledSkills[s.Name] {
 			continue
 		}

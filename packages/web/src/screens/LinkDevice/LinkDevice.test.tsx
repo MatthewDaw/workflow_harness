@@ -44,7 +44,8 @@ describe('LinkDevice (device-auth approval)', () => {
 
     expect(screen.getByText('Terminal commands')).toBeInTheDocument();
     expect(screen.getByText('claude+ reset')).toBeInTheDocument();
-    expect(screen.getByText('claude+ sync-skills')).toBeInTheDocument();
+    expect(screen.getByText('claude+ sync')).toBeInTheDocument();
+    expect(screen.getByText('claude+ stop N')).toBeInTheDocument();
     // These appear both as a command row and as an inline reference / flow step.
     expect(screen.getAllByText('claude+ ls').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('claude+ login').length).toBeGreaterThanOrEqual(1);

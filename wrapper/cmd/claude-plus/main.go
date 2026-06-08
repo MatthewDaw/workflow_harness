@@ -54,13 +54,23 @@ func main() {
 				fail(err)
 			}
 			return
-		case "sync-skills":
-			if err := cmdSyncSkills(); err != nil {
+		case "sync", "sync-skills":
+			// `sync` is the canonical verb: it reconciles EVERYTHING the project
+			// reads — skills, agents, AND MCP servers — from both the connected
+			// repo's own `.claude` and the Command HQ org catalog (the same engine
+			// the in-session `/hq-sync` skill drives). `sync-skills` is a kept-for-
+			// back-compat alias (its name undersold what it always did).
+			if err := cmdSync(); err != nil {
 				fail(err)
 			}
 			return
 		case "reset":
 			if err := cmdReset(); err != nil {
+				fail(err)
+			}
+			return
+		case "stop":
+			if err := cmdStop(os.Args[2:]); err != nil {
 				fail(err)
 			}
 			return
@@ -185,6 +195,29 @@ func cmdReset() error {
 	return nil
 }
 
+// cmdStop stops ONE running session by its `claude+ ls` index: it force-retires
+// that folder's daemon — killing its process tree and clearing its record — while
+// PRESERVING the session-resume pointers, so the conversations come back on the
+// next `claude+` launch in that folder. The targeted counterpart to `claude+ reset`
+// (which clears every daemon). The index is the IDX column from `claude+ ls`.
+func cmdStop(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: claude+ stop <index>   (the IDX column from `claude+ ls`)")
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(args[0]))
+	if err != nil {
+		return fmt.Errorf("invalid index %q — pass a number from `claude+ ls`", args[0])
+	}
+	e, err := daemon.ByIndex(n)
+	if err != nil {
+		return err
+	}
+	daemon.ForceReset(e.Repo)
+	fmt.Printf("stopped session %d (%s); its conversations resume on the next `claude+` in that folder\n",
+		n, e.RepoName)
+	return nil
+}
+
 // cmdAttachIndex attaches to the daemon at the given `ls` index.
 func cmdAttachIndex(n int) error {
 	label := ""
@@ -198,15 +231,17 @@ func cmdAttachIndex(n int) error {
 	return runShell(c, label)
 }
 
-// cmdSyncSkills (`claude+ sync-skills`) runs a one-shot reconcile of HQ's
-// effective skills/agents/MCP servers into the isolated ~/.claude+ registry — the
-// on-demand counterpart to the per-session auto-sync, exposed for the
-// `/update-skills` skill. Pulled (HQ-only) items land in ~/.claude+, never the
-// user's ~/.claude. After reconcile it runs the verification gate (U-Verify-Gate):
-// a partial install returns a non-nil error so this command EXITS NON-ZERO (fail
-// loudly). MCP servers that materialized but need an interactive login are printed
-// (they do not fail the gate) so the user knows the command to run.
-func cmdSyncSkills() error {
+// cmdSync (`claude+ sync`, alias `sync-skills`) runs a one-shot reconcile of the
+// project's EVERYTHING — skills, agents, AND MCP servers — into the isolated
+// ~/.claude+ registry, from both the connected repo's own `.claude` and HQ's
+// effective enabled set (bundle membership expanded live, so it self-heals a stale
+// snapshot). It is the on-demand counterpart to the per-session auto-sync and the
+// engine the `/hq-sync` skill drives. Pulled (HQ-only) items land in ~/.claude+,
+// never the user's ~/.claude. After reconcile it runs the verification gate
+// (U-Verify-Gate): a partial install returns a non-nil error so this command EXITS
+// NON-ZERO (fail loudly). MCP servers that materialized but need an interactive
+// login are printed (they do not fail the gate) so the user knows what to run.
+func cmdSync() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -222,7 +257,7 @@ func cmdSyncSkills() error {
 		// exits non-zero on a partial install.
 		return err
 	}
-	fmt.Printf("skills synced: pulled %d, pushed %d (into ~/.claude+); verify: %s\n",
+	fmt.Printf("synced (skills + agents + mcp): pulled %d, pushed %d (into ~/.claude+); verify: %s\n",
 		pulled, pushed, gate.Summary())
 	return nil
 }

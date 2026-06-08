@@ -317,9 +317,18 @@ Waiting for approval… (Ctrl-C to cancel)`}
               <code className="font-mono">claude+ ls</code>.
             </dd>
 
-            <dt className="font-mono text-ink">claude+ sync-skills</dt>
+            <dt className="font-mono text-ink">claude+ sync</dt>
             <dd className="min-w-0 text-mut">
-              Pull the latest skills and agents for this project down from HQ.
+              Sync everything this project uses — skills, agents, and MCP servers —
+              down from HQ (and up from the repo&rsquo;s own <code className="font-mono">.claude</code>).
+              Run it after connecting a project or enabling something in HQ.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+ stop N</dt>
+            <dd className="min-w-0 text-mut">
+              Stop the session at index <code className="font-mono">N</code> from{' '}
+              <code className="font-mono">claude+ ls</code>. Its conversations resume on the
+              next launch in that folder.
             </dd>
 
             <dt className="font-mono text-ink">claude+ reset</dt>
