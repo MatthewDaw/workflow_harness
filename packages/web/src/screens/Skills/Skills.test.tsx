@@ -106,6 +106,37 @@ describe('Skills scope controls (U17)', () => {
   });
 });
 
+describe('Skills catalog versioning (KTD6)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('shows the per-skill variant switcher + promote on plain cards', async () => {
+    renderWithProviders(<Skills />, {
+      route: '/skills',
+      seed: {
+        skills: BUNDLE_SKILLS,
+        skillVariants: {
+          loner: [
+            { variantId: 'loner#base', baseName: 'loner', name: 'loner', version: 1, isTrue: true },
+            {
+              variantId: 'loner#R#x#U#y',
+              baseName: 'loner',
+              name: 'loner',
+              version: 2,
+              repoId: 'x',
+              authorUserId: 'y',
+            },
+          ],
+        },
+      },
+    });
+    await screen.findByTestId('skill-card-loner');
+
+    // The standalone skill card carries the version dropdown + promote action.
+    expect(await screen.findByTestId('variant-select-loner')).toBeInTheDocument();
+    expect(screen.getByTestId('promote-variant-loner')).toBeInTheDocument();
+  });
+});
+
 describe('Skills bundle-member visibility (U17)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
