@@ -58,6 +58,12 @@ export interface SeedData {
   objectives?: ObjectiveNode[];
   agents?: Agent[];
   skills?: Skill[];
+  /**
+   * Per-name skill variant/revision lists (catalog versioning, KTD6), keyed by
+   * skill name. Served by `GET /skills/:name/variants` so the variant switcher +
+   * promote UI resolve real rows in tests.
+   */
+  skillVariants?: Record<string, unknown[]>;
   mcpServers?: McpServer[];
   weekly?: Record<string, WeeklyUpdate[]>;
   /** Detailed-requirements doc tree, keyed by projectId (U11). */
@@ -153,6 +159,14 @@ export function installFetchStub(seed: SeedData) {
     if (path === 'agents') return json(seed.agents ?? []);
     if (path === 'skills') return json(seed.skills ?? []);
     if (path === 'mcp-servers') return json(seed.mcpServers ?? []);
+
+    // Catalog versioning (KTD6): a name's variant/revision list + the (not
+    // admin-gated) promote endpoint. Matched before the project opt-in routes
+    // below so `skills/<name>/variants` doesn't fall through to a 200 [].
+    const skillVariants = /^skills\/([^/]+)\/variants$/.exec(path);
+    if (skillVariants) return json({ variants: seed.skillVariants?.[skillVariants[1]!] ?? [] });
+    const skillPromote = /^skills\/([^/]+)\/promote$/.exec(path);
+    if (skillPromote) return json({ name: skillPromote[1], variantId: '', rev: 1 });
     if (path === 'sessions') return json(seed.sessions ?? []);
 
     // Project skill/agent opt-in: return the (seeded) project so the mutation
