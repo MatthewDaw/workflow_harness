@@ -16,11 +16,25 @@ Author and register Command HQ skills — a single one or a whole bundle — int
 **org catalog**, then opt the current project into the ones it needs. Runs in the
 developer's claude+ session, inside a connected repo.
 
-> **Model (2026-06-03):** there are **no scope tiers** anymore. Every skill and
-> agent lives in one **org catalog** (`scope: { tier: "org", id: "<org>" }`).
-> Catalog writes are **admin-gated**. Projects then **opt in** to individual items
-> via `enabledSkills` / `enabledAgents`. There is no project/user/org scope choice
-> to make, and no promote/demote. See the
+> **Scope model (live, 3-tier).** The catalog code is firmly 3-tier —
+> `org` / `user` / `project` (see `packages/backend/src/rest/scopeauth.ts`
+> `canReadScope` / `canWriteScope`). Skills and agents live in the **org catalog**
+> by default (`scope: { tier: "org", id: "<org>" }`), and an **org-scope write is
+> admin-gated** (`canWriteOrgCatalog` ⇒ the `custom:admin` claim). A user may
+> still write their **own** user scope without admin, and a project owner their own
+> project scope. The server **forces** `scope` and stamps `createdBy` from the
+> authenticated principal — you never set them. Projects then **opt in** to
+> individual items via `enabledSkills` / `enabledAgents`.
+>
+> **Versioning (live).** A version is `(baseName, repoId, userId)`. Editing the
+> org skill `S` from project `R` as person `P` **forks/updates** the variant
+> `(S, R, P)` and **snapshots an immutable revision** — it never edits the org
+> **base** variant or anyone else's. One org-wide **TRUE** version per name is the
+> UI default and the default added to a project; **any authed org member may
+> promote** a variant to true via `POST /skills/:name/promote { variantId, rev? }`
+> (NOT admin-gated). A project's enabled-set entry carries the chosen variant
+> (`{ name, variantId }`, default = TRUE); a per-repo dropdown can switch it. This
+> replaces the retired `POST /skills/:name/scope` verb (`410 Gone`). See the
 > [org-catalog design spec](../../../docs/superpowers/specs/2026-06-03-org-catalog-scope-collapse-design.md).
 
 ## 1 · Decide: single skill or a bundle
@@ -36,13 +50,22 @@ Read the prompt:
 
 If it's ambiguous, ask: "one skill, or a bundle of several?"
 
-## 2 · There is no scope to choose — it's the org catalog
+## 2 · Scope: org catalog by default (3-tier underneath)
 
-Every skill and bundle is org-scoped. You do **not** ask the user for project /
-user / org. The only question is whether you can write the catalog: catalog writes
-(`POST/PUT/DELETE /skills`, `/agents`) are **admin-gated**. On create the server
-forces `scope = orgScope(<org>)` and stamps `createdBy: { userId, name }` from the
-authenticated principal — you never set `scope` or `createdBy` yourself.
+A new skill/bundle defaults to the **org catalog**. You do **not** prompt for a
+tier in the common path — the server forces `scope = orgScope(<org>)` and stamps
+`createdBy: { userId, name }` from the authenticated principal, so you never set
+`scope` or `createdBy` yourself. The thing to know is *who may write*: an
+**org-scope** catalog write (`POST/PUT/DELETE /skills`, `/agents`) is
+**admin-gated** (`canWriteOrgCatalog` ⇒ the `custom:admin` claim). The underlying
+model is still 3-tier — a user can write their **own** user scope and a project
+owner their own project scope without admin — but for adding a shared skill you're
+writing the org catalog, which needs admin.
+
+**An edit is a fork, not a clobber.** Editing an existing org skill from a project
+context cuts a **new version/variant** keyed by `(name, repo, person)` and
+snapshots an immutable revision — it never overwrites the org base variant or
+anyone else's. The shared catalog stays safe.
 
 The bundled `command-hq-starter` bundle is part of this same org catalog.
 
@@ -168,7 +191,12 @@ must already exist in the org catalog (else `404`). You can also do this from th
 HQ project **Skills** / **Agents** tabs.
 
 > The old per-skill scope picker and the `POST /skills/<name>/scope` change
-> endpoint are **gone** (`410`). Don't reach for them.
+> endpoint are **gone** (`410`). The versioning replacement is
+> `POST /skills/<name>/promote { variantId, rev? }` — repoint the org-wide **TRUE**
+> variant (the default shown in the UI and added to a project). **Any authed org
+> member may promote**; it only repoints the TRUE pointer and never edits or
+> deletes a variant. A project's enabled-set entry carries `{ name, variantId }`
+> (default = TRUE), switchable per-repo via a dropdown.
 
 ## 6 · Make it available in this session — always do this
 

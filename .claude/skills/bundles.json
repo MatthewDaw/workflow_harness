@@ -2,6 +2,7 @@
   "command-hq-starter": {
     "description": "Skills bundled with Command HQ + claude+ (forge, weekly, progress, skill authoring).",
     "members": [
+      "hq-add-mcp",
       "hq-add-skill",
       "hq-create-skill",
       "hq-endforge",
@@ -10,6 +11,7 @@
       "hq-sync",
       "hq-relogin",
       "hq-startforge",
+      "hq-update-agent",
       "hq-update-progress",
       "hq-update-skills",
       "hq-weekly-update"

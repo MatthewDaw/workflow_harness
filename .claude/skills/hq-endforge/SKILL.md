@@ -7,7 +7,8 @@ description: >-
   allowed), distills a short focused prompt from the diff + session, curates the
   minimal skill set (references existing skills, mints only missing ones), shows
   the draft, and on confirmation registers the agent + new skills to Command HQ
-  at the AUTHOR's own scope. A single admin later promotes it org-wide in HQ.
+  at the AUTHOR's own scope. Any org member later promotes it to the org-wide
+  TRUE version in HQ.
   Pair with /hq-startforge. Use when the user says "/hq-endforge", "end the forge",
   "distill this into an agent", or "register the forged agent".
 ---
@@ -89,18 +90,27 @@ The forge boundary is now closed; the agent exists at the author's scope only.
 
 ## Promote org-wide (F4 — a separate human step, R19/R20)
 
-`/hq-endforge` never publishes org-wide. A **single admin** (v1 = one admin user =
-the promoter) opens the forged agent in Command HQ, reviews prompt + skills, and
-flips it to org scope via the existing scope-elevate path:
+`/hq-endforge` never publishes org-wide. Going org-wide is a deliberate human
+action in Command HQ. There are two paths, depending on whether the forged agent
+is registered as its own org-catalog **variant** or sits at the author's user
+scope:
 
-- `POST /agents/:name/scope` with body `{ scope: { tier: "org", id: <org> } }`
-  (`scopeChangeSchema`). The handler rewrites the scope key (delete old, put
-  new). `canWriteScope` gates the org tier behind the `custom:admin` claim
-  (`scopeauth.ts`), so only the admin can promote.
+- **Versioning promote (the live path).** When the agent exists as an org-catalog
+  variant, a reviewer opens it in HQ, reviews prompt + skills, and flips the
+  org-wide **TRUE** pointer to that variant:
+  - `POST /agents/:name/promote { variantId, rev? }` repoints the per-name TRUE
+    variant (the default shown in the UI and added to a project). **Any authed
+    org member may promote** — it only repoints TRUE; it never edits or deletes a
+    variant. Promote the referenced skills the same way
+    (`POST /skills/:name/promote`) so the pointers resolve to org-wide TRUE.
 
-Once promoted, the agent reaches all org users through the existing config-sync
-drift/pull. The skills it references should be promoted the same way so the
-pointers resolve org-wide (`POST /skills/:name/scope`).
+> The old scope-elevate endpoints `POST /agents/:name/scope` /
+> `POST /skills/:name/scope` are **retired** (`410 Gone`); the model is 3-tier
+> (`org` / `user` / `project`, `scopeauth.ts`) with the **versioning promote**
+> above as the org-wide-default mechanism. Don't reach for the `/scope` verbs.
+
+Once TRUE points at the forged variant, the agent reaches all org users through
+the existing config-sync drift/pull.
 
 ## Worked dry-run example (against THIS repo)
 
@@ -124,12 +134,14 @@ Following the `/hq-startforge` example (`skill-authoring-flow`):
 6. Shows the draft; user confirms.
 7. `POST /skills` (skillmd-frontmatter, scope user) then `POST /agents`
    (skill-author, scope user, skills:["skillmd-frontmatter", ...]).
-8. Prints: "Registered 'skill-author' at your scope. An admin can promote it
-   org-wide in HQ → Agents → Promote."
+8. Prints: "Registered 'skill-author' at your scope. Any org member can promote
+   it to the org-wide TRUE version in HQ → Agents → Promote."
 
 ## Verification (this is a doc, not code)
 
 Test expectation: none — SKILL.md authoring. Verified by running it: "no" at the
 prompt registers nothing; "yes" distills a prompt, curates skills, and registers
-the agent + new skills at the author's user scope; the org-promote control
-(scope-elevate to org) is admin-gated. The fuzzy-Forge pipeline stays unrouted.
+the agent + new skills at the author's user scope; org-wide adoption is a separate
+human **promote** step (`POST /agents|skills/:name/promote`, repointing the TRUE
+variant — callable by any authed org member, not the retired `/scope` verb). The
+fuzzy-Forge pipeline stays unrouted.

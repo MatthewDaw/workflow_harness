@@ -20,24 +20,35 @@ just-published bundled skill is usable without restarting a session.
 
 Runs the wrapper's one-shot reconcile (`claude+ sync-skills`), which:
 
-1. Fetches the **whole org catalog** (`GET /skills`, `GET /agents` — no scope
-   resolution; every item is org-scoped), then resolves this repo's linked project
-   and reads its `enabledSkills` / `enabledAgents` (`GET /projects/:id`).
+1. Fetches the catalog (`GET /skills`, `GET /agents`) — the **org catalog merged
+   with the caller's own user-scoped items** (the 3-tier model in
+   `scopeauth.ts`: a user-scoped item shadows an org-scoped one of the same name)
+   — then resolves this repo's linked project and reads its `enabledSkills` /
+   `enabledAgents` (`GET /projects/:id`).
 2. Computes the **effective set** = catalog items whose name is in the project's
-   `enabledSkills` (skills) or `enabledAgents` (agents). An enabled agent's own
-   skills are already in `enabledSkills` (the server union-added them when the agent
-   was enabled), so no extra expansion is needed here.
-3. **Pulls** any effective item missing locally into
-   `~/.claude+/skills/<name>/SKILL.md` (and agents into `~/.claude+/agents/`).
-4. **Pushes** any local-only skill up to the **org catalog** (admin-gated; a
-   non-admin push is rejected).
+   `enabledSkills` (skills) or `enabledAgents` (agents), each resolved to the
+   variant the project pinned (`{ name, variantId }`, default = the org-wide
+   **TRUE** variant). An enabled agent's own skills are already in `enabledSkills`
+   (the server union-added them when the agent was enabled), so no extra expansion
+   is needed here.
+3. **Pulls** any effective item missing locally (or pinned to a newer variant)
+   into `~/.claude+/skills/<name>/SKILL.md` (and agents into `~/.claude+/agents/`).
+4. **Pushes** any local-only skill up to the catalog. An org-scope write is
+   **admin-gated** (a non-admin push to the org catalog is rejected); editing an
+   existing item from a project context instead **forks a new version/variant**
+   (`(name, repo, person)`, immutable revision) — it never clobbers the org base.
 
-This is **not** the old org+user+project narrowest-wins resolution — it is a flat
-org catalog filtered by one project's opt-in. It writes only into the isolated
+This is **not** a narrowest-wins flatten of three independent tiers — it is the
+org catalog (with the caller's user-scoped overrides) filtered by one project's
+opt-in, resolving each enabled name to its pinned variant. It writes only into the
+isolated
 `~/.claude+` root — never your personal `~/.claude` — so bundled product skills
 never pollute your normal Claude Code dataset. Items that exist on both sides with
-different content are reported as `differs` and left for you to resolve (a sync
-never silently overwrites an edited definition).
+different content are reported as `differs`: a sync never silently overwrites an
+edited definition. To publish a local edit, **fork a new version/variant** (an
+edit from a project context cuts the `(name, repo, person)` variant + an immutable
+revision — never clobbering the org base); to adopt the catalog's version, delete
+the local file and re-run so the pinned variant re-pulls.
 
 ## How to run
 

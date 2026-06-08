@@ -77,10 +77,19 @@ generates and scores prompt candidates itself.
    - `PUT /agents/{name}` (or `POST /agents`; the handler upserts) with body
      `{ name, scope: { tier, id }, model, prompt: <best>, skills, tools }`
      (the `agentSchema` shape) and the bearer token.
-   `canWriteScope` gates the write: a user may write their own user/project
-   scope without admin; an **org-scope** write requires the `custom:admin` claim.
-   If the caller cannot write the agent's scope, report it and leave HQ
-   unchanged (offer to save a copy at the caller's user scope instead).
+   `canWriteScope` gates the write (the model is 3-tier — `org` / `user` /
+   `project`; see `packages/backend/src/rest/scopeauth.ts`): a user may write
+   their own user/project scope without admin; an **org-scope** write requires the
+   `custom:admin` claim. If the caller cannot write the agent's scope, report it
+   and leave HQ unchanged (offer to save a copy at the caller's user scope
+   instead).
+   **Versioning:** a version is `(baseName, repoId, userId)`. Re-saving the
+   refined prompt from a project context **forks/updates** the `(name, repo,
+   person)` variant and snapshots an immutable revision — it never overwrites the
+   org base variant or anyone else's. To make the refined prompt the org-wide
+   default, promote its variant via `POST /agents/:name/promote { variantId, rev? }`
+   (callable by **any authed org member**, not admin-gated — it only repoints the
+   per-name **TRUE** pointer).
 6. **Confirm.** Print the agent's HQ URL and the stored score so the change is
    visible. The refined prompt reaches consumers through the existing
    config-sync drift/pull.
