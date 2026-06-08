@@ -543,11 +543,12 @@ func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *
 		}
 	})
 
-	// Install the managed hooks block in ~/.claude/settings.json so Claude Code
-	// forwards lifecycle events to `claude+ __hook` (which delivers them to this
-	// daemon's socket). Best-effort: a missing executable path or unwritable
-	// settings file must never block daemon startup, so errors are ignored.
-	installHooks()
+	// Install the managed hooks block in this repo's per-project config root's
+	// settings.json so Claude Code forwards lifecycle events to `claude+ __hook`
+	// (which delivers them to this daemon's socket). Best-effort: a missing
+	// executable path or unwritable settings file must never block daemon startup,
+	// so errors are ignored.
+	installHooks(d.repoRoot)
 
 	// Register the user-kill hook so an attached client's FrameKill records the
 	// user-intent end (and removes the session from the resume store). The control
@@ -628,7 +629,11 @@ func (rt *Runtime) reconcileSkills() {
 	if src == nil {
 		return
 	}
-	plus, err := config.ProjectConfigDir(rt.d.repoRoot)
+	// EnsureConfigDir (not the pure ProjectConfigDir) so the root + its seed-once
+	// .mcp.json (the user's personal MCP servers) exist BEFORE a pull can merge HQ
+	// servers into a fresh .mcp.json — otherwise a sync-before-first-spawn would
+	// create .mcp.json with only HQ servers and the seed would later be skipped.
+	plus, err := config.EnsureConfigDir(rt.d.repoRoot)
 	if err != nil {
 		diag.Logf("skills auto-sync: resolve project config dir failed: %v", err)
 		return
@@ -669,7 +674,9 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, err error) {
 		return 0, 0, fmt.Errorf("not signed in to HQ (run `claude+ login`)")
 	}
 	src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(repoRoot))
-	plus, err := config.ProjectConfigDir(repoRoot)
+	// EnsureConfigDir (not ProjectConfigDir): seed the root's personal .mcp.json
+	// before any pull merges HQ MCP servers into it (see reconcileSkills).
+	plus, err := config.EnsureConfigDir(repoRoot)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1260,13 +1267,19 @@ func ownerRepoFromRemote(url string) string {
 // forwards each event to this repo's daemon socket. Best-effort: any failure
 // (no resolvable executable, unwritable ~/.claude/settings.json) is ignored —
 // the transcript tailer remains the authoritative event source.
-func installHooks() {
+func installHooks(repoRoot string) {
 	exe, err := os.Executable()
 	if err != nil {
 		return
 	}
+	// Install the managed hooks block into THIS repo's per-project config root (the
+	// same root its sessions launch against), creating + seeding it as needed.
+	dir, err := config.EnsureConfigDir(repoRoot)
+	if err != nil {
+		return
+	}
 	hookCmd := strconv.Quote(exe) + " __hook"
-	_, _ = capture.InstallHooks(hookCmd)
+	_, _ = capture.InstallHooks(dir, hookCmd)
 }
 
 // Stop tears down the runtime.

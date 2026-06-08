@@ -197,25 +197,22 @@ func TestMapHook(t *testing.T) {
 }
 
 func TestInstallHooksIdempotent(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // windows home
-	p1, err := InstallHooks("claude-plus __hook")
+	// Hooks are installed into the config root the daemon passes (the per-project
+	// root in production); the test passes an explicit dir.
+	dir := t.TempDir()
+	p1, err := InstallHooks(dir, "claude-plus __hook")
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	p2, err := InstallHooks("claude-plus __hook")
+	p2, err := InstallHooks(dir, "claude-plus __hook")
 	if err != nil {
 		t.Fatalf("re-install: %v", err)
 	}
 	if p1 != p2 {
 		t.Fatalf("settings path drifted")
 	}
-	// Hooks must be written into the isolated claude+ config root (~/.claude+),
-	// not ~/.claude, since claude+ launches Claude with CLAUDE_CONFIG_DIR there.
-	wantDir := filepath.Join(home, ".claude+")
-	if filepath.Dir(p1) != wantDir {
-		t.Fatalf("hooks installed at %q, want under %q", p1, wantDir)
+	if filepath.Dir(p1) != dir {
+		t.Fatalf("hooks installed at %q, want under %q", p1, dir)
 	}
 	b, _ := os.ReadFile(p1)
 	// Re-install must not duplicate our managed entry under Notification.

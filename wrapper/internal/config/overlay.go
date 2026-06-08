@@ -1,11 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -64,9 +66,20 @@ var seededFiles = []seededFile{
 }
 
 // authSyncFiles are the per-project root files kept convergent with the BASE on
-// every spawn (newer-wins, both directions). `.mcp.json` is deliberately absent:
-// it is seeded once and then owned per-project so pulled MCP servers persist.
-var authSyncFiles = []string{".credentials.json", ".claude.json", "settings.json"}
+// every spawn (newer-wins, both directions). Only true auth/identity files belong
+// here: a credential the inner Claude refreshes in one project must reach the
+// others. `.mcp.json` and `settings.json` are NOT here — they are seeded once and
+// then owned per-project (see seedOnceFiles), so a project's pulled MCP servers
+// and its own permissions/model/hooks settings never leak into another project.
+var authSyncFiles = []string{".credentials.json", ".claude.json"}
+
+// seedOnceFiles are copied from the BASE into a project root exactly once (only
+// when absent), then owned per-project. `.mcp.json` carries the user's personal
+// MCP servers, onto which ApplyPulled merges this project's HQ servers — so a
+// later base copy must never clobber them. `settings.json` carries per-project
+// permissions/model plus the managed hooks block (installed into the root by the
+// daemon), which must not be whole-file synced across projects.
+var seedOnceFiles = []string{".mcp.json", "settings.json"}
 
 // plusDir resolves the BASE ~/.claude+ (canonical auth + the parent of every
 // per-project root). Kept as the package's single home-relative anchor.
@@ -78,13 +91,36 @@ func plusDir() (string, error) {
 	return filepath.Join(home, ".claude+"), nil
 }
 
+// canonRepoRoot normalizes a repo path to a stable identity so the SAME physical
+// repo always maps to the SAME per-project root regardless of how it was spelled
+// at launch. It resolves to an absolute, symlink-free path, and on Windows folds
+// case + separators (the FS is case-insensitive, so C:\Users\Me\repo and
+// c:\users\me\repo are the same directory and must not spawn two roots). Used for
+// BOTH the readable slug prefix and the identity hash so they never diverge.
+func canonRepoRoot(repoRoot string) string {
+	r := repoRoot
+	if abs, err := filepath.Abs(r); err == nil {
+		r = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(r); err == nil && resolved != "" {
+		r = resolved
+	}
+	if runtime.GOOS == "windows" {
+		r = strings.ToLower(filepath.Clean(r))
+	}
+	return r
+}
+
 // projectSlug derives a stable, readable, collision-free directory name for a
-// repo's per-project root. It is the lowercased base folder name (slugified)
-// plus an 8-hex suffix of the absolute path's SHA-1, so two repos that share a
-// folder name in different locations never collide. Self-contained in this
-// package (no import of the daemon/capture slug helpers).
+// repo's per-project root: the canonicalized base folder name (slugified, capped)
+// plus an 8-hex suffix of the canonical path's SHA-1, so two repos that share a
+// folder name in different locations never collide AND the same repo launched
+// under a different casing/spelling resolves to one root. The prefix is length-
+// capped to keep the nested transcript path well under Windows MAX_PATH. Self-
+// contained in this package (no import of the daemon/capture slug helpers).
 func projectSlug(repoRoot string) string {
-	base := strings.ToLower(filepath.Base(repoRoot))
+	canon := canonRepoRoot(repoRoot)
+	base := strings.ToLower(filepath.Base(canon))
 	var b strings.Builder
 	prevDash := false
 	for _, r := range base {
@@ -97,7 +133,10 @@ func projectSlug(repoRoot string) string {
 		}
 	}
 	slug := strings.Trim(b.String(), "-")
-	sum := sha1.Sum([]byte(repoRoot))
+	if len(slug) > 32 {
+		slug = strings.Trim(slug[:32], "-")
+	}
+	sum := sha1.Sum([]byte(canon))
 	suffix := hex.EncodeToString(sum[:])[:8]
 	if slug == "" {
 		return suffix
@@ -167,18 +206,22 @@ func EnsureConfigDir(repoRoot string) (string, error) {
 	for _, sub := range []string{"skills", "agents"} {
 		_ = os.MkdirAll(filepath.Join(root, sub), 0o755)
 	}
-	// `.mcp.json` is seeded ONCE from the base (which carries the user's personal
-	// MCP servers) so the project's pulled HQ servers merged in afterwards are not
+	// `.mcp.json` and `settings.json` are seeded ONCE from the base (the personal
+	// MCP servers / personal settings) so this project can own them: pulled HQ MCP
+	// servers and the per-project hooks block merged in afterwards are never
 	// clobbered on later spawns.
-	rootMcp := filepath.Join(root, ".mcp.json")
-	if !pathExists(rootMcp) {
-		if baseMcp := filepath.Join(base, ".mcp.json"); pathExists(baseMcp) {
-			_ = copyFile(baseMcp, rootMcp)
+	for _, name := range seedOnceFiles {
+		rp := filepath.Join(root, name)
+		if pathExists(rp) {
+			continue
+		}
+		if bp := filepath.Join(base, name); pathExists(bp) {
+			_ = copyFile(bp, rp)
 		}
 	}
-	// Auth/settings: bidirectional newer-wins sync with the base, so a re-login or
-	// another project's refreshed token flows in, and this project's in-session
-	// token refresh flows back out to the base for the others.
+	// Auth: bidirectional newer-wins sync with the base, so a re-login or another
+	// project's refreshed token flows in, and this project's in-session token
+	// refresh flows back out to the base for the others.
 	for _, name := range authSyncFiles {
 		syncAuthFile(base, root, name)
 	}
@@ -205,32 +248,74 @@ func ConfigDir(repoRoot string) (string, bool) {
 // mtime). If only one side exists it is propagated to the other; if neither
 // exists it is a no-op. Best-effort: copy errors are swallowed so a transient
 // failure never blocks a spawn.
+//
+// Two guards keep a corrupt or coarse-mtime filesystem from destroying a good
+// credential: a ZERO-LENGTH file is treated as absent (never propagated over a
+// valid copy — defends against an interrupted external write), and an mtime TIE
+// (coarse FS granularity / same tick) falls back to a content comparison and, if
+// they differ, converges on the BASE as the canonical auth hub rather than
+// leaving the two permanently divergent. copyFile preserves the source mtime, so
+// a converged identical pair compares equal and this becomes a true no-op (no
+// per-spawn copy churn).
 func syncAuthFile(base, root, name string) {
 	bp := filepath.Join(base, name)
 	rp := filepath.Join(root, name)
-	bt, bok := fileMTime(bp)
-	rt, rok := fileMTime(rp)
+	bs, bok := fileStat(bp)
+	rs, rok := fileStat(rp)
+	// A zero-length auth file is corrupt/absent for our purposes: never let it win.
+	if bok && bs.size == 0 {
+		bok = false
+	}
+	if rok && rs.size == 0 {
+		rok = false
+	}
 	switch {
 	case bok && !rok:
 		_ = copyFile(bp, rp)
 	case rok && !bok:
 		_ = copyFile(rp, bp)
 	case bok && rok:
-		if bt.After(rt) {
+		switch {
+		case bs.mtime.After(rs.mtime):
 			_ = copyFile(bp, rp)
-		} else if rt.After(bt) {
+		case rs.mtime.After(bs.mtime):
 			_ = copyFile(rp, bp)
+		default:
+			// Equal mtime: converge on content. Prefer the base on a real difference.
+			if !sameFile(bp, rp) {
+				_ = copyFile(bp, rp)
+			}
 		}
 	}
 }
 
-// fileMTime returns a file's modification time and whether it exists.
-func fileMTime(p string) (mtime time.Time, ok bool) {
+// statInfo carries the two facts syncAuthFile needs about a candidate file.
+type statInfo struct {
+	mtime time.Time
+	size  int64
+}
+
+// fileStat returns a file's mtime + size and whether it exists.
+func fileStat(p string) (statInfo, bool) {
 	fi, err := os.Stat(p)
 	if err != nil {
-		return time.Time{}, false
+		return statInfo{}, false
 	}
-	return fi.ModTime(), true
+	return statInfo{mtime: fi.ModTime(), size: fi.Size()}, true
+}
+
+// sameFile reports whether two files have byte-identical contents. A read error
+// on either side yields false (treat as "differs" so the caller reconciles).
+func sameFile(a, b string) bool {
+	ab, err := os.ReadFile(a)
+	if err != nil {
+		return false
+	}
+	bb, err := os.ReadFile(b)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(ab, bb)
 }
 
 func pathExists(p string) bool {
@@ -238,22 +323,46 @@ func pathExists(p string) bool {
 	return err == nil
 }
 
+// copyFile copies src to dst ATOMICALLY: it streams into a temp file in the
+// destination directory, fsyncs it, then os.Renames it over dst (atomic on a
+// single filesystem on both POSIX and Windows). A reader therefore only ever sees
+// either the old complete file or the new complete one — never a truncated or
+// half-written file — and a crash mid-copy leaves dst intact (plus an orphan
+// temp, which the fixed authSyncFiles/seedOnceFiles lists never pick up). The
+// source mtime is preserved onto dst so a converged pair compares mtime-equal and
+// syncAuthFile stops re-copying on every spawn.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	fi, statErr := in.Stat()
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	out, err := os.Create(dst)
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".tmp-"+filepath.Base(dst)+"-*")
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := io.Copy(tmp, in); err != nil {
+		tmp.Close()
 		return err
 	}
-	return out.Close()
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		return err
+	}
+	if statErr == nil {
+		_ = os.Chtimes(dst, fi.ModTime(), fi.ModTime())
+	}
+	return nil
 }

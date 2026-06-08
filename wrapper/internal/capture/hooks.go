@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
@@ -40,19 +39,16 @@ type settingsHookExec struct {
 	Command string `json:"command"` // the claude+ hook shim invocation
 }
 
-// InstallHooks merges a hooks block into the claude+ BASE config root's
-// settings.json (~/.claude+/settings.json) that forwards lifecycle events to the
-// daemon. The hooks are identical for every project, so they live in the base;
-// each per-project root inherits them via the settings.json auth-sync in
-// EnsureConfigDir, so they fire under isolation regardless of which project root
-// a session is launched against. Writes are additive: existing user hooks are
-// preserved; only our managed entries (identified by the shim command) are
-// reconciled. Returns the settings path written.
-func InstallHooks(hookCmd string) (string, error) {
-	dir, err := config.EnsureBaseDir()
-	if err != nil {
-		return "", err
-	}
+// InstallHooks merges a hooks block into the given config root's settings.json
+// (the per-project root ~/.claude+/roots/<slug>/settings.json) that forwards
+// lifecycle events to the daemon. settings.json is per-project (seeded once, not
+// whole-file synced), so the managed hooks block is installed directly into the
+// root the session is launched against rather than relying on cross-project
+// propagation. Writes are additive: existing user hooks are preserved; only our
+// managed entries (identified by the shim command) are reconciled. Returns the
+// settings path written. The caller resolves `dir` (the daemon passes this repo's
+// EnsureConfigDir result).
+func InstallHooks(dir, hookCmd string) (string, error) {
 	path := filepath.Join(dir, "settings.json")
 
 	settings := map[string]any{}
