@@ -96,10 +96,10 @@
 
   /* project sub-nav */
   .hq-subnav {
-    @apply flex gap-0.5 px-3.5 border-b border-line bg-paper2;
+    @apply flex flex-wrap items-center gap-0.5 px-3.5 border-b border-line bg-paper2;
   }
   .hq-subnav a {
-    @apply text-[12.5px] text-mut px-3 py-2.5 no-underline border-b-2 border-transparent -mb-px uppercase tracking-wide cursor-pointer;
+    @apply text-[12.5px] text-mut px-3 py-2.5 no-underline border-b-2 border-transparent -mb-px uppercase tracking-wide cursor-pointer whitespace-nowrap;
   }
   .hq-subnav a.on {
     @apply text-ink border-b-brass font-semibold;

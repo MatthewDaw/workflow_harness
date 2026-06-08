@@ -13,6 +13,19 @@ export function authorOf(s: Skill): string {
 }
 
 /**
+ * The one-liner a card shows. Normally this is just `skill.description`, but a
+ * locally-ingested skill can arrive with its description set to the whole raw
+ * SKILL.md (frontmatter and all). Strip a leading frontmatter block so the card
+ * shows prose, not a `--- name: … ---` dump; the `line-clamp` then bounds the
+ * height. Falls back to the raw description if stripping leaves nothing.
+ */
+export function descriptionOf(s: Skill): string {
+  const raw = s.description ?? '';
+  const stripped = stripFrontmatter(raw).trim();
+  return stripped || raw;
+}
+
+/**
  * The canonical catalog card for one skill. A bundle renders as a clickable card
  * that drills into its sub-skills; a plain skill renders as a static card. This
  * is the SINGLE representation of a skill in the catalog — the top-level Skills
@@ -49,7 +62,7 @@ export function SkillCard({
           </span>
           <span className="text-[11px] text-faint">{memberCount} skills ›</span>
         </div>
-        <div className="my-1.5 text-xs text-mut">{skill.description}</div>
+        <div className="my-1.5 line-clamp-3 text-xs text-mut">{descriptionOf(skill)}</div>
         <div className="mt-1.5 text-[11px] text-faint" data-testid={`skill-author-${skill.name}`}>
           by {authorOf(skill)}
         </div>
@@ -62,7 +75,7 @@ export function SkillCard({
         <Pill variant="skill">{skill.name}</Pill>
         <span className="text-[11px] text-faint">{skill.source}</span>
       </div>
-      <div className="my-1.5 text-xs text-mut">{skill.description}</div>
+      <div className="my-1.5 line-clamp-3 text-xs text-mut">{descriptionOf(skill)}</div>
       <SkillBodyPreview skill={skill} />
       <div className="mt-1.5 text-[11px] text-faint" data-testid={`skill-author-${skill.name}`}>
         by {authorOf(skill)}
@@ -84,7 +97,12 @@ export function SkillCard({
  */
 function SkillBodyPreview({ skill }: { skill: Skill }) {
   const [open, setOpen] = useState(false);
-  const body = stripFrontmatter(skill.body ?? '').trim();
+  // The full skill text is normally `body` (the whole SKILL.md). A locally
+  // ingested skill can instead carry the whole file in `description` with an
+  // empty body, so fall back to it — otherwise the Expand button would vanish
+  // exactly when the card has the most to show.
+  const source = (skill.body ?? '').trim() ? (skill.body as string) : (skill.description ?? '');
+  const body = stripFrontmatter(source).trim();
   if (!body) return null;
 
   return (

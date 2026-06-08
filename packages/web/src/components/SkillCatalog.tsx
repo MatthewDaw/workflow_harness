@@ -57,7 +57,16 @@ export function SkillCatalog({
     return !memberNames.has(s.name);
   };
 
-  const catalog = skills.filter(visible);
+  // Bundles lead the grid (they're the entry points that drill into sub-skills),
+  // then plain skills — order is otherwise stable so the catalog stays steady.
+  const catalog = skills
+    .filter(visible)
+    .map((s, i) => [s, i] as const)
+    .sort(([a, ai], [b, bi]) => {
+      const rank = (s: Skill) => (s.kind === 'bundle' ? 0 : 1);
+      return rank(a) - rank(b) || ai - bi;
+    })
+    .map(([s]) => s);
 
   return (
     <>
@@ -75,7 +84,7 @@ export function SkillCatalog({
           <label className="flex items-center gap-1.5">
             Author
             <select
-              className="hq-btn"
+              className="hq-btn normal-case"
               data-testid="author-filter"
               value={author}
               onChange={(e) => setAuthor(e.target.value)}

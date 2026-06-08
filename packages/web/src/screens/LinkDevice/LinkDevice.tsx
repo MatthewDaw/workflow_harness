@@ -324,7 +324,7 @@ Waiting for approval… (Ctrl-C to cancel)`}
               Run it after connecting a project or enabling something in HQ.
             </dd>
 
-            <dt className="font-mono text-ink">claude+ stop N</dt>
+            <dt className="font-mono text-ink">claude+ stop=N</dt>
             <dd className="min-w-0 text-mut">
               Stop the session at index <code className="font-mono">N</code> from{' '}
               <code className="font-mono">claude+ ls</code>. Its conversations resume on the

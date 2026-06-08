@@ -17,6 +17,7 @@ import {
 import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
+import { withAuthorNames } from './authorNames.js';
 
 /**
  * REST: agents — collapsed to a single ORG catalog (mirrors skills.ts).
@@ -53,7 +54,9 @@ export async function resolveAgents(
   // Pass the caller's userId so the merged org+user catalog is returned (a
   // user-scoped agent shadows an org-scoped one of the same name).
   const agents = await deps.repo.listAgents(org, principal.userId);
-  return ok({ agents });
+  // Show the author's real name (their email) instead of the raw Cognito sub that
+  // claude+ device-token writes stamp into createdBy.name.
+  return ok({ agents: await withAuthorNames(deps.repo, agents) });
 }
 
 export async function createAgent(

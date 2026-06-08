@@ -2,6 +2,7 @@
   "command-hq-starter": {
     "description": "Skills bundled with Command HQ + claude+ (forge, weekly, progress, skill authoring).",
     "members": [
+      "hq-add-agent",
       "hq-add-mcp",
       "hq-add-skill",
       "hq-endforge",

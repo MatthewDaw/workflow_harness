@@ -66,6 +66,33 @@ describe('GET /skills (org catalog)', () => {
     expect(skills.map((s) => s.name).sort()).toEqual(['forecast', 'reconcile']);
   });
 
+  it('resolves a UUID createdBy.name to the author profile name (email)', async () => {
+    // claude+ device-token writes stamp createdBy.name with the Cognito sub; the
+    // list should display the author's real PROFILE name instead.
+    const sub = 'c4a8c4a8-30b1-70ef-792f-61824f6ca129';
+    await repo.putUser({ userId: sub, name: 'mattdaw7@gmail.com', org: ORG });
+    await repo.putSkill({ ...skill('gstack'), createdBy: { userId: sub, name: sub } });
+    const res = await resolveSkills(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
+    const { skills } = bodyOf<{ skills: Skill[] }>(res as { body: string });
+    const s = skills.find((x) => x.name === 'gstack')!;
+    expect(s.createdBy).toEqual({ userId: sub, name: 'mattdaw7@gmail.com' });
+  });
+
+  it('leaves system-seeded and unresolvable authors untouched', async () => {
+    await repo.putSkill({ ...skill('seeded'), createdBy: { userId: 'system', name: 'system' } });
+    await repo.putSkill({ ...skill('orphan'), createdBy: { userId: 'ghost', name: 'ghost' } });
+    const res = await resolveSkills(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
+    const { skills } = bodyOf<{ skills: Skill[] }>(res as { body: string });
+    expect(skills.find((x) => x.name === 'seeded')!.createdBy).toEqual({
+      userId: 'system',
+      name: 'system',
+    });
+    expect(skills.find((x) => x.name === 'orphan')!.createdBy).toEqual({
+      userId: 'ghost',
+      name: 'ghost',
+    });
+  });
+
   it('annotates a bundle with its transitively-resolved members', async () => {
     await repo.putSkill(skill('a'));
     await repo.putSkill(skill('b'));
@@ -539,5 +566,64 @@ describe('built-ins are fork-only via REST (git-seed owned)', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
+  });
+});
+
+/**
+ * Bundle-overwrite guard: `claude+ sync` is bidirectional and upserts catalog
+ * records BY NAME from local skills, so a local skill dir whose name equals a
+ * bundle would be pushed over the bundle and wipe its members (this destroyed a
+ * 35-member bundle once). A non-bundle skill write must NOT clobber an existing
+ * `kind:bundle` of the same name — the server rejects it with 409.
+ */
+describe('bundle-overwrite guard (skill push must not clobber a bundle)', () => {
+  it('rejects a POST skill that collides with an existing bundle name (409), leaving members intact', async () => {
+    await repo.putSkill(bundle('finance-pack', ['a', 'b']));
+    const res = await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('finance-pack', 'local skill') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+    const stored = await repo.getSkill(SCOPE, 'finance-pack');
+    expect(stored?.kind).toBe('bundle');
+    expect(stored?.members).toEqual(['a', 'b']);
+  });
+
+  it('rejects a PUT skill over an existing bundle name (409)', async () => {
+    await repo.putSkill(bundle('finance-pack', ['a', 'b']));
+    const res = await createSkill(
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'finance-pack' },
+        body: skill('finance-pack', 'local skill'),
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+    expect((await repo.getSkill(SCOPE, 'finance-pack'))?.members).toEqual(['a', 'b']);
+  });
+
+  it('still ALLOWS updating a bundle with a bundle (kind matches)', async () => {
+    await repo.putSkill(bundle('finance-pack', ['a']));
+    const res = await createSkill(
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'finance-pack' },
+        body: bundle('finance-pack', ['a', 'b']),
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect((await repo.getSkill(SCOPE, 'finance-pack'))?.members).toEqual(['a', 'b']);
+  });
+
+  it('still ALLOWS a normal skill create when no bundle of that name exists', async () => {
+    const res = await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'body') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 201 });
   });
 });

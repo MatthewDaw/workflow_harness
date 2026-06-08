@@ -645,6 +645,85 @@ describe('POST /projects', () => {
     expect(stored?.enabledBundles ?? []).not.toContain('command-hq-starter');
     expect(stored?.enabledSkills ?? []).toHaveLength(0);
   });
+
+  /**
+   * Dedupe guard: the same GitHub repo must not spawn a SECOND project record
+   * under a divergent slug. The hazard is a phantom (e.g. the pre-fix folder-name
+   * slug `fractions-tutorial` vs the canonical `matthewdaw-fractions-tutorial`):
+   * skills enabled on one record do nothing on the one the daemon/UI use.
+   */
+  describe('duplicate-repo guard', () => {
+    it('409s a second connect of the same repo under a different id, naming the canonical', async () => {
+      await repo.putProject({
+        id: 'matthewdaw-fractions-tutorial',
+        name: 'Fractions',
+        repo: 'gh/MatthewDaw/fractions_tutorial',
+        ownerUserId: MATT,
+        org: 'acme',
+        liveSessionCount: 0,
+      });
+      const res = await createProject(
+        httpEvent({
+          method: 'POST',
+          userId: MATT,
+          org: 'acme',
+          // phantom slug + the gh/-less repo string — normalizes to the same owner/repo
+          body: { id: 'fractions-tutorial', name: 'Fractions', repo: 'MatthewDaw/fractions_tutorial' },
+        }),
+        deps,
+      );
+      expect(res).toMatchObject({ statusCode: 409 });
+      expect(bodyOf<{ error: string }>(res as { body: string }).error).toContain(
+        'matthewdaw-fractions-tutorial',
+      );
+      // No phantom created; the canonical record is untouched.
+      expect(await repo.getProject('fractions-tutorial')).toBeUndefined();
+      expect(await repo.getProject('matthewdaw-fractions-tutorial')).toBeDefined();
+    });
+
+    it('allows an idempotent re-connect of the SAME id (overwrite, not a duplicate)', async () => {
+      await repo.putProject({
+        id: 'weekly-compass',
+        name: 'Weekly',
+        repo: 'gh/acme/weekly-compass',
+        ownerUserId: MATT,
+        org: 'acme',
+        liveSessionCount: 0,
+      });
+      const res = await createProject(
+        httpEvent({
+          method: 'POST',
+          userId: MATT,
+          org: 'acme',
+          body: { id: 'weekly-compass', name: 'Weekly', repo: 'gh/acme/weekly-compass' },
+        }),
+        deps,
+      );
+      expect(res).toMatchObject({ statusCode: 201 });
+    });
+
+    it('allows connecting a different repo', async () => {
+      await repo.putProject({
+        id: 'weekly-compass',
+        name: 'Weekly',
+        repo: 'gh/acme/weekly-compass',
+        ownerUserId: MATT,
+        org: 'acme',
+        liveSessionCount: 0,
+      });
+      const res = await createProject(
+        httpEvent({
+          method: 'POST',
+          userId: MATT,
+          org: 'acme',
+          body: { id: 'side-quest', name: 'Side', repo: 'gh/acme/side-quest' },
+        }),
+        deps,
+      );
+      expect(res).toMatchObject({ statusCode: 201 });
+      expect(await repo.getProject('side-quest')).toBeDefined();
+    });
+  });
 });
 
 describe('DELETE /projects/:id', () => {

@@ -10,6 +10,7 @@ import type { Repo } from '../db/repo.js';
 import { GitHubApp, PublicGitHubReader } from '../github/app.js';
 import {
   badRequest,
+  conflict,
   created,
   defaultRepo,
   forbidden,
@@ -173,6 +174,33 @@ export async function createProject(
   if (!parsed.success) return badRequest(parsed.error.message);
 
   const project: Project = parsed.data;
+
+  // Dedupe guard: refuse a SECOND project record for the same GitHub repo under a
+  // DIFFERENT id. The web mints `id = projectIdFor(owner/repo)` and `repo =
+  // gh/owner/repo`, so a normal re-connect lands the SAME id (an idempotent
+  // overwrite below — allowed). The hazard is a divergent-slug record: a phantom
+  // created under an old derivation (e.g. the pre-fix folder-name slug
+  // `fractions-tutorial` vs the canonical `matthewdaw-fractions-tutorial`) collides
+  // on the repo while differing on id. Enabling skills then lands on one record and
+  // does nothing on the one the daemon/UI actually use. Reject it, naming the
+  // canonical id so the caller reuses (or deletes) that record instead of forking a
+  // duplicate. Compare on the normalized `owner/repo` (gh/ prefix stripped, lowercased).
+  const incomingRepo = ownerRepoOf(project.repo).toLowerCase();
+  if (incomingRepo) {
+    const owned = await deps.repo.listProjectsForUser(principal.userId);
+    const clash = owned.find(
+      (p) =>
+        p.id !== project.id &&
+        (org ? p.org === org : true) &&
+        ownerRepoOf(p.repo ?? '').toLowerCase() === incomingRepo,
+    );
+    if (clash) {
+      return conflict(
+        `repo "${incomingRepo}" is already connected as project "${clash.id}" — reuse that ` +
+          `project (or delete it first) instead of creating a duplicate under "${project.id}".`,
+      );
+    }
+  }
 
   // Auto-enable the command-hq-starter bundle on every new project so HQ's hq-*
   // management skills are usable from claude+ immediately, without a manual opt-in

@@ -97,6 +97,11 @@ type Compositor struct {
 	userName string
 	orgName  string
 
+	// hqProject is the CommandHQ project id this repo is linked to (the
+	// config.ProjectIDFor slug). Shown next to the "HQ linked" indicator so the
+	// top bar names which HQ project the live session is wired to.
+	hqProject string
+
 	// streamEvents is the bounded live event feed rendered on the Stream tab
 	// (oldest first, newest at the bottom). Fed from the daemon's event bus via
 	// FeedEvent — the terminal counterpart to the desktop Stream panel.
@@ -203,6 +208,14 @@ func (c *Compositor) SetIdentity(name, org string, loggedIn bool) {
 	c.userName = name
 	c.orgName = org
 	c.loggedIn = loggedIn
+	c.mu.Unlock()
+}
+
+// SetHQProject records the CommandHQ project id (config.ProjectIDFor slug) this
+// repo is linked to, shown alongside the "HQ linked" indicator.
+func (c *Compositor) SetHQProject(id string) {
+	c.mu.Lock()
+	c.hqProject = id
 	c.mu.Unlock()
 }
 
@@ -496,19 +509,40 @@ func (c *Compositor) renderTabBar(w int) {
 		c.tabSpans = append(c.tabSpans, span{lo: x, hi: x + len(label), idx: i})
 		x += len(label) + 1
 	}
-	// HQ-linked indicator on the right.
+	// HQ-linked indicator on the right. When linked, it names the CommandHQ
+	// project this repo is wired to ("● HQ linked: <projectId>") so the top bar
+	// shows both that we're connected and to which project.
 	ind := "● HQ linked"
 	indFG := colGreen
 	if c.degraded {
 		ind = "● HQ offline"
 		indFG = colAmber
+	} else if c.hqProject != "" {
+		ind = "● HQ linked: " + c.hqProject
 	}
 	indX := w - len(ind) - 1
-	c.screen.SetString(indX, rowTabBar, ind, indFG, vt.DefaultBG, false, false)
+	if indX > x {
+		c.screen.SetString(indX, rowTabBar, ind, indFG, vt.DefaultBG, false, false)
+	}
 
-	// Signed-in identity sits just left of the HQ indicator: "user @ org" when
-	// logged in (or just the org when no display name is known), else a dim
-	// "not signed in" hint.
+	// Right of the tab labels, laid out right-to-left: the focused session's id
+	// (just left of the HQ indicator) and the signed-in identity (left of that).
+	// The session id is the transcript filename AND the DynamoDB session key, so
+	// surfacing it here lets the user quote "look at this session id" directly.
+	// Each element is only drawn if it clears the tab labels, so a narrow terminal
+	// drops the rightmost extras rather than overlapping the tabs.
+	right := indX
+	if sid := c.focusedIDLocked(); sid != "" {
+		sessLabel := "· " + sid
+		sessX := right - len(sessLabel) - 1
+		if sessX > x {
+			c.screen.SetString(sessX, rowTabBar, sessLabel, colDim, vt.DefaultBG, false, false)
+			right = sessX
+		}
+	}
+
+	// Signed-in identity: "user @ org" when logged in (or just the org when no
+	// display name is known), else a dim "not signed in" hint.
 	idLabel := "not signed in"
 	idFG := colDim
 	if c.loggedIn {
@@ -519,8 +553,7 @@ func (c *Compositor) renderTabBar(w int) {
 		}
 		idFG = colText
 	}
-	idX := indX - len(idLabel) - 2
-	// Don't draw the identity if it would collide with the tab labels on the left.
+	idX := right - len(idLabel) - 1
 	if idX > x {
 		c.screen.SetString(idX, rowTabBar, idLabel, idFG, vt.DefaultBG, false, false)
 	}

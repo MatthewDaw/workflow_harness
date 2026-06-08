@@ -8,6 +8,7 @@
 //	claude+ reset        force-retire all daemons + clear the registry (recover a wedged state)
 //	claude+ login        device-code sign-in to Command HQ (writes credentials)
 //	claude+ --session=N  attach to the daemon at registry index N
+//	claude+ stop=N       stop the daemon at registry index N (also accepts `stop N`)
 //	claude+ --version    print the version
 //
 // Hidden verbs used internally:
@@ -28,6 +29,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/daemon"
 )
 
@@ -35,9 +37,16 @@ import (
 var version = "dev"
 
 func main() {
-	// Hidden internal verbs are dispatched before flag parsing.
+	// Hidden internal verbs are dispatched before flag parsing. A verb may carry
+	// an inline `=value` (e.g. `stop=2`) for parity with the `--session=N` flag;
+	// split it off so the switch matches the bare verb and the value is forwarded.
 	if len(os.Args) >= 2 {
-		switch os.Args[1] {
+		verb := os.Args[1]
+		inlineVal := ""
+		if i := strings.IndexByte(verb, '='); i >= 0 {
+			verb, inlineVal = verb[:i], verb[i+1:]
+		}
+		switch verb {
 		case "__daemon":
 			runDaemon(os.Args[2:])
 			return
@@ -70,7 +79,13 @@ func main() {
 			}
 			return
 		case "stop":
-			if err := cmdStop(os.Args[2:]); err != nil {
+			// `stop=N` (inline) and `stop N` (positional) are equivalent; an inline
+			// value takes the lead slot so cmdStop sees it as the index argument.
+			stopArgs := os.Args[2:]
+			if inlineVal != "" {
+				stopArgs = append([]string{inlineVal}, stopArgs...)
+			}
+			if err := cmdStop(stopArgs); err != nil {
 				fail(err)
 			}
 			return
@@ -175,7 +190,7 @@ func cmdAttachOrCreate() error {
 		}
 		c, err := daemon.Dial(repo)
 		if err == nil {
-			return runShell(c, filepath.Base(repo))
+			return runShell(c, filepath.Base(repo), config.ProjectIDFor(repo))
 		}
 		lastErr = fmt.Errorf("attach: %w", err)
 		// Any attach failure — incompatible/garbage daemon, a clobber race, a hung
@@ -202,7 +217,7 @@ func cmdReset() error {
 // (which clears every daemon). The index is the IDX column from `claude+ ls`.
 func cmdStop(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: claude+ stop <index>   (the IDX column from `claude+ ls`)")
+		return fmt.Errorf("usage: claude+ stop=<index>   (the IDX column from `claude+ ls`)")
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(args[0]))
 	if err != nil {
@@ -220,15 +235,16 @@ func cmdStop(args []string) error {
 
 // cmdAttachIndex attaches to the daemon at the given `ls` index.
 func cmdAttachIndex(n int) error {
-	label := ""
+	label, hqProject := "", ""
 	if e, err := daemon.ByIndex(n); err == nil {
 		label = e.RepoName
+		hqProject = config.ProjectIDFor(e.Repo)
 	}
 	c, err := daemon.DialIndex(n)
 	if err != nil {
 		return err
 	}
-	return runShell(c, label)
+	return runShell(c, label, hqProject)
 }
 
 // cmdSync (`claude+ sync`, alias `sync-skills`) runs a one-shot reconcile of the

@@ -29,7 +29,7 @@ import (
 //	Ctrl-G n / Tab   next tab        Ctrl-G p   prev tab
 //	Ctrl-G 1..5      jump to a tab    Ctrl-G d   detach (daemon + session live on)
 //	Ctrl-G c         new session      Ctrl-G q   quit (end sessions + stop daemon)
-func runShell(c *daemon.Client, instance string) error {
+func runShell(c *daemon.Client, instance, hqProject string) error {
 	inFd := int(os.Stdin.Fd())
 	outFd := int(os.Stdout.Fd())
 
@@ -95,6 +95,8 @@ func runShell(c *daemon.Client, instance string) error {
 	} else {
 		comp.SetIdentity("", "", false)
 	}
+	// Name the CommandHQ project this repo is linked to next to the HQ indicator.
+	comp.SetHQProject(hqProject)
 
 	// Seed the sub-tab row from the attach ack, and size the hosted PTY to the
 	// body region so claude renders at the framed size.

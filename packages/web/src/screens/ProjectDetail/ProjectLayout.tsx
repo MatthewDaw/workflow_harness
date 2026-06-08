@@ -24,7 +24,7 @@ export function ProjectLayout() {
   return (
     <div>
       <nav className="hq-subnav" aria-label="Project sections">
-        <span className="px-1 py-2.5 text-xs text-faint">Projects ›&nbsp;</span>
+        <span className="whitespace-nowrap px-1 py-2.5 text-xs text-faint">Projects ›&nbsp;</span>
         {SUBTABS.map((t) => (
           <NavLink
             key={t.label}
@@ -34,7 +34,9 @@ export function ProjectLayout() {
             {t.label}
           </NavLink>
         ))}
-        <span className="ml-auto px-1 py-2.5 font-mono text-[11px] text-faint">{projectId}</span>
+        <span className="ml-auto whitespace-nowrap px-1 py-2.5 font-mono text-[11px] text-faint">
+          {projectId}
+        </span>
       </nav>
       <Outlet />
     </div>

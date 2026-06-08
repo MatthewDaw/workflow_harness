@@ -16,6 +16,7 @@ import {
 import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
+import { withAuthorNames } from './authorNames.js';
 
 /**
  * REST: MCP servers — a single ORG catalog, modeled on skills minus bundles.
@@ -50,7 +51,9 @@ export async function resolveMcpServers(
   // Pass the caller's userId so the merged org+user catalog is returned (a
   // user-scoped server shadows an org-scoped one of the same name).
   const all = await deps.repo.listMcpServers(org, principal.userId);
-  return ok({ mcpServers: all });
+  // Show the author's real name (their email) instead of the raw Cognito sub that
+  // claude+ device-token writes stamp into createdBy.name.
+  return ok({ mcpServers: await withAuthorNames(deps.repo, all) });
 }
 
 export async function createMcpServer(

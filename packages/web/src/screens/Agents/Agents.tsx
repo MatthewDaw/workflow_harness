@@ -40,7 +40,7 @@ export function Agents() {
         <label className="flex items-center gap-1.5 text-xs text-mut">
           Author
           <select
-            className="hq-btn"
+            className="hq-btn normal-case"
             data-testid="agent-author-filter"
             value={author}
             onChange={(e) => setAuthor(e.target.value)}

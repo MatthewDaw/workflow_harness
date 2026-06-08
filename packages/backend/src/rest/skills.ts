@@ -17,6 +17,7 @@ import {
 import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
+import { withAuthorNames } from './authorNames.js';
 
 /**
  * REST: skills + bundles — collapsed to a single ORG catalog.
@@ -84,7 +85,9 @@ export async function resolveSkills(
   const annotated = all.map((s) =>
     s.kind === 'bundle' ? { ...s, resolvedMembers: flattenBundle(s, byName) } : s,
   );
-  return ok({ skills: annotated });
+  // Show the author's real name (their email) instead of the raw Cognito sub that
+  // claude+ device-token writes stamp into createdBy.name.
+  return ok({ skills: await withAuthorNames(deps.repo, annotated) });
 }
 
 export async function createSkill(
@@ -123,6 +126,19 @@ export async function createSkill(
     return conflict(
       `"${targetName}" is a canonical built-in skill — fork it (set repoId + authorUserId) ` +
         `or change it in catalog/skills and re-seed; in-place writes are rejected.`,
+    );
+  }
+
+  // Bundle-overwrite guard: a non-bundle skill write must NOT clobber an existing
+  // `kind:bundle` of the same name. `claude+ sync` is bidirectional and upserts by
+  // name, so a local skill dir sharing a bundle's name would otherwise be pushed
+  // over the bundle and wipe its members (this destroyed a 35-member bundle once).
+  // Refuse it server-side — the author must rename the local skill or the bundle.
+  if (existing?.kind === 'bundle' && skill.kind !== 'bundle') {
+    return conflict(
+      `"${targetName}" is already a bundle in the org catalog — a skill push under the ` +
+        `same name would clobber it and wipe its members. Rename the local skill (or the ` +
+        `bundle) so their names don't collide.`,
     );
   }
 
@@ -196,7 +212,8 @@ export async function getSkill(
   if (!auth.org) return notFound();
   const skill = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!skill) return notFound();
-  return ok({ skill });
+  const [enriched] = await withAuthorNames(deps.repo, [skill]);
+  return ok({ skill: enriched });
 }
 
 /** Count the agents (in the org catalog) whose `skills[]` references a skill. */
