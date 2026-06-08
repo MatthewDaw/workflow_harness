@@ -38,6 +38,8 @@ func (f *fakeSource) Body(config.RemoteItem) (string, error) {
 
 func (f *fakeSource) Push(config.Item, string) error { return nil }
 
+func (f *fakeSource) AgentSkills(string) []string { return nil }
+
 // hashLike reproduces config.hashContent for a body so the remote hash differs
 // from "absent locally" (forcing a needs_pull). We don't need the exact hash —
 // any stable non-empty value works because the local skill is missing.
@@ -209,24 +211,36 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 		t.Fatalf("non-opted-in org agent must not materialize (err=%v)", err)
 	}
 
-	// The enabled MCP server merges into ~/.claude+/.mcp.json; the non-opted-in
-	// one must not appear. (MCP servers materialize as entries in a shared file,
-	// not one-file-per-item — so assert on the parsed document.)
-	mcpBytes, err := os.ReadFile(filepath.Join(plus, ".mcp.json"))
+	// The enabled MCP server merges into ~/.claude+/.claude.json mcpServers
+	// (U-MCP-Target); the non-opted-in one must not appear. (MCP servers materialize
+	// as entries in a shared file, not one-file-per-item — so assert on the parsed
+	// document.) The enabled server's name must also land in enabledMcpjsonServers
+	// so Claude actually launches it.
+	mcpBytes, err := os.ReadFile(filepath.Join(plus, ".claude.json"))
 	if err != nil {
-		t.Fatalf("enabled mcp server should materialize .mcp.json: %v", err)
+		t.Fatalf("enabled mcp server should materialize .claude.json: %v", err)
 	}
 	var mcpDoc struct {
-		McpServers map[string]json.RawMessage `json:"mcpServers"`
+		McpServers            map[string]json.RawMessage `json:"mcpServers"`
+		EnabledMcpjsonServers []string                   `json:"enabledMcpjsonServers"`
 	}
 	if err := json.Unmarshal(mcpBytes, &mcpDoc); err != nil {
-		t.Fatalf("parse materialized .mcp.json: %v", err)
+		t.Fatalf("parse materialized .claude.json: %v", err)
 	}
 	if _, ok := mcpDoc.McpServers["enabled-mcp"]; !ok {
-		t.Fatalf("enabled mcp server missing from .mcp.json: %s", string(mcpBytes))
+		t.Fatalf("enabled mcp server missing from .claude.json: %s", string(mcpBytes))
 	}
 	if _, ok := mcpDoc.McpServers["other-mcp"]; ok {
 		t.Fatalf("non-opted-in mcp server must not materialize: %s", string(mcpBytes))
+	}
+	var sawEnabled bool
+	for _, n := range mcpDoc.EnabledMcpjsonServers {
+		if n == "enabled-mcp" {
+			sawEnabled = true
+		}
+	}
+	if !sawEnabled {
+		t.Fatalf("enabled-mcp should be added to enabledMcpjsonServers: %s", string(mcpBytes))
 	}
 }
 

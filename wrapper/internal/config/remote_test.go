@@ -320,6 +320,33 @@ func TestPushAgentParsesFrontmatterNoDoubleWrap(t *testing.T) {
 	}
 }
 
+// TestFetchThreadsAgentSkillDeps proves Fetch captures an enabled agent's skill
+// dependencies (agentSchema.skills) so Reconcile can ensure them (U-Agent-Deps).
+func TestFetchThreadsAgentSkillDeps(t *testing.T) {
+	hq := &agentHQ{
+		enabled: []string{"rev"},
+		agents: []map[string]any{{
+			"name":   "rev",
+			"scope":  map[string]string{"tier": "org", "id": "acme"},
+			"prompt": "Review.",
+			"skills": []string{"lint", "format"},
+		}},
+	}
+	srv := hq.server(t)
+	src := NewHTTPRemoteSource(srv.URL, "tok", "proj-1")
+	if _, err := src.Fetch(); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	deps := src.AgentSkills("rev")
+	if len(deps) != 2 || deps[0] != "lint" || deps[1] != "format" {
+		t.Fatalf("want agent deps [lint format], got %v", deps)
+	}
+	// An unknown agent yields nil.
+	if src.AgentSkills("nope") != nil {
+		t.Errorf("unknown agent should yield nil deps")
+	}
+}
+
 func toJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)

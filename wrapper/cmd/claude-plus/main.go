@@ -189,19 +189,31 @@ func cmdAttachIndex(n int) error {
 }
 
 // cmdSyncSkills (`claude+ sync-skills`) runs a one-shot reconcile of HQ's
-// effective skills/agents into the isolated ~/.claude+ registry — the on-demand
-// counterpart to the per-session auto-sync, exposed for the `/update-skills`
-// skill. Pulled (HQ-only) items land in ~/.claude+, never the user's ~/.claude.
+// effective skills/agents/MCP servers into the isolated ~/.claude+ registry — the
+// on-demand counterpart to the per-session auto-sync, exposed for the
+// `/update-skills` skill. Pulled (HQ-only) items land in ~/.claude+, never the
+// user's ~/.claude. After reconcile it runs the verification gate (U-Verify-Gate):
+// a partial install returns a non-nil error so this command EXITS NON-ZERO (fail
+// loudly). MCP servers that materialized but need an interactive login are printed
+// (they do not fail the gate) so the user knows the command to run.
 func cmdSyncSkills() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	pulled, pushed, err := daemon.SyncSkillsNow(cwd)
+	pulled, pushed, gate, err := daemon.SyncSkillsNow(cwd)
+	// Surface needs-auth servers regardless of gate pass/fail — they are actionable
+	// and are not the reason for any failure.
+	for _, na := range gate.NeedsAuth() {
+		fmt.Printf("mcp %q needs interactive auth: %s\n", na.Name, na.Detail)
+	}
 	if err != nil {
+		// The gate's error names every missing/invalid item; return it so the process
+		// exits non-zero on a partial install.
 		return err
 	}
-	fmt.Printf("skills synced: pulled %d, pushed %d (into ~/.claude+)\n", pulled, pushed)
+	fmt.Printf("skills synced: pulled %d, pushed %d (into ~/.claude+); verify: %s\n",
+		pulled, pushed, gate.Summary())
 	return nil
 }
 

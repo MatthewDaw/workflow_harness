@@ -90,12 +90,15 @@ func TestHashIgnoresLineEndings(t *testing.T) {
 // Body returns recorded content; bodyErr names one item whose Body() should fail
 // (the malformed-but-non-fatal edge).
 type fakeRemote struct {
-	items   []RemoteItem
-	bodies  map[string]string
-	bodyErr string // "kind/name" whose Body() returns an error
+	items    []RemoteItem
+	bodies   map[string]string
+	bodyErr  string              // "kind/name" whose Body() returns an error
+	depsByAg map[string][]string // agent name -> skill deps (U-Agent-Deps)
 }
 
-func newFakeRemote() *fakeRemote { return &fakeRemote{bodies: map[string]string{}} }
+func newFakeRemote() *fakeRemote {
+	return &fakeRemote{bodies: map[string]string{}, depsByAg: map[string][]string{}}
+}
 
 func (f *fakeRemote) addRemote(kind Kind, name, body string) {
 	key := string(kind) + "/" + name
@@ -121,6 +124,10 @@ func (f *fakeRemote) Body(item RemoteItem) (string, error) {
 func (f *fakeRemote) Push(item Item, body string) error {
 	f.addRemote(item.Kind, item.Name, body)
 	return nil
+}
+
+func (f *fakeRemote) AgentSkills(agentName string) []string {
+	return f.depsByAg[agentName]
 }
 
 // seedLocalAgent writes a local agent file under a temp ~/.claude and returns its
@@ -411,6 +418,72 @@ func TestReadLocalMcpMalformedNonFatal(t *testing.T) {
 	}
 	if !sawMcpErr {
 		t.Error("malformed .mcp.json should surface as an Err item")
+	}
+}
+
+// TestReconcileEnsuresAgentSkillDeps proves that after an agent is materialized,
+// every skill it depends on is pulled into the registry even if the dep skill was
+// not itself a needs_pull row in the report (U-Agent-Deps), and that a second run
+// is a no-op.
+func TestReconcileEnsuresAgentSkillDeps(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	rem := newFakeRemote()
+	rem.addRemote(KindAgent, "reviewer", "# reviewer\nbody")
+	// The agent depends on two skills; provide their bodies in the cache but do NOT
+	// add them as RemoteItems, so they are NOT needs_pull rows — the dep pass must
+	// still pull them.
+	rem.bodies[string(KindSkill)+"/dep-a"] = "# dep a\nbody"
+	rem.bodies[string(KindSkill)+"/dep-b"] = "# dep b\nbody"
+	rem.depsByAg["reviewer"] = []string{"dep-a", "dep-b"}
+
+	local, _ := ReadLocal(testPlus(t))
+	report := Diff(local, mustFetch(t, rem))
+	pulled, _, errs := Reconcile(report, rem, local, testPlus(t))
+	if len(errs) != 0 {
+		t.Fatalf("reconcile errs: %v", errs)
+	}
+	// 1 agent + 2 dep skills.
+	if pulled != 3 {
+		t.Fatalf("want pulled 3 (agent + 2 deps), got %d", pulled)
+	}
+	for _, dep := range []string{"dep-a", "dep-b"} {
+		p := filepath.Join(testPlus(t), "skills", dep, "SKILL.md")
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("dep skill %s should be materialized: %v", dep, err)
+		}
+	}
+
+	// Second reconcile: agent + deps already present -> no-op.
+	local2, _ := ReadLocal(testPlus(t))
+	report2 := Diff(local2, mustFetch(t, rem))
+	p2, _, e2 := Reconcile(report2, rem, local2, testPlus(t))
+	if p2 != 0 || len(e2) != 0 {
+		t.Fatalf("second reconcile should be a no-op, got pulled %d errs %v", p2, e2)
+	}
+}
+
+// TestReconcileAgentDepMissingBodyNonFatal proves a dep skill with no available
+// body is reported but does not abort the run (the agent still landed).
+func TestReconcileAgentDepMissingBodyNonFatal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	rem := newFakeRemote()
+	rem.addRemote(KindAgent, "reviewer", "# reviewer\nbody")
+	rem.depsByAg["reviewer"] = []string{"ghost"} // no body cached for "ghost"
+
+	local, _ := ReadLocal(testPlus(t))
+	report := Diff(local, mustFetch(t, rem))
+	pulled, _, errs := Reconcile(report, rem, local, testPlus(t))
+	if pulled != 1 {
+		t.Fatalf("the agent should still pull, pulled=%d", pulled)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("the missing dep should report exactly one error, got %v", errs)
 	}
 }
 

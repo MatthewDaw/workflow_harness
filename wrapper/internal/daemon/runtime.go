@@ -663,36 +663,52 @@ func (rt *Runtime) reconcileSkills() {
 // given repo: HQ-only items are materialized into ~/.claude+ and local-only ones
 // pushed to HQ user scope (U19/U21). It is the on-demand entrypoint behind the
 // `/update-skills` skill and `claude+ sync-skills`, reusing the same source +
-// reconcile the daemon runs automatically per session. Returns counts actuated.
-func SyncSkillsNow(repoRoot string) (pulled, pushed int, err error) {
+// reconcile the daemon runs automatically per session. After reconcile it runs the
+// verification gate (U-Verify-Gate) over the effective enabled set: a partial
+// install (a missing/invalid skill, agent, or failed MCP server) returns a non-nil
+// error so the caller fails loudly. The gate report is returned too so the caller
+// can surface needs-auth MCP servers (which do NOT fail the gate). Returns counts
+// actuated plus the gate report.
+func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyReport, err error) {
 	base, ok := loadAPIBase()
 	if !ok {
-		return 0, 0, fmt.Errorf("no HQ API base configured (run `claude+ login`)")
+		return 0, 0, config.VerifyReport{}, fmt.Errorf("no HQ API base configured (run `claude+ login`)")
 	}
 	cfg, ok := loadHQConfig()
 	if !ok {
-		return 0, 0, fmt.Errorf("not signed in to HQ (run `claude+ login`)")
+		return 0, 0, config.VerifyReport{}, fmt.Errorf("not signed in to HQ (run `claude+ login`)")
 	}
 	src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(repoRoot))
-	// EnsureConfigDir (not ProjectConfigDir): seed the root's personal .mcp.json
+	// EnsureConfigDir (not ProjectConfigDir): seed the root's personal .claude.json
 	// before any pull merges HQ MCP servers into it (see reconcileSkills).
 	plus, err := config.EnsureConfigDir(repoRoot)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, config.VerifyReport{}, err
 	}
 	report, err := config.ComputeDrift(src, plus)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, config.VerifyReport{}, err
 	}
 	local, err := config.ReadLocal(plus)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, config.VerifyReport{}, err
 	}
 	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
 	if len(errs) > 0 {
-		return pulled, pushed, errs[0]
+		return pulled, pushed, config.VerifyReport{}, errs[0]
 	}
-	return pulled, pushed, nil
+	// U-Verify-Gate: after reconcile, verify the EFFECTIVE enabled set actually
+	// landed on disk (skill dirs + frontmatter; agent files + deps; MCP not failed).
+	// A partial install fails loudly (non-zero) rather than reporting a misleading
+	// "pulled N". needs-auth MCP servers do NOT fail the gate.
+	gate, gErr := config.VerifyEffectiveSet(src, plus)
+	if gErr != nil {
+		return pulled, pushed, config.VerifyReport{}, gErr
+	}
+	if err := gate.Err(); err != nil {
+		return pulled, pushed, gate, err
+	}
+	return pulled, pushed, gate, nil
 }
 
 // SyncMemoriesNow performs a one-shot FULL RECONCILE of the local Claude Code

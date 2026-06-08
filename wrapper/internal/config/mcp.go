@@ -1,21 +1,31 @@
 package config
 
-// MCP server materialization (U8). Where a skill materializes as a SKILL.md file
-// and an agent as an agents/<name>.md file, an MCP server materializes as one
-// ENTRY merged into ~/.claude+/.mcp.json — a seeded, claude+-owned file
-// (overlay.go). This breaks two assumptions the skills path relies on: items are
-// no longer one-file-per-item (many servers share one .mcp.json), and HQ serves a
+// MCP server materialization (U-MCP-Target). Where a skill materializes as a
+// SKILL.md file and an agent as an agents/<name>.md file, an MCP server
+// materializes as one ENTRY merged into ~/.claude+/<root>/.claude.json under the
+// `mcpServers` key — a seed-once, claude+-owned per-project file (overlay.go).
+//
+// SPIKE RESOLUTION (U-MCP-Target): Claude Code reads its MCP servers from
+// <root>/.claude.json `mcpServers`, NOT from a `.mcp.json` file (which does not
+// exist in real config roots). A file-based server is only LIVE once its name is
+// also listed under `enabledMcpjsonServers` (Claude's approval list for
+// project/file-declared servers), so the wrapper adds every server it writes to
+// that list as well. Both writes MERGE into the existing .claude.json — they never
+// clobber the file's many other top-level keys (auth/identity/UI state) nor other
+// servers (Risk R4).
+//
+// This breaks two assumptions the skills path relies on: items are no longer
+// one-file-per-item (many servers share one .claude.json), and HQ serves a
 // structured record rather than a ready-made body to hash. Drift correctness
 // therefore hinges on ONE canonical serialization used on BOTH the read side
 // (ReadLocal hashing the on-disk entry) and the apply/fetch side (hashing the
 // HQ-built entry): if they differ by even key order or whitespace, every server
 // shows perpetual `differs` (Risk R2).
 //
-// On-disk shape (Risk R4): Claude's real .mcp.json keys each server under
-// `mcpServers[<name>]` and discriminates the entry with a `type` field (NOT
-// `transport`) — `stdio` carries command/args/env, `http`/`sse` carry
-// url/headers. mcp.go is the single place that maps the catalog record's
-// `transport` to the on-disk `type`.
+// On-disk shape: Claude keys each server under `mcpServers[<name>]` and
+// discriminates the entry with a `type` field (NOT `transport`) — `stdio` carries
+// command/args/env, `http`/`sse` carry url/headers. mcp.go is the single place
+// that maps the catalog record's `transport` to the on-disk `type`.
 
 import (
 	"bytes"
@@ -26,11 +36,19 @@ import (
 	"sort"
 )
 
-// mcpFileName is the file each server entry is merged into, under both ~/.claude+
-// and ~/.claude. It is a seeded, claude+-owned file (overlay.go:45).
-const mcpFileName = ".mcp.json"
+// mcpFileName is the file each server entry is merged into, under each per-project
+// config root. Claude Code reads MCP servers from <root>/.claude.json mcpServers
+// (the spike confirmed .mcp.json does not exist in real roots). It is a seed-once,
+// claude+-owned per-project file (overlay.go).
+const mcpFileName = ".claude.json"
 
-// mcpEntry is one server's on-disk shape in .mcp.json. Field order here is NOT
+// enabledMcpjsonKey is the top-level .claude.json array of server NAMES Claude
+// treats as approved file/project-declared MCP servers. A server written into
+// mcpServers is only actually launched once its name appears here, so ApplyPulled
+// adds every synced server's name to this list (merging, de-duplicated).
+const enabledMcpjsonKey = "enabledMcpjsonServers"
+
+// mcpEntry is one server's on-disk shape in .claude.json mcpServers. Field order here is NOT
 // what determines the hash — canonicalEntry re-serializes with sorted keys — but
 // the JSON tags pin the on-disk key names. `Type` is the on-disk discriminator
 // (Claude uses `type`, not `transport`). omitempty keeps an stdio entry from
@@ -45,10 +63,11 @@ type mcpEntry struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-// mcpFile is the top-level .mcp.json document. mcpServers holds the per-name
-// entries; Extra captures every OTHER top-level key (e.g. unrelated Claude
-// settings) so a merge write preserves them verbatim — we never clobber keys we
-// do not understand.
+// mcpFile is the top-level .claude.json document (as far as MCP cares). mcpServers
+// holds the per-name entries; Extra captures every OTHER top-level key (auth,
+// identity, UI state, and the enabledMcpjsonServers approval list) so a merge
+// write preserves them verbatim — we never clobber keys we do not understand.
+// enableMcpjsonServer reads/updates enabledMcpjsonServers via Extra.
 type mcpFile struct {
 	McpServers map[string]json.RawMessage
 	Extra      map[string]json.RawMessage
@@ -143,7 +162,7 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 	}
 }
 
-// parseMcpFile reads a .mcp.json document, splitting the recognized `mcpServers`
+// parseMcpFile reads a .claude.json document, splitting the recognized `mcpServers`
 // map from every other top-level key (Extra). A missing file is not an error: it
 // yields an empty document so callers can merge into it (the seeded file may not
 // exist yet, or may be absent in a fresh registry). Malformed JSON IS returned as
@@ -202,9 +221,11 @@ func canonicalServerHash(raw json.RawMessage) (string, error) {
 }
 
 // mergeMcpServer reads path (or starts empty), sets mcpServers[name] to entry,
-// and writes the document back — a MERGE, never a whole-file overwrite. Other
-// servers under mcpServers and every unrelated top-level key (Extra) survive the
-// write. The written entry uses the canonical serialization so a subsequent
+// ensures the name is present in enabledMcpjsonServers (so Claude actually
+// launches the file-declared server), and writes the document back — a MERGE,
+// never a whole-file overwrite. Other servers under mcpServers and every unrelated
+// top-level key (Extra, including auth/identity/UI state in .claude.json) survive
+// the write. The written entry uses the canonical serialization so a subsequent
 // ReadLocal hashes it identically to the HQ record (idempotent pull).
 func mergeMcpServer(path, name string, entry mcpEntry) error {
 	mf, err := parseMcpFile(path)
@@ -216,7 +237,38 @@ func mergeMcpServer(path, name string, entry mcpEntry) error {
 		return err
 	}
 	mf.McpServers[name] = json.RawMessage(canon)
+	if err := mf.enableMcpjsonServer(name); err != nil {
+		return err
+	}
 	return writeMcpFile(path, mf)
+}
+
+// enableMcpjsonServer adds name to the top-level enabledMcpjsonServers array
+// (stored in Extra so writeMcpFile round-trips it), de-duplicated and order-stable.
+// A server written into mcpServers is only LIVE once approved here, so every pull
+// adds its name. Idempotent: re-adding an already-listed name is a no-op, so a
+// repeated pull does not churn the file. An existing value of an unexpected JSON
+// shape is replaced with a fresh array containing just name (we never corrupt the
+// file, and the server still becomes enabled).
+func (mf *mcpFile) enableMcpjsonServer(name string) error {
+	var names []string
+	if raw, ok := mf.Extra[enabledMcpjsonKey]; ok && len(bytes.TrimSpace(raw)) > 0 {
+		// Tolerate a non-array value (or null) by starting fresh.
+		_ = json.Unmarshal(raw, &names)
+	}
+	for _, n := range names {
+		if n == name {
+			return nil // already enabled — no churn
+		}
+	}
+	names = append(names, name)
+	sort.Strings(names)
+	b, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	mf.Extra[enabledMcpjsonKey] = json.RawMessage(b)
+	return nil
 }
 
 // writeMcpFile serializes an mcpFile back to disk with stable key order. The
