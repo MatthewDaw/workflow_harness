@@ -79,13 +79,52 @@ export async function createMcpServer(
     // PUT /mcp-servers/:name — update; preserve the existing createdBy stamp.
     const existing = await deps.repo.getMcpServer(orgScope(org), name);
     server.createdBy = existing?.createdBy ?? server.createdBy;
+    server.baseName = existing?.baseName ?? server.baseName ?? name;
   } else {
     // POST — stamp authorship from the principal.
     server.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
+    server.baseName = server.baseName ?? server.name;
   }
 
-  await deps.repo.putMcpServer(server);
-  return name ? ok({ mcpServer: server }) : created({ mcpServer: server });
+  // VERSIONING (KTD6): snapshot a revision + fork/advance the variant instead of
+  // clobbering; `putNewVersion` also upserts the live record under `mcpServerKey`.
+  const stamped = await deps.repo.putNewVersion('MCPSERVER', server, {
+    repoId: server.repoId,
+    authorUserId: server.authorUserId,
+  });
+  return name ? ok({ mcpServer: stamped }) : created({ mcpServer: stamped });
+}
+
+/**
+ * POST /mcp-servers/:name/promote — repoint the org-wide TRUE variant for a
+ * baseName. NOT admin-gated (any authed member). Body: `{ variantId, rev? }`.
+ * Mirrors skills/agents promote: it ONLY repoints TRUE.
+ */
+export async function promoteMcpServer(
+  event: APIGatewayProxyEventV2,
+  deps: McpServersDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+  const name = pathParam(event, 'name');
+  if (!name) return badRequest('missing name');
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const variantId = (body as { variantId?: unknown })?.variantId;
+  if (typeof variantId !== 'string' || !variantId) return badRequest('missing variantId');
+  const revRaw = (body as { rev?: unknown })?.rev;
+  const rev = typeof revRaw === 'number' ? revRaw : undefined;
+
+  const pointer = { baseName: name, variantId, ...(rev !== undefined ? { rev } : {}) };
+  await deps.repo.setTrueVariant(orgScope(org), 'MCPSERVER', pointer);
+  return ok({ true: pointer });
 }
 
 export async function getMcpServer(
@@ -145,6 +184,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const name = pathParam(event, 'name');
 
   if (method === 'GET' && path.endsWith('/usage')) return getUsage(event, deps);
+  if (method === 'POST' && path.endsWith('/promote')) return promoteMcpServer(event, deps);
   if (method === 'POST') return createMcpServer(event, deps);
   if (method === 'PUT') return createMcpServer(event, deps);
   if (method === 'DELETE') return deleteMcpServer(event, deps);

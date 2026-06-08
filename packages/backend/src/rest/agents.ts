@@ -82,12 +82,51 @@ export async function createAgent(
     // PUT /agents/:name — update; preserve the existing createdBy stamp.
     const existing = await deps.repo.getAgent(orgScope(org), name);
     agent.createdBy = existing?.createdBy ?? agent.createdBy;
+    agent.baseName = existing?.baseName ?? agent.baseName ?? name;
   } else {
     agent.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
+    agent.baseName = agent.baseName ?? agent.name;
   }
 
-  await deps.repo.putAgent(agent);
-  return name ? ok({ agent }) : created({ agent });
+  // VERSIONING (KTD6): snapshot a revision + fork/advance the variant instead of
+  // clobbering; `putNewVersion` also upserts the live record under `agentKey`.
+  const stamped = await deps.repo.putNewVersion('AGENT', agent, {
+    repoId: agent.repoId,
+    authorUserId: agent.authorUserId,
+  });
+  return name ? ok({ agent: stamped }) : created({ agent: stamped });
+}
+
+/**
+ * POST /agents/:name/promote — repoint the org-wide TRUE variant for a baseName.
+ * NOT admin-gated (any authed member). Body: `{ variantId, rev? }`. Mirrors
+ * skills' promote: it ONLY repoints TRUE, never editing/deleting a variant.
+ */
+export async function promoteAgent(
+  event: APIGatewayProxyEventV2,
+  deps: AgentsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+  const name = pathParam(event, 'name');
+  if (!name) return badRequest('missing name');
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const variantId = (body as { variantId?: unknown })?.variantId;
+  if (typeof variantId !== 'string' || !variantId) return badRequest('missing variantId');
+  const revRaw = (body as { rev?: unknown })?.rev;
+  const rev = typeof revRaw === 'number' ? revRaw : undefined;
+
+  const pointer = { baseName: name, variantId, ...(rev !== undefined ? { rev } : {}) };
+  await deps.repo.setTrueVariant(orgScope(org), 'AGENT', pointer);
+  return ok({ true: pointer });
 }
 
 export async function getAgent(
@@ -129,6 +168,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
   // The scope-change endpoint is retired in the org-only catalog.
   if (method === 'POST' && isScopeRoute) return gone('scope changes are retired');
+  if (method === 'POST' && path.endsWith('/promote')) return promoteAgent(event, deps);
   if (method === 'POST') return createAgent(event, deps);
   if (method === 'PUT') return createAgent(event, deps); // upsert
   if (method === 'DELETE') return deleteAgent(event, deps);

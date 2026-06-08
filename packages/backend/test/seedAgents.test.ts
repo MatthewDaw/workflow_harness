@@ -88,6 +88,10 @@ describe('buildSeedAgents', () => {
       // Seeded agents carry no skills; authorship is the system stamp.
       expect(r.skills).toEqual([]);
       expect(r.createdBy).toEqual({ userId: 'system', name: 'system' });
+      // Versioning: a seeded agent is the BASE variant of its name at rev 1.
+      expect(r.baseName).toBe(f.name);
+      expect(r.variantId).toBe(f.name);
+      expect(r.version).toBe(1);
     }
   });
 
