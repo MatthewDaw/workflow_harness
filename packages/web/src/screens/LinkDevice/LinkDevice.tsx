@@ -218,6 +218,118 @@ Waiting for approval… (Ctrl-C to cancel)`}
           )}
         </form>
       </section>
+
+      {/* Day-to-day usage: run a session, detach/reattach, quit. The chords mirror
+          the claude+ chrome (Ctrl-G prefix), and the quit path emits a done for each
+          session so the Sessions list here clears immediately. */}
+      <section aria-labelledby="use-claude-plus" className="mt-8 border-t border-line pt-6">
+        <h3 id="use-claude-plus" className="text-sm font-semibold">
+          Using claude+ in a project
+        </h3>
+        <p className="mt-1 text-[13px] text-mut">
+          Once a machine is linked, run <code className="font-mono">claude+</code> in any repo to
+          start a session there — it streams into <strong>Sessions</strong> here, live and
+          steerable. Add <code className="font-mono">--dangerously-skip-permissions</code> to skip
+          Claude&rsquo;s per-action approval prompts. Each session runs in a background daemon, so
+          you can leave and reattach without losing it.
+        </p>
+
+        <div className="hq-box bg-paper mt-3">
+          <div className="text-[11px] uppercase tracking-wide text-faint">
+            In-session commands — press Ctrl-G, then the key
+          </div>
+          <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-[13px]">
+            <dt className="font-mono text-ink">Ctrl-G d</dt>
+            <dd className="min-w-0 text-mut">
+              <strong>Detach</strong> — leave the session running and drop back to your shell.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+</dt>
+            <dd className="min-w-0 text-mut">
+              <strong>Reattach</strong> — run <code className="font-mono">claude+</code> again in the
+              same folder to pick the session back up.
+            </dd>
+
+            <dt className="font-mono text-ink">Ctrl-G q</dt>
+            <dd className="min-w-0 text-mut">
+              <strong>Quit</strong> — end every session and stop the daemon; the rows clear from{' '}
+              <strong>Sessions</strong> here right away.
+            </dd>
+
+            <dt className="font-mono text-ink">Ctrl-G c</dt>
+            <dd className="min-w-0 text-mut">
+              <strong>New session</strong> in the same project.
+            </dd>
+
+            <dt className="font-mono text-ink">Ctrl-G n / p / 1-5</dt>
+            <dd className="min-w-0 text-mut">
+              Switch session tabs — next, previous, or jump to one.
+            </dd>
+          </dl>
+        </div>
+
+        <p className="mt-2 text-[13px] text-mut">
+          You can also end a session from here: open <strong>Sessions</strong> and use{' '}
+          <strong>Shut Down</strong> on its row.
+        </p>
+      </section>
+
+      {/* Terminal command reference — run in a normal shell (not inside a session),
+          distinct from the in-session Ctrl-G chords above. login + reset are the
+          recovery commands, so they get plain-language descriptions. */}
+      <section aria-labelledby="claude-plus-commands" className="mt-8 border-t border-line pt-6">
+        <h3 id="claude-plus-commands" className="text-sm font-semibold">
+          Terminal commands
+        </h3>
+        <p className="mt-1 text-[13px] text-mut">
+          Run these in a normal terminal (not inside a session). They&rsquo;re the verbs and flags
+          of the <code className="font-mono">claude+</code> CLI.
+        </p>
+
+        <div className="hq-box bg-paper mt-3">
+          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-[13px]">
+            <dt className="font-mono text-ink">claude+</dt>
+            <dd className="min-w-0 text-mut">
+              Start a session in the current folder — or reattach to the one already running there.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+ --dangerously-skip-permissions</dt>
+            <dd className="min-w-0 text-mut">
+              Same, but the daemon skips Claude&rsquo;s per-action approval prompts. Pick one mode
+              and stick with it — switching restarts that folder&rsquo;s daemon.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+ login</dt>
+            <dd className="min-w-0 text-mut">
+              Sign this machine in to HQ. Prints a short code to approve above (step 3). Run it in a
+              plain terminal so the code is visible.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+ ls</dt>
+            <dd className="min-w-0 text-mut">
+              List the sessions running across all your folders, with an index for{' '}
+              <code className="font-mono">--session</code>.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+ --session=N</dt>
+            <dd className="min-w-0 text-mut">
+              Attach to the session at index <code className="font-mono">N</code> from{' '}
+              <code className="font-mono">claude+ ls</code>.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+ sync-skills</dt>
+            <dd className="min-w-0 text-mut">
+              Pull the latest skills and agents for this project down from HQ.
+            </dd>
+
+            <dt className="font-mono text-ink">claude+ reset</dt>
+            <dd className="min-w-0 text-mut">
+              Clear all daemon state if a session gets stuck or shows an &ldquo;incompatible
+              build&rdquo; error. Your conversations are preserved and resume on the next launch.
+            </dd>
+          </dl>
+        </div>
+      </section>
     </div>
   );
 }

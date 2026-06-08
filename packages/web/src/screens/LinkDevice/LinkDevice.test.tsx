@@ -25,6 +25,31 @@ describe('LinkDevice (device-auth approval)', () => {
     expect(screen.getByRole('link', { name: /claude-plus\/releases/ })).toBeInTheDocument();
   });
 
+  it('explains how to run, detach, reattach, and quit claude+', async () => {
+    renderWithProviders(<LinkDevice />, { route: '/link-device' });
+    await screen.findByTestId('link-device');
+
+    expect(screen.getByText('Using claude+ in a project')).toBeInTheDocument();
+    // The Ctrl-G chords for the day-to-day flow.
+    expect(screen.getByText('Ctrl-G d')).toBeInTheDocument();
+    expect(screen.getByText('Ctrl-G q')).toBeInTheDocument();
+    expect(screen.getByText(/Detach/)).toBeInTheDocument();
+    expect(screen.getByText(/Reattach/)).toBeInTheDocument();
+    expect(screen.getByText(/Quit/)).toBeInTheDocument();
+  });
+
+  it('lists the terminal commands including login and reset', async () => {
+    renderWithProviders(<LinkDevice />, { route: '/link-device' });
+    await screen.findByTestId('link-device');
+
+    expect(screen.getByText('Terminal commands')).toBeInTheDocument();
+    expect(screen.getByText('claude+ reset')).toBeInTheDocument();
+    expect(screen.getByText('claude+ sync-skills')).toBeInTheDocument();
+    // These appear both as a command row and as an inline reference / flow step.
+    expect(screen.getAllByText('claude+ ls').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('claude+ login').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('shows the success message after approving a code', async () => {
     renderWithProviders(<LinkDevice />, { route: '/link-device' });
     await screen.findByTestId('link-device');
