@@ -82,25 +82,24 @@ describe('ProjectMemories — per-user memories tab', () => {
     // The tab mounted (reachable via its route).
     expect(await screen.findByTestId('project-memories')).toBeInTheDocument();
 
-    // Both authors' groups render, labelled by userName.
-    expect(await screen.findByTestId('memory-group-user-matt')).toBeInTheDocument();
-    expect(screen.getByTestId('memory-group-user-ada')).toBeInTheDocument();
-    expect(screen.getByText('Matt')).toBeInTheDocument();
-    expect(screen.getByText('Ada')).toBeInTheDocument();
+    // Both authors' groups render, labelled by userName (scope the label lookup
+    // to each group so it doesn't collide with the filter <option> of same text).
+    const mattGroup = await screen.findByTestId('memory-group-user-matt');
+    const adaGroup = screen.getByTestId('memory-group-user-ada');
+    expect(within(mattGroup).getByRole('heading', { name: 'Matt' })).toBeInTheDocument();
+    expect(within(adaGroup).getByRole('heading', { name: 'Ada' })).toBeInTheDocument();
 
     // A memory's name (heading) and its rendered Markdown content show through.
-    expect(screen.getByText('prefers-pnpm')).toBeInTheDocument();
-    const mattGroup = screen.getByTestId('memory-group-user-matt');
+    expect(within(mattGroup).getByText('prefers-pnpm')).toBeInTheDocument();
     expect(within(mattGroup).getByText('pnpm')).toBeInTheDocument();
-    expect(screen.getByText('variance-cache')).toBeInTheDocument();
+    expect(within(adaGroup).getByText('variance-cache')).toBeInTheDocument();
   });
 
   it('filters to a single author when more than one is present', async () => {
     renderApp('/projects/weekly-compass/memories');
-    await screen.findByTestId('project-memories');
 
-    // Both groups visible by default (all authors).
-    expect(screen.getByTestId('memory-group-user-ada')).toBeInTheDocument();
+    // Both groups visible by default (all authors) — wait for the async load.
+    expect(await screen.findByTestId('memory-group-user-ada')).toBeInTheDocument();
 
     // Narrow to Matt; Ada's group drops out.
     await userEvent.selectOptions(screen.getByLabelText('Author'), 'user-matt');

@@ -272,7 +272,6 @@ note: Added beyond the user's five-feature list as the shared substrate. Fold/re
   | { kind: &quot;user.msg&quot; | &quot;assistant.msg&quot;, sessionId, tokens }
   | { kind: &quot;tool.call&quot;, sessionId, tool, args summary }
   | { kind: &quot;tool.result&quot;, sessionId, ok, ms, summary }
-  | { kind: &quot;cost.tick&quot;, sessionId, deltaUsd, totalUsd, tokens }
   | { kind: &quot;status.change&quot;, sessionId, from, to }          // active | needs_input | idle | done
 Envelope = { v, instanceId, host, ts, seq, event: Event }
 </code></pre>
