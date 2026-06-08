@@ -4,6 +4,8 @@ import type { Skill } from '@harness/shared';
 import { Pill } from './primitives.js';
 import { MarkdownView } from './MarkdownView.js';
 import { stripFrontmatter } from '../lib/frontmatter.js';
+import { VariantSwitcher } from './VariantSwitcher.js';
+import { variantOf } from '../api/baseApi.js';
 
 /** The author/creator of a skill — its createdBy name, falling back to source. */
 export function authorOf(s: Skill): string {
@@ -17,7 +19,19 @@ export function authorOf(s: Skill): string {
  * grid and a bundle's member grid both render it, so a bundle reads exactly like
  * a sub-directory of the same cards (no bespoke per-surface layout).
  */
-export function SkillCard({ skill }: { skill: Skill }) {
+export function SkillCard({
+  skill,
+  showVariants = false,
+}: {
+  skill: Skill;
+  /**
+   * Catalog versioning (KTD6): show the per-name variant switcher + "Promote to
+   * true" under a plain skill card. The card itself renders the org-wide TRUE
+   * variant; the switcher lets any member view another fork/revision and promote
+   * it. Off by default so embedded uses (project tab, bundle drill-in) stay lean.
+   */
+  showVariants?: boolean;
+}) {
   if (skill.kind === 'bundle') {
     const memberCount = (skill.resolvedMembers ?? skill.members).length;
     return (
@@ -53,6 +67,11 @@ export function SkillCard({ skill }: { skill: Skill }) {
       <div className="mt-1.5 text-[11px] text-faint" data-testid={`skill-author-${skill.name}`}>
         by {authorOf(skill)}
       </div>
+      {showVariants && (
+        <div className="mt-2 border-t border-odd pt-2">
+          <VariantSwitcher name={variantOf(skill).baseName} allowPromote />
+        </div>
+      )}
     </div>
   );
 }

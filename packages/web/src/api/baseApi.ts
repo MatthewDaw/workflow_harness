@@ -102,6 +102,73 @@ export interface Memory {
   updatedAt: number;
 }
 
+/**
+ * Catalog versioning (SHARED CONTRACTS #1 / plan KTD6). A catalog item is
+ * identified by `(baseName, repoId, userId)`; editing a skill from a project
+ * forks/updates that variant. Every variant carries an immutable revision
+ * (`version`/`rev`). One ORG-WIDE "true" variant per `baseName` is the default
+ * shown in the catalog and added to a project.
+ *
+ * These fields are surfaced on the catalog DTOs (`Skill`/`Agent`/`McpServer`)
+ * by the schema area (U-Ver-Schema). Until that lands they may be absent on a
+ * given record, so the web reads them defensively via `variantOf()` below —
+ * legacy records resolve to their own `name` as the base variant at rev 1.
+ */
+export interface VariantMeta {
+  /** Stable id for the `(baseName, repoId, userId)` triple. */
+  variantId: string;
+  /** The shared skill/agent/server name this variant belongs to. */
+  baseName: string;
+  /** Repo that forked this variant (empty/undefined = base variant). */
+  repoId?: string;
+  /** Author who forked this variant (empty/undefined = base variant). */
+  authorUserId?: string;
+  /** Immutable revision number, starting at 1. */
+  version: number;
+  /** Whether this is the org-wide TRUE variant for its baseName. */
+  isTrue?: boolean;
+  createdAt?: number;
+}
+
+/**
+ * One variant/revision row as the variants endpoint serves it: the variant
+ * provenance plus the human-facing label fields the switcher renders.
+ */
+export interface SkillVariant extends VariantMeta {
+  /** Display name (usually the baseName). */
+  name: string;
+  description?: string;
+  /** Resolved author display name, when the backend joins it. */
+  authorName?: string;
+}
+
+/**
+ * Read a catalog record's variant metadata defensively. A record from the
+ * versioning-aware backend carries `variantId`/`baseName`/`version`; a legacy
+ * (pre-migration) record carries none, so it resolves to the BASE variant of
+ * its own `name` at rev 1 — exactly the migration contract.
+ */
+export function variantOf(item: {
+  name: string;
+  variantId?: string;
+  baseName?: string;
+  repoId?: string;
+  authorUserId?: string;
+  version?: number;
+  rev?: number;
+  isTrue?: boolean;
+}): VariantMeta {
+  const baseName = item.baseName ?? item.name;
+  return {
+    variantId: item.variantId ?? `${baseName}#base`,
+    baseName,
+    repoId: item.repoId,
+    authorUserId: item.authorUserId,
+    version: item.version ?? item.rev ?? 1,
+    isTrue: item.isTrue,
+  };
+}
+
 function unwrapArray<T>(key: string) {
   return (resp: unknown): T[] => {
     if (Array.isArray(resp)) return resp as T[];
@@ -142,6 +209,7 @@ export const baseApi = createApi({
     'Agent',
     'Skill',
     'McpServer',
+    'Variant',
     'Weekly',
     'Docs',
     'Requirements',
@@ -373,6 +441,39 @@ export const baseApi = createApi({
       providesTags: ['Skill'],
     }),
 
+    /**
+     * Every variant/revision of one skill name (catalog versioning, KTD6). The
+     * catalog's per-name variant switcher reads this to let any org member pick
+     * another `(repo, person)` fork or an earlier revision; the current TRUE
+     * variant is flagged so the UI can default to it. Tagged by name so a
+     * promote/edit of that name refetches just its variant list.
+     */
+    getSkillVariants: build.query<SkillVariant[], string>({
+      query: (name) => `skills/${encodeURIComponent(name)}/variants`,
+      transformResponse: unwrapArray<SkillVariant>('variants'),
+      providesTags: (_r, _e, name) => [{ type: 'Variant', id: name }],
+    }),
+
+    /**
+     * Promote a variant to the org-wide TRUE version for its name (KTD6). Any
+     * authed org member may promote — it is NOT admin-gated — and promotion only
+     * repoints the TRUE pointer; it never edits or deletes a variant. Pass an
+     * optional `rev` to pin a specific revision (defaults to the variant's
+     * current revision). Invalidates the catalog + that name's variant list so
+     * the new TRUE shows as the default everywhere.
+     */
+    promoteSkill: build.mutation<
+      { name: string; variantId: string; rev: number },
+      { name: string; variantId: string; rev?: number }
+    >({
+      query: ({ name, variantId, rev }) => ({
+        url: `skills/${encodeURIComponent(name)}/promote`,
+        method: 'POST',
+        body: rev !== undefined ? { variantId, rev } : { variantId },
+      }),
+      invalidatesTags: (_r, _e, { name }) => ['Skill', { type: 'Variant', id: name }],
+    }),
+
     /** Org MCP-server catalog (collapsed model): no projectId, org scope only. */
     getMcpServers: build.query<McpServer[], void>({
       query: () => 'mcp-servers',
@@ -476,11 +577,22 @@ export const baseApi = createApi({
 
     // ---- Project opt-in (collapsed org-catalog model) ----
 
-    /** Add a skill to a project's enabledSkills (idempotent). */
-    enableProjectSkill: build.mutation<Project, { projectId: string; skillName: string }>({
-      query: ({ projectId, skillName }) => ({
+    /**
+     * Add a skill to a project's enabledSkills (idempotent). The enabled-set
+     * entry carries the chosen variant `{ name, variantId }` (KTD6): the optional
+     * `variantId` defaults server-side to the name's current TRUE variant, and a
+     * per-repo dropdown can pin another variant. The name stays in the URL (so
+     * the handler + existing opt-in tests are unchanged) and the variant rides in
+     * the body when supplied.
+     */
+    enableProjectSkill: build.mutation<
+      Project,
+      { projectId: string; skillName: string; variantId?: string }
+    >({
+      query: ({ projectId, skillName, variantId }) => ({
         url: `projects/${projectId}/skills/${encodeURIComponent(skillName)}`,
         method: 'POST',
+        ...(variantId !== undefined ? { body: { variantId } } : {}),
       }),
       transformResponse: unwrapOne<Project>('project'),
       invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
@@ -714,6 +826,8 @@ export const {
   usePutDodMutation,
   useGetAgentsQuery,
   useGetSkillsQuery,
+  useGetSkillVariantsQuery,
+  usePromoteSkillMutation,
   useGetMcpServersQuery,
   useGetMcpServerQuery,
   useGetWeeklyQuery,

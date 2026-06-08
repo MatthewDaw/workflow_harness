@@ -19,7 +19,7 @@ export function Skills() {
         subtitle="The catalog agents and projects draw from. Bundles open into their sub-skills."
       />
       {isLoading && <div className="text-mut">Loading skills…</div>}
-      {!isLoading && <SkillCatalog skills={skills} />}
+      {!isLoading && <SkillCatalog skills={skills} showVariants />}
     </div>
   );
 }

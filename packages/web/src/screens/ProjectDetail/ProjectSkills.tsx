@@ -11,6 +11,7 @@ import {
 } from '../../api/baseApi.js';
 import { ScreenHeader } from '../../components/primitives.js';
 import { SkillCatalog } from '../../components/SkillCatalog.js';
+import { VariantSwitcher } from '../../components/VariantSwitcher.js';
 import {
   CatalogPicker,
   type CatalogRef,
@@ -48,7 +49,17 @@ export function ProjectSkills() {
   const [applying, setApplying] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
-  const enabled = project?.enabledSkills ?? [];
+  // A project's enabled-set entry carries the chosen variant `{ name, variantId }`
+  // (KTD6). Until the schema area lands that shape, `enabledSkills` may still be a
+  // bare `string[]`; normalize both so the rest of this screen reads plain names
+  // and can look up a per-skill pinned variantId defensively.
+  type EnabledEntry = string | { name: string; variantId?: string };
+  const rawEnabled = (project?.enabledSkills ?? []) as EnabledEntry[];
+  const enabled = rawEnabled.map((e) => (typeof e === 'string' ? e : e.name));
+  const pinnedVariant = (name: string): string | undefined => {
+    const entry = rawEnabled.find((e) => typeof e !== 'string' && e.name === name);
+    return entry && typeof entry !== 'string' ? entry.variantId : undefined;
+  };
   const enabledSet = new Set(enabled);
   const enabledBundles = project?.enabledBundles ?? [];
 
@@ -216,14 +227,30 @@ export function ProjectSkills() {
             skills={display}
             emptyHint="No skills enabled yet."
             renderFooter={(s) => (
-              <button
-                type="button"
-                className="hq-btn self-start"
-                data-testid={`remove-skill-${s.name}`}
-                onClick={() => onRemove(s)}
-              >
-                ✕ remove
-              </button>
+              <div className="flex flex-col gap-1.5">
+                {s.kind !== 'bundle' && (
+                  // Per-repo variant pin (KTD6): default to the org-wide TRUE
+                  // variant, but let this project pin another fork/revision. Picking
+                  // one re-enables the skill with that variantId, which the opt-in
+                  // handler records on the enabled-set entry; sync materializes it.
+                  <VariantSwitcher
+                    name={s.name}
+                    selectedVariantId={pinnedVariant(s.name)}
+                    onSelect={(v) =>
+                      projectId &&
+                      enableSkill({ projectId, skillName: s.name, variantId: v.variantId })
+                    }
+                  />
+                )}
+                <button
+                  type="button"
+                  className="hq-btn self-start"
+                  data-testid={`remove-skill-${s.name}`}
+                  onClick={() => onRemove(s)}
+                >
+                  ✕ remove
+                </button>
+              </div>
             )}
           />
         </div>

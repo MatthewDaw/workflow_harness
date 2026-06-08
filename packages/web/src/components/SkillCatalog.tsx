@@ -28,10 +28,17 @@ export function SkillCatalog({
   skills,
   renderFooter,
   emptyHint = 'No skills in the catalog.',
+  showVariants = false,
 }: {
   skills: Skill[];
   renderFooter?: (skill: Skill) => ReactNode;
   emptyHint?: string;
+  /**
+   * Catalog versioning (KTD6): show the per-skill variant switcher + "Promote to
+   * true" on each plain card. The global Skills catalog turns this on; the
+   * project Skills tab leaves it off (it pins variants in the attach flow).
+   */
+  showVariants?: boolean;
 }) {
   const [showInBundles, setShowInBundles] = useState(false);
   const [author, setAuthor] = useState<string>(ANY_AUTHOR);
@@ -92,11 +99,11 @@ export function SkillCatalog({
               className="flex flex-col gap-1.5"
               data-testid={`skill-cell-${s.name}`}
             >
-              <SkillCard skill={s} />
+              <SkillCard skill={s} showVariants={showVariants} />
               {renderFooter(s)}
             </div>
           ) : (
-            <SkillCard key={s.name} skill={s} />
+            <SkillCard key={s.name} skill={s} showVariants={showVariants} />
           ),
         )}
       </div>
