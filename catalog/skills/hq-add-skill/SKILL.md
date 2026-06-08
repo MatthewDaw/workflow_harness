@@ -42,6 +42,59 @@ developer's claude+ session, inside a connected repo.
 > replaces the retired `POST /skills/:name/scope` verb (`410 Gone`). See the
 > [org-catalog design spec](../../../docs/superpowers/specs/2026-06-03-org-catalog-scope-collapse-design.md).
 
+## 0 · Environment — these are FIXED; do not re-discover them
+
+Re-deriving the HQ base, the token, the plugin path, and "which repo am I in" is
+the #1 time sink. Bind them once and move on:
+
+- **HQ REST base:** `https://l5edwucexb.execute-api.us-east-1.amazonaws.com` (the
+  `ApiStack.HttpApiUrl` — NOT the `wss://` url in the credentials file).
+  `HQ="https://l5edwucexb.execute-api.us-east-1.amazonaws.com"`
+- **Device token:** line 2 of `~/.claude-plus/credentials` (line 1 is the WS url).
+  `TOK="$(sed -n 2p ~/.claude-plus/credentials)"`. The **org rides inside the
+  token** — never prompt for it. Admin is decided server-side from your profile.
+- **Which repo am I in?** One check: `test -f infra/scripts/seed-skills.mjs` →
+  the HQ **backend** repo (catalog source is `catalog/skills/`; the seed path
+  applies). Otherwise a **connected project repo** → use the **direct REST** path
+  (the default below) and never hunt for the seed script.
+- **Plugin skills on disk:** `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/<name>/SKILL.md`
+  (use the newest `<version>` dir). This is where "add plugin X as a bundle" reads.
+
+## Fast path: register a whole plugin as a bundle
+
+"Add `<plugin>` as a bundle in Command HQ" is ONE idempotent batch — not per-skill
+hand-rolling, and not three script iterations. With `$HQ`/`$TOK` bound:
+
+```bash
+HQ="https://l5edwucexb.execute-api.us-east-1.amazonaws.com"
+TOK="$(sed -n 2p ~/.claude-plus/credentials)"
+SK="$(ls -d ~/.claude/plugins/cache/<mkt>/<plugin>/*/skills | sort -V | tail -1)"
+PLUGIN="<plugin>" HQ="$HQ" TOK="$TOK" SK="$SK" python - <<'PY'
+import os, json, glob, urllib.request, urllib.error
+HQ, TOK, SK, PLUGIN = (os.environ[k] for k in ("HQ","TOK","SK","PLUGIN"))
+def post(obj):
+    req = urllib.request.Request(HQ+"/skills", data=json.dumps(obj).encode(),
+        headers={"Authorization":"Bearer "+TOK, "content-type":"application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req) as r: return r.status
+    except urllib.error.HTTPError as e: return e.code   # 403=not org admin · 409=canonical built-in
+members=[]
+for md in sorted(glob.glob(SK+"/*/SKILL.md")):
+    name = os.path.basename(os.path.dirname(md)); body = open(md, encoding="utf-8").read()
+    desc = next((l.split(":",1)[1].strip(" >|-") for l in body.splitlines()
+                 if l.startswith("description:")), name)
+    print(name, post({"name":name,"kind":"skill","source":"custom","description":desc,"body":body}))
+    members.append(name)
+print("bundle", post({"name":PLUGIN,"kind":"bundle","source":"custom",
+    "description":PLUGIN+" plugin skills","members":members}))
+PY
+```
+
+Idempotent (the server upserts by name, so re-running converges). `201/200` ok ·
+`403` = your profile isn't an org admin (ask an admin / the [seed path](#fallback--the-seed-path-bootstrap--no-admin)) ·
+`409` = a canonical built-in you can't clobber. Then go to **§5 opt-in — read its
+fail-fast rule first** (a locally-run repo usually has no project to opt into).
+
 ## 1 · Decide: single skill or a bundle
 
 Read the prompt:
@@ -198,9 +251,25 @@ command-hq-starter bundle`). Commit only the skill file(s), not unrelated
 
 ## 5 · Opt a project into the skill (per-project enablement)
 
-Registering a skill puts it in the catalog; it is **not** active on any project
-until that project opts in. A skill can be enabled directly, or pulled in by an
-agent:
+**Fail-fast gate — check FIRST, and STOP if it fails.** Per-project opt-in needs
+the repo to be a **connected HQ project** AND you to have its `projectId`. There
+is NO list endpoint to enumerate: `GET /projects` is admin-only (`401`), and
+`/me/projects` / `/org/projects` don't exist. So:
+
+- If you already have a `projectId` (the user gave one, or a known connected
+  project), use it.
+- Otherwise do **ONE** probe — `GET $HQ/projects/<candidate>` — and if it returns
+  `{"error":"not found"}`, this repo is **not an HQ project**: **STOP.** Do NOT
+  probe repo-derived ids, git remotes, or local state — that flailing cost ~1.5
+  min last time and a locally-run claude+ repo has no project record by design.
+  Registering in the org catalog IS the deliverable; tell the user verbatim:
+  *"Registered + bundled in the org catalog. It's not enabled on a project yet —
+  connect this repo in the HQ web app (which mints a projectId) or toggle the
+  bundle on the HQ **Skills** tab."* Then finish at step 6.
+
+Once you HAVE a `projectId`, a whole bundle enables all its members in one call
+(`POST $HQ/projects/<projectId>/bundles/<bundleName>`); or enable a skill directly
+or via an agent:
 
 ```
 # enable a skill directly on a project (idempotent)
