@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { Agent } from '@harness/shared';
 import { useGetAgentsQuery } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
+import { MarkdownView } from '../../components/MarkdownView.js';
 
 const ANY_AUTHOR = '__any__';
 
@@ -22,8 +23,7 @@ export function Agents() {
     return [...set].sort();
   }, [agents]);
 
-  const catalog =
-    author === ANY_AUTHOR ? agents : agents.filter((a) => authorOf(a) === author);
+  const catalog = author === ANY_AUTHOR ? agents : agents.filter((a) => authorOf(a) === author);
 
   return (
     <div className="hq-pad" data-testid="agents-screen">
@@ -68,29 +68,181 @@ function AgentCard({ agent }: { agent: Agent }) {
   return (
     <div className="hq-box bg-paper" data-testid={`agent-card-${agent.name}`}>
       <div className="flex justify-between">
-        <Link to={`/agents/${encodeURIComponent(agent.name)}/edit`} className="text-ink no-underline">
+        <Link
+          to={`/agents/${encodeURIComponent(agent.name)}/edit`}
+          className="text-ink no-underline"
+        >
           <b>{agent.name}</b>
         </Link>
         <Pill>{agent.model}</Pill>
       </div>
       {agent.description && (
-        <div
-          className="my-1.5 text-xs text-ink"
-          data-testid={`agent-description-${agent.name}`}
-        >
+        <div className="my-1.5 text-xs text-ink" data-testid={`agent-description-${agent.name}`}>
           {agent.description}
         </div>
       )}
-      {agent.prompt && <div className="my-1.5 text-xs text-mut">{agent.prompt}</div>}
-      <div className="my-1.5">
-        {agent.skills.map((s) => (
-          <Pill key={s} variant="skill" className="mr-1">
-            {s}
-          </Pill>
-        ))}
-      </div>
+      <AgentBodyPreview agent={agent} />
       <div className="mt-1.5 text-[11px] text-faint" data-testid={`agent-author-${agent.name}`}>
         by {authorOf(agent)}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The card keeps only the agent's description (rendered by the caller); the full
+ * registration — system prompt plus every attached skill, MCP server, and tool —
+ * lives behind an Expand button that opens it in a fullscreen overlay, mirroring
+ * how a skill card hides its SKILL.md body. Renders nothing when the agent has no
+ * prompt and nothing attached to show.
+ */
+function AgentBodyPreview({ agent }: { agent: Agent }) {
+  const [open, setOpen] = useState(false);
+  const prompt = (agent.prompt ?? '').trim();
+  const hasAttachments =
+    agent.skills.length > 0 || agent.mcpServers.length > 0 || agent.tools.length > 0;
+  if (!prompt && !hasAttachments) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        className="hq-btn mt-1.5"
+        data-testid={`agent-expand-${agent.name}`}
+        onClick={() => setOpen(true)}
+      >
+        ⤢ Expand
+      </button>
+      {open && <AgentBodyModal agent={agent} prompt={prompt} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/**
+ * A section header for the agent detail overlay. Renders as an unambiguous header:
+ * bold, full-strength ink, with a divider rule beneath it so the eye reads it as a
+ * section break rather than just faint label text.
+ */
+function SectionHeader({ children }: { children: ReactNode }) {
+  return (
+    <div className="mb-2 border-b border-odd pb-1 text-xs font-bold uppercase tracking-wider text-ink">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A labelled row of pills (skills / MCP servers / tools). Hidden when empty unless
+ * `alwaysShow` is set — used for the skills and MCP servers that ship with the agent,
+ * which stay visible (with an explicit empty state) so it's clear nothing is bundled.
+ */
+function AttachmentList({
+  label,
+  items,
+  variant,
+  testid,
+  alwaysShow,
+  emptyHint,
+}: {
+  label: string;
+  items: string[];
+  variant?: 'skill';
+  testid: string;
+  alwaysShow?: boolean;
+  emptyHint?: string;
+}) {
+  if (items.length === 0 && !alwaysShow) return null;
+  return (
+    <div className="mb-3" data-testid={testid}>
+      <SectionHeader>{label}</SectionHeader>
+      {items.length === 0 ? (
+        <div className="text-xs italic text-faint">{emptyHint ?? 'None'}</div>
+      ) : (
+        <div>
+          {items.map((i) => (
+            <Pill key={i} variant={variant} className="mr-1 mb-1">
+              {i}
+            </Pill>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fullscreen overlay rendering an agent's full registration: its attached skills,
+ * MCP servers, and tools, followed by the system prompt.
+ */
+function AgentBodyModal({
+  agent,
+  prompt,
+  onClose,
+}: {
+  agent: Agent;
+  prompt: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-black/50 p-4 sm:p-8"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${agent.name} agent`}
+      data-testid={`agent-modal-${agent.name}`}
+      onClick={onClose}
+    >
+      <div
+        className="hq-box mx-auto flex h-full w-full max-w-[900px] flex-col overflow-hidden bg-paper"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-odd pb-2">
+          <span className="flex items-center gap-2">
+            <b>{agent.name}</b>
+            <Pill>{agent.model}</Pill>
+          </span>
+          <button
+            type="button"
+            className="hq-btn"
+            data-testid={`agent-modal-close-${agent.name}`}
+            onClick={onClose}
+          >
+            ✕ Close
+          </button>
+        </div>
+        <div className="mt-2 min-h-0 flex-1 overflow-auto">
+          {agent.description && <div className="mb-3 text-xs text-mut">{agent.description}</div>}
+          <AttachmentList
+            label="Skills"
+            items={agent.skills}
+            variant="skill"
+            testid={`agent-skills-${agent.name}`}
+            alwaysShow
+            emptyHint="No skills ship with this agent"
+          />
+          <AttachmentList
+            label="MCP servers"
+            items={agent.mcpServers}
+            testid={`agent-mcp-${agent.name}`}
+            alwaysShow
+            emptyHint="No MCP servers ship with this agent"
+          />
+          <AttachmentList label="Tools" items={agent.tools} testid={`agent-tools-${agent.name}`} />
+          {prompt && (
+            <div data-testid={`agent-prompt-${agent.name}`}>
+              <SectionHeader>System prompt</SectionHeader>
+              <MarkdownView markdown={prompt} />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

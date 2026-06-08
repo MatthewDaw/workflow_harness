@@ -41,7 +41,6 @@ export function applyEvent(
           agent: ev.agent,
           status: 'active',
           tokens: 0,
-          costUsd: 0,
           startedAt: env.ts,
           lastEventAt: env.ts,
           maxSeq: 0,
@@ -53,7 +52,6 @@ export function applyEvent(
           host: env.host,
           status: 'active',
           tokens: 0,
-          costUsd: 0,
           startedAt: env.ts,
           lastEventAt: env.ts,
           maxSeq: 0,
@@ -102,10 +100,6 @@ export function applyEvent(
     case 'user.msg':
     case 'assistant.msg':
       next.tokens = base.tokens + ev.tokens;
-      break;
-    case 'cost.tick':
-      next.tokens = ev.tokens;
-      next.costUsd = ev.totalUsd;
       break;
     case 'status.change':
       next.status = ev.to;

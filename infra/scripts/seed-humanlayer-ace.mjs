@@ -36,19 +36,44 @@ if (!ORG) {
 // The 27 HumanLayer command-derived skills (the ACE workflow). Explicit list so
 // this never accidentally sweeps in other skills under .claude/skills/.
 const ACE_SKILLS = [
-  'ci_commit', 'ci_describe_pr', 'commit', 'create_handoff', 'create_plan',
-  'create_plan_generic', 'create_plan_nt', 'create_worktree', 'debug', 'describe_pr',
-  'describe_pr_nt', 'founder_mode', 'implement_plan', 'iterate_plan', 'iterate_plan_nt',
-  'linear', 'local_review', 'oneshot', 'oneshot_plan', 'ralph_impl', 'ralph_plan',
-  'ralph_research', 'research_codebase', 'research_codebase_generic', 'research_codebase_nt',
-  'resume_handoff', 'validate_plan',
+  'ci_commit',
+  'ci_describe_pr',
+  'commit',
+  'create_handoff',
+  'create_plan',
+  'create_plan_generic',
+  'create_plan_nt',
+  'create_worktree',
+  'debug',
+  'describe_pr',
+  'describe_pr_nt',
+  'founder_mode',
+  'implement_plan',
+  'iterate_plan',
+  'iterate_plan_nt',
+  'linear',
+  'local_review',
+  'oneshot',
+  'oneshot_plan',
+  'ralph_impl',
+  'ralph_plan',
+  'ralph_research',
+  'research_codebase',
+  'research_codebase_generic',
+  'research_codebase_nt',
+  'resume_handoff',
+  'validate_plan',
 ];
 
 if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
-  console.error(`[seed-hl-ace] missing ${backendDist}/seed/skills.js — run \`npm run build -w @harness/backend\` first.`);
+  console.error(
+    `[seed-hl-ace] missing ${backendDist}/seed/skills.js — run \`npm run build -w @harness/backend\` first.`,
+  );
   process.exit(1);
 }
-const { buildSeedSkills } = await import(pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href);
+const { buildSeedSkills } = await import(
+  pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href
+);
 const { skillKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
 
 function parseFrontmatter(md) {
@@ -91,7 +116,8 @@ for (const name of ACE_SKILLS) {
 
 const manifest = {
   'humanlayer-ace': {
-    description: "HumanLayer's Advanced Context Engineering workflow — research, plan, implement, validate, commit (imported from humanlayer CLI).",
+    description:
+      "HumanLayer's Advanced Context Engineering workflow — research, plan, implement, validate, commit (imported from humanlayer CLI).",
     members: ACE_SKILLS,
   },
 };
@@ -104,11 +130,20 @@ if (process.env.SEED_DRY_RUN) {
     const what = r.kind === 'bundle' ? `bundle members=[${r.members.length}]` : 'skill';
     console.log(`[dry-run] ${what} ${r.name} @ ${r.scope.tier}#${r.scope.id}`);
   }
-  console.log(`[seed-hl-ace] DRY RUN — ${records.length} records (${ACE_SKILLS.length} skills + 1 bundle) targeting org#${ORG} in ${TABLE}. Nothing written.`);
+  console.log(
+    `[seed-hl-ace] DRY RUN — ${records.length} records (${ACE_SKILLS.length} skills + 1 bundle) targeting org#${ORG} in ${TABLE}. Nothing written.`,
+  );
 } else {
   const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
   for (const record of records) {
-    await doc.send(new PutCommand({ TableName: TABLE, Item: { ...skillKey(record.scope, record.name), ...record } }));
+    await doc.send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: { ...skillKey(record.scope, record.name), ...record },
+      }),
+    );
   }
-  console.log(`[seed-hl-ace] wrote ${records.length} records (27 skills + humanlayer-ace bundle) to ${TABLE} at org#${ORG}.`);
+  console.log(
+    `[seed-hl-ace] wrote ${records.length} records (27 skills + humanlayer-ace bundle) to ${TABLE} at org#${ORG}.`,
+  );
 }

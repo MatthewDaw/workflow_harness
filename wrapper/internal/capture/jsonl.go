@@ -2,7 +2,7 @@
 // envelope (U14). It has two structured sources — never PTY screen-scraping:
 //
 //  1. The session transcript JSONL at ~/.claude/projects/<hash>/<sid>.jsonl,
-//     tailed for message / tool / cost events (KTD3 source 2).
+//     tailed for message / tool events (KTD3 source 2).
 //  2. settings.json hooks (PreToolUse/PostToolUse/Stop/Notification) that POST
 //     low-latency lifecycle + status.change signals to the daemon socket
 //     (KTD3 source 3) — see hooks.go.
@@ -95,7 +95,6 @@ type Tailer struct {
 	path          string
 	offset        int64
 	leftover      []byte
-	totalUsd      float64
 	sawFirst      bool
 	firstUserText string
 	sawAssistant  bool

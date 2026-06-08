@@ -45,7 +45,6 @@ const (
 	KindAssistantMsg     Kind = "assistant.msg"
 	KindToolCall         Kind = "tool.call"
 	KindToolResult       Kind = "tool.result"
-	KindCostTick         Kind = "cost.tick"
 	KindStatusChange     Kind = "status.change"
 	KindSessionHeartbeat Kind = "session.heartbeat"
 	KindSessionTopic     Kind = "session.topic"
@@ -82,16 +81,12 @@ type Event struct {
 	Ms      *int64 `json:"ms,omitempty"`
 	Summary string `json:"summary,omitempty"`
 
-	// user.msg / assistant.msg / cost.tick
+	// user.msg / assistant.msg
 	Tokens *int64 `json:"tokens,omitempty"`
 
 	// user.msg / assistant.msg: the actual (truncated) turn text. Optional; older
 	// daemons omitted it. Carries the real content HQ renders in the live feed.
 	Text string `json:"text,omitempty"`
-
-	// cost.tick
-	DeltaUsd *float64 `json:"deltaUsd,omitempty"`
-	TotalUsd *float64 `json:"totalUsd,omitempty"`
 
 	// status.change
 	From Status `json:"from,omitempty"`
@@ -120,10 +115,9 @@ type Envelope struct {
 	Event      Event  `json:"event"`
 }
 
-// boolPtr / int64Ptr / f64Ptr are small constructors for the optional fields.
-func boolPtr(b bool) *bool      { return &b }
-func int64Ptr(i int64) *int64   { return &i }
-func f64Ptr(f float64) *float64 { return &f }
+// boolPtr / int64Ptr are small constructors for the optional fields.
+func boolPtr(b bool) *bool    { return &b }
+func int64Ptr(i int64) *int64 { return &i }
 
 // ----- Event constructors (kept parallel to the TS schemas) -----
 
@@ -179,14 +173,6 @@ func ToolCall(sessionID, tool, argsSummary string) Event {
 // ToolResult builds a tool.result event.
 func ToolResult(sessionID string, ok bool, ms int64, summary string) Event {
 	return Event{Kind: KindToolResult, SessionID: sessionID, OK: boolPtr(ok), Ms: int64Ptr(ms), Summary: summary}
-}
-
-// CostTick builds a cost.tick event.
-func CostTick(sessionID string, deltaUsd, totalUsd float64, tokens int64) Event {
-	return Event{
-		Kind: KindCostTick, SessionID: sessionID,
-		DeltaUsd: f64Ptr(deltaUsd), TotalUsd: f64Ptr(totalUsd), Tokens: int64Ptr(tokens),
-	}
 }
 
 // StatusChange builds a status.change event.
@@ -249,10 +235,6 @@ func (e Event) Validate() error {
 	case KindToolResult:
 		if e.OK == nil || e.Ms == nil {
 			return fmt.Errorf("tool.result: ok and ms required")
-		}
-	case KindCostTick:
-		if e.DeltaUsd == nil || e.TotalUsd == nil || e.Tokens == nil {
-			return fmt.Errorf("cost.tick: deltaUsd, totalUsd, tokens required")
 		}
 	case KindStatusChange:
 		if !ValidStatus(e.From) || !ValidStatus(e.To) {

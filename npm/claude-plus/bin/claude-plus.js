@@ -4,26 +4,26 @@
 // Resolves the prebuilt binary for the current platform — installed as an
 // optionalDependency `@claude-plus/<os>-<arch>` — and execs it transparently,
 // forwarding argv, stdio, and the exit code. No Go toolchain required.
-"use strict";
+'use strict';
 
-const { spawnSync } = require("node:child_process");
-const { binaryPath } = require("../install.js");
+const { spawnSync } = require('node:child_process');
+const { binaryPath } = require('../install.js');
 
 function main() {
   const bin = binaryPath();
   if (!bin) {
     console.error(
-      "claude+: no prebuilt binary for " +
+      'claude+: no prebuilt binary for ' +
         process.platform +
-        "-" +
+        '-' +
         process.arch +
-        ". Install via curl|sh (scripts/install.sh) or build from source (wrapper/)."
+        '. Install via curl|sh (scripts/install.sh) or build from source (wrapper/).',
     );
     process.exit(1);
   }
-  const result = spawnSync(bin, process.argv.slice(2), { stdio: "inherit" });
+  const result = spawnSync(bin, process.argv.slice(2), { stdio: 'inherit' });
   if (result.error) {
-    console.error("claude+:", result.error.message);
+    console.error('claude+:', result.error.message);
     process.exit(1);
   }
   process.exit(result.status === null ? 1 : result.status);

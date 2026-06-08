@@ -85,12 +85,16 @@ export function LinkDevice() {
           your HQ account. You do it once per machine. Three steps:
         </div>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px]">
-          <li>Install <code className="font-mono">claude+</code> on that machine.</li>
+          <li>
+            Install <code className="font-mono">claude+</code> on that machine.
+          </li>
           <li>
             Run <code className="font-mono">claude+ login</code> there — it shows a short code and
             waits.
           </li>
-          <li>Type that code into the box below and approve. Done — sessions start streaming here.</li>
+          <li>
+            Type that code into the box below and approve. Done — sessions start streaming here.
+          </li>
         </ol>
       </div>
 
@@ -129,11 +133,11 @@ export function LinkDevice() {
           2 · Run claude+ login
         </h3>
         <p className="mt-1 text-[13px] text-mut">
-          In that machine’s terminal, run <code className="font-mono">claude+ login</code>. It prints
-          a short code and waits for you to approve it here:
+          In that machine’s terminal, run <code className="font-mono">claude+ login</code>. It
+          prints a short code and waits for you to approve it here:
         </p>
         <pre className="hq-box bg-ink mt-2 overflow-x-auto whitespace-pre font-mono text-[12px] text-paper">
-{`$ claude+ login
+          {`$ claude+ login
 To finish signing in, open Command HQ and approve this code:
 
     WDJB-MJXT

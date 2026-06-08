@@ -62,9 +62,7 @@ describe('Definition of Done card', () => {
       seed: { dod: { requiresUnitTests: true, requiresProdE2E: false } },
     });
     // Editor hydrates from the served DoD.
-    await waitFor(() =>
-      expect(screen.getByTestId('dod-prod-e2e')).not.toBeChecked(),
-    );
+    await waitFor(() => expect(screen.getByTestId('dod-prod-e2e')).not.toBeChecked());
 
     await userEvent.click(screen.getByTestId('dod-prod-e2e'));
     await userEvent.type(screen.getByTestId('dod-notes'), 'verify against prod');

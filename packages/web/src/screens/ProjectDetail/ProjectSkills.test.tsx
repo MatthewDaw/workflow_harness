@@ -15,13 +15,64 @@ const PROJECT: Project = {
   progressPct: 0,
   liveSessionCount: 0,
   enabledSkills: ['gh'],
+  enabledBundles: [],
   enabledAgents: [],
   enabledMcpServers: [],
 };
 
 const SKILLS: Skill[] = [
-  { name: 'gh', scope: ORG, kind: 'skill', description: 'GitHub CLI', source: 'built-in', members: [], body: '', createdBy: { userId: 'u', name: 'Matt' } },
-  { name: 'browse', scope: ORG, kind: 'skill', description: 'Browser', source: 'local', members: [], body: '', createdBy: { userId: 'u', name: 'Sam' } },
+  {
+    name: 'gh',
+    scope: ORG,
+    kind: 'skill',
+    description: 'GitHub CLI',
+    source: 'built-in',
+    members: [],
+    body: '',
+    createdBy: { userId: 'u', name: 'Matt' },
+  },
+  {
+    name: 'browse',
+    scope: ORG,
+    kind: 'skill',
+    description: 'Browser',
+    source: 'local',
+    members: [],
+    body: '',
+    createdBy: { userId: 'u', name: 'Sam' },
+  },
+  // A bundle whose members are reachable only by expanding it in the picker.
+  {
+    name: 'frontend',
+    scope: ORG,
+    kind: 'bundle',
+    description: 'Frontend pack',
+    source: 'local',
+    members: ['react-skill', 'css-skill'],
+    resolvedMembers: ['react-skill', 'css-skill'],
+    body: '',
+    createdBy: { userId: 'u', name: 'Sam' },
+  },
+  {
+    name: 'react-skill',
+    scope: ORG,
+    kind: 'skill',
+    description: 'React',
+    source: 'local',
+    members: [],
+    body: '',
+    createdBy: { userId: 'u', name: 'Sam' },
+  },
+  {
+    name: 'css-skill',
+    scope: ORG,
+    kind: 'skill',
+    description: 'CSS',
+    source: 'local',
+    members: [],
+    body: '',
+    createdBy: { userId: 'u', name: 'Sam' },
+  },
 ];
 
 interface StubReq {
@@ -47,7 +98,7 @@ describe('ProjectSkills (project opt-in)', () => {
       routePath: '/projects/:projectId/skills',
       seed: { projects: [PROJECT], skills: SKILLS },
     });
-    await screen.findByTestId('enabled-skill-gh');
+    await screen.findByTestId('skill-card-gh');
 
     await userEvent.click(screen.getByTestId('remove-skill-gh'));
     await waitFor(() =>
@@ -57,39 +108,75 @@ describe('ProjectSkills (project opt-in)', () => {
     );
   });
 
-  it('adds a skill from the catalog via enableProjectSkill', async () => {
+  it('adds a standalone skill from the catalog modal via enableProjectSkill', async () => {
     renderWithProviders(<ProjectSkills />, {
       route: '/projects/weekly-compass/skills',
       routePath: '/projects/:projectId/skills',
       seed: { projects: [PROJECT], skills: SKILLS },
     });
-    await screen.findByTestId('enable-skill-input');
+    await screen.findByTestId('skill-card-gh');
 
-    await userEvent.click(screen.getByTestId('enable-skill-input'));
-    await userEvent.click(await screen.findByTestId('enable-skill-option-browse'));
-    await userEvent.click(screen.getByTestId('enable-skill-commit'));
+    await userEvent.click(screen.getByTestId('enable-skill'));
+    await screen.findByTestId('catalog-picker');
+
+    await userEvent.click(screen.getByTestId('catalog-picker-row-skill-browse'));
+    await userEvent.click(screen.getByTestId('catalog-picker-apply'));
+
+    await waitFor(() =>
+      expect(
+        lastMatching((u, m) => m === 'POST' && u.includes('projects/weekly-compass/skills/browse')),
+      ).toBeDefined(),
+    );
+  });
+
+  it('adds a whole bundle via enableProjectBundle', async () => {
+    renderWithProviders(<ProjectSkills />, {
+      route: '/projects/weekly-compass/skills',
+      routePath: '/projects/:projectId/skills',
+      seed: { projects: [PROJECT], skills: SKILLS },
+    });
+    await screen.findByTestId('skill-card-gh');
+
+    await userEvent.click(screen.getByTestId('enable-skill'));
+    await screen.findByTestId('catalog-picker');
+
+    await userEvent.click(screen.getByTestId('catalog-picker-row-bundle-frontend'));
+    await userEvent.click(screen.getByTestId('catalog-picker-apply'));
 
     await waitFor(() =>
       expect(
         lastMatching(
-          (u, m) => m === 'POST' && u.includes('projects/weekly-compass/skills/browse'),
+          (u, m) => m === 'POST' && u.includes('projects/weekly-compass/bundles/frontend'),
         ),
       ).toBeDefined(),
     );
   });
 
-  it('shows a register hint when the typed skill is not in the org catalog', async () => {
+  it('expands a bundle and toggling one member enables that skill', async () => {
     renderWithProviders(<ProjectSkills />, {
       route: '/projects/weekly-compass/skills',
       routePath: '/projects/:projectId/skills',
       seed: { projects: [PROJECT], skills: SKILLS },
     });
-    const input = await screen.findByTestId('enable-skill-input');
+    await screen.findByTestId('skill-card-gh');
 
-    // `gstack` is not in the seeded catalog → the combobox surfaces the
-    // not-in-catalog hint instead of silently offering nothing.
-    await userEvent.type(input, 'gstack');
-    const empty = await screen.findByTestId('enable-skill-empty');
-    expect(empty.textContent).toMatch(/hq-add-skill/);
+    await userEvent.click(screen.getByTestId('enable-skill'));
+    await screen.findByTestId('catalog-picker');
+
+    await userEvent.click(screen.getByTestId('catalog-picker-expand-frontend'));
+    await userEvent.click(await screen.findByTestId('catalog-picker-member-react-skill'));
+    await userEvent.click(screen.getByTestId('catalog-picker-apply'));
+
+    await waitFor(() =>
+      expect(
+        lastMatching(
+          (u, m) => m === 'POST' && u.includes('projects/weekly-compass/skills/react-skill'),
+        ),
+      ).toBeDefined(),
+    );
+    // The whole-bundle endpoint must NOT have been hit for a single member.
+    expect(
+      lastMatching((u, m) => m === 'POST' && u.includes('projects/weekly-compass/bundles/')),
+    ).toBeUndefined();
   });
 });

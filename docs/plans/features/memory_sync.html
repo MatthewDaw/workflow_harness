@@ -1,0 +1,148 @@
+---
+status: active
+type: feature
+created: 2026-06-07
+completion: 90
+feature: memory-sync
+---
+
+<h1>Memory Sync (Claude Code project memories → Command HQ)</h1>
+<p>
+  Claude Code persists small per-project &quot;memories&quot; — short markdown facts it learns about a
+  repo (conventions, gotchas, where things live) — as files under the project&#39;s
+  <code>memory/</code> directory. Memory Sync reconciles that directory up to Command HQ
+  automatically as Claude writes it, so the whole team can see what Claude has learned about a
+  project. Memories are stored <strong>per user</strong> (each stamped with its author) and surfaced
+  on a new per-user, grouped/filterable <strong>Memories</strong> tab on the Project Details page.
+</p>
+<h2>Problem frame</h2>
+<p>
+  Claude Code already saves per-project memories locally, but they never left the developer&#39;s
+  machine. Each memory is a small fact Claude decided was worth keeping for next time — and they
+  accumulated silently in one person&#39;s <code>memory/</code> directory. The team had
+  <strong>no visibility</strong> into what Claude had learned about a project: the same lessons were
+  re-derived per developer, and a teammate opening the repo couldn&#39;t see the context Claude was
+  already operating with. The capture path the daemon uses for sessions doesn&#39;t cover these
+  files, so the knowledge stayed trapped on disk. What&#39;s missing is a way to mirror that local
+  memory set up to HQ as it changes, attributed to whoever authored it, and to read it back grouped
+  by author on the project.
+</p>
+<h2>Key decisions</h2>
+<ul>
+  <li>
+    <strong>Automatic, daemon-driven.</strong> The <code>claude+</code> daemon reconciles the
+    project&#39;s <code>memory/</code> directory up to HQ on the end-of-turn
+    <strong>Stop</strong> hook (debounced), so memories sync as Claude saves them with no manual
+    action from the developer.
+  </li>
+  <li>
+    <strong>Per-user storage.</strong> Every memory is stamped with its author. The data model is
+    <code>PROJ#&lt;projectId&gt;</code> / <code>MEM#&lt;userId&gt;#&lt;name&gt;</code> — one project
+    is one partition, and a per-author <code>SK</code> prefix
+    (<code>MEM#&lt;userId&gt;#</code>) scopes the reconcile so one developer&#39;s sync never touches
+    another&#39;s memories.
+  </li>
+  <li>
+    <strong>Full reconcile (HQ mirrors disk).</strong> The daemon PUTs the
+    <strong>whole current set</strong> for the caller; adds and updates propagate, and so do
+    <strong>deletions</strong> — a memory removed on disk is removed from HQ. An empty array clears
+    the caller&#39;s set entirely. HQ is a mirror of what&#39;s on disk, not an accumulating log.
+  </li>
+  <li>
+    <strong>Surfaced per user.</strong> A new <strong>Memories</strong> tab on Project Details shows
+    the project&#39;s memories grouped and filterable by author, so a teammate can read exactly what
+    Claude learned for each developer on the project.
+  </li>
+  <li>
+    <strong>Shared route, two principals.</strong> The <code>GET</code> (web, Cognito JWT) and the
+    <code>PUT</code> (daemon, HS256 device token) share one route via an
+    <code>HttpNoneAuthorizer</code> plus an in-Lambda <code>resolvePrincipal</code> — exactly like the
+    weekly routes — so the same handler accepts either credential and scopes off the resolved
+    principal.
+  </li>
+</ul>
+<h2>Actors</h2>
+<ul>
+  <li>
+    <strong>The developer (author)</strong> — runs Claude Code on the project; their local
+    <code>memory/</code> directory is the source of truth that gets mirrored to HQ, stamped under
+    their <code>userId</code>.
+  </li>
+  <li>
+    <strong>Teammates viewing the project</strong> — open the Memories tab in Command HQ to read what
+    Claude learned, grouped/filtered by author.
+  </li>
+  <li>
+    <strong>The <code>claude+</code> daemon</strong> — watches the <code>memory/</code> directory and,
+    on the debounced Stop hook, reconciles the current set up to HQ via the <code>PUT</code> route
+    using the device token.
+  </li>
+</ul>
+<h2>Data model</h2>
+<p>
+  Each memory is one record in the project&#39;s partition, sub-keyed by author and name:
+  <code>PROJ#&lt;projectId&gt;</code> / <code>MEM#&lt;userId&gt;#&lt;name&gt;</code> (see
+  <a href="./platform_architecture.html">platform_architecture.html</a> for the single-table model).
+  The record holds <code>{ projectId, userId, userName?, name, description?, type?, content,
+  updatedAt }</code>:
+</p>
+<ul>
+  <li>
+    <strong><code>projectId</code> / <code>userId</code>.</strong> Identify the owning project
+    partition and the author the reconcile scopes to; together with <code>name</code> they form the
+    record key.
+  </li>
+  <li>
+    <strong><code>userName?</code>.</strong> The author&#39;s display name, stamped so the Memories
+    tab can group/label by person without a second lookup.
+  </li>
+  <li>
+    <strong><code>name</code>.</strong> The memory&#39;s file-derived identifier (unique per author
+    within the project).
+  </li>
+  <li>
+    <strong><code>description?</code> / <code>type?</code>.</strong> Optional metadata;
+    <code>type</code> is one of <code>user</code> | <code>feedback</code> | <code>project</code> |
+    <code>reference</code>.
+  </li>
+  <li>
+    <strong><code>content</code>.</strong> The memory body — the markdown fact itself.
+  </li>
+  <li>
+    <strong><code>updatedAt</code>.</strong> Epoch-ms of the sync that last wrote this memory.
+  </li>
+</ul>
+<h2>REST contract</h2>
+<p>
+  Both verbs live on one route, owner-gated, sharing the
+  <code>HttpNoneAuthorizer</code> + <code>resolvePrincipal</code> pattern:
+</p>
+<ul>
+  <li>
+    <strong><code>GET /projects/:id/memories</code> &rarr; <code>200 { memories: Memory[] }</code>.</strong>
+    Owner-gated; returns <strong>all authors&#39;</strong> memories for the project (the tab groups
+    them client-side). Authenticated with the web Cognito JWT.
+  </li>
+  <li>
+    <strong><code>PUT /projects/:id/memories</code></strong> with body
+    <code>{ memories: [{ name, description?, type?, content }] }</code> &rarr;
+    <code>200 { memories }</code>. Reconciles the <strong>caller&#39;s set only</strong>: it
+    replaces every <code>MEM#&lt;userId&gt;#</code> record for the resolved principal — PUTs each
+    item and deletes the author&#39;s existing memories not in the set, so an
+    <strong>empty array clears it</strong>. The server stamps <code>projectId</code>,
+    <code>userId</code>, <code>userName</code>, and <code>updatedAt</code>; the daemon sends only the
+    on-disk fields. Authenticated with the daemon&#39;s HS256 device token.
+  </li>
+</ul>
+<h2>Status</h2>
+<ul>
+  <li>
+    <strong>Built:</strong> the shared DTOs (<code>memorySchema</code> / <code>memoryInputSchema</code>
+    / <code>reconcileMemoriesRequestSchema</code>), the DB keys
+    (<code>memoryKey</code>/<code>memoryPrefix</code>/<code>memoryUserPrefix</code>) and repo reconcile
+    (<code>listMemories</code> / <code>replaceUserMemories</code>), the shared <code>GET</code>/<code
+      >PUT</code
+    >
+    route, the daemon Stop-hook reconcile, and the per-user Memories tab on Project Details.
+  </li>
+</ul>

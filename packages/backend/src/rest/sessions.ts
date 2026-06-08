@@ -194,9 +194,7 @@ export async function control(
 
   // Resolve the owning daemon connection via the instance reverse index.
   const instanceId = session.instanceId;
-  const daemonConnId = instanceId
-    ? await deps.repo.getInstanceConnectionId(instanceId)
-    : undefined;
+  const daemonConnId = instanceId ? await deps.repo.getInstanceConnectionId(instanceId) : undefined;
 
   // Best-effort: route the control frame to the owning daemon if it's connected,
   // so a live process actually receives inject/pause/interrupt or terminates.

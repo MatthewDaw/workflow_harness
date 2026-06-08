@@ -13,6 +13,7 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: [],
   enabledAgents: [],
+  enabledBundles: [],
   enabledMcpServers: [],
 };
 
@@ -54,7 +55,9 @@ describe('ProjectRequirements (U10)', () => {
       routePath: '/projects/:projectId/requirements',
       seed: {
         projects: [PROJECT], // progressPct: 62
-        requirements: { 'weekly-compass': '---\ncompletion: 88\nstatus: active\n---\n\n# Goal\n\nShip it.' },
+        requirements: {
+          'weekly-compass': '---\ncompletion: 88\nstatus: active\n---\n\n# Goal\n\nShip it.',
+        },
       },
     });
     await screen.findByRole('heading', { name: 'Goal' });

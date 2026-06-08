@@ -88,7 +88,10 @@ export function SkillBundle() {
                   ) : (
                     // A member whose skill record isn't in the catalog (dangling
                     // reference) still needs a card + a way to eject it.
-                    <div className="hq-box bg-paper text-xs text-mut" data-testid={`skill-card-${m}`}>
+                    <div
+                      className="hq-box bg-paper text-xs text-mut"
+                      data-testid={`skill-card-${m}`}
+                    >
                       {m} <span className="text-faint">· missing from catalog</span>
                     </div>
                   )}

@@ -78,7 +78,9 @@ function projectProgressChanged(
   const after = newImg.progressPct;
   if (before !== after) return true;
   // Re-pointing which Supporting Outcomes the project owns also moves roll-ups.
-  return JSON.stringify(oldImg?.supportingOutcomeIds) !== JSON.stringify(newImg.supportingOutcomeIds);
+  return (
+    JSON.stringify(oldImg?.supportingOutcomeIds) !== JSON.stringify(newImg.supportingOutcomeIds)
+  );
 }
 
 async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): Promise<void> {
@@ -125,10 +127,7 @@ async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): 
  * is logged and does not abort the batch (the projection fold is idempotent, so
  * a later redelivery still converges).
  */
-export async function consume(
-  event: DynamoDBStreamEvent,
-  deps: StreamConsumerDeps,
-): Promise<void> {
+export async function consume(event: DynamoDBStreamEvent, deps: StreamConsumerDeps): Promise<void> {
   for (const record of event.Records ?? []) {
     try {
       await processRecord(record, deps);
@@ -141,5 +140,4 @@ export async function consume(
   }
 }
 
-export const handler: DynamoDBStreamHandler = (event) =>
-  consume(event, { repo: defaultRepo() });
+export const handler: DynamoDBStreamHandler = (event) => consume(event, { repo: defaultRepo() });

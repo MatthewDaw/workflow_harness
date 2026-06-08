@@ -6,91 +6,139 @@ completion: 92
 ---
 
 <blockquote>
-<p><strong>completion: 91%</strong> — this top-of-<code>docs/plans/</code> file represents the requirements
-for the <strong>whole project</strong>. The website reads this number and displays it on both
-the Command HQ high-level <strong>Project Requirements</strong> bar and the <strong>Detailed
-Requirements</strong> root. Every doc in this folder carries its own <code>completion:</code> at the
-top; <code>/update-progress</code> maintains them.</p>
+  <p>
+    <strong>completion: 91%</strong> — this top-of-<code>docs/plans/</code> file represents the
+    requirements for the <strong>whole project</strong>. The website reads this number and displays
+    it on both the Command HQ high-level <strong>Project Requirements</strong> bar and the
+    <strong>Detailed Requirements</strong> root. Every doc in this folder carries its own
+    <code>completion:</code> at the top; <code>/update-progress</code> maintains them.
+  </p>
 </blockquote>
 <h1>Command HQ + claude+ — Feature Overview</h1>
-<p><strong>This is the single top-level map of what we&#39;re building, and the canonical,
-self-contained spec for the project.</strong> Each feature has a detail file under
-<a href="./features/"><code>features/</code></a>; the durable technical decisions (KTD1–12, data
-model, event schema) live in <a href="./features/platform_architecture.html">platform_architecture.html</a>.
-Read this file first for direction.</p>
+<p>
+  <strong
+    >This is the single top-level map of what we&#39;re building, and the canonical, self-contained
+    spec for the project.</strong
+  >
+  Each feature has a detail file under <a href="./features/"><code>features/</code></a
+  >; the durable technical decisions (KTD1–12, data model, event schema) live in
+  <a href="./features/platform_architecture.html">platform_architecture.html</a>. Read this file
+  first for direction.
+</p>
 <h2>What this product is (one paragraph)</h2>
-<p><code>claude+</code> is a terminal wrapper that hosts the real <code>claude</code> CLI as a persistent
-per-repo daemon and streams every session to the cloud. <strong>Command HQ</strong> is the web
-app that turns that stream into a live, strategy-aligned view of all work:
-company objectives, per-repo requirements, agents/skills, live sessions,
-and weekly reconciliation. The thesis: <strong>day-to-day agent work and company
-strategy are the same system, kept in sync automatically.</strong></p>
-<p><strong>Live deployment (prod).</strong> Command HQ is deployed and serving:
-API <code>https://l5edwucexb.execute-api.us-east-1.amazonaws.com</code>, WebSocket
-<code>wss://fgxq7ezbl1.execute-api.us-east-1.amazonaws.com/prod</code>, site
-<code>https://d13sqkbwzqe38l.cloudfront.net</code>, Cognito pool <code>us-east-1_HqxqXElfd</code>,
-default org <code>personasearch</code>. New accounts come from <strong>Google federated sign-in</strong>
-(email/password self-signup is disabled); a Cognito pre-token-generation Lambda
-defaults a missing <code>custom:org</code> to <code>personasearch</code> so a fresh account is
-authorized everywhere (<code>infra/lib/auth-stack.ts</code>).</p>
+<p>
+  <code>claude+</code> is a terminal wrapper that hosts the real <code>claude</code> CLI as a
+  persistent per-repo daemon and streams every session to the cloud. <strong>Command HQ</strong> is
+  the web app that turns that stream into a live, strategy-aligned view of all work: company
+  objectives, per-repo requirements, agents/skills, live sessions, and weekly reconciliation. The
+  thesis:
+  <strong
+    >day-to-day agent work and company strategy are the same system, kept in sync
+    automatically.</strong
+  >
+</p>
+<p>
+  <strong>Live deployment (prod).</strong> Command HQ is deployed and serving: API
+  <code>https://l5edwucexb.execute-api.us-east-1.amazonaws.com</code>, WebSocket
+  <code>wss://fgxq7ezbl1.execute-api.us-east-1.amazonaws.com/prod</code>, site
+  <code>https://d13sqkbwzqe38l.cloudfront.net</code>, Cognito pool <code>us-east-1_HqxqXElfd</code>,
+  default org <code>personasearch</code>. New accounts come from
+  <strong>Google federated sign-in</strong> (email/password self-signup is disabled); a Cognito
+  pre-token-generation Lambda defaults a missing <code>custom:org</code> to
+  <code>personasearch</code> so a fresh account is authorized everywhere
+  (<code>infra/lib/auth-stack.ts</code>).
+</p>
 <h2>Relationship to <code>st6_prd.md</code></h2>
-<p><code>st6_prd.md</code> is the <strong>inspiration</strong>, not a literal spec. It describes a weekly
-planning tool that forces every weekly commitment to ladder up to strategy
-(RCDO), with a reconciliation of <em>planned vs. actual</em> and manager visibility.
-Command HQ <strong>builds that idea in natively</strong> (the Weekly Update + Objectives
-roll-up) and <strong>extends it with the harness</strong>: the reconciliation&#39;s &quot;actual&quot; is
-real captured sessions/commits, completion is <em>verified</em> (not self-reported), and
-agents that do the work can be distilled and reused. We are not bound by st6&#39;s
-React/Spring/Module-Federation stack.</p>
+<p>
+  <code>st6_prd.md</code> is the <strong>inspiration</strong>, not a literal spec. It describes a
+  weekly planning tool that forces every weekly commitment to ladder up to strategy (RCDO), with a
+  reconciliation of <em>planned vs. actual</em> and manager visibility. Command HQ
+  <strong>builds that idea in natively</strong> (the Weekly Update + Objectives roll-up) and
+  <strong>extends it with the harness</strong>: the reconciliation&#39;s &quot;actual&quot; is real
+  captured sessions/commits, completion is <em>verified</em> (not self-reported), and agents that do
+  the work can be distilled and reused. We are not bound by st6&#39;s React/Spring/Module-Federation
+  stack.
+</p>
 <h2>The five features</h2>
 <table>
-<thead>
-<tr>
-<th>#</th>
-<th>Feature</th>
-<th>One-liner</th>
-<th>Detail</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>1</td>
-<td><strong>Plan mapping</strong></td>
-<td>Company goal → repo goal → detailed breakdown, with a tool that auto-audits progress and verifies completion</td>
-<td><a href="./features/plan_mapping.html">plan_mapping.html</a></td>
-</tr>
-<tr>
-<td>2</td>
-<td><strong>Weekly plan</strong></td>
-<td>A <code>/weekly-update</code> skill that interviews you on next-week goals, then auto-writes &quot;what got done&quot; (from git) vs &quot;what&#39;s next&quot;</td>
-<td><a href="./features/weekly_update.html">weekly_update.html</a></td>
-</tr>
-<tr>
-<td>3</td>
-<td><strong>Claude Code integration</strong></td>
-<td>A single org catalog of agents/skills in HQ, per-project opt-in (<code>enabledSkills</code>/<code>enabledAgents</code>), and live session watch + steer</td>
-<td><a href="./features/claude_code_integration.html">claude_code_integration.html</a></td>
-</tr>
-<tr>
-<td>4</td>
-<td><strong>Claude CLI wrapper</strong></td>
-<td><code>claude+</code> wraps the real <code>claude</code> CLI as a persistent, capturable daemon (survives terminal close; single-laptop)</td>
-<td><a href="./features/claude_cli_wrapper.html">claude_cli_wrapper.html</a></td>
-</tr>
-<tr>
-<td>5</td>
-<td><strong>AgentForge</strong></td>
-<td>Mark a slice of work, capture it, and distill it into a reusable org-wide agent via prompt gradient-descent</td>
-<td><a href="./features/agentforge.html">agentforge.html</a></td>
-</tr>
-</tbody></table>
-<p>Plus the substrate everything rides on: <strong>Platform &amp; Architecture</strong> —
-<a href="./features/platform_architecture.html">platform_architecture.html</a>.</p>
-<p>And the auth/onboarding prerequisite that gates all of the above: <strong>Organization
-Management</strong> — <a href="./features/organization_management.html">organization_management.html</a>.
-On first sign-in a user with no org must <strong>create or join one</strong> (name + password)
-before the app renders; org membership is DB-driven on the user&#39;s PROFILE record (not
-just the auto-assigned <code>custom:org</code> claim), and every feature&#39;s data is then scoped to
-the chosen org.</p>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Feature</th>
+      <th>One-liner</th>
+      <th>Detail</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td><strong>Plan mapping</strong></td>
+      <td>
+        Company goal → repo goal → detailed breakdown, with a tool that auto-audits progress and
+        verifies completion
+      </td>
+      <td><a href="./features/plan_mapping.html">plan_mapping.html</a></td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td><strong>Weekly plan</strong></td>
+      <td>
+        A <code>/weekly-update</code> skill that interviews you on next-week goals, then auto-writes
+        &quot;what got done&quot; (from git) vs &quot;what&#39;s next&quot;
+      </td>
+      <td><a href="./features/weekly_update.html">weekly_update.html</a></td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td><strong>Claude Code integration</strong></td>
+      <td>
+        A single org catalog of agents/skills in HQ, per-project opt-in
+        (<code>enabledSkills</code>/<code>enabledAgents</code>), and live session watch + steer
+      </td>
+      <td><a href="./features/claude_code_integration.html">claude_code_integration.html</a></td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td><strong>Claude CLI wrapper</strong></td>
+      <td>
+        <code>claude+</code> wraps the real <code>claude</code> CLI as a persistent, capturable
+        daemon (survives terminal close; single-laptop)
+      </td>
+      <td><a href="./features/claude_cli_wrapper.html">claude_cli_wrapper.html</a></td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td><strong>AgentForge</strong></td>
+      <td>
+        Mark a slice of work, capture it, and distill it into a reusable org-wide agent via prompt
+        gradient-descent
+      </td>
+      <td><a href="./features/agentforge.html">agentforge.html</a></td>
+    </tr>
+  </tbody>
+</table>
+<p>
+  Plus the substrate everything rides on: <strong>Platform &amp; Architecture</strong> —
+  <a href="./features/platform_architecture.html">platform_architecture.html</a>.
+</p>
+<p>
+  And the auth/onboarding prerequisite that gates all of the above:
+  <strong>Organization Management</strong> —
+  <a href="./features/organization_management.html">organization_management.html</a>. On first
+  sign-in a user with no org must <strong>create or join one</strong> (name + password) before the
+  app renders; org membership is DB-driven on the user&#39;s PROFILE record (not just the
+  auto-assigned <code>custom:org</code> claim), and every feature&#39;s data is then scoped to the
+  chosen org.
+</p>
+<p>
+  And a cross-cutting capture add-on that rides on the daemon and Project Details:
+  <strong>Memory Sync</strong> —
+  <a href="./features/memory_sync.html">memory_sync.html</a>. The <code>claude+</code> daemon
+  reconciles each developer&#39;s local Claude Code <code>memory/</code> directory up to HQ on the
+  end-of-turn Stop hook (full reconcile — adds, updates, and deletions propagate), stored per author
+  under <code>PROJ#&lt;pid&gt;</code> / <code>MEM#&lt;uid&gt;#&lt;name&gt;</code> and surfaced on a
+  per-user, grouped/filterable <strong>Memories</strong> tab.
+</p>
 <h2>How the pieces fit together</h2>
 <pre><code>        claude+ (wrapper, feature 4)
         runs sessions in a repo, captures events
@@ -124,89 +172,133 @@ the chosen org.</p>
    AgentForge (feature 5) mints new registry agents from captured sessions.
 </code></pre>
 <h2>Build status at a glance</h2>
-<p>The <strong>new-model migration</strong>
-(<a href="./features/">2026-06-03 plan</a>,
-units U1–U22) is <strong>landed</strong>: tickets are removed end-to-end, GitHub <code>completion:</code>
-frontmatter is the progress source of truth, the two-tier requirements UI ships,
-the client skills exist under <code>.claude/skills/</code>, and the infra footguns
-(SearchStack, device-token secret, Go CI, CORS) are fixed. The table below
-reflects current reality.</p>
+<p>
+  The <strong>new-model migration</strong> (<a href="./features/">2026-06-03 plan</a>, units U1–U22)
+  is <strong>landed</strong>: tickets are removed end-to-end, GitHub
+  <code>completion:</code> frontmatter is the progress source of truth, the two-tier requirements UI
+  ships, the client skills exist under <code>.claude/skills/</code>, and the infra footguns
+  (SearchStack, device-token secret, Go CI, CORS) are fixed. The table below reflects current
+  reality.
+</p>
 <table>
-<thead>
-<tr>
-<th>Feature</th>
-<th>Backend</th>
-<th>Frontend</th>
-<th>Skill/CLI</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>1 Plan mapping</td>
-<td>roll-up re-pointed off tickets onto stored <code>progressPct</code>; GitHub <code>completion:</code> frontmatter read/store (<code>github/history.ts</code>, <code>rest/projects.ts</code>); docs-tree REST; Definition-of-Done REST (<code>rest/dod.ts</code>, advisory). <strong>Prod-E2E gate still deferred.</strong></td>
-<td>objectives tree + bars; two-tier requirements UI built (<code>ProjectRequirements.tsx</code>, <code>DetailedRequirements.tsx</code>, <code>MarkdownView</code>); editable Project Requirements</td>
-<td><code>/update-progress</code> skill <strong>built</strong></td>
-</tr>
-<tr>
-<td>2 Weekly plan</td>
-<td>weekly = store/serve a client-posted report (<code>rest/weekly.ts</code>); ticket-based <code>assembleWeekly</code>/<code>align.ts</code> removed; <code>conformityScore</code> round-trips</td>
-<td>Weekly screen renders posted report (<code>ProjectWeekly.tsx</code>)</td>
-<td><code>/weekly-update</code> skill <strong>built</strong></td>
-</tr>
-<tr>
-<td>3 CC integration</td>
-<td>scope model + registry + control gateway (<code>ws/control.ts</code>); steer/scope/bundle wired</td>
-<td>agents/skills/sessions/live-watch screens; steer + scope/bundle controls wired</td>
-<td>config sync (remote half + drift) exists</td>
-</tr>
-<tr>
-<td>4 CLI wrapper</td>
-<td>—</td>
-<td>desktop (Wails) app exists; xterm UX (visible cursor, scrollback, double-click rename)</td>
-<td>daemon/attach/capture; LLM auto-titles (<code>internal/title/</code>); hook receiver; <strong>isolated <code>~/.claude+</code> config root</strong></td>
-</tr>
-<tr>
-<td>5 AgentForge</td>
-<td>fuzzy <code>forge/</code> backend <strong>removed</strong>; SearchStack dropped from synth</td>
-<td>single-admin promote via scope-elevate on Agents screen</td>
-<td><code>/startforge</code>/<code>/endforge</code> skills <strong>built</strong> (distiller-first)</td>
-</tr>
-</tbody></table>
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th>Backend</th>
+      <th>Frontend</th>
+      <th>Skill/CLI</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1 Plan mapping</td>
+      <td>
+        roll-up re-pointed off tickets onto stored <code>progressPct</code>; GitHub
+        <code>completion:</code> frontmatter read/store (<code>github/history.ts</code>,
+        <code>rest/projects.ts</code>); docs-tree REST; Definition-of-Done REST
+        (<code>rest/dod.ts</code>, advisory). <strong>Prod-E2E gate still deferred.</strong>
+      </td>
+      <td>
+        objectives tree + bars; two-tier requirements UI built
+        (<code>ProjectRequirements.tsx</code>, <code>DetailedRequirements.tsx</code>,
+        <code>MarkdownView</code>); editable Project Requirements
+      </td>
+      <td><code>/update-progress</code> skill <strong>built</strong></td>
+    </tr>
+    <tr>
+      <td>2 Weekly plan</td>
+      <td>
+        weekly = store/serve a client-posted report (<code>rest/weekly.ts</code>); ticket-based
+        <code>assembleWeekly</code>/<code>align.ts</code> removed;
+        <code>conformityScore</code> round-trips
+      </td>
+      <td>Weekly screen renders posted report (<code>ProjectWeekly.tsx</code>)</td>
+      <td><code>/weekly-update</code> skill <strong>built</strong></td>
+    </tr>
+    <tr>
+      <td>3 CC integration</td>
+      <td>
+        scope model + registry + control gateway (<code>ws/control.ts</code>); steer/scope/bundle
+        wired
+      </td>
+      <td>agents/skills/sessions/live-watch screens; steer + scope/bundle controls wired</td>
+      <td>config sync (remote half + drift) exists</td>
+    </tr>
+    <tr>
+      <td>4 CLI wrapper</td>
+      <td>—</td>
+      <td>
+        desktop (Wails) app exists; xterm UX (visible cursor, scrollback, double-click rename)
+      </td>
+      <td>
+        daemon/attach/capture; LLM auto-titles (<code>internal/title/</code>); hook receiver;
+        <strong>isolated <code>~/.claude+</code> config root</strong>
+      </td>
+    </tr>
+    <tr>
+      <td>5 AgentForge</td>
+      <td>
+        fuzzy <code>forge/</code> backend <strong>removed</strong>; SearchStack dropped from synth
+      </td>
+      <td>single-admin promote via scope-elevate on Agents screen</td>
+      <td>
+        <code>/startforge</code>/<code>/endforge</code> skills
+        <strong>built</strong> (distiller-first)
+      </td>
+    </tr>
+  </tbody>
+</table>
 <blockquote>
-<p>Legend: &quot;built&quot; = code present + tested in repo; &quot;deferred&quot; = explicitly parked
-for a later increment. Detail files carry per-feature status sections.</p>
+  <p>
+    Legend: &quot;built&quot; = code present + tested in repo; &quot;deferred&quot; = explicitly
+    parked for a later increment. Detail files carry per-feature status sections.
+  </p>
 </blockquote>
 <h3>Isolated config root + bundled-skill seed (cross-cutting, built)</h3>
 <p>Two subsystems underpin the skills story and weren&#39;t in the original map:</p>
 <ul>
-<li><strong>Isolated <code>~/.claude+</code> config root.</strong> claude+ launches its inner Claude with
-<code>CLAUDE_CONFIG_DIR=~/.claude+</code> — a <strong>stable</strong> directory seeded once from
-<code>~/.claude</code> (auth/settings/MCP) — so product-bundled skills and claude+ session
-history never pollute the user&#39;s personal <code>~/.claude</code>. The capture tailer follows
-the same root, and the transcript directory slug replaces <strong>every</strong>
-non-alphanumeric char with <code>-</code> to match Claude Code&#39;s project-hash naming.
-<em>Code:</em> <code>wrapper/internal/config/overlay.go</code>, <code>pty/session.go</code>,
-<code>capture/parse.go</code> (<code>projectHash</code>/<code>slugifyPath</code>).</li>
-<li><strong>HQ org-scope skill bundle seed.</strong> The repo&#39;s <code>.claude/skills/</code> set is seeded
-into HQ at <strong>org scope</strong> (<code>personasearch</code>), grouped as the <strong><code>command-hq-starter</code></strong>
-bundle, so the Skills tab shows them on a fresh deploy with no device connected.
-This is the source of truth for &quot;skills visible in HQ out of the box.&quot; <em>Code:</em>
-<code>packages/backend/src/seed/skills.ts</code>, <code>infra/scripts/seed-skills.mjs</code>,
-<code>.github/workflows/seed-skills.yml</code> + the deploy seed step.</li>
+  <li>
+    <strong>Isolated <code>~/.claude+</code> config root.</strong> claude+ launches its inner Claude
+    with <code>CLAUDE_CONFIG_DIR=~/.claude+</code> — a <strong>stable</strong> directory seeded once
+    from <code>~/.claude</code> (auth/settings/MCP) — so product-bundled skills and claude+ session
+    history never pollute the user&#39;s personal <code>~/.claude</code>. The capture tailer follows
+    the same root, and the transcript directory slug replaces
+    <strong>every</strong> non-alphanumeric char with <code>-</code> to match Claude Code&#39;s
+    project-hash naming. <em>Code:</em> <code>wrapper/internal/config/overlay.go</code>,
+    <code>pty/session.go</code>,
+    <code>capture/parse.go</code> (<code>projectHash</code>/<code>slugifyPath</code>).
+  </li>
+  <li>
+    <strong>HQ org-scope skill bundle seed.</strong> The repo&#39;s <code>.claude/skills/</code> set
+    is seeded into HQ at <strong>org scope</strong> (<code>personasearch</code>), grouped as the
+    <strong><code>command-hq-starter</code></strong> bundle, so the Skills tab shows them on a fresh
+    deploy with no device connected. This is the source of truth for &quot;skills visible in HQ out
+    of the box.&quot; <em>Code:</em> <code>packages/backend/src/seed/skills.ts</code>,
+    <code>infra/scripts/seed-skills.mjs</code>, <code>.github/workflows/seed-skills.yml</code> + the
+    deploy seed step.
+  </li>
 </ul>
 <h3>In progress / next (NOT yet on this branch — do not treat as done)</h3>
 <p>Being built in parallel; the docs anticipate them but they are not merged here:</p>
 <ul>
-<li>Live <strong>per-session activity feed</strong> in the watch view.</li>
-<li><strong>Session name + first-prompt columns</strong> in the Sessions tab.</li>
-<li>A <strong><code>UserPromptSubmit</code></strong> hook that auto-renames a session on the first prompt and
-pushes the rename to the attached CLI tab.</li>
-<li>A <strong>daemon protocol-version bump</strong> so rebuilds auto-replace a stale daemon.</li>
-<li><strong>Heartbeat + ~60s freshness window</strong> so power-loss/killed daemons drop off HQ&#39;s
-live list.</li>
-<li><strong>Overview tab removed</strong> (project default tab → Project Requirements).</li>
-<li><strong>Skills tab overhaul</strong> (searchable picker, working scope-change, hide bundle
-members by default with a toggle, a new <code>create-hq-skill</code> skill).</li>
-<li><strong>Delete agents/skills</strong>, with the <code>command-hq-starter</code> bundle protected
-server-side.</li>
+  <li>Live <strong>per-session activity feed</strong> in the watch view.</li>
+  <li><strong>Session name + first-prompt columns</strong> in the Sessions tab.</li>
+  <li>
+    A <strong><code>UserPromptSubmit</code></strong> hook that auto-renames a session on the first
+    prompt and pushes the rename to the attached CLI tab.
+  </li>
+  <li>A <strong>daemon protocol-version bump</strong> so rebuilds auto-replace a stale daemon.</li>
+  <li>
+    <strong>Heartbeat + ~60s freshness window</strong> so power-loss/killed daemons drop off
+    HQ&#39;s live list.
+  </li>
+  <li><strong>Overview tab removed</strong> (project default tab → Project Requirements).</li>
+  <li>
+    <strong>Skills tab overhaul</strong> (searchable picker, working scope-change, hide bundle
+    members by default with a toggle, a new <code>create-hq-skill</code> skill).
+  </li>
+  <li>
+    <strong>Delete agents/skills</strong>, with the <code>command-hq-starter</code> bundle protected
+    server-side.
+  </li>
 </ul>
-

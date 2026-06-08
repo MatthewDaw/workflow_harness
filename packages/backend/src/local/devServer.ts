@@ -24,6 +24,7 @@ import { handler as objectivesHandler } from '../rest/objectives.js';
 import { handler as dodHandler } from '../rest/dod.js';
 import { handler as orgsHandler } from '../rest/orgs.js';
 import { handler as weeklyHandler } from '../rest/weekly.js';
+import { handler as memoriesHandler } from '../rest/memories.js';
 import { handler as deviceHandler } from '../rest/device.js';
 import { defaultRepo } from '../rest/runtime.js';
 import { seedSkills, type BundleManifest, type SeedSkillFile } from '../seed/skills.js';
@@ -213,6 +214,8 @@ const ROUTES: Route[] = [
   { re: /^\/projects\/(?<pid>[^/]+)\/weekly\/(?<week>[^/]+)$/, handler: weeklyHandler },
   { re: /^\/projects\/(?<pid>[^/]+)\/weekly$/, handler: weeklyHandler },
 
+  { re: /^\/projects\/(?<pid>[^/]+)\/memories$/, handler: memoriesHandler },
+
   {
     re: /^\/projects\/(?<projectId>[^/]+)\/skills\/(?<skillName>[^/]+)$/,
     handler: projectsHandler,
@@ -223,6 +226,10 @@ const ROUTES: Route[] = [
   },
   {
     re: /^\/projects\/(?<projectId>[^/]+)\/mcp-servers\/(?<name>[^/]+)$/,
+    handler: projectsHandler,
+  },
+  {
+    re: /^\/projects\/(?<projectId>[^/]+)\/bundles\/(?<bundleName>[^/]+)$/,
     handler: projectsHandler,
   },
   { re: /^\/projects\/(?<id>[^/]+)\/requirements$/, handler: projectsHandler },

@@ -144,6 +144,7 @@ export class ApiStack extends cdk.Stack {
     const mcpServersFn = makeFn('RestMcpServersFn', 'rest_mcpServers');
     const objectivesFn = makeFn('RestObjectivesFn', 'rest_objectives');
     const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
+    const memoriesFn = makeFn('RestMemoriesFn', 'rest_memories');
     const deviceFn = makeFn('RestDeviceFn', 'rest_device');
     const dodFn = makeFn('RestDodFn', 'rest_dod');
     // Membership / org onboarding (GET /me, POST /orgs, POST /orgs/join). Reads
@@ -158,6 +159,7 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(mcpServersFn);
     grantReadWrite(objectivesFn);
     grantReadWrite(weeklyFn);
+    grantReadWrite(memoriesFn);
     grantReadWrite(deviceFn);
     grantReadWrite(dodFn);
     grantReadWrite(orgsFn);
@@ -232,6 +234,22 @@ export class ApiStack extends cdk.Stack {
     // above), so no extra grant is needed.
     r('/projects/{id}/learnings', [M.GET], projectsFn, 'ProjectLearnings');
 
+    // Project opt-in for the org catalog (skills/agents/mcp-servers/bundles).
+    // These are dispatched by the projects Lambda's internal path-based router
+    // (rest/projects.ts handler) — NOT by the skills/agents/mcp-servers Lambdas —
+    // so they all point at projectsFn. On a deployed HTTP API an unregistered
+    // path 404s at the gateway BEFORE reaching the Lambda, so each must be a
+    // dedicated route here even though one Lambda serves them all.
+    //
+    // CRITICAL: the opt-in handler reads the project id via
+    // `pathParam(event, 'projectId')` (NOT 'id', unlike the /projects/{id}
+    // routes above), so the first segment param MUST be `{projectId}` — the
+    // gateway route param name has to match what the handler reads exactly.
+    r('/projects/{projectId}/skills/{skillName}', [M.POST, M.DELETE], projectsFn, 'ProjectSkillOptIn');
+    r('/projects/{projectId}/agents/{agentName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentOptIn');
+    r('/projects/{projectId}/mcp-servers/{name}', [M.POST, M.DELETE], projectsFn, 'ProjectMcpOptIn');
+    r('/projects/{projectId}/bundles/{bundleName}', [M.POST, M.DELETE], projectsFn, 'ProjectBundleOptIn');
+
     r('/sessions', [M.GET], sessionsFn, 'Sessions');
     r('/sessions/{id}', [M.GET], sessionsFn, 'SessionById');
     // Control plane: the REST handler authorizes the caller owns the session,
@@ -253,11 +271,12 @@ export class ApiStack extends cdk.Stack {
 
     // MCP servers mirror the skills catalog routes MINUS the bundle verbs
     // (members/dissolve) and the retired-by-design scope verb — the catalog is a
-    // flat, org-only set (no bundles, no per-server tiering). The project opt-in
-    // route (/projects/{id}/mcp-servers/{name}) is handled by the projects Lambda's
-    // path-based router (rest/projects.ts handler); like the existing skills/agents
-    // project opt-in it is NOT registered as a dedicated API Gateway route here, so
-    // we mirror that and register none.
+    // flat, org-only set (no bundles, no per-server tiering). NOTE: the project
+    // opt-in route (/projects/{projectId}/mcp-servers/{name}) is NOT served by
+    // this mcpServersFn — it is dispatched by the projects Lambda's internal path
+    // router and is registered up with the other /projects routes above (against
+    // projectsFn, using the {projectId} first-segment param the opt-in handler
+    // reads). The routes below are the org-catalog CRUD only.
     r('/mcp-servers', [M.GET, M.POST], mcpServersFn, 'McpServers');
     r('/mcp-servers/{name}', [M.GET, M.PUT, M.DELETE], mcpServersFn, 'McpServerByName');
     r('/mcp-servers/{name}/usage', [M.GET], mcpServersFn, 'McpServerUsage');
@@ -296,6 +315,13 @@ export class ApiStack extends cdk.Stack {
       'WeeklyPublish',
       new HttpNoneAuthorizer(),
     );
+
+    // Memories route mirrors weekly: HttpNoneAuthorizer so the claude+ daemon's
+    // device token reaches the handler (the default JWT authorizer would 403 it
+    // before it runs). The handler verifies the bearer token itself (device OR
+    // Cognito) and scopes the reconcile to the caller's own author key, so a
+    // collaborator's daemon can sync memories to a project they do not own.
+    r('/projects/{pid}/memories', [M.GET, M.PUT], memoriesFn, 'ProjectMemories', new HttpNoneAuthorizer());
 
     // ---- Device-auth (claude+ device-code login) ------------------------------
     // start/poll are PUBLIC: the CLI hits them before it has any token. They must

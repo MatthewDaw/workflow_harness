@@ -141,12 +141,24 @@ func DefaultSpawn(repoRoot, sessionID string) CmdSpec {
 	if os.Getenv("CLAUDE_PLUS_DANGEROUS") != "" {
 		args = append(args, "--dangerously-skip-permissions")
 	}
+	env := append(os.Environ(), "CLAUDE_PLUS_SESSION="+sessionID)
+	// HumanLayer's ACE workflow (the imported research/plan skills) leans on the
+	// extended-thinking magic words baked into those skill bodies ("ultrathink",
+	// "think deeply"). Their .claude/settings.json raises the thinking ceiling to
+	// 32000 so "ultrathink" can actually spend its full budget; we mirror that as a
+	// DEFAULT here (commands import as skills, which have no model/thinking pin of
+	// their own — claude.go materializes no settings.json env we control). It is a
+	// no-clobber default: if the developer already exported MAX_THINKING_TOKENS, we
+	// leave their value untouched.
+	if os.Getenv("MAX_THINKING_TOKENS") == "" {
+		env = append(env, "MAX_THINKING_TOKENS=32000")
+	}
 	return CmdSpec{
 		Name: "claude",
 		Args: args,
 		Dir:  repoRoot,
 		// Also tag the child via the environment for any out-of-band correlation.
-		Env: append(os.Environ(), "CLAUDE_PLUS_SESSION="+sessionID),
+		Env: env,
 		// Run against an isolated ~/.claude+ config root (U21).
 		Isolate: true,
 	}

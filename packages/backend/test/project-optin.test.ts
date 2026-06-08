@@ -52,10 +52,26 @@ function project(id: string, owner: string): Project {
   };
 }
 function skill(name: string): Skill {
-  return { name, scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [], body: '' };
+  return {
+    name,
+    scope: SCOPE,
+    kind: 'skill',
+    description: '',
+    source: 'local',
+    members: [],
+    body: '',
+  };
 }
 function bundle(name: string, members: string[]): Skill {
-  return { name, scope: SCOPE, kind: 'bundle', description: '', source: 'local', members, body: '' };
+  return {
+    name,
+    scope: SCOPE,
+    kind: 'bundle',
+    description: '',
+    source: 'local',
+    members,
+    body: '',
+  };
 }
 function agent(name: string, skills: string[]): Agent {
   return { name, scope: SCOPE, model: 'opus', prompt: '', skills, tools: [] };
@@ -246,9 +262,9 @@ describe('DELETE /projects/:projectId/mcp-servers/:name', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(
-      bodyOf<{ project: Project }>(res as { body: string }).project.enabledMcpServers,
-    ).toEqual(['weather']);
+    expect(bodyOf<{ project: Project }>(res as { body: string }).project.enabledMcpServers).toEqual(
+      ['weather'],
+    );
   });
 });
 

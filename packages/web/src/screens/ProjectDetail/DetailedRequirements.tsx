@@ -1,9 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import {
-  useGetProjectDocsQuery,
-  useGetProjectDocContentQuery,
-} from '../../api/baseApi.js';
+import { useGetProjectDocsQuery, useGetProjectDocContentQuery } from '../../api/baseApi.js';
 import { Bar, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
 import { buildDocTree } from '../../lib/docTree.js';
@@ -38,9 +35,7 @@ export function DetailedRequirements() {
 
   // The bar reflects the selected doc's completion.
   const activePct = activeDoc?.completion ?? 0;
-  const activeLabel = activeDoc
-    ? `${activeDoc.title} · ${activePct}%`
-    : 'Detailed requirements';
+  const activeLabel = activeDoc ? `${activeDoc.title} · ${activePct}%` : 'Detailed requirements';
 
   return (
     <div className="hq-pad" data-testid="detailed-requirements">

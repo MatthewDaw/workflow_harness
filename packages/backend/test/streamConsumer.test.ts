@@ -70,7 +70,12 @@ function projectRecord(
     dynamodb: {
       Keys: marshall(k.projectKey(id)),
       ...(oldProject
-        ? { OldImage: marshall({ ...k.projectKey(id), ...oldProject }, { removeUndefinedValues: true }) }
+        ? {
+            OldImage: marshall(
+              { ...k.projectKey(id), ...oldProject },
+              { removeUndefinedValues: true },
+            ),
+          }
         : {}),
       NewImage: marshall({ ...k.projectKey(id), ...newProject }, { removeUndefinedValues: true }),
     },
@@ -93,37 +98,32 @@ describe('stream consumer — session projection backstop', () => {
 
   it('advances latest-activity fields as later events stream through', async () => {
     await consume(streamEvent(eventRecord(env(0, startEvent))), deps());
-    const cost: Event = {
-      kind: 'cost.tick',
+    const msg: Event = {
+      kind: 'assistant.msg',
       sessionId: SESSION,
-      deltaUsd: 0.4,
-      totalUsd: 0.4,
       tokens: 200,
     };
-    await consume(streamEvent(eventRecord(env(1, cost))), deps());
+    await consume(streamEvent(eventRecord(env(1, msg))), deps());
 
     const proj = await repo.getSessionById(SESSION);
     expect(proj?.maxSeq).toBe(1);
-    expect(proj?.costUsd).toBe(0.4);
     expect(proj?.tokens).toBe(200);
   });
 
   it('is idempotent: re-processing the same event record does not regress state', async () => {
-    const cost: Event = {
-      kind: 'cost.tick',
+    const msg: Event = {
+      kind: 'assistant.msg',
       sessionId: SESSION,
-      deltaUsd: 0.4,
-      totalUsd: 0.4,
       tokens: 200,
     };
     await consume(streamEvent(eventRecord(env(0, startEvent))), deps());
-    await consume(streamEvent(eventRecord(env(1, cost))), deps());
+    await consume(streamEvent(eventRecord(env(1, msg))), deps());
     // Redeliver seq 1 (Streams at-least-once) — must be a no-op.
-    await consume(streamEvent(eventRecord(env(1, cost))), deps());
+    await consume(streamEvent(eventRecord(env(1, msg))), deps());
 
     const proj = await repo.getSessionById(SESSION);
     expect(proj?.maxSeq).toBe(1);
-    expect(proj?.costUsd).toBe(0.4);
+    expect(proj?.tokens).toBe(200);
   });
 
   it('tolerates non-event / malformed records without throwing', async () => {
@@ -161,7 +161,9 @@ describe('stream consumer — objective roll-up driver', () => {
     await repo.putObjective(node('so-b', 'supporting_outcome', 'out'));
   }
 
-  const baseProject = (progressPct?: number): Project & { org: string; supportingOutcomeIds: string[] } => ({
+  const baseProject = (
+    progressPct?: number,
+  ): Project & { org: string; supportingOutcomeIds: string[] } => ({
     id: 'weekly-compass',
     name: 'weekly-compass',
     repo: 'gh/acme/wc',
@@ -199,7 +201,14 @@ describe('stream consumer — objective roll-up driver', () => {
 
   it('skips a project record carrying no org (cannot place into a tree)', async () => {
     await seedTree();
-    const noOrg = { id: 'p2', name: 'p2', repo: 'gh/x/y', ownerUserId: 'matt', liveSessionCount: 0, progressPct: 100 };
+    const noOrg = {
+      id: 'p2',
+      name: 'p2',
+      repo: 'gh/x/y',
+      ownerUserId: 'matt',
+      liveSessionCount: 0,
+      progressPct: 100,
+    };
     await expect(
       consume(streamEvent(projectRecord({ ...noOrg, progressPct: 0 }, noOrg)), deps()),
     ).resolves.toBeUndefined();

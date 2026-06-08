@@ -29,10 +29,13 @@ WebSocket handshake fails — events buffer locally and never reach HQ. Symptoms
 ## Steps
 
 1. **Run the device login** in the claude+ terminal:
+
    ```bash
    claude+ login
    ```
+
    It prints a short user code (e.g. `WDJB-MJXT`) and waits, e.g.:
+
    ```
    To finish signing in, open Command HQ and approve this code:
 
@@ -40,6 +43,7 @@ WebSocket handshake fails — events buffer locally and never reach HQ. Symptoms
 
    Waiting for approval… (Ctrl-C to cancel)
    ```
+
 2. **Approve the code in Command HQ.** Open HQ → **Get started** (the link-device
    screen) and enter the code, or paste it wherever HQ prompts. On approval the
    wrapper claims a freshly-signed token and rewrites

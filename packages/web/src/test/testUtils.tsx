@@ -14,6 +14,7 @@ import type {
   DefinitionOfDone,
   Envelope,
   LearningRecord,
+  Memory,
 } from '@harness/shared';
 import { makeStore, type AppStore } from '../app/store.js';
 import { AuthProvider } from '../auth/AuthProvider.js';
@@ -69,6 +70,8 @@ export interface SeedData {
   wireframe?: Record<string, string>;
   /** Mined topic-focus learnings, keyed by projectId (topic-focus logging). */
   learnings?: Record<string, LearningRecord[]>;
+  /** Per-user Claude Code memories synced from claude+, keyed by projectId. */
+  memories?: Record<string, Memory[]>;
   /** Org-wide Definition of Done (plan-mapping feature 1). */
   dod?: DefinitionOfDone;
 }
@@ -157,6 +160,9 @@ export function installFetchStub(seed: SeedData) {
     const projSkill = /^projects\/([^/]+)\/skills\/([^/]+)$/.exec(path);
     if (projSkill)
       return json({ project: (seed.projects ?? []).find((p) => p.id === projSkill[1]) ?? null });
+    const projBundle = /^projects\/([^/]+)\/bundles\/([^/]+)$/.exec(path);
+    if (projBundle)
+      return json({ project: (seed.projects ?? []).find((p) => p.id === projBundle[1]) ?? null });
     const projAgent = /^projects\/([^/]+)\/agents\/([^/]+)$/.exec(path);
     if (projAgent)
       return json({ project: (seed.projects ?? []).find((p) => p.id === projAgent[1]) ?? null });
@@ -200,6 +206,9 @@ export function installFetchStub(seed: SeedData) {
 
     const docs = /^projects\/([^/]+)\/docs$/.exec(path);
     if (docs) return json(seed.docs?.[docs[1]!] ?? []);
+
+    const memories = /^projects\/([^/]+)\/memories$/.exec(path);
+    if (memories) return json(seed.memories?.[memories[1]!] ?? []);
 
     const requirements = /^projects\/([^/]+)\/requirements$/.exec(path);
     if (requirements) return json({ markdown: seed.requirements?.[requirements[1]!] ?? '' });

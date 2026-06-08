@@ -64,7 +64,11 @@ export function OrgForms({ onSuccess }: { onSuccess?: () => void }) {
   }
 
   return (
-    <form onSubmit={onSubmit} aria-label="Set up your organization" className="hq-frame w-[340px] p-6">
+    <form
+      onSubmit={onSubmit}
+      aria-label="Set up your organization"
+      className="hq-frame w-[340px] p-6"
+    >
       {/* Two tabs toggle the form between creating and joining an org. */}
       <div
         className="mb-4 grid grid-cols-2 gap-1 rounded-md border border-line p-1"

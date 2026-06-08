@@ -8,7 +8,11 @@ import {
   useDisableProjectMcpServerMutation,
 } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
-import { SkillCombobox } from '../../components/SkillCombobox.js';
+import {
+  CatalogPicker,
+  type CatalogRef,
+  type CatalogPickerRow,
+} from '../../components/CatalogPicker.js';
 
 /** Short, secret-free summary line for an enabled server (command or url). */
 function summarize(server: McpServer): string {
@@ -20,9 +24,12 @@ function summarize(server: McpServer): string {
 
 /**
  * Project MCP Servers sub-tab (collapsed model): manage the project's
- * enabledMcpServers directly against the org catalog. Add via a searchable
- * combobox (mirrors the Skills sub-tab; the reused SkillCombobox carries the
- * transport as its hint); remove with a per-row button.
+ * enabledMcpServers directly against the org catalog. The primary surface is now
+ * the shared CatalogPicker modal ("+ Add to project"), so this tab stages a batch
+ * of add/remove toggles in one place instead of one-at-a-time combobox adds; the
+ * enabled-servers list below the button still renders the project's current set
+ * with a per-row remove for quick single removals. There are no MCP bundles, so
+ * every catalog server is a single `{ type: 'mcp', name }` row.
  */
 export function ProjectMcpServers() {
   const { projectId = '' } = useParams();
@@ -33,28 +40,56 @@ export function ProjectMcpServers() {
   const [enableServer] = useEnableProjectMcpServerMutation();
   const [disableServer] = useDisableProjectMcpServerMutation();
 
+  // Local UI state: the modal open flag, an in-flight apply flag (so the picker
+  // shows its busy state while we run the sequential mutations), and the error
+  // banner reused from the old add flow.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
   const enabled = project?.enabledMcpServers ?? [];
   const byName = new Map<string, McpServer>(catalog.map((s) => [s.name, s]));
 
-  // Candidates: catalog servers not already enabled.
-  const candidates = catalog.filter((s) => !enabled.includes(s.name));
+  // Picker rows: one per catalog server. The transport is the hint and the
+  // secret-free command/url summary is the description, mirroring the enabled
+  // list below so the modal and the list read identically.
+  const rows: CatalogPickerRow[] = catalog.map((s) => ({
+    ref: { type: 'mcp', name: s.name },
+    label: s.name,
+    hint: s.transport,
+    description: summarize(s),
+  }));
 
-  const onAdd = async (name: string) => {
-    if (!name || !projectId) return;
+  // The refs that are ON when the modal opens: the project's current enabled set.
+  const initialSelected: CatalogRef[] = enabled.map((name) => ({ type: 'mcp', name }));
+
+  // Apply the picker diff. CRITICAL: every opt-in mutation read-modify-writes the
+  // single project META record, so the enable/disable mutations MUST run
+  // SEQUENTIALLY (await each before the next) — never concurrently, or they
+  // clobber each other.
+  const onApply = async (diff: { enable: CatalogRef[]; disable: CatalogRef[] }) => {
+    if (!projectId) return;
+    setApplying(true);
+    setAddError(null);
     try {
-      await enableServer({ projectId, name }).unwrap();
-      setAddError(null);
+      for (const ref of diff.enable) {
+        await enableServer({ projectId, name: ref.name }).unwrap();
+      }
+      for (const ref of diff.disable) {
+        await disableServer({ projectId, name: ref.name }).unwrap();
+      }
     } catch {
-      // Only servers in the org catalog can be enabled; a 404 means the name
-      // isn't registered. Surface it instead of failing silently — authoring
-      // happens on the MCP Servers tab.
+      // Only servers in the org catalog can be enabled; a 404 means a name isn't
+      // registered. Surface it instead of failing silently — authoring happens on
+      // the MCP Servers tab.
       setAddError(
-        `Couldn't add "${name}" — it isn't in the org catalog. Create it on the MCP Servers tab first.`,
+        "Couldn't apply your changes — a selected server may not be in the org catalog. Create it on the MCP Servers tab first.",
       );
+    } finally {
+      setApplying(false);
     }
   };
+
   const onRemove = (name: string) => {
     if (!projectId) return;
     disableServer({ projectId, name });
@@ -69,21 +104,22 @@ export function ProjectMcpServers() {
 
       <div className="hq-box bg-paper">
         <div className="flex items-center justify-between">
-          <b>Add an MCP server</b>
-          <SkillCombobox
-            testid="enable-mcp-server"
-            placeholder="Search the org catalog…"
-            buttonLabel="+ Add to project"
-            options={candidates.map((c) => ({
-              name: c.name,
-              hint: c.transport,
-            }))}
-            onCommit={onAdd}
-            emptyHint="Not in the org catalog — create it on the MCP Servers tab first."
-          />
+          <b>MCP servers</b>
+          <button
+            type="button"
+            className="hq-btn hq-btn-pri"
+            data-testid="enable-mcp-server"
+            onClick={() => setPickerOpen(true)}
+          >
+            + Add to project
+          </button>
         </div>
         {addError && (
-          <div className="mt-2 text-xs text-rose-600" role="alert" data-testid="add-mcp-server-error">
+          <div
+            className="mt-2 text-xs text-rose-600"
+            role="alert"
+            data-testid="add-mcp-server-error"
+          >
             {addError}
           </div>
         )}
@@ -126,6 +162,17 @@ export function ProjectMcpServers() {
           })}
         </div>
       )}
+
+      <CatalogPicker
+        open={pickerOpen}
+        title="Add MCP servers to project"
+        rows={rows}
+        initialSelected={initialSelected}
+        emptyHint="No MCP servers in the org catalog yet — create one on the MCP Servers tab first."
+        onClose={() => setPickerOpen(false)}
+        onApply={onApply}
+        applying={applying}
+      />
     </div>
   );
 }

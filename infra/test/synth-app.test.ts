@@ -34,9 +34,7 @@ describe('synth app (bin/infra.ts)', () => {
     });
     const files = fs.readdirSync(outDir).filter((f) => f.endsWith('.template.json'));
     stackIds = files.map((f) => f.replace('.template.json', ''));
-    combinedTemplates = files
-      .map((f) => fs.readFileSync(path.join(outDir, f), 'utf8'))
-      .join('\n');
+    combinedTemplates = files.map((f) => fs.readFileSync(path.join(outDir, f), 'utf8')).join('\n');
   });
 
   afterAll(() => {

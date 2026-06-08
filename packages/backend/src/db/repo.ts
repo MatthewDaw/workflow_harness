@@ -13,6 +13,7 @@ import type {
   Envelope,
   LearningRecord,
   McpServer,
+  Memory,
   ObjectiveNode,
   Project,
   ScopeRef,
@@ -24,6 +25,7 @@ import type {
 } from '@harness/shared';
 import {
   DEFAULT_DEFINITION_OF_DONE,
+  memorySchema,
   orgScope,
   projectSchema,
   resolveScoped,
@@ -664,11 +666,58 @@ export class Repo {
     return project;
   }
 
-  /** Idempotently enable a catalog MCP server on a project. Returns the updated Project. */
-  async addMcpServerToProject(
+  /**
+   * Idempotently enable a whole BUNDLE on a project. `enabledBundles` records the
+   * INTENT (the user added the bundle as a unit, so the UI can distinguish a
+   * whole-bundle from an individually-picked member, and a later removal can strip
+   * just the members this bundle contributed). `memberLeaves` is the bundle's
+   * transitively-flattened leaf skills, which are ALWAYS also unioned into the flat
+   * `enabledSkills` set the daemon materializes. This repo stays catalog-agnostic:
+   * the REST layer flattens the bundle against the org catalog and passes the
+   * leaves in. Returns the updated Project, or undefined if the project is missing.
+   */
+  async addBundleToProject(
     projectId: string,
-    serverName: string,
+    bundleName: string,
+    memberLeaves: string[],
   ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    const enabledBundles = project.enabledBundles ?? [];
+    if (!enabledBundles.includes(bundleName)) {
+      project.enabledBundles = [...enabledBundles, bundleName];
+    }
+    const enabledSkills = new Set(project.enabledSkills ?? []);
+    for (const leaf of memberLeaves) enabledSkills.add(leaf);
+    project.enabledSkills = [...enabledSkills];
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Remove a BUNDLE intent from a project AND strip the leaf skills it contributed.
+   * `leavesToRemove` is the set of leaves to drop from `enabledSkills`; the REST
+   * layer computes it as the bundle's leaves MINUS any leaf still covered by another
+   * still-enabled bundle, so a member shared between two enabled bundles survives.
+   * Keeping that accounting in REST (where the org catalog is loaded) keeps this
+   * repo catalog-agnostic. Returns the updated Project, or undefined if missing.
+   */
+  async removeBundleFromProject(
+    projectId: string,
+    bundleName: string,
+    leavesToRemove: string[],
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    project.enabledBundles = (project.enabledBundles ?? []).filter((b) => b !== bundleName);
+    const drop = new Set(leavesToRemove);
+    project.enabledSkills = (project.enabledSkills ?? []).filter((s) => !drop.has(s));
+    await this.putProject(project);
+    return project;
+  }
+
+  /** Idempotently enable a catalog MCP server on a project. Returns the updated Project. */
+  async addMcpServerToProject(projectId: string, serverName: string): Promise<Project | undefined> {
     const project = await this.getProject(projectId);
     if (!project) return undefined;
     const enabledMcpServers = project.enabledMcpServers ?? [];
@@ -849,6 +898,69 @@ export class Repo {
       }),
     );
     return (res.Items ?? []) as WeeklyUpdate[];
+  }
+
+  // --- Project memories (synced up from claude+) -------------------------
+
+  /**
+   * Every memory in a project, across all authors, in one partition read
+   * (`begins_with(SK, 'MEM#')`). Each is parsed through memorySchema (falling
+   * back to the raw item on failure, like getProject) so a malformed legacy item
+   * never blanks the whole tab. The "Memories" tab groups these by `userId`.
+   */
+  async listMemories(projectId: string): Promise<Memory[]> {
+    const { PK, skPrefix } = k.memoryPrefix(projectId);
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+      }),
+    );
+    return (res.Items ?? []).map((item) => {
+      const parsed = memorySchema.safeParse(item);
+      return parsed.success ? parsed.data : (item as Memory);
+    });
+  }
+
+  /**
+   * Reconcile ONE author's memory set for a project to exactly `items`: PUT every
+   * incoming memory (idempotent by key) and DELETE any of the author's existing
+   * memories not in the incoming set. This is what makes deletions on disk
+   * propagate — the daemon sends the whole current set and HQ mirrors it. Scoped
+   * to `userId` via the per-author SK prefix, so one author's sync never touches
+   * another's memories. `items` must already be stamped with projectId/userId.
+   */
+  async replaceUserMemories(projectId: string, userId: string, items: Memory[]): Promise<void> {
+    const { PK, skPrefix } = k.memoryUserPrefix(projectId, userId);
+    const existing = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+        ProjectionExpression: 'SK',
+      }),
+    );
+    const incomingSks = new Set(items.map((m) => k.memoryKey(projectId, userId, m.name).SK));
+    const toDelete = (existing.Items ?? [])
+      .map((it) => (it as { SK: string }).SK)
+      .filter((sk) => !incomingSks.has(sk));
+
+    // The set is small (a handful of facts per project), so individual writes via
+    // Promise.all are simpler than BatchWrite and avoid its 25-item chunking.
+    await Promise.all([
+      ...items.map((m) =>
+        this.doc.send(
+          new PutCommand({
+            TableName: this.table,
+            Item: { ...k.memoryKey(projectId, userId, m.name), ...m },
+          }),
+        ),
+      ),
+      ...toDelete.map((sk) =>
+        this.doc.send(new DeleteCommand({ TableName: this.table, Key: { PK, SK: sk } })),
+      ),
+    ]);
   }
 
   // --- Forge session vectors (U27) ---------------------------------------

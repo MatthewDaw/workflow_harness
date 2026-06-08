@@ -76,20 +76,6 @@
     "ts": 1717200006000,
     "seq": 6,
     "event": {
-      "kind": "cost.tick",
-      "sessionId": "a91f",
-      "deltaUsd": 0.04,
-      "totalUsd": 0.62,
-      "tokens": 48000
-    }
-  },
-  {
-    "v": 1,
-    "instanceId": "inst-0",
-    "host": "matt@mbp",
-    "ts": 1717200007000,
-    "seq": 7,
-    "event": {
       "kind": "status.change",
       "sessionId": "a91f",
       "from": "active",
@@ -100,16 +86,16 @@
     "v": 1,
     "instanceId": "inst-0",
     "host": "matt@mbp",
-    "ts": 1717200008000,
-    "seq": 8,
+    "ts": 1717200007000,
+    "seq": 7,
     "event": { "kind": "session.heartbeat", "sessionId": "a91f" }
   },
   {
     "v": 1,
     "instanceId": "inst-0",
     "host": "matt@mbp",
-    "ts": 1717200009000,
-    "seq": 9,
+    "ts": 1717200008000,
+    "seq": 8,
     "event": {
       "kind": "session.topic",
       "sessionId": "a91f",
@@ -122,8 +108,8 @@
     "v": 1,
     "instanceId": "inst-0",
     "host": "matt@mbp",
-    "ts": 1717200010000,
-    "seq": 10,
+    "ts": 1717200009000,
+    "seq": 9,
     "event": {
       "kind": "session.learning",
       "sessionId": "a91f",

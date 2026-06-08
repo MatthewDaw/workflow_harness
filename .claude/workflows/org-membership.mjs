@@ -4,7 +4,10 @@ export const meta = {
   phases: [
     { title: 'Foundation', detail: 'shared DTOs, keys, password hashing, repo methods' },
     { title: 'Build', detail: 'backend endpoints | frontend OrgGate | documentation' },
-    { title: 'Seed scope', detail: 'seed only command-hq-starter at org scope; narrow the other three' },
+    {
+      title: 'Seed scope',
+      detail: 'seed only command-hq-starter at org scope; narrow the other three',
+    },
     { title: 'Verify', detail: 'typecheck + tests across workspaces, repair failures' },
   ],
 };

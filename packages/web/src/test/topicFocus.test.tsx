@@ -132,13 +132,17 @@ describe('LiveWatch — within-session topic timeline + learnings', () => {
 
     // Impl learnings list renders the impl-stream correction.
     const impl = screen.getByTestId('impl-learnings');
-    expect(within(impl).getByText('Use the cached variance; do not recompute per render.')).toBeInTheDocument();
+    expect(
+      within(impl).getByText('Use the cached variance; do not recompute per render.'),
+    ).toBeInTheDocument();
     expect(within(impl).queryByTestId('impl-learnings-empty')).not.toBeInTheDocument();
 
     // Doc learnings list renders the doc-stream correction + its docRef.
     const doc = screen.getByTestId('doc-learnings');
     expect(
-      within(doc).getByText('The variance doc says recompute is required — that contradicts the cache.'),
+      within(doc).getByText(
+        'The variance doc says recompute is required — that contradicts the cache.',
+      ),
     ).toBeInTheDocument();
     expect(within(doc).getByText('docs/variance.md')).toBeInTheDocument();
   });

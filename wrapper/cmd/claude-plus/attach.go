@@ -340,7 +340,7 @@ func wireClientHandlers(c *daemon.Client, comp *shell.Compositor, markDirty func
 		markDirty()
 	}
 	c.OnStatus = func(s daemon.StatusSnapshot) {
-		comp.SetStatus(int(s.Tokens), s.CostUSD)
+		comp.SetStatus(int(s.Tokens))
 		markDirty()
 	}
 }

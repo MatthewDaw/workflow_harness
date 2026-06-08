@@ -86,6 +86,36 @@ export const learningPrefix = (projectId: string): { PK: string; skPrefix: strin
   skPrefix: 'LEARN#',
 });
 
+/**
+ * A project memory synced up from a developer's machine. Like learnings, memories
+ * live under their PROJECT partition so the whole project's set is one
+ * `begins_with(SK, 'MEM#')` read (the "Memories" tab). The SK carries
+ * `userId#name`, which both groups an author's memories together and makes
+ * `(userId, name)` the idempotency key — a re-synced memory overwrites in place,
+ * and a per-author `begins_with(SK, 'MEM#<userId>#')` scopes the reconcile to one
+ * author so users never clobber each other. Cognito subs and kebab slugs contain
+ * no `#`, so the composite SK is unambiguous.
+ */
+export const memoryKey = (projectId: string, userId: string, name: string): PrimaryKey => ({
+  PK: `PROJ#${projectId}`,
+  SK: `MEM#${userId}#${name}`,
+});
+
+/** Every memory in a project, across all authors (the tab's read). */
+export const memoryPrefix = (projectId: string): { PK: string; skPrefix: string } => ({
+  PK: `PROJ#${projectId}`,
+  skPrefix: 'MEM#',
+});
+
+/** One author's memories in a project (the per-user reconcile scope). */
+export const memoryUserPrefix = (
+  projectId: string,
+  userId: string,
+): { PK: string; skPrefix: string } => ({
+  PK: `PROJ#${projectId}`,
+  skPrefix: `MEM#${userId}#`,
+});
+
 export const agentKey = (scope: ScopeRef, name: string): PrimaryKey => ({
   PK: `SCOPE#${scopeId(scope)}`,
   SK: `AGENT#${name}`,

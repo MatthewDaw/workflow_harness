@@ -55,7 +55,11 @@ describe('PUT /dod', () => {
     );
     expect(put).toMatchObject({ statusCode: 200 });
     const { dod } = bodyOf<{ dod: DefinitionOfDone }>(put as { body: string });
-    expect(dod).toEqual({ requiresUnitTests: true, requiresProdE2E: true, notes: 'prod E2E green' });
+    expect(dod).toEqual({
+      requiresUnitTests: true,
+      requiresProdE2E: true,
+      notes: 'prod E2E green',
+    });
 
     const got = await getDod(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
     expect(bodyOf<{ dod: DefinitionOfDone }>(got as { body: string }).dod).toEqual(dod);
@@ -94,10 +98,7 @@ describe('PUT /dod', () => {
       }),
       deps,
     );
-    const other = await getDod(
-      httpEvent({ method: 'GET', userId: 'eve', org: 'evil-corp' }),
-      deps,
-    );
+    const other = await getDod(httpEvent({ method: 'GET', userId: 'eve', org: 'evil-corp' }), deps);
     expect(bodyOf<{ dod: DefinitionOfDone }>(other as { body: string }).dod.requiresProdE2E).toBe(
       false,
     );

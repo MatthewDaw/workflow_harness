@@ -32,6 +32,16 @@ export const projectSchema = z.object({
    */
   enabledSkills: z.array(z.string()).default([]),
   /**
+   * Bundles this project added "as a whole" (bundle names from the org catalog).
+   * This is an INTENT annotation, not a second materialization set: a bundle's
+   * member skills are always unioned into `enabledSkills` (the flat set the
+   * daemon materializes), so the daemon ignores this field entirely. It exists so
+   * the UI can tell "the user added the whole bundle" apart from "the user picked
+   * some of its members individually", and so removing a bundle can strip the
+   * members it contributed. Defaults to [] for legacy/back-compat records.
+   */
+  enabledBundles: z.array(z.string()).default([]),
+  /**
    * Agents this project has opted into (agent names from the org catalog).
    * Adding an agent unions its declared `skills` into `enabledSkills`.
    * Defaults to [].
@@ -164,7 +174,6 @@ export const sessionProjectionSchema = z.object({
   agent: z.string().optional(),
   status: sessionStatusSchema,
   tokens: z.number().int().nonnegative().default(0),
-  costUsd: z.number().nonnegative().default(0),
   startedAt: z.number().int().nonnegative(),
   lastEventAt: z.number().int().nonnegative(),
   /**
@@ -492,6 +501,60 @@ export const learningRecordSchema = z.object({
   seq: z.number().int().nonnegative(),
 });
 export type LearningRecord = z.infer<typeof learningRecordSchema>;
+
+/**
+ * A project memory synced up from a developer's machine. Claude Code persists
+ * per-project "memories" as small markdown files (one fact per file, with
+ * `name` / `description` / `metadata.type` frontmatter) under the config root's
+ * project dir; the claude+ daemon reconciles that directory up to HQ as Claude
+ * saves them. Each memory is stamped with the AUTHOR who generated it so the
+ * Project Details "Memories" tab can group/filter by user — they live under the
+ * owning PROJECT partition, sub-keyed by `userId` (see keys.ts `memoryKey`).
+ *
+ *  - `name` is the file's kebab-case slug, unique per (project, user).
+ *  - `content` is the full raw markdown of the file (the authoritative body).
+ *  - `description` / `type` are parsed out of the frontmatter for display.
+ */
+export const memoryTypeSchema = z.enum(['user', 'feedback', 'project', 'reference']);
+export type MemoryType = z.infer<typeof memoryTypeSchema>;
+
+export const memorySchema = z.object({
+  projectId: z.string().min(1),
+  userId: z.string().min(1),
+  /** The author's display name, for the tab's per-user grouping. */
+  userName: z.string().optional(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  type: memoryTypeSchema.optional(),
+  content: z.string(),
+  /** Epoch-ms of the last sync that wrote this memory. */
+  updatedAt: z.number().int().nonnegative(),
+});
+export type Memory = z.infer<typeof memorySchema>;
+
+/**
+ * One memory as the daemon sends it: just the on-disk fields. The server stamps
+ * `projectId` (from the path), `userId` / `userName` (from the principal), and
+ * `updatedAt`, so they are intentionally absent here.
+ */
+export const memoryInputSchema = memorySchema.pick({
+  name: true,
+  description: true,
+  type: true,
+  content: true,
+});
+export type MemoryInput = z.infer<typeof memoryInputSchema>;
+
+/**
+ * The reconcile payload (PUT /projects/:id/memories). It carries the caller's
+ * WHOLE current memory set for the project; the server replaces the caller's
+ * stored set with it, so memories deleted on disk are removed from HQ too. An
+ * empty array is valid and clears the caller's set.
+ */
+export const reconcileMemoriesRequestSchema = z.object({
+  memories: z.array(memoryInputSchema),
+});
+export type ReconcileMemoriesRequest = z.infer<typeof reconcileMemoriesRequestSchema>;
 
 /** A session ranked by similarity to a Forge query (U27). */
 export const scoredSessionSchema = z.object({

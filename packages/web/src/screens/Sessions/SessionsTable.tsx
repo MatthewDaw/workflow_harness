@@ -30,7 +30,6 @@ export function SessionsTable({ sessions }: { sessions: SessionProjection[] }) {
           <th className="border-b border-line2 p-2 text-left">topic</th>
           <th className="border-b border-line2 p-2 text-left">host</th>
           <th className="border-b border-line2 p-2 text-left">last activity</th>
-          <th className="border-b border-line2 p-2 text-left">$</th>
           <th className="border-b border-line2 p-2" />
         </tr>
       </thead>
@@ -71,7 +70,10 @@ function SessionRow({ session: s, now }: { session: SessionProjection; now: numb
       </td>
       <td className="border-b border-line2 p-2">{s.projectId}</td>
       <td className="border-b border-line2 p-2">{s.agent ?? '—'}</td>
-      <td className="border-b border-line2 p-2 text-mut" data-testid={`session-name-${s.sessionId}`}>
+      <td
+        className="border-b border-line2 p-2 text-mut"
+        data-testid={`session-name-${s.sessionId}`}
+      >
         {s.name}
       </td>
       <td
@@ -111,13 +113,9 @@ function SessionRow({ session: s, now }: { session: SessionProjection; now: numb
       >
         {relativeTime(s.lastEventAt, now)}
       </td>
-      <td className="border-b border-line2 p-2">{s.costUsd.toFixed(2)}</td>
       <td className="border-b border-line2 p-2">
         <div className="flex items-center justify-end gap-1.5">
-          <Link
-            to={`/sessions/${s.sessionId}`}
-            className={`hq-btn ${isDone ? '' : 'hq-btn-pri'}`}
-          >
+          <Link to={`/sessions/${s.sessionId}`} className={`hq-btn ${isDone ? '' : 'hq-btn-pri'}`}>
             {s.status === 'needs_input' ? 'reply' : isDone ? 'replay' : 'watch'}
           </Link>
           {!isDone && !confirming && (

@@ -1,8 +1,5 @@
 import { Link, useParams } from 'react-router-dom';
-import {
-  useGetProjectQuery,
-  useGetProjectRequirementsQuery,
-} from '../../api/baseApi.js';
+import { useGetProjectQuery, useGetProjectRequirementsQuery } from '../../api/baseApi.js';
 import { Bar, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
 import { parseCompletion } from '../../lib/frontmatter.js';
@@ -32,10 +29,7 @@ export function ProjectRequirements() {
   return (
     <div className="hq-pad" data-testid="project-requirements">
       <div className="mb-3 flex items-start justify-between gap-3">
-        <ScreenHeader
-          title="Project Requirements"
-          subtitle="from GitHub docs/PRD.md (read-only)"
-        />
+        <ScreenHeader title="Project Requirements" subtitle="from GitHub docs/PRD.md (read-only)" />
         <div className="flex shrink-0 gap-2">
           <Link to="full" className="hq-btn">
             ⤢ Full screen

@@ -35,22 +35,26 @@ On Linux CI you may also need the system libraries: `npx playwright install --de
 ## Common commands
 
 - **Open a URL in a headed browser** (manual poke):
+
   ```bash
   npx playwright open https://example.com
   ```
 
 - **Screenshot a page** (headless, no test file):
+
   ```bash
   npx playwright screenshot --full-page https://example.com shot.png
   ```
 
 - **Record a flow → generated script** (codegen): click through the page and
   Playwright writes the equivalent test as you go:
+
   ```bash
   npx playwright codegen https://example.com -o tests/recorded.spec.ts
   ```
 
 - **Run the test suite** (all specs, or one file / one title):
+
   ```bash
   npx playwright test                      # everything
   npx playwright test tests/login.spec.ts  # one file
@@ -59,6 +63,7 @@ On Linux CI you may also need the system libraries: `npx playwright install --de
   ```
 
 - **Open the HTML report** from the last run:
+
   ```bash
   npx playwright show-report
   ```
@@ -89,7 +94,7 @@ On Linux CI you may also need the system libraries: `npx playwright install --de
 
 - This skill assumes a Node/TypeScript repo (Playwright's native home). For a
   Python repo, the equivalent is `pip install pytest-playwright && playwright
-  install`, then `pytest`.
+install`, then `pytest`.
 - It does not start the app under test — launch the dev server first (or rely on
   the config's `webServer` block) so the target URL is reachable.
 - Pure local tooling: nothing is posted to Command HQ.

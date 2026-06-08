@@ -82,12 +82,11 @@ There are two registration paths; both land in the same org catalog:
   `createdBy:{userId:'system',name:'system'}`. **Bundling is opt-in via the
   manifest** `.claude/skills/bundles.json` — a new skill joins `command-hq-starter`
   (or any bundle) only if you add its name to that bundle's `members`. Unless the
-  user asks to bundle it, leave it standalone. The registration *is* getting the
+  user asks to bundle it, leave it standalone. The registration _is_ getting the
   file onto `main`, so **land it to `main` now — do not stop and ask**:
-
   1. Stage and commit just the new `.claude/skills/<name>/` file(s) with the
      developer's git (conventional message, e.g. `feat(skills): add /<name> to
-     command-hq-starter bundle`). Commit only the skill file(s), not unrelated
+command-hq-starter bundle`). Commit only the skill file(s), not unrelated
      untracked paths.
   2. Get the commit onto `main`. If already on `main`, push it. Otherwise prefer
      the project's land flow if one exists (e.g. `/land-and-deploy`); else fast-

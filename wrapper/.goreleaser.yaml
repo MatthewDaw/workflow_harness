@@ -33,17 +33,17 @@ archives:
   - id: default
     builds:
       - claude-plus
-    name_template: "claude-plus_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: 'claude-plus_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
     format: tar.gz
     files:
       - README.md
       - LICENSE*
 
 checksum:
-  name_template: "checksums.txt"
+  name_template: 'checksums.txt'
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  version_template: '{{ incpatch .Version }}-next'
 
 release:
   github:

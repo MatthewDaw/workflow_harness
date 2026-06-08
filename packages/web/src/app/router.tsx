@@ -9,6 +9,7 @@ import {
 } from '../screens/ProjectDetail/ProjectRequirements.js';
 import { DetailedRequirements } from '../screens/ProjectDetail/DetailedRequirements.js';
 import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
+import { ProjectMemories } from '../screens/ProjectDetail/ProjectMemories.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
 import { ProjectAgents } from '../screens/ProjectDetail/ProjectAgents.js';
 import { ProjectSkills } from '../screens/ProjectDetail/ProjectSkills.js';
@@ -46,6 +47,7 @@ export function AppRoutes() {
           <Route path="requirements/full" element={<ProjectRequirementsFull />} />
           <Route path="detailed-requirements" element={<DetailedRequirements />} />
           <Route path="weekly" element={<ProjectWeekly />} />
+          <Route path="memories" element={<ProjectMemories />} />
           <Route path="sessions" element={<ProjectSessions />} />
           <Route path="skills" element={<ProjectSkills />} />
           <Route path="mcp-servers" element={<ProjectMcpServers />} />

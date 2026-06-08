@@ -11,6 +11,7 @@ const SUBTABS = [
   { to: 'requirements', label: 'Project Requirements' },
   { to: 'detailed-requirements', label: 'Detailed Requirements' },
   { to: 'weekly', label: 'Weekly' },
+  { to: 'memories', label: 'Memories' },
   { to: 'sessions', label: 'Sessions' },
   { to: 'skills', label: 'Skills' },
   { to: 'mcp-servers', label: 'MCP Servers' },

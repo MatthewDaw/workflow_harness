@@ -7,126 +7,187 @@ feature: plan-mapping
 ---
 
 <h1>Feature 1 — Plan Mapping (goals → breakdown → verified progress)</h1>
-<p>How a company-level goal narrows down to a repo goal, then to a detailed
-breakdown, and how a tool keeps the progress of all of it honest and
-up to date.</p>
+<p>
+  How a company-level goal narrows down to a repo goal, then to a detailed breakdown, and how a tool
+  keeps the progress of all of it honest and up to date.
+</p>
 <h2>The three altitudes</h2>
 <ol>
-<li><p><strong>Company Objectives (org-wide, RCDO).</strong> Rally Cries → Defining Objectives →
-Outcomes → Supporting Outcomes. One company tree, admin-curated. Every repo&#39;s
-requirements ladder up to a Supporting Outcome here.
-<em>Code today:</em> <code>packages/backend/src/rest/objectives.ts</code>, tree + cached <code>pct</code>
-in <code>db/repo.ts</code>; UI <code>packages/web/src/screens/Objectives/Objectives.tsx</code>.</p>
-</li>
-<li><p><strong>Project Requirements (per-repo, high level).</strong> The simple, high-level list of
-goals management writes — the equivalent of an <code>st6_prd.md</code>. It is the repo file
-<strong><code>docs/PRD.md</code>, rendered read-only from GitHub.</strong> GitHub is the source of truth;
-HQ only renders it (no edits, no injected data) — distinct from the repo-root
-<code>PRD.md</code>, which feeds the Project Overview tab.</p>
-<ul>
-<li>Rendered in HQ; a <strong>full-screen markdown reader</strong> view.</li>
-<li>Its <code>completion:</code> frontmatter drives the Project Requirements progress bar.</li>
-<li>Each item shows a <strong>green check</strong> the moment it is <em>verified</em> complete.</li>
-</ul>
-</li>
-<li><p><strong>Detailed Requirements (per-repo, long form).</strong> The breakdown that expands on
-the high-level goals — <strong>rendered straight from the repo&#39;s <code>docs/plans/</code> on
-GitHub</strong> (a top-level document plus lower-level documents). <strong>GitHub is the
-source of truth; HQ only renders it</strong> read-only and in sync — no edits, no
-injected data. Completion shows wherever a doc has a
-ticked GitHub task item (<code>- [x]</code>).
-<em>Code today (built):</em> the backend reads the <code>docs/plans/</code> tree from GitHub and
-serves it read-only (<code>packages/backend/src/github/app.ts</code>,
-<code>rest/projects.ts</code> docs-tree + per-file endpoints); the web renders it via
-<code>packages/web/src/screens/ProjectDetail/DetailedRequirements.tsx</code> +
-<code>components/MarkdownView.tsx</code> (react-markdown + GFM task lists). The browser
-never talks to GitHub directly — the backend is the only reader.</p>
-</li>
+  <li>
+    <p>
+      <strong>Company Objectives (org-wide, RCDO).</strong> Rally Cries → Defining Objectives →
+      Outcomes → Supporting Outcomes. One company tree, admin-curated. Every repo&#39;s requirements
+      ladder up to a Supporting Outcome here. <em>Code today:</em>
+      <code>packages/backend/src/rest/objectives.ts</code>, tree + cached <code>pct</code> in
+      <code>db/repo.ts</code>; UI <code>packages/web/src/screens/Objectives/Objectives.tsx</code>.
+    </p>
+  </li>
+  <li>
+    <p>
+      <strong>Project Requirements (per-repo, high level).</strong> The simple, high-level list of
+      goals management writes — the equivalent of an <code>st6_prd.md</code>. It is the repo file
+      <strong><code>docs/PRD.md</code>, rendered read-only from GitHub.</strong> GitHub is the
+      source of truth; HQ only renders it (no edits, no injected data) — distinct from the repo-root
+      <code>PRD.md</code>, which feeds the Project Overview tab.
+    </p>
+    <ul>
+      <li>Rendered in HQ; a <strong>full-screen markdown reader</strong> view.</li>
+      <li>
+        Its <code>completion:</code> frontmatter drives the Project Requirements progress bar.
+      </li>
+      <li>
+        Each item shows a <strong>green check</strong> the moment it is <em>verified</em> complete.
+      </li>
+    </ul>
+  </li>
+  <li>
+    <p>
+      <strong>Detailed Requirements (per-repo, long form).</strong> The breakdown that expands on
+      the high-level goals —
+      <strong>rendered straight from the repo&#39;s <code>docs/plans/</code> on GitHub</strong> (a
+      top-level document plus lower-level documents).
+      <strong>GitHub is the source of truth; HQ only renders it</strong> read-only and in sync — no
+      edits, no injected data. Completion shows wherever a doc has a ticked GitHub task item (<code
+        >- [x]</code
+      >). <em>Code today (built):</em> the backend reads the <code>docs/plans/</code> tree from
+      GitHub and serves it read-only (<code>packages/backend/src/github/app.ts</code>,
+      <code>rest/projects.ts</code> docs-tree + per-file endpoints); the web renders it via
+      <code>packages/web/src/screens/ProjectDetail/DetailedRequirements.tsx</code> +
+      <code>components/MarkdownView.tsx</code> (react-markdown + GFM task lists). The browser never
+      talks to GitHub directly — the backend is the only reader.
+    </p>
+  </li>
 </ol>
 <h2>Where completion lives</h2>
-<p><strong><code>docs/PRD.md</code> and every doc in <code>docs/plans/</code> carry a <code>completion:</code> percentage in
-their frontmatter (at the top). The website reads those numbers directly — it does
-not recompute them.</strong></p>
+<p>
+  <strong
+    ><code>docs/PRD.md</code> and every doc in <code>docs/plans/</code> carry a
+    <code>completion:</code> percentage in their frontmatter (at the top). The website reads those
+    numbers directly — it does not recompute them.</strong
+  >
+</p>
 <ul>
-<li><strong><code>docs/PRD.md</code></strong>&#39;s <code>completion:</code> is the headline number on the high-level
-<strong>Project Requirements</strong> bar.</li>
-<li>The <strong>top-of-<code>docs/plans/</code> file</strong> (<code>command-hq-overview.md</code>) represents the whole
-detailed breakdown; its <code>completion:</code> is the headline number shown on the
-<strong>Detailed Requirements</strong> root.</li>
-<li>Each lower-level doc shows its own <code>completion:</code> in the Detailed doc-tree.</li>
-<li>Item-level detail still uses GitHub task items (<code>- [x]</code>) inside the docs; the
-headline bar is the frontmatter <code>completion:</code>.</li>
-<li><code>/update-progress</code> (a client-side Claude skill) computes the <code>completion:</code> % and
-pushes it to GitHub; <strong>HQ reads it, never writes.</strong> The number in the GitHub
-<code>.md</code> is the single source of truth for the bar.</li>
+  <li>
+    <strong><code>docs/PRD.md</code></strong
+    >&#39;s <code>completion:</code> is the headline number on the high-level
+    <strong>Project Requirements</strong> bar.
+  </li>
+  <li>
+    The <strong>top-of-<code>docs/plans/</code> file</strong> (<code>command-hq-overview.md</code>)
+    represents the whole detailed breakdown; its <code>completion:</code> is the headline number
+    shown on the <strong>Detailed Requirements</strong> root.
+  </li>
+  <li>Each lower-level doc shows its own <code>completion:</code> in the Detailed doc-tree.</li>
+  <li>
+    Item-level detail still uses GitHub task items (<code>- [x]</code>) inside the docs; the
+    headline bar is the frontmatter <code>completion:</code>.
+  </li>
+  <li>
+    <code>/update-progress</code> (a client-side Claude skill) computes the
+    <code>completion:</code> % and pushes it to GitHub;
+    <strong>HQ reads it, never writes.</strong> The number in the GitHub <code>.md</code> is the
+    single source of truth for the bar.
+  </li>
 </ul>
 <pre><code>/update-progress (client-side: Claude computes % from code vs docs)
    → pushes completion: % to docs/PRD.md AND docs/plans/ .md → HQ reads it (HQ never writes)
    → Project Requirements bar (docs/PRD.md) + Detailed root (docs/plans/ headline).
      Also emits a compliance report.
 </code></pre>
-<p><em>Code today (built):</em> <code>packages/backend/src/github/history.ts</code> parses the
-<code>completion:</code> frontmatter of the top <code>docs/plans/</code> doc (falling back to legacy
-<code>PROGRESS.md %</code>); <code>rest/projects.ts</code> stores it as the project&#39;s <code>progressPct</code>
-(with <code>framingReadAt</code>/<code>framingStale</code> for last-known-on-failure);
-<code>projections/rollup.ts</code> (re-pointed off tickets in the migration) derives a
-Supporting-Outcome leaf % from that stored value. The web bars read the stored
-number.</p>
+<p>
+  <em>Code today (built):</em> <code>packages/backend/src/github/history.ts</code> parses the
+  <code>completion:</code> frontmatter of the top <code>docs/plans/</code> doc (falling back to
+  legacy <code>PROGRESS.md %</code>); <code>rest/projects.ts</code> stores it as the project&#39;s
+  <code>progressPct</code> (with <code>framingReadAt</code>/<code>framingStale</code> for
+  last-known-on-failure); <code>projections/rollup.ts</code> (re-pointed off tickets in the
+  migration) derives a Supporting-Outcome leaf % from that stored value. The web bars read the
+  stored number.
+</p>
 <h2><code>/update-progress</code> — the auto-audit tool</h2>
-<p>A <strong>Command HQ skill</strong> (see <a href="./claude_code_integration.html">feature 3</a> for how
-skills register) that a developer runs in their repo. It:</p>
+<p>
+  A <strong>Command HQ skill</strong> (see
+  <a href="./claude_code_integration.html">feature 3</a> for how skills register) that a developer
+  runs in their repo. It:
+</p>
 <ol>
-<li><strong>Audits the repo</strong> against the requirement docs (the <code>docs/plans/</code> tree + the
-high-level goals).</li>
-<li>Runs the project&#39;s <strong>Definition of Done</strong> gate before marking anything done:<ul>
-<li><strong>Unit tests passing</strong> (the org-wide floor / default).</li>
-<li><strong>End-to-end tests verified in <em>production</em></strong> — not locally. The skill
-confirms the prod E2E suite exists and is green against the deployed
-environment.</li>
-</ul>
-</li>
-<li><strong>Computes the completion %</strong> from what&#39;s actually coded up versus the docs (so
-the user doesn&#39;t hand-calculate it), then <strong>pushes the number to GitHub</strong>
-(client-side, with the dev&#39;s own git) by writing the <code>completion:</code> frontmatter.
-HQ reads it from GitHub to move the bar — <strong>HQ never writes to GitHub.</strong></li>
-<li><strong>Generates a compliance report</strong> comparing the requirements against what&#39;s
-actually built and flagging drift (between the high-level <code>docs/PRD.md</code>
-Project Requirements and the detailed <code>docs/plans/</code> docs) — the reconciliation
-surface.</li>
+  <li>
+    <strong>Audits the repo</strong> against the requirement docs (the <code>docs/plans/</code> tree
+    + the high-level goals).
+  </li>
+  <li>
+    Runs the project&#39;s <strong>Definition of Done</strong> gate before marking anything done:
+    <ul>
+      <li><strong>Unit tests passing</strong> (the org-wide floor / default).</li>
+      <li>
+        <strong>End-to-end tests verified in <em>production</em></strong> — not locally. The skill
+        confirms the prod E2E suite exists and is green against the deployed environment.
+      </li>
+    </ul>
+  </li>
+  <li>
+    <strong>Computes the completion %</strong> from what&#39;s actually coded up versus the docs (so
+    the user doesn&#39;t hand-calculate it), then
+    <strong>pushes the number to GitHub</strong> (client-side, with the dev&#39;s own git) by
+    writing the <code>completion:</code> frontmatter. HQ reads it from GitHub to move the bar —
+    <strong>HQ never writes to GitHub.</strong>
+  </li>
+  <li>
+    <strong>Generates a compliance report</strong> comparing the requirements against what&#39;s
+    actually built and flagging drift (between the high-level <code>docs/PRD.md</code> Project
+    Requirements and the detailed <code>docs/plans/</code> docs) — the reconciliation surface.
+  </li>
 </ol>
 <p><strong>Completion is never typed in by hand</strong> — it is earned by passing the gate.</p>
 <h3>Definition of Done lives in Company Objectives</h3>
-<p>A config block on the Objectives pane defines what <code>/update-progress</code> must verify
-before a check turns green. Org-wide default = <strong>unit tests passing</strong>; projects
-may <em>tighten</em> (e.g. add prod-E2E) but not drop below the org floor.</p>
-<p><em>Code today (built, advisory):</em> <code>packages/backend/src/rest/dod.ts</code> exposes
-<code>GET /dod</code> (the org Definition of Done, defaulting to the floor when unset) and
-<code>PUT /dod</code> (admin-only). As built it is <strong>advisory</strong> — surfaced in HQ and reported
-on by the compliance report, but it does <strong>not</strong> hard-block a progress push. The
-prod-E2E <em>enforced</em> gate remains deferred (see Open questions).</p>
+<p>
+  A config block on the Objectives pane defines what <code>/update-progress</code> must verify
+  before a check turns green. Org-wide default = <strong>unit tests passing</strong>; projects may
+  <em>tighten</em> (e.g. add prod-E2E) but not drop below the org floor.
+</p>
+<p>
+  <em>Code today (built, advisory):</em> <code>packages/backend/src/rest/dod.ts</code> exposes
+  <code>GET /dod</code> (the org Definition of Done, defaulting to the floor when unset) and
+  <code>PUT /dod</code> (admin-only). As built it is <strong>advisory</strong> — surfaced in HQ and
+  reported on by the compliance report, but it does <strong>not</strong> hard-block a progress push.
+  The prod-E2E <em>enforced</em> gate remains deferred (see Open questions).
+</p>
 <h2>Open questions</h2>
 <ul>
-<li>Exact shape of the markdown editor + versioning for Project Requirements.</li>
-<li>How <code>/update-progress</code> discovers &quot;the prod E2E suite&quot; and the deployed target.</li>
-<li>How the high-level HQ requirements file maps onto the <code>docs/plans/</code> docs for per-item check roll-up.</li>
-<li><strong>[Deferred — 2026-06-03 review]</strong> The verified-completion gate (prod-E2E suite
-discovery + binding the deployed env to the committed code) and <code>completion:</code>
-integrity (the frontmatter is hand-editable, bypassing the gate) are unresolved —
-the &quot;verified, not self-reported&quot; guarantee is not yet enforceable.</li>
-<li><strong>Interaction states to define (design phase):</strong> Project Requirements editor
-(edit / save / conflict / versioning), Detailed Requirements sync-failure / empty
-/ first-connect, and the progress zero-state.</li>
+  <li>Exact shape of the markdown editor + versioning for Project Requirements.</li>
+  <li>
+    How <code>/update-progress</code> discovers &quot;the prod E2E suite&quot; and the deployed
+    target.
+  </li>
+  <li>
+    How the high-level HQ requirements file maps onto the <code>docs/plans/</code> docs for per-item
+    check roll-up.
+  </li>
+  <li>
+    <strong>[Deferred — 2026-06-03 review]</strong> The verified-completion gate (prod-E2E suite
+    discovery + binding the deployed env to the committed code) and
+    <code>completion:</code> integrity (the frontmatter is hand-editable, bypassing the gate) are
+    unresolved — the &quot;verified, not self-reported&quot; guarantee is not yet enforceable.
+  </li>
+  <li>
+    <strong>Interaction states to define (design phase):</strong> Project Requirements editor (edit
+    / save / conflict / versioning), Detailed Requirements sync-failure / empty / first-connect, and
+    the progress zero-state.
+  </li>
 </ul>
 <h2>Status</h2>
 <ul>
-<li><strong>Built:</strong> objectives tree CRUD; GitHub <code>completion:</code> frontmatter read + store
-(with legacy <code>PROGRESS.md %</code> fallback); roll-up <strong>re-pointed off tickets</strong> onto
-the stored <code>progressPct</code>; the docs-tree read endpoints; the two-tier
-(Project/Detailed) requirements UI with <code>MarkdownView</code> and a full-screen reader;
-the editable HQ-owned Project Requirements; the advisory Definition-of-Done REST;
-the <code>/update-progress</code> skill (<code>.claude/skills/update-progress/</code>).</li>
-<li><strong>Deferred:</strong> the <strong>enforced</strong> prod-E2E verified-completion gate (and
-<code>completion:</code> frontmatter integrity) — for v1 the pushed % is <code>/update-progress</code>&#39;s
-computed estimate, not a gated guarantee.</li>
+  <li>
+    <strong>Built:</strong> objectives tree CRUD; GitHub <code>completion:</code> frontmatter read +
+    store (with legacy <code>PROGRESS.md %</code> fallback); roll-up
+    <strong>re-pointed off tickets</strong> onto the stored <code>progressPct</code>; the docs-tree
+    read endpoints; the two-tier (Project/Detailed) requirements UI with
+    <code>MarkdownView</code> and a full-screen reader; the editable HQ-owned Project Requirements;
+    the advisory Definition-of-Done REST; the <code>/update-progress</code> skill
+    (<code>.claude/skills/update-progress/</code>).
+  </li>
+  <li>
+    <strong>Deferred:</strong> the <strong>enforced</strong> prod-E2E verified-completion gate (and
+    <code>completion:</code> frontmatter integrity) — for v1 the pushed % is
+    <code>/update-progress</code>&#39;s computed estimate, not a gated guarantee.
+  </li>
 </ul>
-

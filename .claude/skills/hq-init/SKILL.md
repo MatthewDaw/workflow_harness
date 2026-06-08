@@ -41,13 +41,13 @@ exist, and prints what it skipped.
 This skill scaffolds **only** these four files. There is no repo-root `PRD.md`
 and no `PROGRESS.md` — everything HQ needs lives under `docs/`.
 
-| HQ surface | Repo file | What's parsed |
-| --- | --- | --- |
-| **Project Overview** (goal) | `docs/PRD.html` | the `Product goal:` line (markdown `**Goal:**` or an HTML `<strong>Product goal:</strong>` label) → the goal shown on the project card. |
-| **Project Requirements** (body **and** bar) | `docs/PRD.html` | the high-level requirements prose → the read-only body; `completion:` frontmatter → `progressPct`. |
-| **Detailed Requirements** (headline + bar fallback) | `docs/plans/specs_overview.html` | the top-of-tree overview doc; its `completion:` frontmatter is the Detailed Requirements headline number. |
-| **Detailed Requirements** (per-feature) | `docs/plans/features/*.html` | each feature doc + its `completion:` frontmatter badge; `example_feature.html` is the seed template. |
-| **Project Requirements** (wireframe preview) | `docs/wireframe.html` | the full HTML file is served verbatim → a scaled preview on the Project Requirements tab that links to a full-screen `requirements/wireframe` route. |
+| HQ surface                                          | Repo file                        | What's parsed                                                                                                                                        |
+| --------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Project Overview** (goal)                         | `docs/PRD.html`                  | the `Product goal:` line (markdown `**Goal:**` or an HTML `<strong>Product goal:</strong>` label) → the goal shown on the project card.              |
+| **Project Requirements** (body **and** bar)         | `docs/PRD.html`                  | the high-level requirements prose → the read-only body; `completion:` frontmatter → `progressPct`.                                                   |
+| **Detailed Requirements** (headline + bar fallback) | `docs/plans/specs_overview.html` | the top-of-tree overview doc; its `completion:` frontmatter is the Detailed Requirements headline number.                                            |
+| **Detailed Requirements** (per-feature)             | `docs/plans/features/*.html`     | each feature doc + its `completion:` frontmatter badge; `example_feature.html` is the seed template.                                                 |
+| **Project Requirements** (wireframe preview)        | `docs/wireframe.html`            | the full HTML file is served verbatim → a scaled preview on the Project Requirements tab that links to a full-screen `requirements/wireframe` route. |
 
 The backend parsing lives in `packages/backend/src/github/history.ts`
 (`parseGoal`, `parseCompletionFrontmatter`) and `app.ts`
@@ -234,8 +234,8 @@ Expected behavior on a repo with no HQ files:
    ```
 
 7. `git add docs/PRD.html docs/plans/specs_overview.html docs/plans/features/example_feature.html docs/wireframe.html
-   && git commit -m "chore(hq): scaffold Command HQ project files via /hq-init"
-   && git push`.
+&& git commit -m "chore(hq): scaffold Command HQ project files via /hq-init"
+&& git push`.
 
 On a repo that already has, say, `docs/PRD.html` and a `docs/plans/features/`
 tree, it reports `skipped docs/PRD.html`, `skipped docs/plans/features/** (N docs
@@ -252,4 +252,5 @@ re-running it creates nothing (idempotent). After an HQ refresh the Overview
 shows the `Product goal:`, the Project Requirements tab renders `docs/PRD.html`
 read-only plus a wireframe preview that links to the full-screen
 `requirements/wireframe` route, the Detailed Requirements tab lists the overview
-+ example feature, and the bars read `0%` instead of the empty state.
+
+- example feature, and the bars read `0%` instead of the empty state.

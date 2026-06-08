@@ -149,7 +149,13 @@ describe('live WS middleware', () => {
         host: 'matt@mbp',
         ts: 2002,
         seq: 22,
-        event: { kind: 'tool.result', sessionId: 'a91f', ok: true, ms: 120, summary: 'BUILD OK\n0 errors' },
+        event: {
+          kind: 'tool.result',
+          sessionId: 'a91f',
+          ok: true,
+          ms: 120,
+          summary: 'BUILD OK\n0 errors',
+        },
       }),
     );
 

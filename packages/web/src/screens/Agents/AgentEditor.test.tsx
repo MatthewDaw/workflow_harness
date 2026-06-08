@@ -105,14 +105,10 @@ describe('AgentEditor (U17)', () => {
     await screen.findByTestId('agent-editor');
 
     // Seeded from the existing agent.
-    await waitFor(() =>
-      expect(screen.getByTestId('agent-model')).toHaveValue('claude-sonnet-4'),
-    );
+    await waitFor(() => expect(screen.getByTestId('agent-model')).toHaveValue('claude-sonnet-4'));
     // Description seeds from the existing record and saves through.
     await waitFor(() =>
-      expect(screen.getByTestId('agent-description')).toHaveValue(
-        'Use when building features',
-      ),
+      expect(screen.getByTestId('agent-description')).toHaveValue('Use when building features'),
     );
     // gh is already selected; toggle on browse too. The catalog renders once
     // the seeded skills resolve, so wait for the button before clicking.

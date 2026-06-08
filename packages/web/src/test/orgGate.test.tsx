@@ -60,7 +60,9 @@ describe('org gate', () => {
     let switched = false;
     installFetchStub({
       me: () =>
-        switched ? { org: 'beta', orgs: ['acme', 'beta'] } : { org: 'acme', orgs: ['acme', 'beta'] },
+        switched
+          ? { org: 'beta', orgs: ['acme', 'beta'] }
+          : { org: 'acme', orgs: ['acme', 'beta'] },
       routes: {
         'POST me/org': () => {
           switched = true;
@@ -77,9 +79,7 @@ describe('org gate', () => {
     await userEvent.click(await screen.findByRole('menuitem', { name: 'beta' }));
 
     // After switching, the header reflects the new active org.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /^beta/i })).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /^beta/i })).toBeInTheDocument());
   });
 
   it('shows a generic error when joining with a bad name/password (403)', async () => {

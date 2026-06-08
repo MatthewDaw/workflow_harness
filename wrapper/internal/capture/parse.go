@@ -31,6 +31,25 @@ func TranscriptPath(repoRoot, sessionID string) (string, error) {
 	return filepath.Join(base, "projects", projectHash(repoRoot), sessionID+".jsonl"), nil
 }
 
+// MemoryDir resolves the per-project memory directory for a repo, the sibling
+// `memory/` under the SAME <config>/projects/<hash>/ dir the transcript lives in
+// (TranscriptPath). claude+ launches Claude against the isolated ~/.claude+ config
+// root (U21), so when isolation is active the memories live under it; we fall back
+// to ~/.claude otherwise — exactly mirroring TranscriptPath's base resolution so
+// the two never diverge. The <hash> is projectHash(repoRoot), reused (not
+// re-derived) so a Claude Code layout change is re-pinned in one place (R2).
+func MemoryDir(repoRoot string) (string, error) {
+	base, ok := config.ConfigDir()
+	if !ok {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".claude")
+	}
+	return filepath.Join(base, "projects", projectHash(repoRoot), "memory"), nil
+}
+
 // projectHash derives Claude Code's per-project directory name. Claude Code
 // slugifies the absolute path by replacing every non-alphanumeric character with
 // a dash (NOT just path separators): `C:\Users\me\workflow_harness` becomes

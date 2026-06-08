@@ -31,13 +31,15 @@ describe('scope resolution', () => {
     expect(out[0]!.scope.tier).toBe('project');
   });
 
-  it("drops items scoped to another user or project", () => {
+  it('drops items scoped to another user or project', () => {
     const items = [
       agent('mine', 'user', 'matt'),
       agent('theirs', 'user', 'someone-else'),
       agent('otherproj', 'project', 'atlas-billing'),
     ];
-    const out = resolveScoped(items, ctx).map((a) => a.name).sort();
+    const out = resolveScoped(items, ctx)
+      .map((a) => a.name)
+      .sort();
     expect(out).toEqual(['mine']);
   });
 
@@ -54,7 +56,9 @@ describe('scope resolution', () => {
       agent('research-sweeper', 'user', 'matt'),
       agent('rcdo-linker', 'project', 'weekly-compass'),
     ];
-    const out = resolveScoped(items, ctx).map((a) => a.name).sort();
+    const out = resolveScoped(items, ctx)
+      .map((a) => a.name)
+      .sort();
     expect(out).toEqual(['rcdo-linker', 'research-sweeper', 'reviewer']);
   });
 });

@@ -45,8 +45,6 @@ function feedRow(env: Envelope): FeedRow | null {
       return { header: `▎ you · ${e.tokens} tok`, body: e.text || undefined };
     case 'assistant.msg':
       return { header: `▎ claude · ${e.tokens} tok`, body: e.text || undefined };
-    case 'cost.tick':
-      return { header: `$ +${e.deltaUsd} (total ${e.totalUsd})` };
     case 'status.change':
       return { header: `● ${e.from} → ${e.to}` };
     case 'session.rename':
@@ -202,7 +200,11 @@ function LearningSection({
       ) : (
         <ul className="mt-1.5 flex flex-col gap-2">
           {rows.map((l) => (
-            <li key={`${l.sessionId}#${l.turnId}`} className="text-xs" data-testid={`${testid}-row`}>
+            <li
+              key={`${l.sessionId}#${l.turnId}`}
+              className="text-xs"
+              data-testid={`${testid}-row`}
+            >
               <div className="text-faint">{l.topicLabel}</div>
               <div className="text-mut">{l.text}</div>
               {l.docRef && <div className="font-mono text-[11px] text-faint">{l.docRef}</div>}
@@ -358,7 +360,7 @@ export function LiveWatch() {
             >
               <div data-testid="live-session-name">{session.name}</div>
               <div className="mt-2 text-faint">
-                tokens {session.tokens} · ${session.costUsd.toFixed(2)} · status{' '}
+                tokens {session.tokens} · status{' '}
                 <span data-testid="live-status">{session.status}</span>
               </div>
               <div className="mt-2 whitespace-pre-wrap break-words">

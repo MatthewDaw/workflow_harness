@@ -43,9 +43,8 @@ type Daemon struct {
 	recent     []event.Envelope                // bounded replay buffer for new subscribers
 
 	statusMu sync.Mutex
-	sTokens  int64   // cumulative tokens (from cost.tick)
-	sUSD     float64 // cumulative cost USD (sum of cost.tick deltas)
-	sDrift   int     // agents/skills out of sync (set by the config layer)
+	sTokens  int64 // cumulative tokens (from user.msg / assistant.msg events)
+	sDrift   int   // agents/skills out of sync (set by the config layer)
 
 	hookMu     sync.Mutex
 	hookIngest func(sessID string, e event.Event) // set by the Runtime; routes hook events through emit
@@ -71,8 +70,29 @@ type Daemon struct {
 	// critical path).
 	topicHook func(sig TopicSignal)
 
+	// memSyncMu guards the memory-sync debounce state below. End-of-turn (Stop) is
+	// the natural low-frequency point to reconcile the project's memories up to HQ,
+	// but rapid back-to-back Stops (e.g. a burst of short turns) must coalesce into
+	// ONE sync rather than firing a network reconcile per turn.
+	memSyncMu sync.Mutex
+	// memSyncTimer coalesces Stops: each Stop (re)arms a single short timer; only
+	// when it finally elapses does one SyncMemoriesNow run. memSyncPending records
+	// that a timer is currently armed so we don't stack timers.
+	memSyncTimer   *time.Timer
+	memSyncPending bool
+
 	stopCh chan struct{}
 }
+
+// memSyncDebounce is how long after the last Stop we wait before reconciling
+// memories, so a burst of quick turns collapses into a single network sync.
+const memSyncDebounce = 2 * time.Second
+
+// syncMemoriesNow is the seam the debounce timer calls to push this repo's
+// memories to HQ. It defaults to the runtime's full-reconcile entrypoint but is a
+// package var so the debounce wiring test can substitute a deterministic stub
+// without a network round-trip (mirrors the runJudge/runClaude test seams).
+var syncMemoriesNow = SyncMemoriesNow
 
 // New constructs a daemon bound to repoRoot. spawn may be nil (DefaultSpawn).
 // The loopback listen address is assigned in Serve (a free port on 127.0.0.1).
@@ -211,7 +231,10 @@ func (d *Daemon) handle(conn net.Conn) {
 	case FrameHello:
 		d.attach(conn, r, first.Version)
 	default:
-		_ = writeFrame(conn, Frame{Type: FrameAck, Err: "expected hello"})
+		// Stamp our ProtocolVersion even on an error ack: the client checks
+		// ack.Version before ack.Err, so a Version-less error frame (Version==0) is
+		// misclassified as a "protocol v0" mismatch and the real error is discarded.
+		_ = writeFrame(conn, Frame{Type: FrameAck, Version: ProtocolVersion, Err: "expected hello"})
 	}
 }
 
@@ -395,6 +418,11 @@ func (d *Daemon) ingestHook(raw string) {
 	// side channel and never delays the idle transition.
 	if h.HookEventName == "Stop" {
 		d.forwardTopic(TopicSignal{Kind: TopicStop, TabID: h.SessionID})
+		// End of a turn is the natural low-frequency point to reconcile this
+		// project's memories up to HQ (Claude tends to save memories during a turn,
+		// not mid-keystroke). Kick a DEBOUNCED, off-critical-path sync so a burst of
+		// quick turns collapses into one reconcile and the hook never blocks.
+		d.scheduleMemorySync()
 	}
 	// Seed the prior status from the live session so the mapped transition starts
 	// from where the session actually is, not a guess.
@@ -415,6 +443,37 @@ func (d *Daemon) ingestHook(raw string) {
 	}
 	// No Runtime wired (local-only daemon): publish to the local bus directly.
 	d.PublishEvent(event.Envelope{V: 1, TS: time.Now().UnixMilli(), Event: ev})
+}
+
+// scheduleMemorySync arms (or re-arms) the debounce timer that reconciles this
+// project's memories up to HQ. Each Stop pushes the fire time out by
+// memSyncDebounce, so a burst of quick turns coalesces into ONE sync after the
+// turns settle. The actual reconcile runs on the timer's own goroutine via
+// syncMemoriesNow(d.repoRoot) — NEVER on the hook path, so a slow or failing sync
+// can never block or destabilize the daemon — and any error is logged-and-
+// swallowed, exactly how the skills auto-sync tolerates failures.
+func (d *Daemon) scheduleMemorySync() {
+	d.memSyncMu.Lock()
+	defer d.memSyncMu.Unlock()
+	if d.memSyncTimer != nil {
+		// A reconcile is already pending: push it out so the burst keeps coalescing.
+		d.memSyncTimer.Reset(memSyncDebounce)
+		return
+	}
+	d.memSyncPending = true
+	d.memSyncTimer = time.AfterFunc(memSyncDebounce, func() {
+		defer diag.Recover("daemon.memorySync")
+		// Clear the pending flag/timer BEFORE syncing so a Stop that arrives during
+		// the sync arms a fresh timer (and thus a follow-up reconcile that captures
+		// memories written by that later turn).
+		d.memSyncMu.Lock()
+		d.memSyncPending = false
+		d.memSyncTimer = nil
+		d.memSyncMu.Unlock()
+		if err := syncMemoriesNow(d.repoRoot); err != nil {
+			diag.Logf("memory sync: %v", err)
+		}
+	})
 }
 
 // firstPromptSummary trims a raw first prompt and caps it to a display-friendly
@@ -477,7 +536,10 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 	if d.mux.Count() == 0 {
 		if _, err := d.mux.Spawn(""); err != nil {
 			d.mux.RemoveSink(clientID)
-			_ = writeFrame(conn, Frame{Type: FrameAck, Err: err.Error()})
+			// Surface the REAL spawn failure: stamp our ProtocolVersion so the client
+			// (which checks ack.Version before ack.Err) does not misreport this as a
+			// "protocol v0 (incompatible build)" mismatch and discard err.
+			_ = writeFrame(conn, Frame{Type: FrameAck, Version: ProtocolVersion, Err: err.Error()})
 			return
 		}
 	}

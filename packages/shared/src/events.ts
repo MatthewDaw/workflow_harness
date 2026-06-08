@@ -74,14 +74,6 @@ export const toolResultEventSchema = z.object({
   summary: z.string().default(''),
 });
 
-export const costTickEventSchema = z.object({
-  kind: z.literal('cost.tick'),
-  sessionId,
-  deltaUsd: z.number().nonnegative(),
-  totalUsd: z.number().nonnegative(),
-  tokens: z.number().int().nonnegative(),
-});
-
 export const statusChangeEventSchema = z.object({
   kind: z.literal('status.change'),
   sessionId,
@@ -141,7 +133,6 @@ export const eventSchema = z.discriminatedUnion('kind', [
   assistantMsgEventSchema,
   toolCallEventSchema,
   toolResultEventSchema,
-  costTickEventSchema,
   statusChangeEventSchema,
   sessionHeartbeatEventSchema,
   sessionTopicEventSchema,

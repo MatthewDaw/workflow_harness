@@ -16,17 +16,53 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: [],
   enabledAgents: ['reviewer'],
+  enabledBundles: [],
   enabledMcpServers: [],
 };
 
 const SKILLS: Skill[] = [
-  { name: 'gh', scope: ORG, kind: 'skill', description: '', source: 'built-in', members: [], body: '' },
-  { name: 'kit', scope: ORG, kind: 'bundle', description: '', source: 'built-in', members: ['gh'], resolvedMembers: ['gh'], body: '' },
+  {
+    name: 'gh',
+    scope: ORG,
+    kind: 'skill',
+    description: '',
+    source: 'built-in',
+    members: [],
+    body: '',
+  },
+  {
+    name: 'kit',
+    scope: ORG,
+    kind: 'bundle',
+    description: '',
+    source: 'built-in',
+    members: ['gh'],
+    resolvedMembers: ['gh'],
+    body: '',
+  },
 ];
 
 const AGENTS: Agent[] = [
-  { name: 'builder', scope: ORG, description: '', model: 'claude-sonnet-4', prompt: '', skills: ['kit'], tools: [], mcpServers: [] },
-  { name: 'reviewer', scope: ORG, description: '', model: 'claude-opus-4', prompt: '', skills: [], tools: [], mcpServers: [] },
+  {
+    name: 'builder',
+    scope: ORG,
+    description: '',
+    model: 'claude-sonnet-4',
+    prompt: '',
+    skills: ['kit'],
+    tools: [],
+    mcpServers: [],
+  },
+  {
+    name: 'reviewer',
+    scope: ORG,
+    description: '',
+    model: 'claude-opus-4',
+    prompt: '',
+    skills: [],
+    tools: [],
+    mcpServers: [],
+  },
 ];
 
 interface StubReq {
@@ -46,18 +82,33 @@ function lastMatching(pred: (u: string, m: string) => boolean): StubReq | undefi
 describe('ProjectAgents (project opt-in)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('enables a catalog agent and flattens bundle skills it brings', async () => {
+  it('shows only the enabled agents in the page body', async () => {
     renderWithProviders(<ProjectAgents />, {
       route: '/projects/weekly-compass/agents',
       routePath: '/projects/:projectId/agents',
       seed: { projects: [PROJECT], agents: AGENTS, skills: SKILLS },
     });
-    await screen.findByTestId('project-agent-builder');
 
-    // Bundle skill 'kit' flattens to leaf 'gh' in the brings display.
-    expect(screen.getByTestId('brings-note-builder')).toBeInTheDocument();
+    // The enabled 'reviewer' card renders; the not-yet-enabled 'builder' does not.
+    await screen.findByTestId('project-agent-reviewer');
+    expect(screen.queryByTestId('project-agent-builder')).not.toBeInTheDocument();
+  });
 
-    await userEvent.click(screen.getByTestId('enable-agent-builder'));
+  it('enables a catalog agent via the picker (Apply fires the enable POST)', async () => {
+    renderWithProviders(<ProjectAgents />, {
+      route: '/projects/weekly-compass/agents',
+      routePath: '/projects/:projectId/agents',
+      seed: { projects: [PROJECT], agents: AGENTS, skills: SKILLS },
+    });
+    await screen.findByTestId('project-agent-reviewer');
+
+    // Open the picker and toggle the catalog agent 'builder' on.
+    await userEvent.click(screen.getByTestId('add-agent'));
+    await screen.findByTestId('catalog-picker');
+    await userEvent.click(screen.getByTestId('catalog-picker-row-agent-builder'));
+
+    // Apply stages -> enable diff -> POST projects/.../agents/builder.
+    await userEvent.click(screen.getByTestId('catalog-picker-apply'));
     await waitFor(() =>
       expect(
         lastMatching(
@@ -67,7 +118,7 @@ describe('ProjectAgents (project opt-in)', () => {
     );
   });
 
-  it('shows enabled agents with a disable control', async () => {
+  it('disables an enabled agent from its card', async () => {
     renderWithProviders(<ProjectAgents />, {
       route: '/projects/weekly-compass/agents',
       routePath: '/projects/:projectId/agents',

@@ -249,7 +249,10 @@ describe('control routing', () => {
     await seedConn('web-conn', OWNER, 'web');
     const { posts, poster } = recordingPoster();
 
-    await control(wsEvent({ sessionId: SESSION, action: 'shutdown' }, 'web-conn'), { repo, poster });
+    await control(wsEvent({ sessionId: SESSION, action: 'shutdown' }, 'web-conn'), {
+      repo,
+      poster,
+    });
     await control(wsEvent({ sessionId: SESSION, action: 'kill' }, 'web-conn'), { repo, poster });
 
     expect(posts.map((p) => (p.body as { action: string }).action)).toEqual(['shutdown', 'kill']);

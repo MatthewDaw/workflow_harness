@@ -90,7 +90,7 @@ runtime files, not compiled in.
 `/hq-update-skills` does the **bidirectional** HQ reconcile (pulls the project's
 enabled changes AND pushes your local-only skills up to the org catalog) — use it
 when you want your edits to reach **other people** through HQ. `/hq-refresh-skills`
-is **local-first and pull-only**: it makes *your own* `~/.claude+` reflect the
+is **local-first and pull-only**: it makes _your own_ `~/.claude+` reflect the
 connected repo's `.claude/skills/` and HQ's latest, without publishing anything.
 Reach for `/hq-refresh-skills` right after editing a skill in the repo so the
 running claude+ session picks it up immediately; reach for `/hq-update-skills` when

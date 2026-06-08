@@ -175,7 +175,10 @@ describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () =>
 
   it('stores a posted report authenticated by a device token', async () => {
     await repo.putProject(project(MATT));
-    const res = await putWeekly(await bearerPutEvent(MATT, { done: 'via device token', plan: 'x' }), deps);
+    const res = await putWeekly(
+      await bearerPutEvent(MATT, { done: 'via device token', plan: 'x' }),
+      deps,
+    );
     expect(res).toMatchObject({ statusCode: 200 });
     const stored = await repo.getWeekly(PROJ, WEEK);
     expect(stored?.done).toBe('via device token');
@@ -184,16 +187,24 @@ describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () =>
   it('401s when there is neither jwt claims nor a bearer token', async () => {
     await repo.putProject(project(MATT));
     const res = await putWeekly(
-      httpEvent({ method: 'PUT', userId: null, path: { pid: PROJ, week: WEEK },
-        rawPath: `/projects/${PROJ}/weekly/${WEEK}`, body: { done: 'x', plan: 'y' } }),
+      httpEvent({
+        method: 'PUT',
+        userId: null,
+        path: { pid: PROJ, week: WEEK },
+        rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
+        body: { done: 'x', plan: 'y' },
+      }),
       deps,
     );
     expect(res).toMatchObject({ statusCode: 401 });
   });
 
-  it("404s a device token whose user does not own the project (no enumeration)", async () => {
+  it('404s a device token whose user does not own the project (no enumeration)', async () => {
     await repo.putProject(project(MATT));
-    const res = await putWeekly(await bearerPutEvent('someone-else', { done: 'x', plan: 'y' }), deps);
+    const res = await putWeekly(
+      await bearerPutEvent('someone-else', { done: 'x', plan: 'y' }),
+      deps,
+    );
     expect(res).toMatchObject({ statusCode: 404 });
   });
 });

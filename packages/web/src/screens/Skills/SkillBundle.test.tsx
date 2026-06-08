@@ -17,9 +17,33 @@ const SKILLS: Skill[] = [
     members: ['gh', 'browse'],
     body: '',
   },
-  { name: 'gh', scope: SCOPE, kind: 'skill', description: '', source: 'built-in', members: [], body: '' },
-  { name: 'browse', scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [], body: '' },
-  { name: 'qa', scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [], body: '' },
+  {
+    name: 'gh',
+    scope: SCOPE,
+    kind: 'skill',
+    description: '',
+    source: 'built-in',
+    members: [],
+    body: '',
+  },
+  {
+    name: 'browse',
+    scope: SCOPE,
+    kind: 'skill',
+    description: '',
+    source: 'local',
+    members: [],
+    body: '',
+  },
+  {
+    name: 'qa',
+    scope: SCOPE,
+    kind: 'skill',
+    description: '',
+    source: 'local',
+    members: [],
+    body: '',
+  },
 ];
 
 interface StubReq {
@@ -28,14 +52,18 @@ interface StubReq {
   body: unknown;
 }
 
-function lastMatching(pred: (url: string, method: string) => boolean):
-  | { url: string; method: string; body: unknown }
-  | undefined {
+function lastMatching(
+  pred: (url: string, method: string) => boolean,
+): { url: string; method: string; body: unknown } | undefined {
   const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
   for (let i = calls.length - 1; i >= 0; i--) {
     const req = calls[i]![0] as StubReq;
     if (pred(req.url, req.method)) {
-      return { url: req.url, method: req.method, body: req.body ? JSON.parse(String(req.body)) : undefined };
+      return {
+        url: req.url,
+        method: req.method,
+        body: req.body ? JSON.parse(String(req.body)) : undefined,
+      };
     }
   }
   return undefined;

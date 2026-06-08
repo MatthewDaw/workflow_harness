@@ -7,98 +7,152 @@ feature: plan-mapping
 ---
 
 <h1>Plan — Source Project Requirements from <code>docs/PRD.md</code></h1>
-<p><strong>Type:</strong> <code>refactor</code> (re-point an existing tab&#39;s source of truth) + a small skill
-extension. <strong>Depth:</strong> Standard. <strong>Target repo:</strong> this repo (<code>workflow_harness</code>).</p>
-<p>Repoint the <strong>Project Requirements</strong> tab so its body and progress bar come from a
-repo file — <code>docs/PRD.md</code> — read-only from GitHub, instead of the HQ-owned
-markdown stored in DynamoDB. Extend <code>/hq-update-progress</code> so it also computes and
-writes <code>docs/PRD.md</code>&#39;s <code>completion:</code> frontmatter, the same way it already does for
-the <code>docs/plans/</code> tree. After this, the two requirement bars are driven by two
-distinct, code-audited numbers:</p>
+<p>
+  <strong>Type:</strong> <code>refactor</code> (re-point an existing tab&#39;s source of truth) + a
+  small skill extension. <strong>Depth:</strong> Standard. <strong>Target repo:</strong> this repo
+  (<code>workflow_harness</code>).
+</p>
+<p>
+  Repoint the <strong>Project Requirements</strong> tab so its body and progress bar come from a
+  repo file — <code>docs/PRD.md</code> — read-only from GitHub, instead of the HQ-owned markdown
+  stored in DynamoDB. Extend <code>/hq-update-progress</code> so it also computes and writes
+  <code>docs/PRD.md</code>&#39;s <code>completion:</code> frontmatter, the same way it already does
+  for the <code>docs/plans/</code> tree. After this, the two requirement bars are driven by two
+  distinct, code-audited numbers:
+</p>
 <ul>
-<li><strong>Project Requirements</strong> bar + body ← <code>docs/PRD.md</code> (high level).</li>
-<li><strong>Detailed Requirements</strong> tree + bar ← <code>docs/plans/**</code> (unchanged).</li>
+  <li><strong>Project Requirements</strong> bar + body ← <code>docs/PRD.md</code> (high level).</li>
+  <li>
+    <strong>Detailed Requirements</strong> tree + bar ← <code>docs/plans/**</code> (unchanged).
+  </li>
 </ul>
-<p>There is <strong>no UI button and no remote trigger</strong> — <code>/hq-update-progress</code> is run
-locally in the claude+ PTY, as today (explicitly de-scoped by the user).</p>
-<hr>
+<p>
+  There is <strong>no UI button and no remote trigger</strong> — <code>/hq-update-progress</code> is
+  run locally in the claude+ PTY, as today (explicitly de-scoped by the user).
+</p>
+<hr />
 <h2>Problem frame</h2>
-<p>The user wants both requirement tabs&#39; progress bars to reflect <em>actual code
-progress against the actual requirements</em>, with the Project Requirements tab
-specifically reading from <code>docs/PRD.md</code> and Detailed Requirements from
-<code>docs/plans/</code>.</p>
-<p>What already exists (built + tested) — see
-<a href="./plan_mapping.html">01-plan-mapping.md</a>:</p>
+<p>
+  The user wants both requirement tabs&#39; progress bars to reflect
+  <em>actual code progress against the actual requirements</em>, with the Project Requirements tab
+  specifically reading from <code>docs/PRD.md</code> and Detailed Requirements from
+  <code>docs/plans/</code>.
+</p>
+<p>
+  What already exists (built + tested) — see <a href="./plan_mapping.html">01-plan-mapping.md</a>:
+</p>
 <ul>
-<li><code>/hq-update-progress</code> already audits <code>docs/plans/**</code>, computes a code-vs-docs
-<code>completion:</code> per doc, writes the frontmatter, commits/pushes, and emits a
-compliance report. <strong>The progress-computation engine is reused, not rebuilt.</strong></li>
-<li><strong>Detailed Requirements</strong> already renders <code>docs/plans/**</code> read-only from GitHub;
-its bar is the docs-tree top doc&#39;s <code>completion:</code>. ✅ Already matches the ask.</li>
-<li><strong>Project Requirements</strong> is the one mismatch: today its body is <strong>HQ-owned</strong>
-markdown (DynamoDB, edited inline, <code>PUT /projects/:id/requirements</code>) and its bar
-reads <code>project.progressPct</code>, which is currently sourced from the <code>docs/plans/</code>
-top doc. The ask is to source the body + bar from <code>docs/PRD.md</code> instead.</li>
+  <li>
+    <code>/hq-update-progress</code> already audits <code>docs/plans/**</code>, computes a
+    code-vs-docs <code>completion:</code> per doc, writes the frontmatter, commits/pushes, and emits
+    a compliance report. <strong>The progress-computation engine is reused, not rebuilt.</strong>
+  </li>
+  <li>
+    <strong>Detailed Requirements</strong> already renders <code>docs/plans/**</code> read-only from
+    GitHub; its bar is the docs-tree top doc&#39;s <code>completion:</code>. ✅ Already matches the
+    ask.
+  </li>
+  <li>
+    <strong>Project Requirements</strong> is the one mismatch: today its body is
+    <strong>HQ-owned</strong> markdown (DynamoDB, edited inline,
+    <code>PUT /projects/:id/requirements</code>) and its bar reads <code>project.progressPct</code>,
+    which is currently sourced from the <code>docs/plans/</code> top doc. The ask is to source the
+    body + bar from <code>docs/PRD.md</code> instead.
+  </li>
 </ul>
 <p>So this is a re-pointing job plus a skill extension, not a new subsystem.</p>
 <h3>Scope boundaries</h3>
 <p>In scope:</p>
 <ul>
-<li>Project Requirements body + bar sourced from <code>docs/PRD.md</code> (read-only).</li>
-<li><code>progressPct</code> re-sourced from <code>docs/PRD.md</code>&#39;s <code>completion:</code> (with graceful
-fallback to today&#39;s sources so repos without <code>docs/PRD.md</code> don&#39;t regress).</li>
-<li><code>/hq-update-progress</code> extended to audit + write <code>docs/PRD.md</code>.</li>
-<li>Create the initial <code>docs/PRD.md</code> for this repo.</li>
-<li>Reconcile the contract docs + <code>/hq-init-command-hq</code> scaffolder.</li>
+  <li>Project Requirements body + bar sourced from <code>docs/PRD.md</code> (read-only).</li>
+  <li>
+    <code>progressPct</code> re-sourced from <code>docs/PRD.md</code>&#39;s
+    <code>completion:</code> (with graceful fallback to today&#39;s sources so repos without
+    <code>docs/PRD.md</code> don&#39;t regress).
+  </li>
+  <li><code>/hq-update-progress</code> extended to audit + write <code>docs/PRD.md</code>.</li>
+  <li>Create the initial <code>docs/PRD.md</code> for this repo.</li>
+  <li>Reconcile the contract docs + <code>/hq-init-command-hq</code> scaffolder.</li>
 </ul>
 <h4>Deferred to follow-up work</h4>
 <ul>
-<li>Any HQ web <strong>button</strong> or <strong>remote trigger</strong> of the skill — explicitly dropped
-for now (the skill stays local-only).</li>
-<li>The enforced prod-E2E verified-completion gate (already deferred in
-<a href="./plan_mapping.html">01-plan-mapping.md</a>).</li>
-<li><code>completion:</code> frontmatter integrity (hand-editable) — unchanged.</li>
+  <li>
+    Any HQ web <strong>button</strong> or <strong>remote trigger</strong> of the skill — explicitly
+    dropped for now (the skill stays local-only).
+  </li>
+  <li>
+    The enforced prod-E2E verified-completion gate (already deferred in
+    <a href="./plan_mapping.html">01-plan-mapping.md</a>).
+  </li>
+  <li><code>completion:</code> frontmatter integrity (hand-editable) — unchanged.</li>
 </ul>
-<hr>
+<hr />
 <h2>Key technical decisions</h2>
 <ul>
-<li><p><strong>KTD-A — <code>progressPct</code> is re-sourced, not duplicated.</strong> The Project
-Requirements bar reads <code>project.progressPct</code>. Rather than add a parallel field,
-change where <code>readFramingWithCompletion()</code> derives <code>progressPct</code> from. New
-precedence: <code>docs/PRD.md</code> <code>completion:</code> → (fallback) <code>docs/plans/</code> top doc
-<code>completion:</code> → (fallback) <code>PROGRESS.md</code> <code>N%</code> → <code>0</code>. <code>DetailedRequirements.tsx</code>
-is unaffected because it already reads the docs-tree top doc directly, not
-<code>progressPct</code>. This also means the <strong>objectives roll-up</strong> now ladders up from
-the high-level PRD number, which is the more correct altitude
-(&quot;every repo&#39;s requirements ladder up to a Supporting Outcome&quot;).</p>
-</li>
-<li><p><strong>KTD-B — Reuse <code>GET /projects/:id/requirements</code>, drop the write path.</strong> Keep
-the existing read endpoint + frontend hook (<code>useGetProjectRequirementsQuery</code>,
-response shape <code>{ markdown }</code>) so the wiring stays stable, but change its
-implementation to read <code>docs/PRD.md</code> from GitHub via the injected GitHub App
-instead of DynamoDB. Remove <code>PUT /projects/:id/requirements</code>, its frontend
-mutation, and the now-dead <code>repo.getProjectRequirements</code> / <code>putProjectRequirements</code>
-DB methods. GitHub-unreachable degrades to <code>{ markdown: &#39;&#39;, stale: true }</code>,
-matching the doc-content endpoint&#39;s failure posture.</p>
-</li>
-<li><p><strong>KTD-C — <code>docs/PRD.md</code> is a distinct file from the repo-root <code>PRD.md</code>.</strong> The
-root <code>PRD.md</code> keeps feeding the <strong>Project Overview</strong> tab (goal + <code>SO-…</code> ids via
-<code>parsePrd</code>) untouched. <code>docs/PRD.md</code> is the new <strong>Project Requirements</strong> source.
-The contract docs + <code>/hq-init-command-hq</code> table must spell out both so the two
-are not confused.</p>
-</li>
-<li><p><strong>KTD-D — <code>docs/PRD.md</code> lives outside the <code>docs/plans/</code> prefix on purpose.</strong> The
-<code>docs/plans/</code>-prefixed reads (<code>readTree</code>, <code>readDocContent</code>, <code>listDocs</code>) stay
-scoped to the Detailed Requirements tree. <code>docs/PRD.md</code> is read with the plain
-<code>readFile(&#39;docs/PRD.md&#39;)</code> path (Contents API, already used for root <code>PRD.md</code>),
-so it never leaks into the Detailed doc tree.</p>
-</li>
-<li><p><strong>KTD-E — Reuse <code>parseCompletionFrontmatter</code>.</strong> It is already a pure,
-doc-agnostic parser; <code>docs/PRD.md</code> carries the same <code>---\ncompletion: N\n---</code>
-block. No new parser.</p>
-</li>
+  <li>
+    <p>
+      <strong>KTD-A — <code>progressPct</code> is re-sourced, not duplicated.</strong> The Project
+      Requirements bar reads <code>project.progressPct</code>. Rather than add a parallel field,
+      change where <code>readFramingWithCompletion()</code> derives <code>progressPct</code> from.
+      New precedence: <code>docs/PRD.md</code> <code>completion:</code> → (fallback)
+      <code>docs/plans/</code> top doc <code>completion:</code> → (fallback)
+      <code>PROGRESS.md</code> <code>N%</code> → <code>0</code>.
+      <code>DetailedRequirements.tsx</code>
+      is unaffected because it already reads the docs-tree top doc directly, not
+      <code>progressPct</code>. This also means the <strong>objectives roll-up</strong> now ladders
+      up from the high-level PRD number, which is the more correct altitude (&quot;every repo&#39;s
+      requirements ladder up to a Supporting Outcome&quot;).
+    </p>
+  </li>
+  <li>
+    <p>
+      <strong
+        >KTD-B — Reuse <code>GET /projects/:id/requirements</code>, drop the write path.</strong
+      >
+      Keep the existing read endpoint + frontend hook (<code>useGetProjectRequirementsQuery</code>,
+      response shape <code>{ markdown }</code>) so the wiring stays stable, but change its
+      implementation to read <code>docs/PRD.md</code> from GitHub via the injected GitHub App
+      instead of DynamoDB. Remove <code>PUT /projects/:id/requirements</code>, its frontend
+      mutation, and the now-dead <code>repo.getProjectRequirements</code> /
+      <code>putProjectRequirements</code> DB methods. GitHub-unreachable degrades to
+      <code>{ markdown: &#39;&#39;, stale: true }</code>, matching the doc-content endpoint&#39;s
+      failure posture.
+    </p>
+  </li>
+  <li>
+    <p>
+      <strong
+        >KTD-C — <code>docs/PRD.md</code> is a distinct file from the repo-root
+        <code>PRD.md</code>.</strong
+      >
+      The root <code>PRD.md</code> keeps feeding the <strong>Project Overview</strong> tab (goal +
+      <code>SO-…</code> ids via <code>parsePrd</code>) untouched. <code>docs/PRD.md</code> is the
+      new <strong>Project Requirements</strong> source. The contract docs +
+      <code>/hq-init-command-hq</code> table must spell out both so the two are not confused.
+    </p>
+  </li>
+  <li>
+    <p>
+      <strong
+        >KTD-D — <code>docs/PRD.md</code> lives outside the <code>docs/plans/</code> prefix on
+        purpose.</strong
+      >
+      The <code>docs/plans/</code>-prefixed reads (<code>readTree</code>,
+      <code>readDocContent</code>, <code>listDocs</code>) stay scoped to the Detailed Requirements
+      tree. <code>docs/PRD.md</code> is read with the plain
+      <code>readFile(&#39;docs/PRD.md&#39;)</code> path (Contents API, already used for root
+      <code>PRD.md</code>), so it never leaks into the Detailed doc tree.
+    </p>
+  </li>
+  <li>
+    <p>
+      <strong>KTD-E — Reuse <code>parseCompletionFrontmatter</code>.</strong> It is already a pure,
+      doc-agnostic parser; <code>docs/PRD.md</code> carries the same
+      <code>---\ncompletion: N\n---</code> block. No new parser.
+    </p>
+  </li>
 </ul>
-<hr>
+<hr />
 <h2>High-level data flow (after this change)</h2>
 <pre><code>docs/PRD.md  ──readFile()──▶ getProjectRequirements()  ──▶ Project Requirements BODY (read-only)
    │ completion: frontmatter
@@ -112,224 +166,368 @@ docs/plans/**  ──listDocs()──▶ Detailed Requirements tree + bar   (UNC
    audits code-vs-docs ──▶ writes completion: into BOTH docs/PRD.md AND docs/plans/**
    ──git push──▶ GitHub  ──▶ HQ reads on refresh (HQ never writes)
 </code></pre>
-<hr>
+<hr />
 <h2>Implementation units</h2>
 <h3>U1. Create <code>docs/PRD.md</code> as the Project Requirements source</h3>
-<p><strong>Goal:</strong> Add the repo&#39;s <code>docs/PRD.md</code> with <code>completion:</code> frontmatter and a
-high-level requirements body, so the re-pointed tab has something real to render.</p>
-<p><strong>Requirements:</strong> The Project Requirements tab must pull from <code>docs/PRD.md</code>.</p>
+<p>
+  <strong>Goal:</strong> Add the repo&#39;s <code>docs/PRD.md</code> with
+  <code>completion:</code> frontmatter and a high-level requirements body, so the re-pointed tab has
+  something real to render.
+</p>
+<p>
+  <strong>Requirements:</strong> The Project Requirements tab must pull from
+  <code>docs/PRD.md</code>.
+</p>
 <p><strong>Dependencies:</strong> none.</p>
 <p><strong>Files:</strong></p>
 <ul>
-<li><code>docs/PRD.md</code> (create)</li>
+  <li><code>docs/PRD.md</code> (create)</li>
 </ul>
-<p><strong>Approach:</strong> Author a concise high-level requirements doc (the &quot;what management
-writes&quot; altitude — the five features from
-<a href="../specs_overview.html">command-hq-overview.md</a>, as outcome-level bullets, not
-the detailed breakdown). Seed content from the existing <code>docs/st6_prd.md</code>
-inspiration where useful, but keep it product-requirement prose, not a plan. Start
-the file with a <code>---\ncompletion: 0\n---</code> frontmatter block (the placeholder;
-<code>/hq-update-progress</code> overwrites it). Do <strong>not</strong> delete or move <code>docs/st6_prd.md</code>
-(it remains the cited inspiration) or the repo-root <code>PRD.md</code> (Project Overview).</p>
-<p><strong>Patterns to follow:</strong> the frontmatter convention used by every <code>docs/plans/</code>
-doc; the high-level-vs-detailed split described in
-<a href="./plan_mapping.html">01-plan-mapping.md</a> (&quot;The three altitudes&quot;).</p>
-<p><strong>Test scenarios:</strong> Test expectation: none — content authoring (a markdown doc,
-no behavior). Verified indirectly by U2&#39;s parser tests reading a <code>docs/PRD.md</code>
-fixture.</p>
-<p><strong>Verification:</strong> <code>docs/PRD.md</code> exists, starts with a <code>completion:</code> frontmatter
-block, and reads as high-level requirements (not a detailed plan).</p>
-<hr>
-<h3>U2. Backend — source Project Requirements body + <code>progressPct</code> from <code>docs/PRD.md</code></h3>
-<p><strong>Goal:</strong> Make the backend read the Project Requirements body and the
-<code>progressPct</code> bar value from <code>docs/PRD.md</code> (read-only via the GitHub App), and
-retire the HQ-owned write path.</p>
-<p><strong>Requirements:</strong> Project Requirements tab + bar driven by <code>docs/PRD.md</code>; Detailed
-Requirements unchanged.</p>
-<p><strong>Dependencies:</strong> U1 (a real file to read; tests use fixtures so this is a soft
-dep).</p>
+<p>
+  <strong>Approach:</strong> Author a concise high-level requirements doc (the &quot;what management
+  writes&quot; altitude — the five features from
+  <a href="../specs_overview.html">command-hq-overview.md</a>, as outcome-level bullets, not the
+  detailed breakdown). Seed content from the existing <code>docs/st6_prd.md</code> inspiration where
+  useful, but keep it product-requirement prose, not a plan. Start the file with a
+  <code>---\ncompletion: 0\n---</code> frontmatter block (the placeholder;
+  <code>/hq-update-progress</code> overwrites it). Do <strong>not</strong> delete or move
+  <code>docs/st6_prd.md</code> (it remains the cited inspiration) or the repo-root
+  <code>PRD.md</code> (Project Overview).
+</p>
+<p>
+  <strong>Patterns to follow:</strong> the frontmatter convention used by every
+  <code>docs/plans/</code>
+  doc; the high-level-vs-detailed split described in
+  <a href="./plan_mapping.html">01-plan-mapping.md</a> (&quot;The three altitudes&quot;).
+</p>
+<p>
+  <strong>Test scenarios:</strong> Test expectation: none — content authoring (a markdown doc, no
+  behavior). Verified indirectly by U2&#39;s parser tests reading a
+  <code>docs/PRD.md</code> fixture.
+</p>
+<p>
+  <strong>Verification:</strong> <code>docs/PRD.md</code> exists, starts with a
+  <code>completion:</code> frontmatter block, and reads as high-level requirements (not a detailed
+  plan).
+</p>
+<hr />
+<h3>
+  U2. Backend — source Project Requirements body + <code>progressPct</code> from
+  <code>docs/PRD.md</code>
+</h3>
+<p>
+  <strong>Goal:</strong> Make the backend read the Project Requirements body and the
+  <code>progressPct</code> bar value from <code>docs/PRD.md</code> (read-only via the GitHub App),
+  and retire the HQ-owned write path.
+</p>
+<p>
+  <strong>Requirements:</strong> Project Requirements tab + bar driven by <code>docs/PRD.md</code>;
+  Detailed Requirements unchanged.
+</p>
+<p>
+  <strong>Dependencies:</strong> U1 (a real file to read; tests use fixtures so this is a soft dep).
+</p>
 <p><strong>Files:</strong></p>
 <ul>
-<li><code>packages/backend/src/github/app.ts</code> (modify) — add a small
-<code>readPrdDoc()</code> helper (or inline <code>readFile(&#39;docs/PRD.md&#39;)</code>); change
-<code>readFramingWithCompletion()</code> so <code>progressPct</code> precedence is
-<code>docs/PRD.md</code> completion → <code>docs/plans/</code> top-doc completion → <code>PROGRESS.md</code> →
-<code>0</code>.</li>
-<li><code>packages/backend/src/rest/projects.ts</code> (modify) — repoint
-<code>getProjectRequirements</code> to read <code>docs/PRD.md</code> via the injected GitHub App
-(<code>{ markdown }</code>, <code>{ markdown: &#39;&#39;, stale: true }</code> when no app / unreachable);
-remove <code>putProjectRequirements</code> and its route branch in <code>handler</code>.</li>
-<li><code>packages/backend/src/db/repo.ts</code> (modify) — remove now-dead
-<code>getProjectRequirements</code> / <code>putProjectRequirements</code> methods (and any
-requirements-specific key in <code>db/keys.ts</code>). If removal proves entangled, leaving
-them orphaned is an acceptable fallback — note it in the PR.</li>
-<li><code>packages/backend/src/github/history.ts</code> — <strong>no change</strong> (reuse
-<code>parseCompletionFrontmatter</code>).</li>
-<li>Tests: <code>packages/backend/src/github/app.test.ts</code>,
-<code>packages/backend/src/rest/projects.test.ts</code> (modify);
-remove/replace any <code>putProjectRequirements</code> test; add a <code>docs/PRD.md</code> fixture.</li>
+  <li>
+    <code>packages/backend/src/github/app.ts</code> (modify) — add a small
+    <code>readPrdDoc()</code> helper (or inline <code>readFile(&#39;docs/PRD.md&#39;)</code>);
+    change <code>readFramingWithCompletion()</code> so <code>progressPct</code> precedence is
+    <code>docs/PRD.md</code> completion → <code>docs/plans/</code> top-doc completion →
+    <code>PROGRESS.md</code> → <code>0</code>.
+  </li>
+  <li>
+    <code>packages/backend/src/rest/projects.ts</code> (modify) — repoint
+    <code>getProjectRequirements</code> to read <code>docs/PRD.md</code> via the injected GitHub App
+    (<code>{ markdown }</code>, <code>{ markdown: &#39;&#39;, stale: true }</code> when no app /
+    unreachable); remove <code>putProjectRequirements</code> and its route branch in
+    <code>handler</code>.
+  </li>
+  <li>
+    <code>packages/backend/src/db/repo.ts</code> (modify) — remove now-dead
+    <code>getProjectRequirements</code> / <code>putProjectRequirements</code> methods (and any
+    requirements-specific key in <code>db/keys.ts</code>). If removal proves entangled, leaving them
+    orphaned is an acceptable fallback — note it in the PR.
+  </li>
+  <li>
+    <code>packages/backend/src/github/history.ts</code> — <strong>no change</strong> (reuse
+    <code>parseCompletionFrontmatter</code>).
+  </li>
+  <li>
+    Tests: <code>packages/backend/src/github/app.test.ts</code>,
+    <code>packages/backend/src/rest/projects.test.ts</code> (modify); remove/replace any
+    <code>putProjectRequirements</code> test; add a <code>docs/PRD.md</code> fixture.
+  </li>
 </ul>
-<p><strong>Approach:</strong> <code>readFraming()</code> already reads root <code>PRD.md</code>; add a parallel
-<code>readFile(&#39;docs/PRD.md&#39;)</code> for the new source. In <code>readFramingWithCompletion()</code>,
-compute <code>prdCompletion = parseCompletionFrontmatter(docsPrdMd)</code> and prefer it over
-the existing <code>topCompletion</code>. <code>getProjectRequirements</code> builds the GitHub App via
-the existing <code>deps.githubFor ?? defaultGithubFor</code> pattern (mirror
-<code>getProjectDocContent</code>&#39;s structure for the unreachable/stale branch).</p>
-<p><strong>Patterns to follow:</strong> <code>getProjectDocContent</code> (GitHub App acquisition + stale
-fallback); <code>readFramingWithCompletion</code> (Promise.all + precedence); the read-only,
-never-throw-on-GitHub-failure posture used across <code>rest/projects.ts</code>.</p>
+<p>
+  <strong>Approach:</strong> <code>readFraming()</code> already reads root <code>PRD.md</code>; add
+  a parallel <code>readFile(&#39;docs/PRD.md&#39;)</code> for the new source. In
+  <code>readFramingWithCompletion()</code>, compute
+  <code>prdCompletion = parseCompletionFrontmatter(docsPrdMd)</code> and prefer it over the existing
+  <code>topCompletion</code>. <code>getProjectRequirements</code> builds the GitHub App via the
+  existing <code>deps.githubFor ?? defaultGithubFor</code> pattern (mirror
+  <code>getProjectDocContent</code>&#39;s structure for the unreachable/stale branch).
+</p>
+<p>
+  <strong>Patterns to follow:</strong> <code>getProjectDocContent</code> (GitHub App acquisition +
+  stale fallback); <code>readFramingWithCompletion</code> (Promise.all + precedence); the read-only,
+  never-throw-on-GitHub-failure posture used across <code>rest/projects.ts</code>.
+</p>
 <p><strong>Test scenarios:</strong></p>
 <ul>
-<li><code>readFramingWithCompletion</code>: <code>docs/PRD.md</code> with <code>completion: 42</code> present →
-<code>progressPct === 42</code>, overriding a different <code>docs/plans/</code> top-doc completion.</li>
-<li><code>readFramingWithCompletion</code>: <code>docs/PRD.md</code> absent → falls back to the
-<code>docs/plans/</code> top-doc completion (no regression for repos without <code>docs/PRD.md</code>).</li>
-<li><code>readFramingWithCompletion</code>: neither present → falls back to <code>PROGRESS.md</code> <code>N%</code>,
-then <code>0</code> (existing behavior preserved).</li>
-<li><code>getProjectRequirements</code>: GitHub App returns <code>docs/PRD.md</code> body → response
-<code>{ markdown: &lt;body&gt; }</code>.</li>
-<li><code>getProjectRequirements</code>: no GitHub App (not connected) → <code>{ markdown: &#39;&#39;, stale: true }</code>, <strong>not</strong> a 500.</li>
-<li><code>getProjectRequirements</code>: GitHub App throws (unreachable) → <code>{ markdown: &#39;&#39;, stale: true }</code>, not a 500.</li>
-<li><code>handler</code>: <code>PUT /projects/:id/requirements</code> no longer routes to a write handler
-(404 or method-not-allowed, matching how unknown routes fall through today).</li>
-<li>Covers the contract: Detailed Requirements endpoints (<code>/docs</code>, <code>/docs/content</code>)
-are untouched — a regression test that <code>getProjectDocs</code> still returns the
-<code>docs/plans/</code> tree.</li>
+  <li>
+    <code>readFramingWithCompletion</code>: <code>docs/PRD.md</code> with
+    <code>completion: 42</code> present → <code>progressPct === 42</code>, overriding a different
+    <code>docs/plans/</code> top-doc completion.
+  </li>
+  <li>
+    <code>readFramingWithCompletion</code>: <code>docs/PRD.md</code> absent → falls back to the
+    <code>docs/plans/</code> top-doc completion (no regression for repos without
+    <code>docs/PRD.md</code>).
+  </li>
+  <li>
+    <code>readFramingWithCompletion</code>: neither present → falls back to <code>PROGRESS.md</code>
+    <code>N%</code>, then <code>0</code> (existing behavior preserved).
+  </li>
+  <li>
+    <code>getProjectRequirements</code>: GitHub App returns <code>docs/PRD.md</code> body → response
+    <code>{ markdown: &lt;body&gt; }</code>.
+  </li>
+  <li>
+    <code>getProjectRequirements</code>: no GitHub App (not connected) →
+    <code>{ markdown: &#39;&#39;, stale: true }</code>, <strong>not</strong> a 500.
+  </li>
+  <li>
+    <code>getProjectRequirements</code>: GitHub App throws (unreachable) →
+    <code>{ markdown: &#39;&#39;, stale: true }</code>, not a 500.
+  </li>
+  <li>
+    <code>handler</code>: <code>PUT /projects/:id/requirements</code> no longer routes to a write
+    handler (404 or method-not-allowed, matching how unknown routes fall through today).
+  </li>
+  <li>
+    Covers the contract: Detailed Requirements endpoints (<code>/docs</code>,
+    <code>/docs/content</code>) are untouched — a regression test that
+    <code>getProjectDocs</code> still returns the <code>docs/plans/</code> tree.
+  </li>
 </ul>
-<p><strong>Verification:</strong> Backend suite green; <code>progressPct</code> reflects <code>docs/PRD.md</code>&#39;s
-<code>completion:</code> when present; the requirements read endpoint serves <code>docs/PRD.md</code>;
-the write path is gone.</p>
-<hr>
+<p>
+  <strong>Verification:</strong> Backend suite green; <code>progressPct</code> reflects
+  <code>docs/PRD.md</code>&#39;s <code>completion:</code> when present; the requirements read
+  endpoint serves <code>docs/PRD.md</code>; the write path is gone.
+</p>
+<hr />
 <h3>U3. Web — Project Requirements tab renders <code>docs/PRD.md</code> read-only</h3>
-<p><strong>Goal:</strong> Turn the Project Requirements tab into a read-only GitHub-sourced
-renderer (like Detailed Requirements): drop the inline editor, the <code>✎ Edit</code> flow,
-and the <code>PUT</code> mutation; keep the bar + full-screen reader.</p>
-<p><strong>Requirements:</strong> Project Requirements tab pulls from <code>docs/PRD.md</code>; read-only.</p>
+<p>
+  <strong>Goal:</strong> Turn the Project Requirements tab into a read-only GitHub-sourced renderer
+  (like Detailed Requirements): drop the inline editor, the <code>✎ Edit</code> flow, and the
+  <code>PUT</code> mutation; keep the bar + full-screen reader.
+</p>
+<p>
+  <strong>Requirements:</strong> Project Requirements tab pulls from <code>docs/PRD.md</code>;
+  read-only.
+</p>
 <p><strong>Dependencies:</strong> U2 (endpoint now serves <code>docs/PRD.md</code>).</p>
 <p><strong>Files:</strong></p>
 <ul>
-<li><code>packages/web/src/screens/ProjectDetail/ProjectRequirements.tsx</code> (modify) —
-remove <code>editing</code>/<code>draft</code> state, <code>startEdit</code>/<code>onSave</code>, the <code>✎ Edit</code> button, the
-editor <code>&lt;textarea&gt;</code>, and the <code>usePutProjectRequirementsMutation</code> import/use.
-Keep <code>useGetProjectRequirementsQuery</code> (now GitHub-sourced), the <code>Bar</code>, and the
-full-screen reader. Update copy: subtitle/label to reflect &quot;from GitHub
-<code>docs/PRD.md</code>, read-only&quot; and the completion source. <code>ProjectRequirementsFull</code>
-is already read-only — leave its logic, refresh copy only.</li>
-<li><code>packages/web/src/api/baseApi.ts</code> (modify) — remove the
-<code>putProjectRequirements</code> mutation + its export <code>usePutProjectRequirementsMutation</code>;
-keep <code>getProjectRequirements</code>. Optionally surface <code>stale</code> on <code>ProjectRequirements</code>.</li>
-<li>Tests: <code>packages/web/src/screens/ProjectDetail/ProjectRequirements.test.tsx</code>
-(modify) — drop edit/save assertions; add read-only + render-from-endpoint
-assertions.</li>
+  <li>
+    <code>packages/web/src/screens/ProjectDetail/ProjectRequirements.tsx</code> (modify) — remove
+    <code>editing</code>/<code>draft</code> state, <code>startEdit</code>/<code>onSave</code>, the
+    <code>✎ Edit</code> button, the editor <code>&lt;textarea&gt;</code>, and the
+    <code>usePutProjectRequirementsMutation</code> import/use. Keep
+    <code>useGetProjectRequirementsQuery</code> (now GitHub-sourced), the <code>Bar</code>, and the
+    full-screen reader. Update copy: subtitle/label to reflect &quot;from GitHub
+    <code>docs/PRD.md</code>, read-only&quot; and the completion source.
+    <code>ProjectRequirementsFull</code> is already read-only — leave its logic, refresh copy only.
+  </li>
+  <li>
+    <code>packages/web/src/api/baseApi.ts</code> (modify) — remove the
+    <code>putProjectRequirements</code> mutation + its export
+    <code>usePutProjectRequirementsMutation</code>; keep <code>getProjectRequirements</code>.
+    Optionally surface <code>stale</code> on <code>ProjectRequirements</code>.
+  </li>
+  <li>
+    Tests: <code>packages/web/src/screens/ProjectDetail/ProjectRequirements.test.tsx</code> (modify)
+    — drop edit/save assertions; add read-only + render-from-endpoint assertions.
+  </li>
 </ul>
-<p><strong>Approach:</strong> Mechanical removal of the edit affordances; the read + bar paths
-already exist. Make sure no remaining reference to the removed mutation breaks the
-build (grep <code>usePutProjectRequirementsMutation</code>).</p>
-<p><strong>Patterns to follow:</strong> <code>DetailedRequirements.tsx</code> (read-only, GitHub-sourced
-render with a <code>Bar</code>); the existing <code>MarkdownView</code> usage already in this file.</p>
+<p>
+  <strong>Approach:</strong> Mechanical removal of the edit affordances; the read + bar paths
+  already exist. Make sure no remaining reference to the removed mutation breaks the build (grep
+  <code>usePutProjectRequirementsMutation</code>).
+</p>
+<p>
+  <strong>Patterns to follow:</strong> <code>DetailedRequirements.tsx</code> (read-only,
+  GitHub-sourced render with a <code>Bar</code>); the existing <code>MarkdownView</code> usage
+  already in this file.
+</p>
 <p><strong>Test scenarios:</strong></p>
 <ul>
-<li>Renders the markdown returned by <code>getProjectRequirements</code> (mock returns a
-<code>docs/PRD.md</code> body) in a <code>MarkdownView</code>.</li>
-<li>The bar shows <code>project.progressPct</code>.</li>
-<li>No <code>✎ Edit</code> button / editor <code>&lt;textarea&gt;</code> is present (read-only).</li>
-<li>Empty body → the &quot;No requirements yet&quot; empty state still renders (now phrased
-for the GitHub-sourced case, e.g. &quot;No <code>docs/PRD.md</code> found&quot;).</li>
-<li>Full-screen reader route still renders the body read-only.</li>
+  <li>
+    Renders the markdown returned by <code>getProjectRequirements</code> (mock returns a
+    <code>docs/PRD.md</code> body) in a <code>MarkdownView</code>.
+  </li>
+  <li>The bar shows <code>project.progressPct</code>.</li>
+  <li>
+    No <code>✎ Edit</code> button / editor <code>&lt;textarea&gt;</code> is present (read-only).
+  </li>
+  <li>
+    Empty body → the &quot;No requirements yet&quot; empty state still renders (now phrased for the
+    GitHub-sourced case, e.g. &quot;No <code>docs/PRD.md</code> found&quot;).
+  </li>
+  <li>Full-screen reader route still renders the body read-only.</li>
 </ul>
-<p><strong>Verification:</strong> Web suite green; the tab renders <code>docs/PRD.md</code> with a progress
-bar and no editing UI; no dangling references to the removed mutation.</p>
-<hr>
-<h3>U4. Skill — extend <code>/hq-update-progress</code> to audit + write <code>docs/PRD.md</code></h3>
-<p><strong>Goal:</strong> Make the local skill compute and write <code>docs/PRD.md</code>&#39;s <code>completion:</code>
-frontmatter (the Project Requirements headline number) alongside the existing
-<code>docs/plans/**</code> audit, and push it.</p>
-<p><strong>Requirements:</strong> Project Requirements bar updates from real code progress, driven
-by the same local skill.</p>
-<p><strong>Dependencies:</strong> U1 (the file to write into); conceptually pairs with U2 (the
-backend that reads it).</p>
+<p>
+  <strong>Verification:</strong> Web suite green; the tab renders <code>docs/PRD.md</code> with a
+  progress bar and no editing UI; no dangling references to the removed mutation.
+</p>
+<hr />
+<h3>
+  U4. Skill — extend <code>/hq-update-progress</code> to audit + write <code>docs/PRD.md</code>
+</h3>
+<p>
+  <strong>Goal:</strong> Make the local skill compute and write <code>docs/PRD.md</code>&#39;s
+  <code>completion:</code>
+  frontmatter (the Project Requirements headline number) alongside the existing
+  <code>docs/plans/**</code> audit, and push it.
+</p>
+<p>
+  <strong>Requirements:</strong> Project Requirements bar updates from real code progress, driven by
+  the same local skill.
+</p>
+<p>
+  <strong>Dependencies:</strong> U1 (the file to write into); conceptually pairs with U2 (the
+  backend that reads it).
+</p>
 <p><strong>Files:</strong></p>
 <ul>
-<li><code>.claude/skills/hq-update-progress/SKILL.md</code> (modify) — add <code>docs/PRD.md</code> to the
-audited set: step 1 (locate) includes <code>docs/PRD.md</code> as the <strong>Project
-Requirements headline</strong>; step 5 (compute) scores <code>docs/PRD.md</code> from code-vs its
-high-level requirements; step 6 (write) updates its frontmatter; step 7 (commit)
-stages <code>docs/PRD.md</code> in addition to <code>docs/plans/**</code>; step 8 (report) lists it.
-Update the &quot;what HQ shows&quot; framing: <strong>Project Requirements bar ← <code>docs/PRD.md</code>
-completion; Detailed Requirements ← <code>docs/plans/</code> headline</strong> (today&#39;s text says
-both come from the <code>docs/plans/</code> headline — correct that).</li>
+  <li>
+    <code>.claude/skills/hq-update-progress/SKILL.md</code> (modify) — add
+    <code>docs/PRD.md</code> to the audited set: step 1 (locate) includes
+    <code>docs/PRD.md</code> as the <strong>Project Requirements headline</strong>; step 5 (compute)
+    scores <code>docs/PRD.md</code> from code-vs its high-level requirements; step 6 (write) updates
+    its frontmatter; step 7 (commit) stages <code>docs/PRD.md</code> in addition to
+    <code>docs/plans/**</code>; step 8 (report) lists it. Update the &quot;what HQ shows&quot;
+    framing:
+    <strong
+      >Project Requirements bar ← <code>docs/PRD.md</code> completion; Detailed Requirements ←
+      <code>docs/plans/</code> headline</strong
+    >
+    (today&#39;s text says both come from the <code>docs/plans/</code> headline — correct that).
+  </li>
 </ul>
-<p><strong>Approach:</strong> Documentation/skill authoring only. Keep the advisory-DoD, never-
-block posture intact. Make the headline/altitude split explicit so the skill&#39;s
-mental model matches U2&#39;s precedence (PRD = Project Requirements, plans =
-Detailed).</p>
-<p><strong>Patterns to follow:</strong> the existing step structure + worked dry-run example in
-the same file.</p>
-<p><strong>Test scenarios:</strong> Test expectation: none — SKILL.md authoring. Verified by
-running <code>/hq-update-progress</code> locally: it edits <code>docs/PRD.md</code>&#39;s <code>completion:</code>,
-pushes, and the Project Requirements bar reflects the pushed number after an HQ
-refresh.</p>
-<p><strong>Verification:</strong> The skill&#39;s steps name <code>docs/PRD.md</code>; a local run writes its
-<code>completion:</code> and the compliance report lists it.</p>
-<hr>
+<p>
+  <strong>Approach:</strong> Documentation/skill authoring only. Keep the advisory-DoD, never- block
+  posture intact. Make the headline/altitude split explicit so the skill&#39;s mental model matches
+  U2&#39;s precedence (PRD = Project Requirements, plans = Detailed).
+</p>
+<p>
+  <strong>Patterns to follow:</strong> the existing step structure + worked dry-run example in the
+  same file.
+</p>
+<p>
+  <strong>Test scenarios:</strong> Test expectation: none — SKILL.md authoring. Verified by running
+  <code>/hq-update-progress</code> locally: it edits <code>docs/PRD.md</code>&#39;s
+  <code>completion:</code>, pushes, and the Project Requirements bar reflects the pushed number
+  after an HQ refresh.
+</p>
+<p>
+  <strong>Verification:</strong> The skill&#39;s steps name <code>docs/PRD.md</code>; a local run
+  writes its <code>completion:</code> and the compliance report lists it.
+</p>
+<hr />
 <h3>U5. Reconcile contract docs + <code>/hq-init-command-hq</code></h3>
-<p><strong>Goal:</strong> Keep the source-of-truth docs honest: Project Requirements is now a
-<strong>repo file (<code>docs/PRD.md</code>)</strong>, no longer HQ-owned, and the scaffolder creates it.</p>
-<p><strong>Requirements:</strong> Documentation reflects the new contract; a freshly connected
-repo scaffolds <code>docs/PRD.md</code>.</p>
+<p>
+  <strong>Goal:</strong> Keep the source-of-truth docs honest: Project Requirements is now a
+  <strong>repo file (<code>docs/PRD.md</code>)</strong>, no longer HQ-owned, and the scaffolder
+  creates it.
+</p>
+<p>
+  <strong>Requirements:</strong> Documentation reflects the new contract; a freshly connected repo
+  scaffolds <code>docs/PRD.md</code>.
+</p>
 <p><strong>Dependencies:</strong> U2–U4 (the behavior the docs now describe).</p>
 <p><strong>Files:</strong></p>
 <ul>
-<li><code>.claude/skills/hq-init-command-hq/SKILL.md</code> (modify) — add a step to scaffold
-<code>docs/PRD.md</code> (with <code>completion: 0</code> frontmatter + a placeholder high-level
-body) only if missing; update the &quot;What each tab reads&quot; table so Project
-Requirements (body <strong>and</strong> bar) maps to <code>docs/PRD.md</code>; remove the &quot;Project
-Requirements body is HQ-owned, fill it in inside HQ&quot; follow-up.</li>
-<li><code>docs/plans/command-hq/01-plan-mapping.md</code> (modify) — update altitude 2
-(Project Requirements) from &quot;a single markdown file owned by Command HQ&quot; to
-&quot;repo file <code>docs/PRD.md</code>, rendered read-only from GitHub&quot;; update &quot;Where
-completion lives&quot; so the Project Requirements bar = <code>docs/PRD.md</code> completion and
-the Detailed root = <code>docs/plans/</code> headline.</li>
-<li><code>docs/plans/command-hq-overview.md</code> (modify) — update the ASCII &quot;how the pieces
-fit&quot; diagram + the &quot;Source of truth&quot; line so Project Requirements is GitHub-
-sourced (<code>docs/PRD.md</code>), not HQ-owned.</li>
+  <li>
+    <code>.claude/skills/hq-init-command-hq/SKILL.md</code> (modify) — add a step to scaffold
+    <code>docs/PRD.md</code> (with <code>completion: 0</code> frontmatter + a placeholder high-level
+    body) only if missing; update the &quot;What each tab reads&quot; table so Project Requirements
+    (body <strong>and</strong> bar) maps to <code>docs/PRD.md</code>; remove the &quot;Project
+    Requirements body is HQ-owned, fill it in inside HQ&quot; follow-up.
+  </li>
+  <li>
+    <code>docs/plans/command-hq/01-plan-mapping.md</code> (modify) — update altitude 2 (Project
+    Requirements) from &quot;a single markdown file owned by Command HQ&quot; to &quot;repo file
+    <code>docs/PRD.md</code>, rendered read-only from GitHub&quot;; update &quot;Where completion
+    lives&quot; so the Project Requirements bar = <code>docs/PRD.md</code> completion and the
+    Detailed root = <code>docs/plans/</code> headline.
+  </li>
+  <li>
+    <code>docs/plans/command-hq-overview.md</code> (modify) — update the ASCII &quot;how the pieces
+    fit&quot; diagram + the &quot;Source of truth&quot; line so Project Requirements is GitHub-
+    sourced (<code>docs/PRD.md</code>), not HQ-owned.
+  </li>
 </ul>
-<p><strong>Approach:</strong> Documentation reconciliation. Be precise about the two PRD files
-(root <code>PRD.md</code> = Project Overview; <code>docs/PRD.md</code> = Project Requirements) to avoid
-confusion (KTD-C).</p>
-<p><strong>Test scenarios:</strong> Test expectation: none — documentation. (<code>/hq-init-command-hq</code>
-is a doc/skill; its scaffolding is verified by running it in a repo missing
-<code>docs/PRD.md</code>.)</p>
-<p><strong>Verification:</strong> No doc still describes Project Requirements as HQ-owned; the init
-skill scaffolds <code>docs/PRD.md</code>; the two PRD files are clearly distinguished.</p>
-<hr>
+<p>
+  <strong>Approach:</strong> Documentation reconciliation. Be precise about the two PRD files (root
+  <code>PRD.md</code> = Project Overview; <code>docs/PRD.md</code> = Project Requirements) to avoid
+  confusion (KTD-C).
+</p>
+<p>
+  <strong>Test scenarios:</strong> Test expectation: none — documentation. (<code
+    >/hq-init-command-hq</code
+  >
+  is a doc/skill; its scaffolding is verified by running it in a repo missing
+  <code>docs/PRD.md</code>.)
+</p>
+<p>
+  <strong>Verification:</strong> No doc still describes Project Requirements as HQ-owned; the init
+  skill scaffolds <code>docs/PRD.md</code>; the two PRD files are clearly distinguished.
+</p>
+<hr />
 <h2>System-wide impact</h2>
 <ul>
-<li><strong>Objectives roll-up</strong> (<code>packages/backend/src/projections/rollup.ts</code>) consumes
-<code>progressPct</code>. Its math is unchanged, but its input now reflects <code>docs/PRD.md</code>
-(high level) rather than the <code>docs/plans/</code> top doc. This is intended (KTD-A) and
-is the more correct altitude, but it shifts the displayed roll-up number for any
-connected project — call it out in the PR.</li>
-<li><strong>Repos without <code>docs/PRD.md</code></strong> must not regress: the fallback chain (KTD-A)
-preserves today&#39;s behavior until a <code>docs/PRD.md</code> exists. U2&#39;s fallback tests
-guard this.</li>
-<li><strong>Weekly</strong> (<code>rest/weekly.ts</code>) is independent of this change (it round-trips a
-client-posted report) — no impact.</li>
+  <li>
+    <strong>Objectives roll-up</strong> (<code>packages/backend/src/projections/rollup.ts</code>)
+    consumes <code>progressPct</code>. Its math is unchanged, but its input now reflects
+    <code>docs/PRD.md</code> (high level) rather than the <code>docs/plans/</code> top doc. This is
+    intended (KTD-A) and is the more correct altitude, but it shifts the displayed roll-up number
+    for any connected project — call it out in the PR.
+  </li>
+  <li>
+    <strong>Repos without <code>docs/PRD.md</code></strong> must not regress: the fallback chain
+    (KTD-A) preserves today&#39;s behavior until a <code>docs/PRD.md</code> exists. U2&#39;s
+    fallback tests guard this.
+  </li>
+  <li>
+    <strong>Weekly</strong> (<code>rest/weekly.ts</code>) is independent of this change (it
+    round-trips a client-posted report) — no impact.
+  </li>
 </ul>
 <h2>Risks &amp; mitigations</h2>
 <ul>
-<li><strong>Two-PRD confusion</strong> (root <code>PRD.md</code> vs <code>docs/PRD.md</code>). Mitigation: KTD-C + explicit
-contract-table updates in U5.</li>
-<li><strong>Dead-code removal entanglement</strong> (the DynamoDB requirements methods/keys).
-Mitigation: U2 allows leaving them orphaned with a PR note if removal is messy.</li>
-<li><strong>Stale bar after a <code>docs/PRD.md</code> edit</strong> until an HQ refresh. This matches
-existing behavior for all GitHub-sourced data (refresh-on-read); no new risk.</li>
+  <li>
+    <strong>Two-PRD confusion</strong> (root <code>PRD.md</code> vs <code>docs/PRD.md</code>).
+    Mitigation: KTD-C + explicit contract-table updates in U5.
+  </li>
+  <li>
+    <strong>Dead-code removal entanglement</strong> (the DynamoDB requirements methods/keys).
+    Mitigation: U2 allows leaving them orphaned with a PR note if removal is messy.
+  </li>
+  <li>
+    <strong>Stale bar after a <code>docs/PRD.md</code> edit</strong> until an HQ refresh. This
+    matches existing behavior for all GitHub-sourced data (refresh-on-read); no new risk.
+  </li>
 </ul>
 <h2>Open questions (deferred to implementation)</h2>
 <ul>
-<li>Exact seed content/length of <code>docs/PRD.md</code> (U1) — an authoring choice, resolved
-when writing it.</li>
-<li>Whether to remove vs orphan the DynamoDB requirements methods (U2) — decided at
-implementation time based on coupling.</li>
+  <li>
+    Exact seed content/length of <code>docs/PRD.md</code> (U1) — an authoring choice, resolved when
+    writing it.
+  </li>
+  <li>
+    Whether to remove vs orphan the DynamoDB requirements methods (U2) — decided at implementation
+    time based on coupling.
+  </li>
 </ul>
-

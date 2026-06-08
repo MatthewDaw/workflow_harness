@@ -31,7 +31,6 @@ export function applyEventToProjection(
         agent: env.event.agent,
         status: 'active',
         tokens: 0,
-        costUsd: 0,
         startedAt: env.ts,
         lastEventAt: env.ts,
         maxSeq: env.seq,
@@ -48,10 +47,6 @@ export function applyEventToProjection(
       break;
     case 'status.change':
       next.status = e.to;
-      break;
-    case 'cost.tick':
-      next.costUsd = e.totalUsd;
-      next.tokens = e.tokens;
       break;
     case 'user.msg':
     case 'assistant.msg':
@@ -76,8 +71,7 @@ export const liveMiddleware: Middleware = (store) => {
     }
   };
 
-  const isLiveStatus = (status: string): boolean =>
-    status === 'active' || status === 'needs_input';
+  const isLiveStatus = (status: string): boolean => status === 'active' || status === 'needs_input';
 
   const foldEvent = (env: Envelope) => {
     const sessionId = env.event.sessionId;
@@ -94,7 +88,9 @@ export const liveMiddleware: Middleware = (store) => {
     // cached list row, else a bootstrap from a session.start event.
     const state = store.getState() as never;
     const knownProjection: SessionProjection | undefined =
-      (baseApi.endpoints.getSession.select(sessionId)(state).data as SessionProjection | undefined) ??
+      (baseApi.endpoints.getSession.select(sessionId)(state).data as
+        | SessionProjection
+        | undefined) ??
       findInLists(state, sessionId) ??
       applyEventToProjection(undefined, env);
 

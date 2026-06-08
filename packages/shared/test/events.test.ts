@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  envelopeSchema,
-  parseEnvelope,
-  safeParseEnvelope,
-  type EventKind,
-} from '../src/events.js';
+import { envelopeSchema, parseEnvelope, safeParseEnvelope, type EventKind } from '../src/events.js';
 import golden from './golden/event-envelope.json' with { type: 'json' };
 
 describe('event envelope schema', () => {
@@ -17,7 +12,6 @@ describe('event envelope schema', () => {
       'assistant.msg',
       'tool.call',
       'tool.result',
-      'cost.tick',
       'status.change',
       'session.heartbeat',
       'session.topic',

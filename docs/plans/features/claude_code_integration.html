@@ -7,98 +7,208 @@ feature: claude-code-integration
 ---
 
 <h1>Feature 3 — Claude Code Integration (org catalog, per-project opt-in, live sessions)</h1>
-<p>How Command HQ shows the agents/skills available to a developer as a single
-<strong>org catalog</strong>, how each project <strong>opts in</strong> to the skills/agents it wants, and
-how active sessions are shown and steered.</p>
+<p>
+  How Command HQ shows the agents/skills available to a developer as a single
+  <strong>org catalog</strong>, how each project <strong>opts in</strong> to the skills/agents it
+  wants, and how active sessions are shown and steered.
+</p>
 <blockquote>
-<p><strong>Model change (2026-06-03):</strong> the old 3-tier scope (repo / user / team) with
-narrowest-wins resolution and scope promotion/demotion is <strong>retired</strong> for skills
-and agents. Skills and agents are now a single <strong>org-scoped catalog</strong>; projects
-turn individual items on via <code>enabledSkills</code> / <code>enabledAgents</code>. See the full
-<a href="../../superpowers/specs/2026-06-03-org-catalog-scope-collapse-design.md">org-catalog design spec</a>.</p>
+  <p>
+    <strong>Model change (2026-06-03):</strong> the old 3-tier scope (repo / user / team) with
+    narrowest-wins resolution and scope promotion/demotion is <strong>retired</strong> for skills
+    and agents. Skills and agents are now a single <strong>org-scoped catalog</strong>; projects
+    turn individual items on via <code>enabledSkills</code> / <code>enabledAgents</code>. See the
+    full
+    <a href="../../superpowers/specs/2026-06-03-org-catalog-scope-collapse-design.md"
+      >org-catalog design spec</a
+    >.
+  </p>
 </blockquote>
 <h2>Registered agents &amp; skills in HQ</h2>
-<p>Agents and skills the developer uses are registered and visible in HQ as a
-browsable catalog, including <strong>bundles</strong> (a named set of skills; bundles can
-nest).</p>
-<p><em>Code today:</em> <code>rest/agents.ts</code>, <code>rest/skills.ts</code>; UI <code>screens/Agents/Agents.tsx</code>,
-<code>screens/Skills/Skills.tsx</code>, <code>screens/Skills/SkillBundle.tsx</code>. The wrapper keeps
-the local registry in sync (<code>wrapper/internal/config/</code>): each agent or skill is a
-content-hashed <code>Item</code>; drift is push/pull/reconciled. <strong>As built, the wrapper reads
-the union of <code>~/.claude</code> (the user&#39;s own) and the isolated <code>~/.claude+</code>
-(product-bundled) when computing drift, but only ever materializes pulled items
-into <code>~/.claude+</code></strong> — see <a href="./claude_cli_wrapper.html">04</a> (isolated config root).
-HQ shows the product-bundled skills out of the box via the org-scope
-<code>command-hq-starter</code> seed (<code>packages/backend/src/seed/skills.ts</code>,
-<code>infra/scripts/seed-skills.mjs</code>), independent of any connected device.</p>
+<p>
+  Agents and skills the developer uses are registered and visible in HQ as a browsable catalog,
+  including <strong>bundles</strong> (a named set of skills; bundles can nest).
+</p>
+<p>
+  <em>Code today:</em> <code>rest/agents.ts</code>, <code>rest/skills.ts</code>; UI
+  <code>screens/Agents/Agents.tsx</code>, <code>screens/Skills/Skills.tsx</code>,
+  <code>screens/Skills/SkillBundle.tsx</code>. The wrapper keeps the local registry in sync
+  (<code>wrapper/internal/config/</code>): each agent or skill is a content-hashed
+  <code>Item</code>; drift is push/pull/reconciled.
+  <strong
+    >As built, the wrapper reads the union of <code>~/.claude</code> (the user&#39;s own) and the
+    isolated <code>~/.claude+</code> (product-bundled) when computing drift, but only ever
+    materializes pulled items into <code>~/.claude+</code></strong
+  >
+  — see <a href="./claude_cli_wrapper.html">04</a> (isolated config root). HQ shows the
+  product-bundled skills out of the box via the org-scope <code>command-hq-starter</code> seed
+  (<code>packages/backend/src/seed/skills.ts</code>, <code>infra/scripts/seed-skills.mjs</code>),
+  independent of any connected device.
+</p>
 <h2>Org catalog + per-project opt-in</h2>
-<p>There are no scope tiers for skills and agents anymore. Every skill and agent is
-<strong>org-scoped</strong> (<code>scope: { tier: &quot;org&quot;, id: &quot;&lt;org&gt;&quot; }</code>) and lives in one shared
-<strong>org catalog</strong>. A project then chooses which of those items it wants:</p>
+<p>
+  There are no scope tiers for skills and agents anymore. Every skill and agent is
+  <strong>org-scoped</strong> (<code
+    >scope: { tier: &quot;org&quot;, id: &quot;&lt;org&gt;&quot; }</code
+  >) and lives in one shared <strong>org catalog</strong>. A project then chooses which of those
+  items it wants:
+</p>
 <ul>
-<li><strong>One catalog.</strong> <code>GET /skills</code> and <code>GET /agents</code> return the whole org catalog —
-no <code>?project</code> param, no <code>resolveScoped</code>. <em>Code:</em> <code>rest/skills.ts</code>, <code>rest/agents.ts</code>;
-keys forced to <code>SCOPE#org#&lt;org&gt;</code> via <code>orgScope(org)</code> (<code>db/keys.ts</code>).</li>
-<li><strong>Admin-gated writes.</strong> <code>POST/PUT/DELETE /skills</code> and <code>/agents</code> are org-only and
-admin-gated; the server forces <code>scope = orgScope(principal.org)</code> and stamps
-<code>createdBy: { userId, name }</code> from the authenticated principal on create.</li>
-<li><strong>Per-project opt-in.</strong> A <code>Project</code> carries <code>enabledSkills: string[]</code> and
-<code>enabledAgents: string[]</code> (skill/agent names; default <code>[]</code>). A project owner or
-org admin toggles them:<ul>
-<li><code>POST|DELETE /projects/:id/skills/:name</code> — add/remove a skill directly (no agent
-needed).</li>
-<li><code>POST|DELETE /projects/:id/agents/:name</code> — enable/disable an agent. <strong>Enabling an
-agent UNIONS that agent&#39;s declared <code>skills</code> into <code>enabledSkills</code></strong> (de-duped;
-bundles among them flattened transitively to leaf member skills), so the agent&#39;s
-dependencies come along automatically. Disabling an agent removes it from
-<code>enabledAgents</code> but does <strong>not</strong> prune <code>enabledSkills</code> (a skill may also be
-enabled directly or brought by another agent).</li>
+  <li>
+    <strong>One catalog.</strong> <code>GET /skills</code> and <code>GET /agents</code> return the
+    whole org catalog — no <code>?project</code> param, no <code>resolveScoped</code>.
+    <em>Code:</em> <code>rest/skills.ts</code>, <code>rest/agents.ts</code>; keys forced to
+    <code>SCOPE#org#&lt;org&gt;</code> via <code>orgScope(org)</code> (<code>db/keys.ts</code>).
+  </li>
+  <li>
+    <strong>Admin-gated writes.</strong> <code>POST/PUT/DELETE /skills</code> and
+    <code>/agents</code> are org-only and admin-gated; the server forces
+    <code>scope = orgScope(principal.org)</code> and stamps
+    <code>createdBy: { userId, name }</code> from the authenticated principal on create.
+  </li>
+  <li>
+    <strong>Per-project opt-in.</strong> A <code>Project</code> carries
+    <code>enabledSkills: string[]</code>, <code>enabledAgents: string[]</code>,
+    <code>enabledMcpServers: string[]</code>, and <code>enabledBundles: string[]</code> (catalog item
+    names; default <code>[]</code> each). <code>enabledSkills</code> is the flat
+    <strong>materialization set</strong> the daemon writes to <code>~/.claude+</code>;
+    <code>enabledBundles</code> is an <strong>intent annotation</strong> layered over it (see below).
+    A project owner or org admin toggles them:
+    <ul>
+      <li>
+        <code>POST|DELETE /projects/:id/skills/:name</code> — add/remove a skill directly (no agent
+        needed).
+      </li>
+      <li>
+        <code>POST|DELETE /projects/:id/agents/:name</code> — enable/disable an agent.
+        <strong
+          >Enabling an agent UNIONS that agent&#39;s declared <code>skills</code> into
+          <code>enabledSkills</code></strong
+        >
+        (de-duped; bundles among them flattened transitively to leaf member skills), so the
+        agent&#39;s dependencies come along automatically. Disabling an agent removes it from
+        <code>enabledAgents</code> but does <strong>not</strong> prune <code>enabledSkills</code> (a
+        skill may also be enabled directly or brought by another agent).
+      </li>
+      <li>
+        <code>POST|DELETE /projects/:id/bundles/:name</code> — enable/disable a whole
+        <strong>bundle as a unit</strong>. <code>enabledBundles</code> only records that the user
+        added the <em>whole</em> bundle (the UI can then tell a whole-bundle add from individually
+        picked members); the bundle&#39;s member skills are <strong>always also unioned</strong> into
+        the flat <code>enabledSkills</code> set the daemon materializes. The name must resolve to a
+        catalog entry of <code>kind: &quot;bundle&quot;</code> (a leaf skill name or unknown name is
+        a <code>404</code> — you cannot &quot;bundle-enable&quot; a single skill); the REST layer
+        flattens the bundle transitively to leaf members and adds them in one read-modify-write.
+        <strong>On DELETE, member accounting:</strong> the bundle intent is cleared and the leaf
+        skills it contributed are stripped from <code>enabledSkills</code> —
+        <em>except any leaf still covered by another still-enabled bundle</em> (a member shared
+        between two enabled bundles survives). A bundle that has since vanished from the catalog still
+        clears its intent (with no leaves to strip), so a project can never be stuck holding a dead
+        bundle reference.
+      </li>
+      <li>
+        <code>POST|DELETE /projects/:id/mcp-servers/:name</code> — add/remove an MCP server directly
+        (flat; MCP servers have no bundle concept). See the
+        <a href="../2026-06-07-001-feat-mcp-servers-tab-plan.md">MCP Servers plan</a>.
+      </li>
+    </ul>
+  </li>
+  <li>
+    <strong>No promotion / demotion.</strong> The scope-change endpoint
+    (<code>changeAgentScope</code>/<code>changeSkillScope</code>) is
+    <strong>retired</strong> (returns <code>410 Gone</code> / route removed); there is no tier to
+    elevate or demote between.
+  </li>
+  <li>
+    AgentForge (<a href="./agentforge.html">feature 5</a>) registers its distilled agents into the
+    <strong>org catalog</strong>; an admin then enables them per project.
+  </li>
 </ul>
-</li>
-<li><strong>No promotion / demotion.</strong> The scope-change endpoint
-(<code>changeAgentScope</code>/<code>changeSkillScope</code>) is <strong>retired</strong> (returns <code>410 Gone</code> / route
-removed); there is no tier to elevate or demote between.</li>
-<li>AgentForge (<a href="./agentforge.html">feature 5</a>) registers its distilled agents into
-the <strong>org catalog</strong>; an admin then enables them per project.</li>
-</ul>
-<p>A connected repo materializes <strong>only the linked project&#39;s</strong> enabled sets into
-<code>~/.claude+</code>: the wrapper fetches the full org catalog, then keeps just the items
-named in that project&#39;s <code>enabledSkills</code> / <code>enabledAgents</code> — see
-<a href="./claude_cli_wrapper.html">04</a> (isolated config root). Because an agent&#39;s skills were union-added into
-<code>enabledSkills</code> when it was enabled, no extra expansion is needed at sync time.</p>
+<p>
+  A connected repo materializes <strong>only the linked project&#39;s</strong> enabled sets into
+  <code>~/.claude+</code>: the wrapper fetches the full org catalog, then keeps just the items named
+  in that project&#39;s <code>enabledSkills</code> / <code>enabledAgents</code> — see
+  <a href="./claude_cli_wrapper.html">04</a> (isolated config root). Because an agent&#39;s skills
+  were union-added into <code>enabledSkills</code> when it was enabled, no extra expansion is needed
+  at sync time.
+</p>
+<h2>Adding to a project — the CatalogPicker modal</h2>
+<p>
+  Each project&#39;s <strong>Skills</strong>, <strong>MCP Servers</strong>, and
+  <strong>Agents</strong> sub-tab carries a single <strong>&quot;+ Add to project&quot;</strong>
+  button that opens a shared <strong>CatalogPicker</strong> modal listing the whole org catalog
+  (<code>web/src/components/CatalogPicker.tsx</code>). Inside the modal the user
+  <strong>stages</strong> add/remove toggles against the project&#39;s current enabled set and then
+  clicks <strong>Apply</strong> — nothing is written until Apply. On the Skills tab a
+  <strong>bundle</strong> shows as one row that can be added <em>whole</em> or
+  <strong>expanded</strong> to pick individual member skills; the rows that are ON when the modal
+  opens are each enabled bundle (as a bundle ref) plus each enabled skill not already covered by an
+  enabled bundle.
+</p>
+<p>
+  On Apply the staged diff is fanned back out to the per-type opt-in mutations
+  (<code>enable/disableProjectSkill</code>, <code>…Bundle</code>, <code>…McpServer</code>). Because
+  <strong>every opt-in mutation does a full read-modify-write of the single project META record</strong>,
+  the diff MUST be applied <strong>SEQUENTIALLY</strong> (await each before the next) — firing them
+  concurrently would clobber each other&#39;s writes. Order matters too: on enable, bundles are
+  processed before individual skills (so a bundle&#39;s members are unioned first); on disable,
+  individual skills before bundles (strip members before removing the whole bundle). A
+  <code>404</code> during Apply means a name isn&#39;t in the org catalog — the modal surfaces it and
+  points the user at <code>/hq-add-skill</code> to register it.
+  <em>Code:</em> <code>screens/ProjectDetail/{ProjectSkills,ProjectMcpServers,ProjectAgents}.tsx</code>,
+  <code>components/CatalogPicker.tsx</code>, <code>components/SkillCatalog.tsx</code>.
+</p>
 <h2>Active sessions — show and steer</h2>
 <ul>
-<li><strong>Show:</strong> a live list (live pinned, then newest), per project and globally.
-<em>Code:</em> <code>rest/sessions.ts</code>, <code>screens/Sessions/*</code>, <code>screens/LiveWatch/LiveWatch.tsx</code>;
-live data arrives over a WebSocket middleware (<code>web/src/ws/liveMiddleware.ts</code>).</li>
-<li><strong>Steer:</strong> from HQ you can <strong>inject a message / pause / interrupt / shut down /
-kill</strong> a live session. Because the daemon holds a persistent <em>outbound</em>
-WebSocket, HQ routes a control frame down to it — no inbound ports needed (single
-laptop; the daemon dials out). Every control frame is authorized (the requester
-must own the target session).
-<em>Code:</em> <code>ws/control.ts</code>, <code>rest/sessions.ts</code> <code>sendControl</code>; on the daemon the
-inbound control <code>payload</code> is decoded as an <strong>object</strong> (<code>transport/wsclient.go</code> →
-<code>msg.Payload.Text</code>) and applied by <code>transport/control.go</code>&#39;s <code>Receiver</code>, which
-supports <code>inject</code>/<code>pause</code>/<code>interrupt</code>/<code>shutdown</code> (SIGTERM + force fallback)/<code>kill</code>.
-The <strong>control gateway</strong> is described in <a href="./platform_architecture.html">platform</a>.</li>
+  <li>
+    <strong>Show:</strong> a live list (live pinned, then newest), per project and globally.
+    <em>Code:</em> <code>rest/sessions.ts</code>, <code>screens/Sessions/*</code>,
+    <code>screens/LiveWatch/LiveWatch.tsx</code>; live data arrives over a WebSocket middleware
+    (<code>web/src/ws/liveMiddleware.ts</code>).
+  </li>
+  <li>
+    <strong>Steer:</strong> from HQ you can
+    <strong>inject a message / pause / interrupt / shut down / kill</strong> a live session. Because
+    the daemon holds a persistent <em>outbound</em>
+    WebSocket, HQ routes a control frame down to it — no inbound ports needed (single laptop; the
+    daemon dials out). Every control frame is authorized (the requester must own the target
+    session).
+    <em>Code:</em> <code>ws/control.ts</code>, <code>rest/sessions.ts</code>
+    <code>sendControl</code>; on the daemon the inbound control <code>payload</code> is decoded as
+    an <strong>object</strong> (<code>transport/wsclient.go</code> → <code>msg.Payload.Text</code>)
+    and applied by <code>transport/control.go</code>&#39;s <code>Receiver</code>, which supports
+    <code>inject</code>/<code>pause</code>/<code>interrupt</code>/<code>shutdown</code> (SIGTERM +
+    force fallback)/<code>kill</code>. The <strong>control gateway</strong> is described in
+    <a href="./platform_architecture.html">platform</a>.
+  </li>
 </ul>
 <h2>Open questions</h2>
 <ul>
-<li>Bundle assignment granularity (whole bundle vs. individual member to an agent).</li>
-<li>Whether promotion needs review/approval at org scope (supply-chain surface for
-175+ users) — see Forge governance note.</li>
+  <li>
+    Bundle assignment granularity to an <strong>agent</strong> definition (whole bundle vs.
+    individual member). For a <strong>project</strong> this is resolved: the CatalogPicker adds a
+    bundle whole or expands it to pick individual members, with <code>enabledBundles</code> recording
+    whole-bundle intent.
+  </li>
+  <li>
+    Whether promotion needs review/approval at org scope (supply-chain surface for 175+ users) — see
+    Forge governance note.
+  </li>
 </ul>
 <h2>Status</h2>
 <ul>
-<li><strong>Built:</strong> scope model + resolution; agents/skills/bundles registry + REST;
-config sync drift (over the <code>~/.claude</code> ∪ <code>~/.claude+</code> union); sessions list +
-live watch + control gateway (inject/pause/interrupt/shutdown/kill); steer +
-scope/bundle controls wired in the web UI; org-scope bundled-skill seed.</li>
-<li><strong>In progress (not on this branch):</strong> session name + first-prompt columns on the
-Sessions tab; live per-session activity feed in the watch view; a Skills-tab
-overhaul (searchable picker, hide bundle members by default, a <code>create-hq-skill</code>
-skill); delete agents/skills with the <code>command-hq-starter</code> bundle protected
-server-side. See the overview&#39;s &quot;In progress / next&quot;.</li>
-<li><strong>Polish/open:</strong> org-publish governance (review/approval at org scope).</li>
+  <li>
+    <strong>Built:</strong> scope model + resolution; agents/skills/bundles registry + REST; config
+    sync drift (over the <code>~/.claude</code> ∪ <code>~/.claude+</code> union); sessions list +
+    live watch + control gateway (inject/pause/interrupt/shutdown/kill); steer + scope/bundle
+    controls wired in the web UI; org-scope bundled-skill seed.
+  </li>
+  <li>
+    <strong>In progress (not on this branch):</strong> session name + first-prompt columns on the
+    Sessions tab; live per-session activity feed in the watch view; a Skills-tab overhaul
+    (searchable picker, hide bundle members by default, a <code>create-hq-skill</code> skill);
+    delete agents/skills with the <code>command-hq-starter</code> bundle protected server-side. See
+    the overview&#39;s &quot;In progress / next&quot;.
+  </li>
+  <li><strong>Polish/open:</strong> org-publish governance (review/approval at org scope).</li>
 </ul>
-

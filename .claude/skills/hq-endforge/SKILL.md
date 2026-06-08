@@ -32,7 +32,7 @@ Reuse the existing **contract shape** (not any server-side drafter):
 
 - **The proposal shape** `AgentProposal` (`packages/shared/src/dto.ts`):
   `{ name, model, prompt, skills[], tools[], lowConfidence[], evidence[],
-  insufficientHistory }`. `/hq-endforge` produces a proposal in this shape from the
+insufficientHistory }`. `/hq-endforge` produces a proposal in this shape from the
   captured slice (the evidence here is the branch diff + this session, not
   k-NN-mined history).
 - Rank the skills/tools actually used in the captured session by frequency and
@@ -69,21 +69,21 @@ hidden) — only `/hq-startforge`…`/hq-endforge` is user-visible.
      (don't duplicate) (R13);
    - if the agent needs a capability with **no** existing skill, mint **only**
      that one new skill and plan to register it alongside the agent (R14).
-   The agent stores its skills as **name pointers** (R15) — agent and skills are
-   distinct registry records.
+     The agent stores its skills as **name pointers** (R15) — agent and skills are
+     distinct registry records.
 6. **Show the draft (R16).** Present the drafted agent: name, model, prompt,
    referenced skills, any new skills to be minted, and the coherence verdict.
    Register **only on the user's confirmation**.
-7. **Register at author scope (R17, R18).** Register new skills *first* so the
+7. **Register at author scope (R17, R18).** Register new skills _first_ so the
    agent's pointers resolve when consumed (R18), then the agent — all at the
    **author's user scope** (`scope: { tier: "user", id: <authorUserId> }`). Use
    the HQ registry REST:
    - Skills: `POST /skills` with body `{ name, scope, kind: "skill",
-     description, source: "custom", members: [] }` (the `skillSchema` shape).
+description, source: "custom", members: [] }` (the `skillSchema` shape).
    - Agent: `POST /agents` with body `{ name, scope, model, prompt, skills:
-     [<skill names>], tools: [...] }` (the `agentSchema` shape).
-   Both at `tier: "user"` — `canWriteScope` lets a user write their own user
-   scope without admin. Do **not** post at org scope.
+  [<skill names>], tools: [...] }` (the `agentSchema` shape).
+     Both at `tier: "user"` — `canWriteScope` lets a user write their own user
+     scope without admin. Do **not** post at org scope.
 
 The forge boundary is now closed; the agent exists at the author's scope only.
 

@@ -9,21 +9,21 @@ All stacks deploy to **`us-east-1`** (required for the CloudFront/ACM path and t
 keep the API, table, and SPA colocated) under the account from the ambient CDK
 CLI credentials (`CDK_DEFAULT_ACCOUNT`).
 
-| Stack         | Unit | What it provisions |
-|---------------|------|--------------------|
-| `AuthStack`   | U4   | Cognito user pool + web app client for HQ users. |
-| `ApiStack`    | U5   | DynamoDB single-table (`harness`) + HTTP API (JWT auth) + WebSocket API (device/JWT auth) and the handler Lambdas. References `AuthStack`. |
-| `SearchStack` | U27  | OpenSearch Serverless `VECTORSEARCH` collection for Forge (optional; brute-force fallback is the default). |
+| Stack         | Unit | What it provisions                                                                                                                                                       |
+| ------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AuthStack`   | U4   | Cognito user pool + web app client for HQ users.                                                                                                                         |
+| `ApiStack`    | U5   | DynamoDB single-table (`harness`) + HTTP API (JWT auth) + WebSocket API (device/JWT auth) and the handler Lambdas. References `AuthStack`.                               |
+| `SearchStack` | U27  | OpenSearch Serverless `VECTORSEARCH` collection for Forge (optional; brute-force fallback is the default).                                                               |
 | `SiteStack`   | U29  | Private S3 bucket + CloudFront (Origin Access Control) serving the Vite SPA build, with SPA 403/404 → `/index.html` routing and a cache-invalidating `BucketDeployment`. |
 
 ## Useful commands
 
-* `npm run build`   compile TypeScript to JS
-* `npm run watch`   watch for changes and compile
-* `npm run test`    run the jest assertion tests (table/GSI/routes, OAC, SPA routing)
-* `npx cdk synth`   emit the synthesized CloudFormation templates for all stacks
-* `npx cdk diff`    compare deployed stacks with current state
-* `npx cdk deploy`  deploy stacks to your default AWS account/region
+- `npm run build` compile TypeScript to JS
+- `npm run watch` watch for changes and compile
+- `npm run test` run the jest assertion tests (table/GSI/routes, OAC, SPA routing)
+- `npx cdk synth` emit the synthesized CloudFormation templates for all stacks
+- `npx cdk diff` compare deployed stacks with current state
+- `npx cdk deploy` deploy stacks to your default AWS account/region
 
 ## Deploying
 

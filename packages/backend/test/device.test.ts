@@ -32,9 +32,12 @@ beforeEach(() => {
 describe('device-code login', () => {
   it('start returns a deviceCode + userCode + poll interval', async () => {
     const res = await deviceStart(httpEvent({ method: 'POST' }), deps);
-    const body = bodyOf<{ deviceCode: string; userCode: string; expiresAt: number; interval: number }>(
-      res,
-    );
+    const body = bodyOf<{
+      deviceCode: string;
+      userCode: string;
+      expiresAt: number;
+      interval: number;
+    }>(res);
     expect(body.deviceCode).toBeTruthy();
     expect(body.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
     expect(body.expiresAt).toBeGreaterThan(0);

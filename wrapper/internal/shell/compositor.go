@@ -88,7 +88,6 @@ type Compositor struct {
 	scrollOff int
 
 	tokens   int
-	costUSD  float64
 	degraded bool
 
 	// Signed-in identity for the top status line. `loggedIn` gates the label:
@@ -197,7 +196,6 @@ func (c *Compositor) focusedIDLocked() string {
 	return ""
 }
 
-// SetStatus updates the token/cost readout.
 // SetIdentity records the signed-in user/org shown at the top of the frame.
 // `loggedIn` false renders a "not signed in" hint regardless of name/org.
 func (c *Compositor) SetIdentity(name, org string, loggedIn bool) {
@@ -208,10 +206,11 @@ func (c *Compositor) SetIdentity(name, org string, loggedIn bool) {
 	c.mu.Unlock()
 }
 
-func (c *Compositor) SetStatus(tokens int, costUSD float64) {
+// SetStatus updates the token readout.
+func (c *Compositor) SetStatus(tokens int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tokens, c.costUSD = tokens, costUSD
+	c.tokens = tokens
 }
 
 // SetDegraded flags HQ-unreachable state for the chrome.
@@ -739,8 +738,6 @@ func describeEvent(e event.Event) string {
 		return "user message"
 	case event.KindAssistantMsg:
 		return "assistant message"
-	case event.KindCostTick:
-		return "cost tick"
 	case event.KindStatusChange:
 		return string(e.From) + " → " + string(e.To)
 	default:
@@ -768,7 +765,7 @@ func (c *Compositor) renderStatusLine(w, h int) {
 	if c.focusedSub >= 0 && c.focusedSub < len(c.subs) {
 		focused = c.subs[c.focusedSub].Name
 	}
-	left := fmt.Sprintf(" %s  ▸ %s  %dtok  $%.2f", c.instance, focused, c.tokens, c.costUSD)
+	left := fmt.Sprintf(" %s  ▸ %s  %dtok", c.instance, focused, c.tokens)
 	if c.scrollOff > 0 {
 		left += fmt.Sprintf("  ↑ scrolled (%d)", c.scrollOff)
 	}

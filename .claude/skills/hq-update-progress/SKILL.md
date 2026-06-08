@@ -60,8 +60,8 @@ pulls."
      no overview exists) is the **Detailed headline** doc — its `completion:` is
      the number HQ shows on the **Detailed Requirements root**. Every other plan
      doc gets its own per-doc `completion:`.
-   If `docs/PRD.md` is absent, audit only the `docs/plans/` tree (no regression
-   for repos that have not added a `docs/PRD.md` yet).
+     If `docs/PRD.md` is absent, audit only the `docs/plans/` tree (no regression
+     for repos that have not added a `docs/PRD.md` yet).
 2. **Read the requirements.** For each doc, extract its stated requirements:
    frontmatter, the requirements/units/acceptance sections, and any GitHub task
    items (`- [ ]` / `- [x]`). These are the "claimed" surface.
@@ -78,8 +78,8 @@ pulls."
      whether it is green against the deployed environment. The hard binding of
      deployed-env↔committed-code is **deferred**, so when this can't be verified,
      record it as **unknown / not-yet-enforced** rather than a hard fail.
-   This evaluation is **ADVISORY** — it shapes the report and may temper the
-   estimate, but it **never blocks** the push (next steps run regardless).
+     This evaluation is **ADVISORY** — it shapes the report and may temper the
+     estimate, but it **never blocks** the push (next steps run regardless).
 5. **Compute completion per doc.** For each doc, score each requirement as
    built / partial / not-built (a partial counts ~0.5), weight by the doc's own
    structure, and roll up to a 0–100 integer. Score `docs/PRD.md` the same way,
@@ -116,24 +116,24 @@ pulls."
       3. **Demo Video**
       4. **Test Results**
       5. **AI Usage Log**
-      Then the stated stack/architecture **constraints to attest**, e.g.:
-      client-side SPA / no SSR (no Next/Remix); data fetching without Redux
-      Saga/Thunk; backend Spring Data JPA + Hibernate with Lombok
-      `@Getter`/`@Setter`/`@Builder` (not `@Data`); structured as a Vite Module
-      Federation remote with a single route entry + shared deps + no hardcoded
-      shell/navigation. **Status** is one of `met` / `partial` / `missing` /
-      `n/a`. **Evidence** cites a real repo path, a test count, or a one-line
-      reason. For THIS repo the Spring/JPA/Hibernate/Lombok and (where
-      inapplicable) Module-Federation backend constraints are **N/A** — it is a
-      TS/serverless app, not Spring — so mark those `n/a` with a one-line note
-      (e.g. "n/a — TS/serverless monorepo, no Spring backend") rather than
-      failing them. Never mark a constraint `missing` just because it does not
-      apply to this stack.
+         Then the stated stack/architecture **constraints to attest**, e.g.:
+         client-side SPA / no SSR (no Next/Remix); data fetching without Redux
+         Saga/Thunk; backend Spring Data JPA + Hibernate with Lombok
+         `@Getter`/`@Setter`/`@Builder` (not `@Data`); structured as a Vite Module
+         Federation remote with a single route entry + shared deps + no hardcoded
+         shell/navigation. **Status** is one of `met` / `partial` / `missing` /
+         `n/a`. **Evidence** cites a real repo path, a test count, or a one-line
+         reason. For THIS repo the Spring/JPA/Hibernate/Lombok and (where
+         inapplicable) Module-Federation backend constraints are **N/A** — it is a
+         TS/serverless app, not Spring — so mark those `n/a` with a one-line note
+         (e.g. "n/a — TS/serverless monorepo, no Spring backend") rather than
+         failing them. Never mark a constraint `missing` just because it does not
+         apply to this stack.
    2. **Emit in the doc's native format**, detected by the target doc's
       extension: for a `.html` PRD doc emit the body as HTML (`<h2>Compliance
-      breakdown</h2>` + a `<table>` with a header row and one `<tr>` per
+breakdown</h2>` + a `<table>` with a header row and one `<tr>` per
       requirement); for a `.md` PRD doc emit the body as a markdown `##` heading
-      + GitHub-Flavored-Markdown table. Wrap the body in the sentinel comments:
+      - GitHub-Flavored-Markdown table. Wrap the body in the sentinel comments:
       ```
       <!--hq:compliance v1-->
       ...report body (heading + table)...
@@ -150,15 +150,15 @@ pulls."
       block is present, insert the new block right after the frontmatter (and
       before the first heading). Preserve the frontmatter and the rest of the
       body **byte-for-byte**; only the sentinel block region changes.
-   This block is the **source of truth** for the compliance panel CommandHQ
-   renders between the progress bar and the raw body — the web extracts the
-   sentinel-delimited region from the PRD doc and displays it there. Keep it in
-   sync by regenerating it on every run.
+      This block is the **source of truth** for the compliance panel CommandHQ
+      renders between the progress bar and the raw body — the web extracts the
+      sentinel-delimited region from the PRD doc and displays it there. Keep it in
+      sync by regenerating it on every run.
 8. **Commit + push.** Stage only the changed requirements docs — `docs/PRD.md`
    (when present) and the changed `docs/plans/**` files — **plus the PRD doc
    whose compliance block changed in step 7** (`docs/PRD.html` or `docs/PRD.md`).
    Commit with a message like `chore(progress): update completion via
-   /hq-update-progress` (include the Co-Authored-By trailer the repo uses). Push
+/hq-update-progress` (include the Co-Authored-By trailer the repo uses). Push
    to the current branch's upstream with `git push` (use `gh` only if auth/PR is
    needed). Never call the GitHub Contents API to write — push with the dev's own
    git, so HQ's read sees the new SHA. The push happens **even if the DoD is not
@@ -169,8 +169,8 @@ pulls."
      - `requiresUnitTests` → "unit tests passing" (which suite, green/red).
      - `requiresProdE2E` → "prod-E2E verified" (suite found? observed green? or
        "not-yet-enforced — hard gate deferred").
-     End with the explicit line: **"Definition of Done is advisory — this push
-     was not blocked by DoD conformance."**
+       End with the explicit line: **"Definition of Done is advisory — this push
+       was not blocked by DoD conformance."**
    - **Requirements vs. built** — per doc (including `docs/PRD.md`): built /
      partial / missing, with the evidence file(s) for each "built."
    - **Drift** — discrepancies between the high-level **Project Requirements**
@@ -257,8 +257,9 @@ Expected behavior on this repo's current tree:
    </table>
    <!--/hq:compliance-->
    ```
+
 8. `git add docs/PRD.html docs/plans/... && git commit -m "chore(progress): update
-   completion via /hq-update-progress" && git push`.
+completion via /hq-update-progress" && git push`.
 9. Print a compliance report, e.g.:
 
    ```

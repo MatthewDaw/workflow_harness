@@ -8,8 +8,7 @@
 
 // First compliance block: opening sentinel (optional version token + whitespace),
 // inner content (lazy), closing sentinel. Surrounding whitespace is tolerated.
-const COMPLIANCE =
-  /<!--\s*hq:compliance(?:\s+[^>]*?)?\s*-->([\s\S]*?)<!--\s*\/hq:compliance\s*-->/;
+const COMPLIANCE = /<!--\s*hq:compliance(?:\s+[^>]*?)?\s*-->([\s\S]*?)<!--\s*\/hq:compliance\s*-->/;
 
 /**
  * Extract the FIRST `<!--hq:compliance-->` block from `content`.

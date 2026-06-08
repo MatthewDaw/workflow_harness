@@ -41,16 +41,22 @@ if (!ORG) {
 }
 
 if (!existsSync(path.join(sharedDist, 'index.js'))) {
-  console.error(`[reg-hl-approvals] missing ${sharedDist}/index.js — run \`npm run build -w @harness/shared\` first.`);
+  console.error(
+    `[reg-hl-approvals] missing ${sharedDist}/index.js — run \`npm run build -w @harness/shared\` first.`,
+  );
   process.exit(1);
 }
 if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
-  console.error(`[reg-hl-approvals] missing ${backendDist}/db/keys.js — run \`npm run build -w @harness/backend\` first.`);
+  console.error(
+    `[reg-hl-approvals] missing ${backendDist}/db/keys.js — run \`npm run build -w @harness/backend\` first.`,
+  );
   process.exit(1);
 }
 
 // Compiled schema + scope helper (what the REST layer uses) and the key builder.
-const { mcpServerSchema, orgScope } = await import(pathToFileURL(path.join(sharedDist, 'index.js')).href);
+const { mcpServerSchema, orgScope } = await import(
+  pathToFileURL(path.join(sharedDist, 'index.js')).href
+);
 const { mcpServerKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
 
 // The single stdio MCP server record. Validate it through the compiled schema so
@@ -78,11 +84,18 @@ if (process.env.SEED_DRY_RUN) {
   console.log(`[dry-run] mcp-server ${server.name} @ ${server.scope.tier}#${server.scope.id}`);
   console.log(`[dry-run] key ${JSON.stringify(key)}`);
   console.log(`[dry-run] item ${JSON.stringify({ ...key, ...server })}`);
-  console.log(`[reg-hl-approvals] DRY RUN — 1 MCP-server record (${server.name}) targeting org#${ORG} in ${TABLE}. Nothing written.`);
+  console.log(
+    `[reg-hl-approvals] DRY RUN — 1 MCP-server record (${server.name}) targeting org#${ORG} in ${TABLE}. Nothing written.`,
+  );
 } else {
   const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
   await doc.send(
-    new PutCommand({ TableName: TABLE, Item: { ...mcpServerKey(server.scope, server.name), ...server } }),
+    new PutCommand({
+      TableName: TABLE,
+      Item: { ...mcpServerKey(server.scope, server.name), ...server },
+    }),
   );
-  console.log(`[reg-hl-approvals] wrote 1 MCP-server record (${server.name}) to ${TABLE} at org#${ORG}.`);
+  console.log(
+    `[reg-hl-approvals] wrote 1 MCP-server record (${server.name}) to ${TABLE} at org#${ORG}.`,
+  );
 }

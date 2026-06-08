@@ -20,10 +20,7 @@ interface ProjectWithFraming {
 }
 
 /** Gather each project's stored progress + the Supporting Outcomes it owns. */
-async function gatherProjectProgress(
-  repo: Repo,
-  projectIds: string[],
-): Promise<ProjectProgress[]> {
+async function gatherProjectProgress(repo: Repo, projectIds: string[]): Promise<ProjectProgress[]> {
   const projects = await Promise.all(projectIds.map((pid) => repo.getProject(pid)));
   return projects
     .filter((p): p is NonNullable<typeof p> => Boolean(p))

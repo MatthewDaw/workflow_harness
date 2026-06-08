@@ -171,7 +171,7 @@ func TestBridgeForwardsStatus(t *testing.T) {
 	em := &fakeEmitter{}
 	b := New(fc, em)
 	b.Start()
-	fc.onStatus(daemon.StatusSnapshot{Tokens: 42, CostUSD: 1.5, Drift: 2})
+	fc.onStatus(daemon.StatusSnapshot{Tokens: 42, Drift: 2})
 
 	em.mu.Lock()
 	defer em.mu.Unlock()

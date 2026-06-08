@@ -36,8 +36,7 @@ export function AgentEditor() {
   const [draft, setDraft] = useState<Agent | null>(null);
   // Seed the draft from the existing agent once it loads (edit), or a blank
   // skeleton (create). State init runs before agents resolve, so derive lazily.
-  const agent: Agent =
-    draft ??
+  const agent: Agent = draft ??
     existing ?? {
       name: name ?? '',
       scope: orgScope(org),
@@ -53,15 +52,15 @@ export function AgentEditor() {
 
   const toggleSkill = (skillName: string) => {
     const has = agent.skills.includes(skillName);
-    set({ skills: has ? agent.skills.filter((s) => s !== skillName) : [...agent.skills, skillName] });
+    set({
+      skills: has ? agent.skills.filter((s) => s !== skillName) : [...agent.skills, skillName],
+    });
   };
 
   const toggleMcpServer = (name: string) => {
     const has = agent.mcpServers.includes(name);
     set({
-      mcpServers: has
-        ? agent.mcpServers.filter((s) => s !== name)
-        : [...agent.mcpServers, name],
+      mcpServers: has ? agent.mcpServers.filter((s) => s !== name) : [...agent.mcpServers, name],
     });
   };
 

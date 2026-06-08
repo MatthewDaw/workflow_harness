@@ -125,7 +125,10 @@ export function McpServerEditor() {
   const remote = isRemote(d.transport);
   const urlInvalid = remote && d.url.trim() !== '' && !urlIsValid(d.url);
   const canSave =
-    isAdmin && d.name.trim() !== '' && !saving && (remote ? urlIsValid(d.url) : d.command.trim() !== '');
+    isAdmin &&
+    d.name.trim() !== '' &&
+    !saving &&
+    (remote ? urlIsValid(d.url) : d.command.trim() !== '');
 
   const onSave = async () => {
     if (!canSave) return;
@@ -229,7 +232,11 @@ export function McpServerEditor() {
               onChange={(e) => set({ url: e.target.value })}
             />
             {urlInvalid && (
-              <div className="mt-1 text-[11px] text-red-600" role="alert" data-testid="mcp-url-error">
+              <div
+                className="mt-1 text-[11px] text-red-600"
+                role="alert"
+                data-testid="mcp-url-error"
+              >
                 Enter a valid URL (including scheme, e.g. https://).
               </div>
             )}

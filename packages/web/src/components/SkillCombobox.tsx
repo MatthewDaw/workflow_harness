@@ -121,9 +121,7 @@ export function SkillCombobox({
                 role="option"
                 aria-selected={i === active}
                 data-testid={`${testid}-option-${o.name}`}
-                className={`cursor-pointer px-2 py-1 text-[13px] ${
-                  i === active ? 'bg-line2' : ''
-                }`}
+                className={`cursor-pointer px-2 py-1 text-[13px] ${i === active ? 'bg-line2' : ''}`}
                 // onMouseDown (not onClick) so it fires before the input blur.
                 onMouseDown={(e) => {
                   e.preventDefault();

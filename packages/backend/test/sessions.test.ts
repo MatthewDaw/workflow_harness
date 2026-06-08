@@ -47,7 +47,6 @@ function session(
     ownerUserId: owner,
     status,
     tokens: 0,
-    costUsd: 0,
     startedAt: 1,
     lastEventAt,
     maxSeq: 0,
@@ -128,7 +127,9 @@ describe('GET /sessions', () => {
     await repo.putProject(project('p1', MATT));
     // A daemon that quit without a termination signal: stored status is still
     // active/needs_input/idle, but it stopped heartbeating long ago.
-    await repo.putSessionProjection(session('ghost-active', 'p1', MATT, 'active', now - 2 * 86_400_000));
+    await repo.putSessionProjection(
+      session('ghost-active', 'p1', MATT, 'active', now - 2 * 86_400_000),
+    );
     await repo.putSessionProjection(
       session('ghost-idle', 'p1', MATT, 'idle', now - STALE_WINDOW_MS - 1),
     );

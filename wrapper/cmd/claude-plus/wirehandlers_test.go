@@ -35,7 +35,7 @@ func TestWireClientHandlersFeedsStreamTab(t *testing.T) {
 	if c.OnStatus == nil {
 		t.Fatal("OnStatus must be wired so the status meter reflects daemon totals")
 	}
-	c.OnStatus(daemon.StatusSnapshot{Tokens: 1234, CostUSD: 0.56})
+	c.OnStatus(daemon.StatusSnapshot{Tokens: 1234})
 	comp.SetTab(0)
 	comp.Render()
 	if out := buf.String(); !strings.Contains(out, "1234tok") {

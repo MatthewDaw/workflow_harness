@@ -35,9 +35,7 @@ describe('buildDocTree', () => {
   });
 
   it('handles arbitrary nesting depth', () => {
-    const tree = buildDocTree([
-      { path: 'docs/plans/a/b/deep.md', title: 'Deep', completion: 50 },
-    ]);
+    const tree = buildDocTree([{ path: 'docs/plans/a/b/deep.md', title: 'Deep', completion: 50 }]);
     expect(labels(tree)).toEqual(['[a/ 50%]', '[b/ 50%]', 'Deep']);
     const deep = tree.find((n) => n.kind === 'doc');
     expect(deep?.depth).toBe(2);

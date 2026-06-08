@@ -18,7 +18,7 @@
 phase problem.** Forged agents are phase specialists: narrow scope, a small prompt, a
 handful of skills. The prompt's job is to make the agent do **sound, well-sequenced
 work** — build a solid foundation first, do things in the right order, and avoid
-dead-ends/bad ideas. Prompts stay concise as a matter of *clarity* (no bloat), **not**
+dead-ends/bad ideas. Prompts stay concise as a matter of _clarity_ (no bloat), **not**
 because token spend is an optimization target — we explicitly do **not** optimize for
 fewest tokens.
 
@@ -36,48 +36,52 @@ fewest tokens.
 ## What `/endforge` does
 
 a. **Distill a seed prompt + curate the skill set.**
-   - *Prompt:* a first draft that reproduces the captured work. It **is allowed to
-     contain project-specific instructions** at this stage.
-   - *Skills:* the distiller has **full access to the entire skill catalog**, but
-     anchors on the **skills actually used** in the captured session, rounding the
-     set out from the catalog only where something obviously fits. **Skills are
-     curated, not searched/optimized.**
+
+- _Prompt:_ a first draft that reproduces the captured work. It **is allowed to
+  contain project-specific instructions** at this stage.
+- _Skills:_ the distiller has **full access to the entire skill catalog**, but
+  anchors on the **skills actually used** in the captured session, rounding the
+  set out from the catalog only where something obviously fits. **Skills are
+  curated, not searched/optimized.**
 
 b. **Gradient-descent the prompt (prompt only).**
-   - Run the seed prompt through a **third-party prompt-gradient-descent tool** to make
-     the agent produce **sounder, better-sequenced work** — the objective is **outcome
-     + process quality** (reproduce-or-improve the captured work, built in a good
-     order, foundation-first, no dead-ends). **Token spend is not part of the
-     objective.** (See Tooling section for the v1 tool choice; behind a thin
-     `PromptOptimizer` interface.)
-   - The optimizer needs an objective + an eval case to descend on. **The captured
-     diff/session is that eval target** — the captured work both seeds the prompt and
-     grades the optimizer's candidates.
-   - The optimizer touches **only the prompt**. Skills are decided once by curation
-     and handed to registration untouched.
-   - The prompt should explicitly encode **principles + sequencing + failure-avoidance**
-     ("here's the good order; here are the dead-ends to skip"), partly as standing
-     distillation guidance and partly extracted from the good ordering actually followed
-     in the captured session.
+
+- Run the seed prompt through a **third-party prompt-gradient-descent tool** to make
+  the agent produce **sounder, better-sequenced work** — the objective is \*\*outcome
+  - process quality** (reproduce-or-improve the captured work, built in a good
+    order, foundation-first, no dead-ends). **Token spend is not part of the
+    objective.\*\* (See Tooling section for the v1 tool choice; behind a thin
+    `PromptOptimizer` interface.)
+- The optimizer needs an objective + an eval case to descend on. **The captured
+  diff/session is that eval target** — the captured work both seeds the prompt and
+  grades the optimizer's candidates.
+- The optimizer touches **only the prompt**. Skills are decided once by curation
+  and handed to registration untouched.
+- The prompt should explicitly encode **principles + sequencing + failure-avoidance**
+  ("here's the good order; here are the dead-ends to skip"), partly as standing
+  distillation guidance and partly extracted from the good ordering actually followed
+  in the captured session.
 
 c. **Split pass (after optimization).**
-   - Decompose the optimized prompt into two pieces:
-     1. **Reusable prompt** — the generalizable, project-agnostic agent/skill
-        instructions. *This is what gets registered and reused on other projects.*
-     2. **Project-specific instructions** — what this particular unit of work was
-        doing. **Mostly documentation**; rides along as the agent's forge-provenance
-        record, **not** shipped into other projects at runtime.
-   - Why split *after* optimizing: the optimizer needs the specifics in the prompt to
-     hit the eval target; generalization is a single decomposition step at the end
-     rather than a constraint that hobbles the descent.
+
+- Decompose the optimized prompt into two pieces:
+  1.  **Reusable prompt** — the generalizable, project-agnostic agent/skill
+      instructions. _This is what gets registered and reused on other projects._
+  2.  **Project-specific instructions** — what this particular unit of work was
+      doing. **Mostly documentation**; rides along as the agent's forge-provenance
+      record, **not** shipped into other projects at runtime.
+- Why split _after_ optimizing: the optimizer needs the specifics in the prompt to
+  hit the eval target; generalization is a single decomposition step at the end
+  rather than a constraint that hobbles the descent.
 
 d. **Register org-wide.**
-   - Register the agent = `{ reusable prompt, model, skill refs }` to Command HQ at
-     **org scope, for all users.**
-   - **Co-register any new skills** the agent points to (no dangling skill pointers).
-   - Write the **agent ↔ skill association both ways**: the agent lists the skills it
-     uses; a skill records the agent it's likely to be used in.
-   - Keep the project-specific instructions as the agent's forge-provenance doc.
+
+- Register the agent = `{ reusable prompt, model, skill refs }` to Command HQ at
+  **org scope, for all users.**
+- **Co-register any new skills** the agent points to (no dangling skill pointers).
+- Write the **agent ↔ skill association both ways**: the agent lists the skills it
+  uses; a skill records the agent it's likely to be used in.
+- Keep the project-specific instructions as the agent's forge-provenance doc.
 
 ## How this builds on what already exists
 
@@ -178,7 +182,7 @@ end of this section.
    better-sequenced work — reproduce-or-improve the captured task, foundation-first, no
    dead-ends. Dropping the token term also removes the multi-objective Pareto / token-
    penalty machinery the research describes.
-2. **Keep the "good principles" mechanism light — don't overengineer it.** We are *not*
+2. **Keep the "good principles" mechanism light — don't overengineer it.** We are _not_
    building a process-eval harness that scores "did it build in a good order." Sound
    sequencing/principles are **content the prompt encodes** — standing distillation
    guidance plus the good ordering extracted from the captured session (as principle +
@@ -189,8 +193,8 @@ end of this section.
    captured task — but keep it light; don't over-invest here for v1.
 4. **Quality gate before org-wide publish is non-negotiable.** Strongest number in the
    research: **curated skills +16.2pp; unverified self-generated skills −1.3pp** (SoK
-   2026). This partially *un-defers* governance — v1 needs at least a **transfer-
-   validation gate** (the forged agent must succeed once on a *different* repo than the
+   2026). This partially _un-defers_ governance — v1 needs at least a **transfer-
+   validation gate** (the forged agent must succeed once on a _different_ repo than the
    source) before it goes live for everyone.
 5. **Generalize via trajectory comparison, not self-reflection.** ExpeL: diffing a
    success vs. failure trajectory generalizes better than asking the model to explain
@@ -206,23 +210,24 @@ end of this section.
 
 **Decision: the model doing the optimization is Claude, run through Claude Code on the
 user's own subscription — not a hosted model API, not a third-party framework's API.** Rationale:
-we're optimizing prompts *for Claude Code builds*, so the optimization (and its eval)
+we're optimizing prompts _for Claude Code builds_, so the optimization (and its eval)
 should run in the same harness and on the same model the forged agent will actually use.
 Same-environment optimization = higher fidelity, and it spends the subscription rather
 than a metered API budget.
 
-This rules out the heavyweight options the research surfaced as *products*: the **hosted prompt-optimizer products** (vendor-metered, wrong model account) and the Python frameworks
+This rules out the heavyweight options the research surfaced as _products_: the **hosted prompt-optimizer products** (vendor-metered, wrong model account) and the Python frameworks
 (**TextGrad / DSPy / DeepEval**) that drive their own model calls via litellm / hosted inference APIs.
-Their *ideas* still apply — LLM-as-optimizer / textual-gradient refinement, correctness-
+Their _ideas_ still apply — LLM-as-optimizer / textual-gradient refinement, correctness-
 first scoring, trajectory-pair generalization — but we implement them as a small loop,
-not by adopting a framework. Also *not* DSPy/MIPROv2 specifically: it needs 20+ labeled
+not by adopting a framework. Also _not_ DSPy/MIPROv2 specifically: it needs 20+ labeled
 examples we won't have per agent.
 
 **The loop (deliberately minimal):**
+
 1. Run the **candidate prompt in a Claude Code session** against the captured task in a
    fresh worktree (we already create worktrees at `/startforge`, so the eval sandbox is
    free).
-2. **Judge the result** — primarily *did the work come out sound?* Run the captured
+2. **Judge the result** — primarily _did the work come out sound?_ Run the captured
    tests if any; otherwise a short Claude rubric pass. Execution-based signal is
    bias-free and is the thing to lean on.
 3. **Refine the prompt** — Claude proposes the next version from the critique.
@@ -240,6 +245,7 @@ treating the Claude rubric as a secondary signal — rather than standing up a s
 account just to judge.
 
 ## LLM-as-judge best practices (when no tests exist)
+
 - Best practice is a **cross-family judge** (don't let Claude grade Claude —
   self-preference bias); **v1 instead leans on execution-based eval** (run the work in a
   worktree) since the optimizer stays on the Claude subscription — see judge caveat above.
@@ -250,8 +256,9 @@ account just to judge.
   prefer behavioral equivalence (run the tests).
 
 ## Forged-agent shape (adopt the SoK 4-tuple)
+
 A skill/agent = `S = (C, π, T, R)`: applicability **C** (semantic trigger + optional
-keywords), policy **π** (the distilled prompt), termination **T** (success *and*
+keywords), policy **π** (the distilled prompt), termination **T** (success _and_
 failure conditions — failure handling is mandatory, not optional), interface **R**
 (tools/skills, **pinned model**, required context). Store **summary + full body**
 separately (metadata-driven disclosure / lazy load — matches Claude Code and our
@@ -259,6 +266,7 @@ existing config model). Identify as `slug:semver`, with **content-hash pinning**
 the skills an agent points to (we already hash items in `internal/config`).
 
 ## Registry / distribution best practices
+
 - **Hash-pin** skill pointers at consumption (LangSmith/`skill:<hash>` pattern);
   `latest` is for experimentation only.
 - **Environment-gated promotion**: `draft → review → staging → prod`, each gated by an
@@ -270,6 +278,7 @@ the skills an agent points to (we already hash items in `internal/config`).
 - **One topic per skill, precise trigger, explicit rationale** (Devin KB practice).
 
 ## Sources
+
 - Prompt optimizers: [TextGrad](https://github.com/zou-group/textgrad) ·
   [TextGrad paper (Nature/arXiv)](https://arxiv.org/abs/2406.07496) ·
   [DSPy MIPROv2](https://dspy.ai/api/optimizers/MIPROv2/) ·

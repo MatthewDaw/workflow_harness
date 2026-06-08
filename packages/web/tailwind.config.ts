@@ -45,7 +45,14 @@ const config: Config = {
       },
       fontFamily: {
         // Body: condensed humanist; Mono: typewriter; Stencil: stamped headers.
-        sans: ['"Barlow Semi Condensed"', 'system-ui', '"Segoe UI"', 'Roboto', 'Arial', 'sans-serif'],
+        sans: [
+          '"Barlow Semi Condensed"',
+          'system-ui',
+          '"Segoe UI"',
+          'Roboto',
+          'Arial',
+          'sans-serif',
+        ],
         mono: ['"Courier Prime"', 'ui-monospace', 'Consolas', 'monospace'],
         stencil: ['"Stardos Stencil"', '"Barlow Semi Condensed"', 'system-ui', 'sans-serif'],
       },

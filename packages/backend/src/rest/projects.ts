@@ -23,6 +23,7 @@ import {
 } from './runtime.js';
 import { isAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
+import { flattenBundle } from './skills.js';
 
 /**
  * REST: projects (U8).
@@ -103,7 +104,16 @@ export async function listProjects(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
 
-  const projects = await deps.repo.listProjectsForUser(principal.userId);
+  // Scope to the caller's EFFECTIVE org. A project belongs to exactly one org
+  // (stamped from the creator's effective org at connect time), but the owner
+  // index (GSI1 `USER#<id>`) gathers every project the user owns regardless of
+  // org. Without this filter a repo connected in one org would surface under
+  // every org the owner belongs to — i.e. appear "registered in both orgs".
+  // Strict match: a project with no `org` (legacy, pre-org-stamping) is hidden
+  // until the backfill (infra/scripts/backfill-project-org.mjs) tags it.
+  const org = await effectiveOrg(event, deps.repo);
+  const owned = await deps.repo.listProjectsForUser(principal.userId);
+  const projects = owned.filter((p) => p.org === org);
   const withCounts = await Promise.all(
     projects.map(async (p) => ({ ...p, liveSessionCount: await liveCount(deps.repo, p.id) })),
   );
@@ -536,6 +546,81 @@ export async function disableProjectMcpServer(
   return ok({ project: updated });
 }
 
+/**
+ * POST /projects/:projectId/bundles/:bundleName — enable a whole bundle as a unit.
+ *
+ * Recording the bundle (intent) AND unioning its flattened leaf members into
+ * `enabledSkills` happens in one read-modify-write. The bundle is resolved against
+ * the org catalog and must be a catalog entry of kind `bundle` (a non-bundle skill
+ * name or an unknown name is a 404 — you cannot "bundle-enable" a leaf skill). The
+ * REST layer flattens here (where the catalog is loaded) so the repo stays
+ * catalog-agnostic.
+ */
+export async function enableProjectBundle(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, principal } = resolved;
+  const bundleName = pathParam(event, 'bundleName');
+  if (!bundleName) return badRequest('missing bundle name');
+
+  // Resolve the bundle against the org catalog; it must exist AND be a bundle.
+  const catalog = await deps.repo.listSkills(principal.org);
+  const byName = new Map(catalog.map((s) => [s.name, s]));
+  const bundle = byName.get(bundleName);
+  if (!bundle || bundle.kind !== 'bundle') return notFound();
+
+  const leaves = flattenBundle(bundle, byName);
+  const updated = await deps.repo.addBundleToProject(project.id, bundleName, leaves);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
+/**
+ * DELETE /projects/:projectId/bundles/:bundleName — disable a whole bundle.
+ *
+ * Clears the bundle intent AND strips the leaf skills it contributed, EXCEPT any
+ * leaf still covered by another still-enabled bundle (a member shared between two
+ * enabled bundles survives). We compute the "keep" set by flattening every OTHER
+ * enabled bundle, then only remove the leaves not in it. A bundle that has since
+ * vanished from the catalog still removes its intent successfully (with no leaves
+ * to strip) so the project can never be stuck holding a dead bundle reference.
+ */
+export async function disableProjectBundle(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, principal } = resolved;
+  const bundleName = pathParam(event, 'bundleName');
+  if (!bundleName) return badRequest('missing bundle name');
+
+  const catalog = await deps.repo.listSkills(principal.org);
+  const byName = new Map(catalog.map((s) => [s.name, s]));
+
+  // The leaves this bundle would contribute (empty if it vanished from the catalog).
+  const bundle = byName.get(bundleName);
+  const leaves = bundle && bundle.kind === 'bundle' ? flattenBundle(bundle, byName) : [];
+
+  // Leaves still covered by some OTHER enabled bundle must be kept.
+  const keep = new Set<string>();
+  for (const otherName of project.enabledBundles ?? []) {
+    if (otherName === bundleName) continue;
+    const other = byName.get(otherName);
+    if (other && other.kind === 'bundle') {
+      for (const leaf of flattenBundle(other, byName)) keep.add(leaf);
+    }
+  }
+  const removable = leaves.filter((l) => !keep.has(l));
+
+  const updated = await deps.repo.removeBundleFromProject(project.id, bundleName, removable);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
 /** Routes the verbs/sub-paths by method/path for a single Lambda integration. */
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: ProjectsDeps = { repo: defaultRepo() };
@@ -555,6 +640,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (/\/mcp-servers\/[^/]+$/.test(rawPath)) {
     if (method === 'POST') return enableProjectMcpServer(event, deps);
     if (method === 'DELETE') return disableProjectMcpServer(event, deps);
+  }
+  if (/\/bundles\/[^/]+$/.test(rawPath)) {
+    if (method === 'POST') return enableProjectBundle(event, deps);
+    if (method === 'DELETE') return disableProjectBundle(event, deps);
   }
 
   if (method === 'DELETE' && hasId) return deleteProjectHandler(event, deps);

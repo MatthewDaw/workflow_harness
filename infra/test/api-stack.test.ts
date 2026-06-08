@@ -148,6 +148,28 @@ describe('ApiStack', () => {
     }
   });
 
+  test('routes the project opt-in handlers (skills/agents/mcp-servers/bundles) under {projectId}', () => {
+    // These four opt-in routes are dispatched by the projects Lambda's internal
+    // path router; on a deployed HTTP API an unregistered path 404s at the
+    // gateway before reaching the Lambda, so each must be a dedicated route. The
+    // first-segment param MUST be `{projectId}` (what the handler reads via
+    // pathParam(event, 'projectId')), not `{id}`.
+    for (const routeKey of [
+      'POST /projects/{projectId}/skills/{skillName}',
+      'DELETE /projects/{projectId}/skills/{skillName}',
+      'POST /projects/{projectId}/agents/{agentName}',
+      'DELETE /projects/{projectId}/agents/{agentName}',
+      'POST /projects/{projectId}/mcp-servers/{name}',
+      'DELETE /projects/{projectId}/mcp-servers/{name}',
+      'POST /projects/{projectId}/bundles/{bundleName}',
+      'DELETE /projects/{projectId}/bundles/{bundleName}',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+      });
+    }
+  });
+
   test('scopes the weekly routes under /projects/{pid} (rest_weekly)', () => {
     // The weekly handler requires a `pid` path param; the routes must be
     // project-scoped (not the bare /weekly registrations).
@@ -174,11 +196,7 @@ describe('ApiStack', () => {
   test('routes the device-auth handlers (start/poll PUBLIC, approve JWT)', () => {
     // claude+ device-code login: start/poll are public (the CLI has no token
     // yet); approve requires the signed-in browser's JWT.
-    for (const routeKey of [
-      'POST /device/start',
-      'POST /device/poll',
-      'POST /device/approve',
-    ]) {
+    for (const routeKey of ['POST /device/start', 'POST /device/poll', 'POST /device/approve']) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
         RouteKey: routeKey,
       });
@@ -236,8 +254,9 @@ describe('ApiStack', () => {
     const fns = template.findResources('AWS::Lambda::Function');
     let sawDeviceSecret = false;
     for (const res of Object.values(fns)) {
-      const vars = (res as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
-        .Properties?.Environment?.Variables;
+      const vars = (
+        res as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } }
+      ).Properties?.Environment?.Variables;
       if (vars && 'DEVICE_TOKEN_SECRET' in vars) {
         sawDeviceSecret = true;
         const value = vars.DEVICE_TOKEN_SECRET;

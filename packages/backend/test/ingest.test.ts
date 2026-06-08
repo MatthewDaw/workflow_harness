@@ -202,28 +202,23 @@ describe('event ingestion', () => {
   it('ignores a duplicate seq (idempotent append, no projection regression)', async () => {
     await seedDaemonConn();
     await ingest(wsEvent(env(0, startEvent)), deps());
-    const cost: Event = {
-      kind: 'cost.tick',
+    const msg: Event = {
+      kind: 'assistant.msg',
       sessionId: SESSION,
-      deltaUsd: 0.1,
-      totalUsd: 0.1,
       tokens: 100,
     };
-    await ingest(wsEvent(env(1, cost)), deps());
+    await ingest(wsEvent(env(1, msg)), deps());
 
-    // Replay the same seq with a different (stale) total — must be ignored.
+    // Replay the same seq with a different (stale) token count — must be ignored.
     const dupe: Event = {
-      kind: 'cost.tick',
+      kind: 'assistant.msg',
       sessionId: SESSION,
-      deltaUsd: 9,
-      totalUsd: 9,
       tokens: 9,
     };
     const res = await ingest(wsEvent(env(1, dupe)), deps());
     expect(res).toMatchObject({ statusCode: 200, body: JSON.stringify({ stored: false }) });
 
     const proj = await repo.getSessionById(SESSION);
-    expect(proj?.costUsd).toBe(0.1);
     expect(proj?.tokens).toBe(100);
   });
 

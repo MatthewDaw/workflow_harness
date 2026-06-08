@@ -1,7 +1,4 @@
-import type {
-  APIGatewayRequestAuthorizerEvent,
-  APIGatewayAuthorizerResult,
-} from 'aws-lambda';
+import type { APIGatewayRequestAuthorizerEvent, APIGatewayAuthorizerResult } from 'aws-lambda';
 import { verifyDeviceToken, AwsCognitoVerifier, type CognitoVerifier } from '../auth/verify.js';
 
 /**
@@ -87,7 +84,9 @@ export const handler = async (
         'device:',
         deviceErr instanceof Error ? `${deviceErr.name}: ${deviceErr.message}` : String(deviceErr),
         '| cognito:',
-        cognitoErr instanceof Error ? `${cognitoErr.name}: ${cognitoErr.message}` : String(cognitoErr),
+        cognitoErr instanceof Error
+          ? `${cognitoErr.name}: ${cognitoErr.message}`
+          : String(cognitoErr),
       );
       return policy('anonymous', 'Deny', resource, {});
     }

@@ -85,6 +85,23 @@ export interface ProjectWireframe {
   stale?: boolean;
 }
 
+/**
+ * A single Claude Code "memory" synced up from claude+ (per user). Mirrors the
+ * shared `Memory` DTO; declared locally (like ProjectDoc above) because the
+ * Memories tab is the only consumer. `type` is the loose string form of the
+ * shared MemoryType enum so the UI can render an unknown future type as-is.
+ */
+export interface Memory {
+  projectId: string;
+  userId: string;
+  userName?: string;
+  name: string;
+  description?: string;
+  type?: string;
+  content: string;
+  updatedAt: number;
+}
+
 function unwrapArray<T>(key: string) {
   return (resp: unknown): T[] => {
     if (Array.isArray(resp)) return resp as T[];
@@ -130,6 +147,7 @@ export const baseApi = createApi({
     'Requirements',
     'Dod',
     'Learnings',
+    'Memory',
   ],
   endpoints: (build) => ({
     /**
@@ -420,6 +438,17 @@ export const baseApi = createApi({
       providesTags: (_r, _e, { projectId }) => [{ type: 'Learnings', id: projectId }],
     }),
 
+    /**
+     * The project's per-user Claude Code memories, synced up from claude+ as
+     * Claude saves them. The flat list spans every author; the Memories tab
+     * groups it by `userId` and lets you filter to a single author.
+     */
+    getProjectMemories: build.query<Memory[], string>({
+      query: (projectId) => `projects/${projectId}/memories`,
+      transformResponse: unwrapArray<Memory>('memories'),
+      providesTags: (_r, _e, id) => [{ type: 'Memory', id }],
+    }),
+
     // ---- Mutations (U22/U24/U25) ----
 
     /** Create or update an agent (the editor's Save & sync; server forces org scope). */
@@ -481,6 +510,34 @@ export const baseApi = createApi({
     disableProjectMcpServer: build.mutation<Project, { projectId: string; name: string }>({
       query: ({ projectId, name }) => ({
         url: `projects/${projectId}/mcp-servers/${encodeURIComponent(name)}`,
+        method: 'DELETE',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /**
+     * Add a whole bundle to a project. The server records the bundle name in
+     * enabledBundles (the INTENT annotation, so the UI can show whole-bundle vs
+     * individually-picked members) AND unions the bundle's member skills into
+     * enabledSkills (the flat set the daemon actually materializes).
+     */
+    enableProjectBundle: build.mutation<Project, { projectId: string; bundleName: string }>({
+      query: ({ projectId, bundleName }) => ({
+        url: `projects/${projectId}/bundles/${encodeURIComponent(bundleName)}`,
+        method: 'POST',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /**
+     * Remove a whole bundle from a project. The server drops the bundle from
+     * enabledBundles and strips the member skills it contributed to enabledSkills.
+     */
+    disableProjectBundle: build.mutation<Project, { projectId: string; bundleName: string }>({
+      query: ({ projectId, bundleName }) => ({
+        url: `projects/${projectId}/bundles/${encodeURIComponent(bundleName)}`,
         method: 'DELETE',
       }),
       transformResponse: unwrapOne<Project>('project'),
@@ -665,6 +722,7 @@ export const {
   useGetProjectRequirementsQuery,
   useGetProjectWireframeQuery,
   useGetProjectLearningsQuery,
+  useGetProjectMemoriesQuery,
   useSaveAgentMutation,
   useSaveMcpServerMutation,
   useDeleteMcpServerMutation,
@@ -672,6 +730,8 @@ export const {
   useDisableProjectSkillMutation,
   useEnableProjectMcpServerMutation,
   useDisableProjectMcpServerMutation,
+  useEnableProjectBundleMutation,
+  useDisableProjectBundleMutation,
   useEnableProjectAgentMutation,
   useDisableProjectAgentMutation,
   useAddBundleMemberMutation,

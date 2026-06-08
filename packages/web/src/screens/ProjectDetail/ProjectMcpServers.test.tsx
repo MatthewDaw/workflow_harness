@@ -16,6 +16,7 @@ const PROJECT: Project = {
   progressPct: 0,
   liveSessionCount: 0,
   enabledSkills: [],
+  enabledBundles: [],
   enabledAgents: [],
   enabledMcpServers: ['fs'],
 };
@@ -85,22 +86,43 @@ describe('ProjectMcpServers (project opt-in)', () => {
     );
   });
 
-  it('adds a server from the catalog via enableProjectMcpServer', async () => {
+  it('adds a server from the catalog via the picker (enable on Apply)', async () => {
     renderWithProviders(<ProjectMcpServers />, {
       route: '/projects/weekly-compass/mcp-servers',
       routePath: '/projects/:projectId/mcp-servers',
       seed: { projects: [PROJECT], mcpServers: SERVERS },
     });
-    await screen.findByTestId('enable-mcp-server-input');
-
-    await userEvent.click(screen.getByTestId('enable-mcp-server-input'));
-    await userEvent.click(await screen.findByTestId('enable-mcp-server-option-linear'));
-    await userEvent.click(screen.getByTestId('enable-mcp-server-commit'));
+    // Open the picker, toggle a not-yet-enabled catalog server on, then Apply.
+    await userEvent.click(await screen.findByTestId('enable-mcp-server'));
+    await screen.findByTestId('catalog-picker');
+    await userEvent.click(screen.getByTestId('catalog-picker-row-mcp-linear'));
+    await userEvent.click(screen.getByTestId('catalog-picker-apply'));
 
     await waitFor(() =>
       expect(
         lastMatching(
           (u, m) => m === 'POST' && u.includes('projects/weekly-compass/mcp-servers/linear'),
+        ),
+      ).toBeDefined(),
+    );
+  });
+
+  it('removes an enabled server via the picker (disable on Apply)', async () => {
+    renderWithProviders(<ProjectMcpServers />, {
+      route: '/projects/weekly-compass/mcp-servers',
+      routePath: '/projects/:projectId/mcp-servers',
+      seed: { projects: [PROJECT], mcpServers: SERVERS },
+    });
+    // 'fs' starts enabled; open the picker, toggle it off, then Apply -> DELETE.
+    await userEvent.click(await screen.findByTestId('enable-mcp-server'));
+    await screen.findByTestId('catalog-picker');
+    await userEvent.click(screen.getByTestId('catalog-picker-row-mcp-fs'));
+    await userEvent.click(screen.getByTestId('catalog-picker-apply'));
+
+    await waitFor(() =>
+      expect(
+        lastMatching(
+          (u, m) => m === 'DELETE' && u.includes('projects/weekly-compass/mcp-servers/fs'),
         ),
       ).toBeDefined(),
     );

@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { LearningRecord, Project, SessionProjection } from '@harness/shared';
+import type { LearningRecord, Project, SessionProjection, Skill } from '@harness/shared';
+import { orgScope } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import {
   createProject,
   deleteProjectHandler,
+  disableProjectBundle,
+  enableProjectBundle,
   getProject,
   getProjectDocContent,
   getProjectDocs,
@@ -40,8 +43,8 @@ beforeEach(() => {
 const MATT = 'matt';
 const ALICE = 'alice';
 
-function project(id: string, owner: string): Project {
-  return { id, name: id, repo: `gh/acme/${id}`, ownerUserId: owner, liveSessionCount: 0 };
+function project(id: string, owner: string, org = 'acme'): Project {
+  return { id, name: id, repo: `gh/acme/${id}`, ownerUserId: owner, org, liveSessionCount: 0 };
 }
 
 function session(
@@ -80,6 +83,18 @@ describe('GET /projects', () => {
     expect(ids).toEqual(['side-quest', 'weekly-compass']);
     const wc = projects.find((p) => p.id === 'weekly-compass')!;
     expect(wc.liveSessionCount).toBe(1); // active counts, idle does not
+  });
+
+  it('scopes to the active org: a project owned in another org is excluded', async () => {
+    // Same owner, two orgs. The caller's effective org is the token claim
+    // ('acme' by default), so only the acme-org project comes back — the repo
+    // connected under 'other-org' must NOT leak into the acme view.
+    await repo.putProject(project('weekly-compass', MATT, 'acme'));
+    await repo.putProject(project('other-repo', MATT, 'other-org'));
+
+    const res = await listProjects(httpEvent({ method: 'GET', userId: MATT, org: 'acme' }), deps);
+    const { projects } = bodyOf<{ projects: Project[] }>(res as { body: string });
+    expect(projects.map((p) => p.id)).toEqual(['weekly-compass']);
   });
 
   it('returns an empty list for a user with no projects', async () => {
@@ -602,7 +617,7 @@ describe('DELETE /projects/:id', () => {
     expect(await repo.getProjectIdForRepo('acme/weekly-compass')).toBeUndefined();
   });
 
-  it("404s a non-owner (no enumeration) and leaves the project intact", async () => {
+  it('404s a non-owner (no enumeration) and leaves the project intact', async () => {
     await repo.putProject(project('weekly-compass', MATT));
     const res = await deleteProjectHandler(
       httpEvent({ method: 'DELETE', userId: ALICE, path: { id: 'weekly-compass' } }),
@@ -635,5 +650,149 @@ describe('DELETE /projects/:id', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     expect(await repo.getProject('weekly-compass')).toBeUndefined();
+  });
+});
+
+describe('project bundle opt-in', () => {
+  // Seed a catalog skill/bundle into the org scope so the REST layer can resolve
+  // and flatten it. Members default to [] for leaf skills.
+  async function seedSkill(
+    name: string,
+    kind: Skill['kind'],
+    members: string[] = [],
+  ): Promise<void> {
+    await repo.putSkill({
+      name,
+      scope: orgScope('acme'),
+      kind,
+      description: '',
+      source: 'local',
+      members,
+      body: '',
+    });
+  }
+
+  function bundleEvent(method: string, projectId: string, bundleName: string, who = MATT) {
+    return httpEvent({
+      method,
+      userId: who,
+      path: { projectId, bundleName },
+    });
+  }
+
+  it('enabling a bundle records it AND unions its leaf members into enabledSkills', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await seedSkill('alpha', 'skill');
+    await seedSkill('beta', 'skill');
+    await seedSkill('pack', 'bundle', ['alpha', 'beta']);
+
+    const res = await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'pack'), deps);
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { project: p } = bodyOf<{ project: Project }>(res as { body: string });
+    expect(p.enabledBundles).toEqual(['pack']);
+    expect([...(p.enabledSkills ?? [])].sort()).toEqual(['alpha', 'beta']);
+  });
+
+  it('flattens a nested bundle transitively into enabledSkills', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await seedSkill('leaf1', 'skill');
+    await seedSkill('leaf2', 'skill');
+    await seedSkill('inner', 'bundle', ['leaf2']);
+    await seedSkill('outer', 'bundle', ['leaf1', 'inner']);
+
+    const res = await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'outer'), deps);
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { project: p } = bodyOf<{ project: Project }>(res as { body: string });
+    expect(p.enabledBundles).toEqual(['outer']);
+    expect([...(p.enabledSkills ?? [])].sort()).toEqual(['leaf1', 'leaf2']);
+  });
+
+  it('404s POST on a non-bundle skill name', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await seedSkill('alpha', 'skill');
+    const res = await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'alpha'), deps);
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('404s POST on an unknown name', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'ghost'), deps);
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('disabling removes the bundle and its leaves, but keeps leaves another bundle still covers', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    // Two overlapping bundles: `shared` is a member of both.
+    await seedSkill('only-a', 'skill');
+    await seedSkill('shared', 'skill');
+    await seedSkill('only-b', 'skill');
+    await seedSkill('packA', 'bundle', ['only-a', 'shared']);
+    await seedSkill('packB', 'bundle', ['shared', 'only-b']);
+
+    await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'packA'), deps);
+    await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'packB'), deps);
+
+    const res = await disableProjectBundle(bundleEvent('DELETE', 'weekly-compass', 'packA'), deps);
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { project: p } = bodyOf<{ project: Project }>(res as { body: string });
+    expect(p.enabledBundles).toEqual(['packB']);
+    // `only-a` is dropped; `shared` survives (still covered by packB); `only-b` stays.
+    expect([...(p.enabledSkills ?? [])].sort()).toEqual(['only-b', 'shared']);
+  });
+
+  it('disabling a bundle that vanished from the catalog still clears the intent', async () => {
+    // Seed the project with a stale bundle intent and a leaf the bundle once brought.
+    const p = project('weekly-compass', MATT);
+    p.enabledBundles = ['gone'];
+    p.enabledSkills = ['orphan'];
+    await repo.putProject(p);
+
+    const res = await disableProjectBundle(bundleEvent('DELETE', 'weekly-compass', 'gone'), deps);
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { project: out } = bodyOf<{ project: Project }>(res as { body: string });
+    expect(out.enabledBundles).toEqual([]);
+    // No catalog entry => no leaves to strip; the orphan skill is left intact.
+    expect(out.enabledSkills).toEqual(['orphan']);
+  });
+
+  it('403s a non-owner non-admin', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await seedSkill('alpha', 'skill');
+    await seedSkill('pack', 'bundle', ['alpha']);
+    const res = await enableProjectBundle(
+      bundleEvent('POST', 'weekly-compass', 'pack', ALICE),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+  });
+
+  it('routes bundle POST/DELETE through the lambda handler', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await seedSkill('alpha', 'skill');
+    await seedSkill('pack', 'bundle', ['alpha']);
+
+    const enableRes = await handler(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { projectId: 'weekly-compass', bundleName: 'pack' },
+        rawPath: '/projects/weekly-compass/bundles/pack',
+      }),
+    );
+    expect(enableRes).toMatchObject({ statusCode: 200 });
+    expect((await repo.getProject('weekly-compass'))?.enabledBundles).toEqual(['pack']);
+
+    const disableRes = await handler(
+      httpEvent({
+        method: 'DELETE',
+        userId: MATT,
+        path: { projectId: 'weekly-compass', bundleName: 'pack' },
+        rawPath: '/projects/weekly-compass/bundles/pack',
+      }),
+    );
+    expect(disableRes).toMatchObject({ statusCode: 200 });
+    const after = await repo.getProject('weekly-compass');
+    expect(after?.enabledBundles).toEqual([]);
+    expect(after?.enabledSkills).toEqual([]);
   });
 });

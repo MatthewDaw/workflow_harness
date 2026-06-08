@@ -94,9 +94,9 @@ describe('learningKey / learningPrefix', () => {
   });
 
   it("a session's learnings sort deterministically by LEARN#<sessionId>#<turnId>", () => {
-    expect(k.learningKey(PROJECT, SESSION, 't-1').SK < k.learningKey(PROJECT, SESSION, 't-2').SK).toBe(
-      true,
-    );
+    expect(
+      k.learningKey(PROJECT, SESSION, 't-1').SK < k.learningKey(PROJECT, SESSION, 't-2').SK,
+    ).toBe(true);
   });
 });
 

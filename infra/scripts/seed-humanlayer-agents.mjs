@@ -32,10 +32,14 @@ if (!ORG) {
 }
 
 if (!existsSync(path.join(backendDist, 'seed', 'agents.js'))) {
-  console.error(`[seed-hl-agents] missing ${backendDist}/seed/agents.js — run \`npm run build -w @harness/backend\` first.`);
+  console.error(
+    `[seed-hl-agents] missing ${backendDist}/seed/agents.js — run \`npm run build -w @harness/backend\` first.`,
+  );
   process.exit(1);
 }
-const { buildSeedAgents } = await import(pathToFileURL(path.join(backendDist, 'seed', 'agents.js')).href);
+const { buildSeedAgents } = await import(
+  pathToFileURL(path.join(backendDist, 'seed', 'agents.js')).href
+);
 const { agentKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
 
 // Frontmatter parser extended from seed-humanlayer-ace.mjs: also extracts
@@ -83,10 +87,14 @@ function parseFrontmatter(md) {
 
 // Discover the agent files (explicit *.md scan under .claude/agents).
 const mdFiles = existsSync(agentsDir)
-  ? readdirSync(agentsDir).filter((f) => f.endsWith('.md')).sort()
+  ? readdirSync(agentsDir)
+      .filter((f) => f.endsWith('.md'))
+      .sort()
   : [];
 if (mdFiles.length === 0) {
-  console.error(`[seed-hl-agents] no .claude/agents/*.md files found in ${agentsDir} — nothing to seed.`);
+  console.error(
+    `[seed-hl-agents] no .claude/agents/*.md files found in ${agentsDir} — nothing to seed.`,
+  );
   process.exit(1);
 }
 
@@ -110,13 +118,22 @@ const records = buildSeedAgents(ORG, files);
 
 if (process.env.SEED_DRY_RUN) {
   for (const r of records) {
-    console.log(`[dry-run] agent ${r.name} @ ${r.scope.tier}#${r.scope.id} model=${r.model} tools=[${r.tools.join(', ')}]`);
+    console.log(
+      `[dry-run] agent ${r.name} @ ${r.scope.tier}#${r.scope.id} model=${r.model} tools=[${r.tools.join(', ')}]`,
+    );
   }
-  console.log(`[seed-hl-agents] DRY RUN — ${records.length} agent records targeting org#${ORG} in ${TABLE}. Nothing written.`);
+  console.log(
+    `[seed-hl-agents] DRY RUN — ${records.length} agent records targeting org#${ORG} in ${TABLE}. Nothing written.`,
+  );
 } else {
   const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
   for (const record of records) {
-    await doc.send(new PutCommand({ TableName: TABLE, Item: { ...agentKey(record.scope, record.name), ...record } }));
+    await doc.send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: { ...agentKey(record.scope, record.name), ...record },
+      }),
+    );
   }
   console.log(`[seed-hl-agents] wrote ${records.length} agent records to ${TABLE} at org#${ORG}.`);
 }

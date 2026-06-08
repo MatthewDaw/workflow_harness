@@ -7,76 +7,109 @@ feature: weekly-update
 ---
 
 <h1>Feature 2 — Weekly Plan (<code>/hq-weekly-update</code>)</h1>
-<p>A Claude command/skill that, when run, interviews the user about their coming
-goals and then auto-generates a weekly update with two halves: <strong>what was
-accomplished last week</strong> and <strong>what&#39;s coming next</strong>. This is the st6 weekly
-lifecycle, built natively and automated by the harness.</p>
+<p>
+  A Claude command/skill that, when run, interviews the user about their coming goals and then
+  auto-generates a weekly update with two halves:
+  <strong>what was accomplished last week</strong> and <strong>what&#39;s coming next</strong>. This
+  is the st6 weekly lifecycle, built natively and automated by the harness.
+</p>
 <h2>Flow</h2>
 <ol>
-<li><strong>Interview.</strong> The skill asks the user what they want to do next week (in
-plain language).</li>
-<li><strong>Conformity score (never blocks).</strong> It scores how well each stated goal ladders
-up to the repo&#39;s <strong>fixed high-level goals</strong> (owned Supporting Outcomes / Project
-Requirements) and surfaces the score so a <strong>manager can see when someone is
-drifting too far off</strong>. It nudges the user to re-anchor but never blocks publish.
-<em>Now:</em> the conformity score is computed client-side in the <code>/hq-weekly-update</code>
-skill (Claude Code); the old <code>weekly/agent.ts</code> challenger + <code>weekly/align.ts</code> were removed.</li>
-<li><strong>Reconcile last week (auto, from git).</strong> It reads the <strong>git history since the
-last weekly report</strong> and summarizes the week&#39;s commits/PRs as the &quot;done&quot;
-actuals (a git-history summary — no ticket linkage), and writes a checklist of:<ul>
-<li>what was completed,</li>
-<li>which <strong>high-level requirement items got checked off</strong> this week,</li>
-<li>how that <strong>moved overall progress</strong> (per-objective <code>priorPct → reportedPct</code>
-deltas), and</li>
-<li>how that <strong>compared to last week&#39;s plan</strong> (planned vs. actual = the
-<em>reconciliation</em>).
-<em>Code today (built):</em> this reconciliation is assembled <strong>client-side</strong> by the
-<code>/weekly-update</code> skill from the git diff today→−7d. The old server-side
-<code>weekly/align.ts</code> (<code>summarizeAlignment</code>/<code>computeDeltas</code>/<code>attributeDone</code>) and
-<code>weekly/agent.ts</code> were <strong>deleted</strong> in the migration — the whole <code>weekly/</code> module
-is gone; the backend no longer generates weekly content. <code>github/history.ts</code>
-remains for git-history reads.</li>
-</ul>
-</li>
-<li><strong>Forward plan.</strong> It fills the &quot;what&#39;s coming next&quot; section from the validated
-plan, each item linked to the outcome it advances, with projected deltas.</li>
-<li><strong>Publish.</strong> The skill POSTs the assembled report (<code>done</code> summary, <code>plan</code>,
-<code>conformityScore</code>) to HQ; publish recomputes the Company Objectives roll-up.
-<em>Code today (built):</em> <code>rest/weekly.ts</code> is now <strong>store/serve only</strong> — it validates
-and stores the client-posted report (PUT draft / POST publish →
-<code>recomputeOrgRollup</code>) and serves it; <code>conformityScore</code> round-trips and is never a
-gate.</li>
+  <li>
+    <strong>Interview.</strong> The skill asks the user what they want to do next week (in plain
+    language).
+  </li>
+  <li>
+    <strong>Conformity score (never blocks).</strong> It scores how well each stated goal ladders up
+    to the repo&#39;s <strong>fixed high-level goals</strong> (owned Supporting Outcomes / Project
+    Requirements) and surfaces the score so a
+    <strong>manager can see when someone is drifting too far off</strong>. It nudges the user to
+    re-anchor but never blocks publish. <em>Now:</em> the conformity score is computed client-side
+    in the <code>/hq-weekly-update</code> skill (Claude Code); the old
+    <code>weekly/agent.ts</code> challenger + <code>weekly/align.ts</code> were removed.
+  </li>
+  <li>
+    <strong>Reconcile last week (auto, from git).</strong> It reads the
+    <strong>git history since the last weekly report</strong> and summarizes the week&#39;s
+    commits/PRs as the &quot;done&quot; actuals (a git-history summary — no ticket linkage), and
+    writes a checklist of:
+    <ul>
+      <li>what was completed,</li>
+      <li>which <strong>high-level requirement items got checked off</strong> this week,</li>
+      <li>
+        how that <strong>moved overall progress</strong> (per-objective
+        <code>priorPct → reportedPct</code> deltas), and
+      </li>
+      <li>
+        how that <strong>compared to last week&#39;s plan</strong> (planned vs. actual = the
+        <em>reconciliation</em>). <em>Code today (built):</em> this reconciliation is assembled
+        <strong>client-side</strong> by the <code>/weekly-update</code> skill from the git diff
+        today→−7d. The old server-side
+        <code>weekly/align.ts</code>
+        (<code>summarizeAlignment</code>/<code>computeDeltas</code>/<code>attributeDone</code>) and
+        <code>weekly/agent.ts</code> were <strong>deleted</strong> in the migration — the whole
+        <code>weekly/</code> module is gone; the backend no longer generates weekly content.
+        <code>github/history.ts</code> remains for git-history reads.
+      </li>
+    </ul>
+  </li>
+  <li>
+    <strong>Forward plan.</strong> It fills the &quot;what&#39;s coming next&quot; section from the
+    validated plan, each item linked to the outcome it advances, with projected deltas.
+  </li>
+  <li>
+    <strong>Publish.</strong> The skill POSTs the assembled report (<code>done</code> summary,
+    <code>plan</code>, <code>conformityScore</code>) to HQ; publish recomputes the Company
+    Objectives roll-up. <em>Code today (built):</em> <code>rest/weekly.ts</code> is now
+    <strong>store/serve only</strong> — it validates and stores the client-posted report (PUT draft
+    / POST publish → <code>recomputeOrgRollup</code>) and serves it;
+    <code>conformityScore</code> round-trips and is never a gate.
+  </li>
 </ol>
 <h2>Native st6 framing (surface, don&#39;t hide)</h2>
 <p>Because st6 is the inspiration, the Weekly Update is labeled in its vocabulary:</p>
 <ul>
-<li><strong>Reconciliation</strong> — the Done-from-git vs. plan comparison is literally called
-reconciliation.</li>
-<li><strong>Weekly lifecycle states</strong> — <code>DRAFT → LOCKED → RECONCILING → RECONCILED</code>
-(+ carry-forward) as a first-class status on the weekly record. <strong>No state blocks
-publish</strong> (conformity is score-only). Transition triggers, the interview&#39;s
-accept/refuse/error states, and each state&#39;s failure path are design-phase work.</li>
+  <li>
+    <strong>Reconciliation</strong> — the Done-from-git vs. plan comparison is literally called
+    reconciliation.
+  </li>
+  <li>
+    <strong>Weekly lifecycle states</strong> —
+    <code>DRAFT → LOCKED → RECONCILING → RECONCILED</code> (+ carry-forward) as a first-class status
+    on the weekly record. <strong>No state blocks publish</strong> (conformity is score-only).
+    Transition triggers, the interview&#39;s accept/refuse/error states, and each state&#39;s
+    failure path are design-phase work.
+  </li>
 </ul>
 <h2>Where it runs</h2>
-<p>A registered <strong>Command HQ skill</strong> (see <a href="./claude_code_integration.html">feature 3</a>).
-The interview + conformity loop run in the developer&#39;s session; the report and
-publish hit the HQ REST API. The Weekly screen in HQ
-(<code>screens/ProjectDetail/ProjectWeekly.tsx</code>, wireframe &quot;HQ — Project › Weekly
-Update&quot;) renders the <em>output</em>.</p>
+<p>
+  A registered <strong>Command HQ skill</strong> (see
+  <a href="./claude_code_integration.html">feature 3</a>). The interview + conformity loop run in
+  the developer&#39;s session; the report and publish hit the HQ REST API. The Weekly screen in HQ
+  (<code>screens/ProjectDetail/ProjectWeekly.tsx</code>, wireframe &quot;HQ — Project › Weekly
+  Update&quot;) renders the <em>output</em>.
+</p>
 <h2>Open questions</h2>
 <ul>
-<li>&quot;Since the last weekly report&quot; boundary when reports are skipped or backfilled.</li>
-<li>Carry-forward semantics for unfinished plan items.</li>
-<li>Conformity is <strong>score-only, never blocking</strong> (resolved 2026-06-03); open: how the
-score is computed and surfaced to managers.</li>
+  <li>&quot;Since the last weekly report&quot; boundary when reports are skipped or backfilled.</li>
+  <li>Carry-forward semantics for unfinished plan items.</li>
+  <li>
+    Conformity is <strong>score-only, never blocking</strong> (resolved 2026-06-03); open: how the
+    score is computed and surfaced to managers.
+  </li>
 </ul>
 <h2>Status</h2>
 <ul>
-<li><strong>Built:</strong> the <code>/weekly-update</code> skill (<code>.claude/skills/weekly-update/</code>) with the
-interview + client-side never-blocking conformity score; the store/serve
-<code>rest/weekly.ts</code> (draft/publish, <code>conformityScore</code> round-trip); the Weekly screen
-(<code>ProjectWeekly.tsx</code>) renders the posted report.</li>
-<li><strong>Not built / deferred:</strong> the explicit <code>DRAFT → LOCKED → RECONCILING → RECONCILED</code> lifecycle states as first-class status; the manager-visibility
-conformity surfacing UX is minimal.</li>
+  <li>
+    <strong>Built:</strong> the <code>/weekly-update</code> skill
+    (<code>.claude/skills/weekly-update/</code>) with the interview + client-side never-blocking
+    conformity score; the store/serve <code>rest/weekly.ts</code> (draft/publish,
+    <code>conformityScore</code> round-trip); the Weekly screen (<code>ProjectWeekly.tsx</code>)
+    renders the posted report.
+  </li>
+  <li>
+    <strong>Not built / deferred:</strong> the explicit
+    <code>DRAFT → LOCKED → RECONCILING → RECONCILED</code> lifecycle states as first-class status;
+    the manager-visibility conformity surfacing UX is minimal.
+  </li>
 </ul>
-

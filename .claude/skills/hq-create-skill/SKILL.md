@@ -64,9 +64,11 @@ in HQ (`skillSchema.body`) so a daemon can materialize it locally on sync.
    # /my-skill
 
    ## When this runs
+
    ...
 
    ## Steps
+
    1. ...
    ```
 

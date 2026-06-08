@@ -106,7 +106,10 @@ describe('POST /skills (admin-gated org write + createdBy)', () => {
 
 describe('PUT /skills/:name (preserves createdBy)', () => {
   it('updates fields but keeps the original createdBy', async () => {
-    await repo.putSkill({ ...skill('reconcile', 'old'), createdBy: { userId: 'alice', name: 'Alice' } });
+    await repo.putSkill({
+      ...skill('reconcile', 'old'),
+      createdBy: { userId: 'alice', name: 'Alice' },
+    });
     const res = await createSkill(
       adminEvent({
         method: 'PUT',

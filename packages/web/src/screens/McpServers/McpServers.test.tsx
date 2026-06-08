@@ -14,7 +14,7 @@ const SERVERS: McpServer[] = [
     transport: 'stdio',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-filesystem'],
-    env: {},
+    env: { API_KEY: 'super-secret-value' },
     createdBy: { userId: 'u-matt', name: 'Matt' },
   },
   {
@@ -45,7 +45,36 @@ describe('McpServers org catalog (collapsed model)', () => {
     expect(screen.getByTestId('mcp-summary-filesystem')).toHaveTextContent(
       'npx -y @modelcontextprotocol/server-filesystem',
     );
-    expect(screen.getByTestId('mcp-summary-linear')).toHaveTextContent('https://mcp.linear.app/sse');
+    expect(screen.getByTestId('mcp-summary-linear')).toHaveTextContent(
+      'https://mcp.linear.app/sse',
+    );
+  });
+
+  it('expands a stdio server to show command, args, and env (with masked secret values)', async () => {
+    renderWithProviders(<McpServers />, { route: '/mcp-servers', seed: seedFor(SERVERS) });
+    await screen.findByTestId('mcp-card-filesystem');
+
+    // Details are hidden until Expand is clicked.
+    expect(screen.queryByTestId('mcp-modal-filesystem')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('mcp-expand-filesystem'));
+
+    const modal = screen.getByTestId('mcp-modal-filesystem');
+    expect(modal).toHaveTextContent('npx');
+    expect(modal).toHaveTextContent('@modelcontextprotocol/server-filesystem');
+    // The env KEY shows; the secret VALUE is masked, never printed.
+    expect(screen.getByTestId('mcp-env-filesystem')).toHaveTextContent('API_KEY');
+    expect(modal).not.toHaveTextContent('super-secret-value');
+
+    await userEvent.click(screen.getByTestId('mcp-modal-close-filesystem'));
+    expect(screen.queryByTestId('mcp-modal-filesystem')).not.toBeInTheDocument();
+  });
+
+  it('expands an http server to show its URL', async () => {
+    renderWithProviders(<McpServers />, { route: '/mcp-servers', seed: seedFor(SERVERS) });
+    await screen.findByTestId('mcp-card-linear');
+
+    await userEvent.click(screen.getByTestId('mcp-expand-linear'));
+    expect(screen.getByTestId('mcp-modal-linear')).toHaveTextContent('https://mcp.linear.app/sse');
   });
 
   it('shows an empty state when the catalog is empty', async () => {

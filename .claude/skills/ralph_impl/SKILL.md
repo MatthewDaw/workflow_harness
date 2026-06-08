@@ -12,23 +12,27 @@ description: >-
 ## PART I - IF NO TICKET IS MENTIOND
 
 0.  read .claude/commands/linear.md
-0a. fetch the top 10 priority items from linear in status "ready for dev" using the MCP tools, noting all items in the `links` section
-0b. select the highest priority SMALL or XS issue from the list (if no SMALL or XS issues exist, EXIT IMMEDIATELY and inform the user)
-0c. use `linear` cli to fetch the selected item into thoughts with the ticket number - ./thoughts/shared/tickets/ENG-xxxx.md
-0d. read the ticket and all comments to understand the implementation plan and any concerns
+    0a. fetch the top 10 priority items from linear in status "ready for dev" using the MCP tools, noting all items in the `links` section
+    0b. select the highest priority SMALL or XS issue from the list (if no SMALL or XS issues exist, EXIT IMMEDIATELY and inform the user)
+    0c. use `linear` cli to fetch the selected item into thoughts with the ticket number - ./thoughts/shared/tickets/ENG-xxxx.md
+    0d. read the ticket and all comments to understand the implementation plan and any concerns
 
 ## PART II - NEXT STEPS
 
 think deeply
 
 1. move the item to "in dev" using the MCP tools
-1a. identify the linked implementation plan document from the `links` section
-1b. if no plan exists, move the ticket back to "ready for spec" and EXIT with an explanation
+   1a. identify the linked implementation plan document from the `links` section
+   1b. if no plan exists, move the ticket back to "ready for spec" and EXIT with an explanation
 
 think deeply about the implementation
 
 2. set up worktree for implementation:
-2a. read `hack/create_worktree.sh` and create a new worktree with the Linear branch name: `./hack/create_worktree.sh ENG-XXXX BRANCH_NAME`
-2b. launch implementation session: `humanlayer-nightly launch --model opus --dangerously-skip-permissions --dangerously-skip-permissions-timeout 15m --title "implement ENG-XXXX" -w ~/wt/humanlayer/ENG-XXXX "/implement_plan and when you are done implementing and all tests pass, read ./claude/commands/commit.md and create a commit, then read ./claude/commands/describe_pr.md and create a PR, then add a comment to the Linear ticket with the PR link"`
+   2a. read `hack/create_worktree.sh` and create a new worktree with the Linear branch name: `./hack/create_worktree.sh ENG-XXXX BRANCH_NAME`
+   2b. launch implementation session: `humanlayer-nightly launch --model opus --dangerously-skip-permissions --dangerously-skip-permissions-timeout 15m --title "implement ENG-XXXX" -w ~/wt/humanlayer/ENG-XXXX "/implement_plan and when you are done implementing and all tests pass, read ./claude/commands/commit.md and create a commit, then read ./claude/commands/describe_pr.md and create a PR, then add a comment to the Linear ticket with the PR link"`
 
 think deeply, use TodoWrite to track your tasks. When fetching from linear, get the top 10 items by priority but only work on ONE item - specifically the highest priority SMALL or XS sized issue.
+
+## Ask a human
+
+This skill often runs autonomously (no human at the terminal). When you reach a decision only a human can make — ambiguous requirements, a product or scope judgment call, or a blocker you cannot resolve from the repo or the ticket — reach a human out of band by calling the `mcp__humanlayer-contact__contact_human` tool with a clear, specific question, and wait for the reply before continuing. Only call this tool when it is available; if it is not present in this environment, fall back to your best-judgment default and do not raise an error.

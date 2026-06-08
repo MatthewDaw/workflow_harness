@@ -36,7 +36,7 @@ score:
 - "Done"-only reports are not allowed. A report with an empty `plan` (`""`) must
   never be PUT or published.
 - This gate is on the **existence of a plan**, not its quality. A low conformity
-  score still publishes (it only nudges); but *no plan at all* blocks. Vague
+  score still publishes (it only nudges); but _no plan at all_ blocks. Vague
   filler ("misc work", "stuff") doesn't count — push for a concrete goal.
 
 ## When this runs
@@ -70,7 +70,7 @@ publish (mirrors `02-weekly-update.md`: conformity is score-only).
 
 Heuristic (v1): for each goal stated in the plan, judge semantic alignment to the
 nearest high-level goal (full / partial / none → 1.0 / 0.5 / 0.0), average across
-goals, scale to 0–100. Print the per-goal rationale so the manager sees *why*.
+goals, scale to 0–100. Print the per-goal rationale so the manager sees _why_.
 
 ## Steps
 
@@ -84,11 +84,11 @@ goals, scale to 0–100. Print the per-goal rationale so the manager sees *why*.
    - `## Conformity report` — the overall conformity score (the same integer as
      `conformityScore`) followed by a short per-goal rationale: for each next-week
      goal, how well it ladders to the fixed high-level goals (full / partial /
-     none) and why. This is the *written* form of the score.
+     none) and why. This is the _written_ form of the score.
    - `## Additional things coded up` — a bulleted list of the notable changes from
      the git window **beyond** the stated plan (the incidental/extra work), one
      bullet per change with a terse description (cite commit subjects).
-   Keep it Markdown (headings + bullets) so the UI can render the sections.
+     Keep it Markdown (headings + bullets) so the UI can render the sections.
 3. **Interview for the plan (REQUIRED — gate).** Ask the user what they will work
    on next week; record their goals into the `plan` **string**. **You may not
    advance to PUT/POST until the `plan` names ≥1 concrete goal.** If they decline
@@ -133,7 +133,7 @@ Request body (JSON) the skill sends and the backend must validate + store:
 
   // never-blocking conformity score, 0–100 integer. Stored + surfaced for
   // manager visibility; HQ must NOT gate publish on it.
-  "conformityScore": 82
+  "conformityScore": 82,
 }
 ```
 
@@ -147,7 +147,7 @@ them, as it does today). The response echoes the stored `update`.
    dropped); `conformityScore?: number` (0–100) is optional. The ticket-derived
    `completionPct`/attribution fields are gone.
 2. `PUT` stores the posted body as the draft (`validated: false`); `POST
-   .../publish` flips `validated: true` and recomputes the org roll-up. No
+.../publish` flips `validated: true` and recomputes the org roll-up. No
    server-side weekly content generation remains (`assembleWeekly` /
    `attributeDone` deleted).
 3. `conformityScore` round-trips through store + serve and is purely
@@ -171,9 +171,11 @@ them, as it does today). The response echoes the stored `update`.
    (0.0) → overall ~50. Nudge: "1 of 2 goals is off-roadmap"; still publishes.
 5. Body:
    ```jsonc
-   { "done": "## Summary\nAuthored 4 client skills; started de-ticket migration.\n\n## Conformity report\nOverall 50. Goal 1 fully ladders (1.0); goal 2 does not (0.0).\n\n## Additional things coded up\n- Tidied the seed script.\n- Fixed a flaky test.",
+   {
+     "done": "## Summary\nAuthored 4 client skills; started de-ticket migration.\n\n## Conformity report\nOverall 50. Goal 1 fully ladders (1.0); goal 2 does not (0.0).\n\n## Additional things coded up\n- Tidied the seed script.\n- Fixed a flaky test.",
      "plan": "1. Wire the prod-E2E gate.\n2. Refactor the Saturday side project.",
-     "conformityScore": 50 }
+     "conformityScore": 50,
+   }
    ```
 6. `PUT /projects/workflow-harness/weekly/2026-W23` then
    `POST /projects/workflow-harness/weekly/2026-W23/publish`.

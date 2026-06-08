@@ -33,13 +33,15 @@ export function Organizations() {
         Organizations
       </h1>
       <p className="mb-5 text-xs text-mut">
-        Switch between the organizations you belong to, or join/create another. Switching
-        reloads every screen with that organization's data.
+        Switch between the organizations you belong to, or join/create another. Switching reloads
+        every screen with that organization's data.
       </p>
 
       <div className="grid gap-6 md:grid-cols-2">
         <section>
-          <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">Your organizations</div>
+          <div className="mb-2 text-[11px] uppercase tracking-wide text-faint">
+            Your organizations
+          </div>
           <ul className="hq-frame divide-y divide-line2">
             {orgs.map((o) => {
               const isActive = o === active;

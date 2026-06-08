@@ -31,7 +31,7 @@ separate process the app merely attaches to). Two user-facing gaps:
   the underlying `claude` CLI's own transcript-resume, used outside claude+.
 - No confirmation dialogs. ✕ behaves like closing a browser tab.
 - No graceful (SIGTERM-with-timeout) shutdown of an individual session — ✕ is a
-  hard kill. (Quit *does* go through the graceful per-child `Session.Close()` path
+  hard kill. (Quit _does_ go through the graceful per-child `Session.Close()` path
   via `mux.CloseAll()`, but that is the existing behavior, not new work.)
 - No multi-client session-list broadcast. A kill acks the **requesting** client's
   list only — consistent with how `NewSession`/`Rename` already behave. (The
@@ -142,7 +142,7 @@ Force-killing a session's PTY does not delete claude's conversation transcripts 
 `~/.claude/projects` (the same files the capture layer tails). So after quitting,
 `claude --resume` (pick from list) or `claude -c` (continue most recent), run
 directly in the terminal, resumes the conversation. This requirement is satisfied
-by *killing* rather than *deleting* — no new claude+ code.
+by _killing_ rather than _deleting_ — no new claude+ code.
 
 ## Error handling
 
@@ -173,15 +173,15 @@ by *killing* rather than *deleting* — no new claude+ code.
 
 ## Files touched (summary)
 
-| File | Change |
-|------|--------|
-| `internal/daemon/attach.go` | `FrameKill`, `FrameShutdown`, `ProtocolVersion = 3` |
-| `internal/daemon/daemon.go` | attach-loop cases for `FrameKill`, `FrameShutdown` |
-| `internal/pty/mux.go` | `Kill(id)` + shared removal helper |
-| `internal/daemon/client.go` | `CloseSession`, `Shutdown` |
-| `internal/desktop/bridge.go` | interface + `CloseSession`, `Shutdown` |
-| `cmd/claude-plus-desktop/app.go` | `App.CloseSession`, `App.shutdown`, adapter methods |
-| `cmd/claude-plus-desktop/main.go` | `OnShutdown: app.shutdown` |
-| `cmd/claude-plus-desktop/frontend/src/Sessions.tsx` | ✕ button |
-| `cmd/claude-plus-desktop/frontend/wailsjs/go/main/App.{d.ts,js}` | regenerated bindings |
-| `internal/daemon/version_test.go`, `internal/pty/*_test.go`, `internal/desktop/bridge_test.go` | tests |
+| File                                                                                           | Change                                              |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `internal/daemon/attach.go`                                                                    | `FrameKill`, `FrameShutdown`, `ProtocolVersion = 3` |
+| `internal/daemon/daemon.go`                                                                    | attach-loop cases for `FrameKill`, `FrameShutdown`  |
+| `internal/pty/mux.go`                                                                          | `Kill(id)` + shared removal helper                  |
+| `internal/daemon/client.go`                                                                    | `CloseSession`, `Shutdown`                          |
+| `internal/desktop/bridge.go`                                                                   | interface + `CloseSession`, `Shutdown`              |
+| `cmd/claude-plus-desktop/app.go`                                                               | `App.CloseSession`, `App.shutdown`, adapter methods |
+| `cmd/claude-plus-desktop/main.go`                                                              | `OnShutdown: app.shutdown`                          |
+| `cmd/claude-plus-desktop/frontend/src/Sessions.tsx`                                            | ✕ button                                            |
+| `cmd/claude-plus-desktop/frontend/wailsjs/go/main/App.{d.ts,js}`                               | regenerated bindings                                |
+| `internal/daemon/version_test.go`, `internal/pty/*_test.go`, `internal/desktop/bridge_test.go` | tests                                               |

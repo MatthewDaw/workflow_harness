@@ -14,9 +14,7 @@ describe('MarkdownView (U9)', () => {
   });
 
   it('renders GFM task lists as ☑ / ☐ glyphs', () => {
-    const { container } = render(
-      <MarkdownView markdown={'- [x] done item\n- [ ] todo item'} />,
-    );
+    const { container } = render(<MarkdownView markdown={'- [x] done item\n- [ ] todo item'} />);
     const text = container.textContent ?? '';
     expect(text).toContain('☑');
     expect(text).toContain('☐');
@@ -27,9 +25,7 @@ describe('MarkdownView (U9)', () => {
   });
 
   it('renders a GFM table', () => {
-    render(
-      <MarkdownView markdown={'| a | b |\n| - | - |\n| 1 | 2 |'} />,
-    );
+    render(<MarkdownView markdown={'| a | b |\n| - | - |\n| 1 | 2 |'} />);
     expect(screen.getByRole('table')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'a' })).toBeInTheDocument();
   });

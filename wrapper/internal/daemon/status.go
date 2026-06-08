@@ -5,28 +5,28 @@ import (
 	"github.com/workflow-harness/claude-plus/internal/event"
 )
 
-// StatusSnapshot is the daemon-wide meter rendered by the desktop status bar:
-// cumulative tokens and cost across all sessions, plus the agents/skills drift
-// count maintained by the config layer.
+// StatusSnapshot is the daemon-wide meter rendered by the status bar: cumulative
+// tokens across all sessions, plus the agents/skills drift count maintained by
+// the config layer.
 type StatusSnapshot struct {
-	Tokens  int64   `json:"tokens"`
-	CostUSD float64 `json:"costUsd"`
-	Drift   int     `json:"drift"`
+	Tokens int64 `json:"tokens"`
+	Drift  int   `json:"drift"`
 }
 
-// updateStatus folds a cost.tick envelope into the running totals. Other event
-// kinds do not affect the meters. Called from PublishEvent.
+// updateStatus folds an event's token count into the running total. Only the
+// message events (user.msg / assistant.msg) carry tokens; every other kind is
+// ignored. Called from PublishEvent.
 func (d *Daemon) updateStatus(env event.Envelope) {
-	if env.Event.Kind != event.KindCostTick {
+	switch env.Event.Kind {
+	case event.KindUserMsg, event.KindAssistantMsg:
+	default:
+		return
+	}
+	if env.Event.Tokens == nil {
 		return
 	}
 	d.statusMu.Lock()
-	if env.Event.Tokens != nil {
-		d.sTokens += *env.Event.Tokens
-	}
-	if env.Event.DeltaUsd != nil {
-		d.sUSD += *env.Event.DeltaUsd
-	}
+	d.sTokens += *env.Event.Tokens
 	d.statusMu.Unlock()
 }
 
@@ -54,5 +54,5 @@ func (d *Daemon) SyncConfigOnce(src config.RemoteSource) error {
 func (d *Daemon) Status() StatusSnapshot {
 	d.statusMu.Lock()
 	defer d.statusMu.Unlock()
-	return StatusSnapshot{Tokens: d.sTokens, CostUSD: d.sUSD, Drift: d.sDrift}
+	return StatusSnapshot{Tokens: d.sTokens, Drift: d.sDrift}
 }

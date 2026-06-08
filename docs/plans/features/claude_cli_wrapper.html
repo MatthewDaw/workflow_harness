@@ -7,174 +7,255 @@ feature: claude-cli-wrapper
 ---
 
 <h1>Feature 4 — Claude CLI Wrapper (<code>claude+</code>)</h1>
-<p>How we wrap the real <code>claude</code> CLI in <code>claude+</code> so that every session is captured
-and streamable without changing the native experience.</p>
+<p>
+  How we wrap the real <code>claude</code> CLI in <code>claude+</code> so that every session is
+  captured and streamable without changing the native experience.
+</p>
 <h2>Daemon + thin attach client (tmux model)</h2>
-<p><code>claude+</code> starts (or attaches to) a <strong>background daemon bound to the repo</strong>; the
-terminal UI is a thin client attached over a local socket. Sessions survive the terminal
-closing and are re-attachable from another terminal on the same machine.
-(v1 is single-laptop; no remote/SSH.)</p>
+<p>
+  <code>claude+</code> starts (or attaches to) a
+  <strong>background daemon bound to the repo</strong>; the terminal UI is a thin client attached
+  over a local socket. Sessions survive the terminal closing and are re-attachable from another
+  terminal on the same machine. (v1 is single-laptop; no remote/SSH.)
+</p>
 <ul>
-<li><code>claude+</code> in a repo → attach-or-create for the current directory.</li>
-<li><code>claude+ ls</code> → enumerate daemons/instances.</li>
-<li><code>claude+ --session=N</code> → attach by index.</li>
-<li><code>claude+ --gui</code> → launch the desktop app (a Wails build already exists under
-<code>wrapper/cmd/claude-plus-desktop/</code>).</li>
+  <li><code>claude+</code> in a repo → attach-or-create for the current directory.</li>
+  <li><code>claude+ ls</code> → enumerate daemons/instances.</li>
+  <li><code>claude+ --session=N</code> → attach by index.</li>
+  <li>
+    <code>claude+ --gui</code> → launch the desktop app (a Wails build already exists under
+    <code>wrapper/cmd/claude-plus-desktop/</code>).
+  </li>
 </ul>
-<p><em>Code today:</em> <code>wrapper/cmd/claude-plus/</code> (<code>main.go</code>, <code>attach.go</code>, <code>gui.go</code>),
-<code>wrapper/internal/daemon/</code> (attach protocol, client).</p>
+<p>
+  <em>Code today:</em> <code>wrapper/cmd/claude-plus/</code> (<code>main.go</code>,
+  <code>attach.go</code>, <code>gui.go</code>), <code>wrapper/internal/daemon/</code> (attach
+  protocol, client).
+</p>
 <h2>Capture without screen-scraping</h2>
 <p>Three sources, never PTY text parsing:</p>
 <ol>
-<li><strong>PTY pass-through</strong> renders the native interactive <code>claude</code> unchanged.</li>
-<li>The daemon <strong>tails Claude Code&#39;s transcript JSONL</strong>
-(<code>&lt;config&gt;/projects/&lt;hash&gt;/&lt;sid&gt;.jsonl</code>) for structured message/tool events and
-cost/token deltas. The transcript lives under whatever config root the inner
-Claude runs against — which is the isolated <code>~/.claude+</code> (below), so the tailer
-resolves its base from <code>config.ConfigDir()</code> and falls back to <code>~/.claude</code> only
-when isolation is inactive. The per-project <code>&lt;hash&gt;</code> is Claude Code&#39;s slug:
-<strong>every</strong> non-alphanumeric character (including <code>_</code>) becomes <code>-</code>, runs are not
-collapsed (<code>C:\Users\me\workflow_harness</code> → <code>C--Users-me-workflow-harness</code>);
-replacing only path separators missed the underscore and captured nothing.
-<em>Code:</em> <code>capture/parse.go</code> (<code>TranscriptPath</code>/<code>projectHash</code>/<code>slugifyPath</code>).</li>
-<li><strong>Hooks</strong> (<code>settings.json</code> PreToolUse/PostToolUse/Stop/Notification) post
-low-latency lifecycle + <code>status.change</code> signals to the daemon&#39;s local socket.</li>
+  <li>
+    <strong>PTY pass-through</strong> renders the native interactive <code>claude</code> unchanged.
+  </li>
+  <li>
+    The daemon
+    <strong>tails Claude Code&#39;s transcript JSONL</strong>
+    (<code>&lt;config&gt;/projects/&lt;hash&gt;/&lt;sid&gt;.jsonl</code>) for structured
+    message/tool events and cost/token deltas. The transcript lives under whatever config root the
+    inner Claude runs against — which is the isolated <code>~/.claude+</code> (below), so the tailer
+    resolves its base from <code>config.ConfigDir()</code> and falls back to
+    <code>~/.claude</code> only when isolation is inactive. The per-project
+    <code>&lt;hash&gt;</code> is Claude Code&#39;s slug: <strong>every</strong> non-alphanumeric
+    character (including <code>_</code>) becomes <code>-</code>, runs are not collapsed (<code
+      >C:\Users\me\workflow_harness</code
+    >
+    → <code>C--Users-me-workflow-harness</code>); replacing only path separators missed the
+    underscore and captured nothing. <em>Code:</em>
+    <code>capture/parse.go</code>
+    (<code>TranscriptPath</code>/<code>projectHash</code>/<code>slugifyPath</code>).
+  </li>
+  <li>
+    <strong>Hooks</strong> (<code>settings.json</code> PreToolUse/PostToolUse/Stop/Notification)
+    post low-latency lifecycle + <code>status.change</code> signals to the daemon&#39;s local
+    socket.
+  </li>
 </ol>
-<p><em>Code today:</em> <code>wrapper/internal/capture/</code> (<code>hooks.go</code>, <code>jsonl.go</code>, <code>parse.go</code>).</p>
+<p>
+  <em>Code today:</em> <code>wrapper/internal/capture/</code> (<code>hooks.go</code>,
+  <code>jsonl.go</code>, <code>parse.go</code>).
+</p>
 <h2>Isolated <code>~/.claude+</code> config root (no <code>~/.claude</code> pollution)</h2>
-<p>claude+ launches its inner <code>claude</code> with <code>CLAUDE_CONFIG_DIR</code> pointed at an
-<strong>isolated config root, <code>~/.claude+</code></strong>, so the product-bundled skills/agents and
-the session history claude+ generates never land in the user&#39;s personal
-<code>~/.claude</code>. Because the env var is set only on the child claude+ spawns, a normal
-<code>claude</code> run (claude+ not running, or a separate session) still reads <code>~/.claude</code>
-and never sees this root.</p>
-<p><strong>As-built shape (divergence from the migration plan).</strong> The plan
-(<a href="../specs_overview.html">U21</a>) described a
-<em>per-session</em> <code>~/.claude+/run/&lt;id&gt;</code> dir built with symlinks and torn down on close.
-The code instead uses a <strong>single stable <code>~/.claude+</code></strong> root that is <strong>seeded once</strong>
-from <code>~/.claude</code> (<code>.credentials.json</code>, <code>.claude.json</code>, <code>settings.json</code>, <code>.mcp.json</code>
-— copied only when absent) and <strong>never torn down</strong>, so auth, onboarding, settings,
-MCP, and transcripts persist across claude+ restarts; claude+ then owns its own
-copies. <code>skills/</code>/<code>agents/</code> under it receive pulled (synced) items. This is simpler
-and more durable than the per-session symlink design, at the cost of write-through
-credential sharing (the stable root keeps its own seeded credentials rather than
-symlinking the live <code>~/.claude</code> login). <em>Code:</em> <code>internal/config/overlay.go</code>
-(<code>EnsureConfigDir</code>/<code>ConfigDir</code>), <code>internal/pty/session.go</code> (<code>DefaultSpawn</code> sets
-<code>Isolate</code>; <code>newSession</code> sets <code>CLAUDE_CONFIG_DIR</code>).</p>
+<p>
+  claude+ launches its inner <code>claude</code> with <code>CLAUDE_CONFIG_DIR</code> pointed at an
+  <strong>isolated config root, <code>~/.claude+</code></strong
+  >, so the product-bundled skills/agents and the session history claude+ generates never land in
+  the user&#39;s personal <code>~/.claude</code>. Because the env var is set only on the child
+  claude+ spawns, a normal <code>claude</code> run (claude+ not running, or a separate session)
+  still reads <code>~/.claude</code> and never sees this root.
+</p>
+<p>
+  <strong>As-built shape (divergence from the migration plan).</strong> The plan (<a
+    href="../specs_overview.html"
+    >U21</a
+  >) described a <em>per-session</em> <code>~/.claude+/run/&lt;id&gt;</code> dir built with symlinks
+  and torn down on close. The code instead uses a
+  <strong>single stable <code>~/.claude+</code></strong> root that is
+  <strong>seeded once</strong> from <code>~/.claude</code> (<code>.credentials.json</code>,
+  <code>.claude.json</code>, <code>settings.json</code>, <code>.mcp.json</code> — copied only when
+  absent) and <strong>never torn down</strong>, so auth, onboarding, settings, MCP, and transcripts
+  persist across claude+ restarts; claude+ then owns its own copies. <code>skills/</code>/<code
+    >agents/</code
+  >
+  under it receive pulled (synced) items. This is simpler and more durable than the per-session
+  symlink design, at the cost of write-through credential sharing (the stable root keeps its own
+  seeded credentials rather than symlinking the live <code>~/.claude</code> login). <em>Code:</em>
+  <code>internal/config/overlay.go</code> (<code>EnsureConfigDir</code>/<code>ConfigDir</code>),
+  <code>internal/pty/session.go</code> (<code>DefaultSpawn</code> sets <code>Isolate</code>;
+  <code>newSession</code> sets <code>CLAUDE_CONFIG_DIR</code>).
+</p>
 <h2>Transport &amp; auth</h2>
 <ul>
-<li>Outbound-only <strong>WebSocket</strong> to the cloud, with <strong>offline buffering</strong> that
-replays after reconnect. Control frames come back down the same socket
-(<a href="./claude_code_integration.html">feature 3 steering</a>).</li>
-<li><strong>Device-token auth:</strong> <code>claude+ login</code> runs a device-code flow against HQ; the
-token authorizes the daemon&#39;s WS <code>$connect</code> and scopes its data to that user.
-No inbound ports needed — the daemon dials out. The token carries a TTL, a
-revoke control in HQ, and lives in the OS keychain (not a plaintext dotfile).
-Device tokens are signed/verified with a backend <code>DEVICE_TOKEN_SECRET</code> (sourced
-from secrets at deploy, not a baked placeholder); <strong>rotating that secret
-invalidates all outstanding tokens</strong>, so devices must re-run <code>claude+ login</code>.
-<em>Code today:</em> <code>wrapper/internal/config/</code>, HQ side <code>backend/src/auth/device.ts</code>;
-connection setup captured in the project memory note <code>hq-connection-setup</code>.</li>
+  <li>
+    Outbound-only <strong>WebSocket</strong> to the cloud, with
+    <strong>offline buffering</strong> that replays after reconnect. Control frames come back down
+    the same socket (<a href="./claude_code_integration.html">feature 3 steering</a>).
+  </li>
+  <li>
+    <strong>Device-token auth:</strong> <code>claude+ login</code> runs a device-code flow against
+    HQ; the token authorizes the daemon&#39;s WS <code>$connect</code> and scopes its data to that
+    user. No inbound ports needed — the daemon dials out. The token carries a TTL, a revoke control
+    in HQ, and lives in the OS keychain (not a plaintext dotfile). Device tokens are signed/verified
+    with a backend <code>DEVICE_TOKEN_SECRET</code> (sourced from secrets at deploy, not a baked
+    placeholder); <strong>rotating that secret invalidates all outstanding tokens</strong>, so
+    devices must re-run <code>claude+ login</code>. <em>Code today:</em>
+    <code>wrapper/internal/config/</code>, HQ side <code>backend/src/auth/device.ts</code>;
+    connection setup captured in the project memory note <code>hq-connection-setup</code>.
+  </li>
 </ul>
 <h2>Distribution</h2>
-<p>Go cross-compiled with <strong>goreleaser</strong>; an <strong>npm wrapper package</strong>
-(<code>npm/claude-plus/</code>) ships per-platform prebuilt binaries (<code>npm i -g claude-plus</code>,
-no Go toolchain), plus <code>scripts/install.sh</code> for <code>curl | sh</code>. The release publishes
-<code>checksums.txt</code> and <code>install.sh</code> verifies a SHA-256 before executing the binary —
-v1 ships unsigned, so the checksum is the integrity gate.</p>
+<p>
+  Go cross-compiled with <strong>goreleaser</strong>; an
+  <strong>npm wrapper package</strong> (<code>npm/claude-plus/</code>) ships per-platform prebuilt
+  binaries (<code>npm i -g claude-plus</code>, no Go toolchain), plus
+  <code>scripts/install.sh</code> for <code>curl | sh</code>. The release publishes
+  <code>checksums.txt</code> and <code>install.sh</code> verifies a SHA-256 before executing the
+  binary — v1 ships unsigned, so the checksum is the integrity gate.
+</p>
 <h2>Desktop app (Wails) — same core, graphical shell</h2>
-<p>A native desktop GUI for the <em>same users and the same work</em> as the terminal — a
-more polished UX, not a new capability. Durable decisions (migrated from the
-desktop design spec):</p>
+<p>
+  A native desktop GUI for the <em>same users and the same work</em> as the terminal — a more
+  polished UX, not a new capability. Durable decisions (migrated from the desktop design spec):
+</p>
 <ul>
-<li><strong>Wails, one Go module, one shared daemon.</strong> The desktop <code>main</code>
-(<code>wrapper/cmd/claude-plus-desktop</code>) lives <strong>inside the existing <code>wrapper/</code>
-module</strong>, linking the same <code>internal/daemon</code>/<code>pty</code>/<code>transport</code>. A protocol change
-breaks both binaries at compile time — coupling over convention. A Go-hosted
-system webview (WebView2 / WKWebView / WebKitGTK) keeps one cross-platform
-codebase with small binaries.</li>
-<li><strong>Second attach client.</strong> The desktop is just another client of the attach
-protocol (the role the TUI plays). The live <code>claude</code> surface renders in an
-<code>xterm.js</code> pane; the chrome around it is native panels.</li>
-<li><strong>Concurrent per-client attach.</strong> Terminal and desktop can drive the same daemon
-at once. <code>pty.Mux</code> <strong>already implements</strong> per-client focus + per-client PTY
-sizing — this is built, not new work.</li>
-<li><strong>Two binaries.</strong> <code>claude+ --gui</code> discovers and execs <code>claude-plus-desktop</code>
-(focuses an open window for the repo rather than spawning a second); clear error
-when it isn&#39;t installed.</li>
-<li><strong>v1 = full TUI parity</strong> — all four tabs (Session, Agents, Forge, Stream) as
-native panels + status meters. <code>FrameEvent</code>, <code>FrameStatus</code>, and the
-protocol-version handshake <strong>already exist</strong>; the only genuinely new daemon work
-is <code>FrameAgentDiff</code> + reconcile and a multi-consumer event tap. Plus HQ login
-(Forge calls the in-module HQ client directly).</li>
-<li><strong>Interaction states to define (design phase):</strong> HQ-login surface inside the app,
-pre-attach empty state, protocol-mismatch error.</li>
-<li><strong>Build.</strong> A <strong>separate per-OS native build matrix</strong> (<code>wails build</code> on
-windows/macos/ubuntu) alongside — not inside — the goreleaser job; CGO webview
-libs can&#39;t ride the pure-Go cross-compile. Linux WebKitGTK is the fussiest; smoke
-it early. v1 ships unsigned developer builds (signing/notarization deferred).</li>
+  <li>
+    <strong>Wails, one Go module, one shared daemon.</strong> The desktop
+    <code>main</code> (<code>wrapper/cmd/claude-plus-desktop</code>) lives
+    <strong>inside the existing <code>wrapper/</code> module</strong>, linking the same
+    <code>internal/daemon</code>/<code>pty</code>/<code>transport</code>. A protocol change breaks
+    both binaries at compile time — coupling over convention. A Go-hosted system webview (WebView2 /
+    WKWebView / WebKitGTK) keeps one cross-platform codebase with small binaries.
+  </li>
+  <li>
+    <strong>Second attach client.</strong> The desktop is just another client of the attach protocol
+    (the role the TUI plays). The live <code>claude</code> surface renders in an
+    <code>xterm.js</code> pane; the chrome around it is native panels.
+  </li>
+  <li>
+    <strong>Concurrent per-client attach.</strong> Terminal and desktop can drive the same daemon at
+    once. <code>pty.Mux</code> <strong>already implements</strong> per-client focus + per-client PTY
+    sizing — this is built, not new work.
+  </li>
+  <li>
+    <strong>Two binaries.</strong> <code>claude+ --gui</code> discovers and execs
+    <code>claude-plus-desktop</code> (focuses an open window for the repo rather than spawning a
+    second); clear error when it isn&#39;t installed.
+  </li>
+  <li>
+    <strong>v1 = full TUI parity</strong> — all four tabs (Session, Agents, Forge, Stream) as native
+    panels + status meters. <code>FrameEvent</code>, <code>FrameStatus</code>, and the
+    protocol-version handshake <strong>already exist</strong>; the only genuinely new daemon work is
+    <code>FrameAgentDiff</code> + reconcile and a multi-consumer event tap. Plus HQ login (Forge
+    calls the in-module HQ client directly).
+  </li>
+  <li>
+    <strong>Interaction states to define (design phase):</strong> HQ-login surface inside the app,
+    pre-attach empty state, protocol-mismatch error.
+  </li>
+  <li>
+    <strong>Build.</strong> A <strong>separate per-OS native build matrix</strong> (<code
+      >wails build</code
+    >
+    on windows/macos/ubuntu) alongside — not inside — the goreleaser job; CGO webview libs can&#39;t
+    ride the pure-Go cross-compile. Linux WebKitGTK is the fussiest; smoke it early. v1 ships
+    unsigned developer builds (signing/notarization deferred).
+  </li>
 </ul>
 <h2>Terminal &amp; session UX</h2>
-<p>These behaviors govern how the live <code>claude</code> surface and the session sub-tabs
-feel in the desktop client. They are client-side (<code>xterm.js</code> + the desktop
-bridge) except where noted.</p>
+<p>
+  These behaviors govern how the live <code>claude</code> surface and the session sub-tabs feel in
+  the desktop client. They are client-side (<code>xterm.js</code> + the desktop bridge) except where
+  noted.
+</p>
 <ul>
-<li><strong>Visible input cursor.</strong> The <code>xterm.js</code> pane uses a <strong>blinking block cursor</strong>
-and grabs focus on mount and on click. An unfocused xterm renders a hollow,
-easy-to-miss caret, so we focus it explicitly — the caret is always visible
-while typing. <em>Code:</em> <code>cmd/claude-plus-desktop/frontend/src/Terminal.tsx</code>.</li>
-<li><strong>Scrollback.</strong> The terminal keeps a generous scrollback buffer (10k lines) so
-you can mouse-wheel up through a session&#39;s earlier output; typing or new output
-snaps back to the live edge. <em>Code:</em> <code>Terminal.tsx</code> (<code>scrollback</code> xterm option).</li>
-<li><strong>Auto-generated session titles (LLM).</strong> A session starts with a provisional
-keyword slug from its first user turn, then <strong>upgrades to a concise
-LLM-generated title</strong> once the first full exchange (first user message + first
-assistant reply) lands. The daemon runs a one-shot, time-boxed headless
-<code>claude -p</code> on the user&#39;s <strong>own subscription</strong> to summarize the opening
-exchange into a 2–4 word kebab title, renames the session, and emits a
-<code>session.rename</code> event. Best-effort: if the call fails or times out, the
-provisional slug stays. The title sub-process is tagged with
-<code>CLAUDE_PLUS_TITLE=1</code> so the hook shim skips it (no phantom session reaches
-HQ). A manual rename locks the name against further auto-titling. <em>Code:</em>
-<code>internal/title/</code>, <code>internal/capture/jsonl.go</code> (first-exchange hook),
-<code>internal/daemon/runtime.go</code>, <code>internal/pty/{session,mux}.go</code>.</li>
-<li><strong>Rename a session by double-clicking its tab.</strong> Double-click a session
-sub-tab&#39;s name to edit it inline; Enter commits, Escape cancels. This is the
-GUI surface of the existing ⌃R manual rename, and a manual name is sticky —
-auto-titling will not overwrite it. <em>Code:</em> <code>Sessions.tsx</code> →
-<code>App.Rename</code> → bridge → <code>FrameRename</code> → <code>Mux.Rename</code>.</li>
-<li><strong>Session tabs hidden on Agents / Stream.</strong> The desktop chrome has top-level
-views — <strong>Session · Agents · Stream</strong>. The session sub-tab row belongs to the
-Session view only; selecting Agents or Stream hides it, since those views are
-instance-scoped rather than per-session. <em>Code:</em> <code>App.tsx</code> view switcher.</li>
-<li><strong><code>--dangerously-skip-permissions</code> propagates to every session.</strong> Launching
-<code>claude+ --dangerously-skip-permissions</code> (or with <code>--gui</code>) starts the repo&#39;s
-daemon in <strong>dangerous mode</strong>: every inner <code>claude</code> child it spawns is launched
-with <code>--dangerously-skip-permissions</code>, so sub-agents inherit the wrapper&#39;s
-permission posture. The mode is carried to the detached daemon via the
-<code>CLAUDE_PLUS_DANGEROUS</code> environment variable and honored in
-<code>pty.DefaultSpawn</code>. Because the daemon is per-repo and shared, the mode is
-fixed when the daemon first starts for a repo — if a daemon is already running,
-restart it to change the mode. <em>Code:</em> <code>cmd/claude-plus/main.go</code>,
-<code>cmd/claude-plus-desktop/app.go</code>, <code>internal/pty/session.go</code> (<code>DefaultSpawn</code>).</li>
+  <li>
+    <strong>Visible input cursor.</strong> The <code>xterm.js</code> pane uses a
+    <strong>blinking block cursor</strong> and grabs focus on mount and on click. An unfocused xterm
+    renders a hollow, easy-to-miss caret, so we focus it explicitly — the caret is always visible
+    while typing. <em>Code:</em> <code>cmd/claude-plus-desktop/frontend/src/Terminal.tsx</code>.
+  </li>
+  <li>
+    <strong>Scrollback.</strong> The terminal keeps a generous scrollback buffer (10k lines) so you
+    can mouse-wheel up through a session&#39;s earlier output; typing or new output snaps back to
+    the live edge. <em>Code:</em> <code>Terminal.tsx</code> (<code>scrollback</code> xterm option).
+  </li>
+  <li>
+    <strong>Auto-generated session titles (LLM).</strong> A session starts with a provisional
+    keyword slug from its first user turn, then
+    <strong>upgrades to a concise LLM-generated title</strong> once the first full exchange (first
+    user message + first assistant reply) lands. The daemon runs a one-shot, time-boxed headless
+    <code>claude -p</code> on the user&#39;s <strong>own subscription</strong> to summarize the
+    opening exchange into a 2–4 word kebab title, renames the session, and emits a
+    <code>session.rename</code> event. Best-effort: if the call fails or times out, the provisional
+    slug stays. The title sub-process is tagged with <code>CLAUDE_PLUS_TITLE=1</code> so the hook
+    shim skips it (no phantom session reaches HQ). A manual rename locks the name against further
+    auto-titling. <em>Code:</em> <code>internal/title/</code>,
+    <code>internal/capture/jsonl.go</code> (first-exchange hook),
+    <code>internal/daemon/runtime.go</code>, <code>internal/pty/{session,mux}.go</code>.
+  </li>
+  <li>
+    <strong>Rename a session by double-clicking its tab.</strong> Double-click a session
+    sub-tab&#39;s name to edit it inline; Enter commits, Escape cancels. This is the GUI surface of
+    the existing ⌃R manual rename, and a manual name is sticky — auto-titling will not overwrite it.
+    <em>Code:</em> <code>Sessions.tsx</code> → <code>App.Rename</code> → bridge →
+    <code>FrameRename</code> → <code>Mux.Rename</code>.
+  </li>
+  <li>
+    <strong>Session tabs hidden on Agents / Stream.</strong> The desktop chrome has top-level views
+    — <strong>Session · Agents · Stream</strong>. The session sub-tab row belongs to the Session
+    view only; selecting Agents or Stream hides it, since those views are instance-scoped rather
+    than per-session. <em>Code:</em> <code>App.tsx</code> view switcher.
+  </li>
+  <li>
+    <strong><code>--dangerously-skip-permissions</code> propagates to every session.</strong>
+    Launching <code>claude+ --dangerously-skip-permissions</code> (or with <code>--gui</code>)
+    starts the repo&#39;s daemon in <strong>dangerous mode</strong>: every inner
+    <code>claude</code> child it spawns is launched with
+    <code>--dangerously-skip-permissions</code>, so sub-agents inherit the wrapper&#39;s permission
+    posture. The mode is carried to the detached daemon via the
+    <code>CLAUDE_PLUS_DANGEROUS</code> environment variable and honored in
+    <code>pty.DefaultSpawn</code>. Because the daemon is per-repo and shared, the mode is fixed when
+    the daemon first starts for a repo — if a daemon is already running, restart it to change the
+    mode. <em>Code:</em> <code>cmd/claude-plus/main.go</code>,
+    <code>cmd/claude-plus-desktop/app.go</code>,
+    <code>internal/pty/session.go</code> (<code>DefaultSpawn</code>).
+  </li>
 </ul>
-<p>Adding the inline-rename control channel (<code>FrameRename</code>) bumped the attach
-<strong><code>ProtocolVersion</code></strong>, so a stale pre-rename daemon is auto-replaced on the next
-attach rather than silently lacking the new frame.</p>
+<p>
+  Adding the inline-rename control channel (<code>FrameRename</code>) bumped the attach
+  <strong><code>ProtocolVersion</code></strong
+  >, so a stale pre-rename daemon is auto-replaced on the next attach rather than silently lacking
+  the new frame.
+</p>
 <h2>Status</h2>
 <ul>
-<li><strong>Built:</strong> daemon + attach client, capture (hooks/jsonl, with the hook receiver
-forwarding lifecycle events), desktop bridge, <code>--gui</code> discovery, npm/install
-scaffolding, terminal/session UX (visible cursor, scrollback, LLM auto-titles,
-double-click rename, view switcher, dangerous-mode propagation), the <strong>isolated
-<code>~/.claude+</code> config root</strong>, and config-sync (remote half + drift over the
-<code>~/.claude</code> ∪ <code>~/.claude+</code> union).</li>
-<li><strong>In progress (not on this branch):</strong> a <code>UserPromptSubmit</code> hook that auto-renames
-a session on the first prompt and pushes the rename to the attached CLI tab; a
-further daemon <strong>protocol-version bump</strong> so rebuilds auto-replace a stale daemon;
-a heartbeat + ~60s freshness window so power-loss/killed daemons drop off HQ&#39;s
-live list. See the overview&#39;s &quot;In progress / next&quot;.</li>
-<li><strong>Open:</strong> full transport hardening (offline buffer edge cases), status-line and
-multiplexed-tab polish per the wireframe TUI screens.</li>
+  <li>
+    <strong>Built:</strong> daemon + attach client, capture (hooks/jsonl, with the hook receiver
+    forwarding lifecycle events), desktop bridge, <code>--gui</code> discovery, npm/install
+    scaffolding, terminal/session UX (visible cursor, scrollback, LLM auto-titles, double-click
+    rename, view switcher, dangerous-mode propagation), the
+    <strong>isolated <code>~/.claude+</code> config root</strong>, and config-sync (remote half +
+    drift over the <code>~/.claude</code> ∪ <code>~/.claude+</code> union).
+  </li>
+  <li>
+    <strong>In progress (not on this branch):</strong> a <code>UserPromptSubmit</code> hook that
+    auto-renames a session on the first prompt and pushes the rename to the attached CLI tab; a
+    further daemon <strong>protocol-version bump</strong> so rebuilds auto-replace a stale daemon; a
+    heartbeat + ~60s freshness window so power-loss/killed daemons drop off HQ&#39;s live list. See
+    the overview&#39;s &quot;In progress / next&quot;.
+  </li>
+  <li>
+    <strong>Open:</strong> full transport hardening (offline buffer edge cases), status-line and
+    multiplexed-tab polish per the wireframe TUI screens.
+  </li>
 </ul>
-

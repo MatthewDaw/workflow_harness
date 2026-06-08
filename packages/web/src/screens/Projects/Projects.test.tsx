@@ -14,6 +14,7 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: [],
   enabledAgents: [],
+  enabledBundles: [],
   enabledMcpServers: [],
 };
 
@@ -80,8 +81,6 @@ describe('Projects — connect repo', () => {
     // Connecting then fires a best-effort GitHub framing refresh.
     await waitFor(() => expect(postsTo('/projects/acme-atlas-billing/refresh').length).toBe(1));
     // Form closes on success.
-    await waitFor(() =>
-      expect(screen.queryByTestId('connect-repo-form')).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('connect-repo-form')).not.toBeInTheDocument());
   });
 });

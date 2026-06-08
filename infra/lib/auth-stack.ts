@@ -92,8 +92,7 @@ export class AuthStack extends cdk.Stack {
     // from Secrets Manager at deploy time, never committed.
     const google = new cognito.UserPoolIdentityProviderGoogle(this, 'GoogleIdp', {
       userPool: this.userPool,
-      clientId:
-        '163836316499-evusmfl30r9qag5jrcjvji5ine94jcgo.apps.googleusercontent.com',
+      clientId: '163836316499-evusmfl30r9qag5jrcjvji5ine94jcgo.apps.googleusercontent.com',
       clientSecretValue: cdk.SecretValue.secretsManager('command-hq/google-oauth', {
         jsonField: 'clientSecret',
       }),

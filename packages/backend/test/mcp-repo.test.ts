@@ -30,10 +30,23 @@ const PROJ = 'weekly-compass';
 const SCOPE = orgScope(ORG);
 
 function stdioServer(name: string): McpServer {
-  return { name, scope: SCOPE, transport: 'stdio', command: 'npx', args: ['-y', 'srv'], env: { TOKEN: 'sk-1' } };
+  return {
+    name,
+    scope: SCOPE,
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', 'srv'],
+    env: { TOKEN: 'sk-1' },
+  };
 }
 function httpServer(name: string): McpServer {
-  return { name, scope: SCOPE, transport: 'http', url: 'https://mcp.example.com', headers: { Authorization: 'Bearer x' } };
+  return {
+    name,
+    scope: SCOPE,
+    transport: 'http',
+    url: 'https://mcp.example.com',
+    headers: { Authorization: 'Bearer x' },
+  };
 }
 function project(id: string, owner: string): Project {
   return {
@@ -125,7 +138,10 @@ describe('addMcpServerToProject / removeMcpServerFromProject', () => {
   });
 
   it('removes a server from enabledMcpServers', async () => {
-    await repo.putProject({ ...project(PROJ, MATT), enabledMcpServers: ['local-fs', 'remote-mcp'] });
+    await repo.putProject({
+      ...project(PROJ, MATT),
+      enabledMcpServers: ['local-fs', 'remote-mcp'],
+    });
     const out = await repo.removeMcpServerFromProject(PROJ, 'local-fs');
     expect(out?.enabledMcpServers).toEqual(['remote-mcp']);
   });

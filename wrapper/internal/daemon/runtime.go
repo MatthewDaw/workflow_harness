@@ -679,6 +679,36 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, err error) {
 	return pulled, pushed, nil
 }
 
+// SyncMemoriesNow performs a one-shot FULL RECONCILE of the local Claude Code
+// project "memories" up to HQ for the given repo: it reads every memory/<slug>.md
+// under this project's isolated config dir and PUTs the whole set to
+// /projects/{id}/memories, which replaces the caller's entire set server-side
+// (adds, updates, AND deletions on disk all propagate; an empty set clears it).
+// It mirrors SyncSkillsNow's config resolution (API base + device token the same
+// way) and projectIDFor(repoRoot). A missing base/token is a no-op (return nil),
+// NOT an error: a daemon running without `claude+ login` simply doesn't sync —
+// this is the end-of-turn reconcile and must never destabilize an unauthenticated
+// session. ReadLocalMemories' error is tolerated (a missing memory/ dir yields an
+// empty set, which is a valid reconcile), so the only hard error is the PUT.
+func SyncMemoriesNow(repoRoot string) error {
+	base, ok := loadAPIBase()
+	if !ok {
+		return nil // no HQ API base configured — nothing to sync to (no-op)
+	}
+	cfg, ok := loadHQConfig()
+	if !ok || cfg.Token == "" {
+		return nil // not signed in — nothing to sync (no-op)
+	}
+	memoryDir, err := capture.MemoryDir(repoRoot)
+	if err != nil {
+		return err
+	}
+	// A missing dir / read hiccup yields an empty set; reconcile it anyway (an empty
+	// PUT clears the author's set, which is the correct full-reconcile semantics).
+	items, _ := config.ReadLocalMemories(memoryDir)
+	return config.ReconcileMemories(base, cfg.Token, projectIDFor(repoRoot), items)
+}
+
 // syncSkillsOnce triggers the skills auto-sync the first time a given session is
 // observed. Subsequent observations of the same session are no-ops, so the sync
 // runs once per NEW session (#1). The reconcile runs on its own goroutine so it

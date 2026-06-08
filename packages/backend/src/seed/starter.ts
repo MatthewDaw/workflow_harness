@@ -31,11 +31,7 @@ import {
 const TEMPLATE_ORG = process.env.STARTER_TEMPLATE_ORG ?? 'acme';
 
 /** Build the org-scoped starter records by cloning the template org's catalog. */
-async function cloneStarterRecords(
-  repo: Repo,
-  templateOrg: string,
-  org: string,
-): Promise<Skill[]> {
+async function cloneStarterRecords(repo: Repo, templateOrg: string, org: string): Promise<Skill[]> {
   const catalog = await repo.listSkills(templateOrg);
   const bundle = catalog.find((s) => s.kind === 'bundle' && s.name === STARTER_BUNDLE_NAME);
   if (!bundle) return [];

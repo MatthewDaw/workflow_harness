@@ -24,7 +24,10 @@ export function normalizeRepoSlug(input: string): string {
 
 /** A stable project id derived from the repo slug (`acme/Weekly-Compass` → `acme-weekly-compass`). */
 export function projectIdFor(slug: string): string {
-  return slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 /** Projects overview (U21): a card per repo, framed by PRD goal + progress. */

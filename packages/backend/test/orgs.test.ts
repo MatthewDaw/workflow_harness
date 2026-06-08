@@ -87,7 +87,9 @@ describe('POST /orgs (create)', () => {
       ...over,
     });
     await repo.putSkill(mk({ name: 'hq-weekly-update', kind: 'skill', body: 'x' }));
-    await repo.putSkill(mk({ name: STARTER_BUNDLE_NAME, kind: 'bundle', members: ['hq-weekly-update'] }));
+    await repo.putSkill(
+      mk({ name: STARTER_BUNDLE_NAME, kind: 'bundle', members: ['hq-weekly-update'] }),
+    );
 
     await createOrg(
       httpEvent({ method: 'POST', userId: BOB, body: { name: 'newco', password: 'secret1' } }),
@@ -242,11 +244,15 @@ describe('POST /me/org (switch active org)', () => {
 
   it('the admin flag follows the active org', async () => {
     // Active 'beta' (Alice only joined it) → not admin.
-    const before = bodyOf<{ admin?: boolean }>(await getMe(httpEvent({ method: 'GET', userId: ALICE }), deps));
+    const before = bodyOf<{ admin?: boolean }>(
+      await getMe(httpEvent({ method: 'GET', userId: ALICE }), deps),
+    );
     expect(before.admin).toBeFalsy();
     // Switch to 'acme' (she created it) → admin.
     await switchOrg(httpEvent({ method: 'POST', userId: ALICE, body: { org: 'acme' } }), deps);
-    const after = bodyOf<{ admin?: boolean }>(await getMe(httpEvent({ method: 'GET', userId: ALICE }), deps));
+    const after = bodyOf<{ admin?: boolean }>(
+      await getMe(httpEvent({ method: 'GET', userId: ALICE }), deps),
+    );
     expect(after.admin).toBe(true);
   });
 
