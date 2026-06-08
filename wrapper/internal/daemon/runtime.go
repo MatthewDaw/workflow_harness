@@ -511,7 +511,7 @@ func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *
 	// Checkpoint store for per-session topic state, under the claude+ config dir
 	// (C6). Best-effort: an unavailable config dir leaves topicStore nil and the
 	// gate runs on ephemeral state.
-	if dir, err := config.EnsureConfigDir(); err == nil {
+	if dir, err := config.EnsureConfigDir(d.repoRoot); err == nil {
 		if st, err := topic.NewStore(dir); err == nil {
 			rt.topicStore = st
 		}
@@ -628,17 +628,22 @@ func (rt *Runtime) reconcileSkills() {
 	if src == nil {
 		return
 	}
-	report, err := config.ComputeDrift(src)
+	plus, err := config.ProjectConfigDir(rt.d.repoRoot)
+	if err != nil {
+		diag.Logf("skills auto-sync: resolve project config dir failed: %v", err)
+		return
+	}
+	report, err := config.ComputeDrift(src, plus)
 	if err != nil {
 		diag.Logf("skills auto-sync: compute drift failed: %v", err)
 		return
 	}
-	local, err := config.ReadLocal()
+	local, err := config.ReadLocal(plus)
 	if err != nil {
 		diag.Logf("skills auto-sync: read local failed: %v", err)
 		return
 	}
-	pulled, pushed, errs := config.Reconcile(report, src, local)
+	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
 	for _, e := range errs {
 		diag.Logf("skills auto-sync: %v", e)
 	}
@@ -664,15 +669,19 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, err error) {
 		return 0, 0, fmt.Errorf("not signed in to HQ (run `claude+ login`)")
 	}
 	src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(repoRoot))
-	report, err := config.ComputeDrift(src)
+	plus, err := config.ProjectConfigDir(repoRoot)
 	if err != nil {
 		return 0, 0, err
 	}
-	local, err := config.ReadLocal()
+	report, err := config.ComputeDrift(src, plus)
 	if err != nil {
 		return 0, 0, err
 	}
-	pulled, pushed, errs := config.Reconcile(report, src, local)
+	local, err := config.ReadLocal(plus)
+	if err != nil {
+		return 0, 0, err
+	}
+	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
 	if len(errs) > 0 {
 		return pulled, pushed, errs[0]
 	}
@@ -741,13 +750,20 @@ func (rt *Runtime) forgetSkillSync(sessID string) {
 func (rt *Runtime) configSyncLoop(src config.RemoteSource) {
 	tk := time.NewTicker(30 * time.Second)
 	defer tk.Stop()
-	_ = rt.d.SyncConfigOnce(src) // prime immediately on start
+	// Each sync runs behind a recover: a panic in the fetch/parse is logged and the
+	// bad tick skipped rather than tearing down this poller (which has no other
+	// recover) and, with it, the daemon. The loop keeps refreshing the drift meter.
+	sync := func() {
+		defer diag.Recover("runtime.configSyncLoop")
+		_ = rt.d.SyncConfigOnce(src)
+	}
+	sync() // prime immediately on start
 	for {
 		select {
 		case <-rt.stop:
 			return
 		case <-tk.C:
-			_ = rt.d.SyncConfigOnce(src)
+			sync()
 		}
 	}
 }
@@ -811,7 +827,14 @@ func (rt *Runtime) captureLoop(instanceID string) {
 		}
 	}
 
-	for {
+	// tick handles exactly one loop iteration behind a recover so a panic in any
+	// branch (a malformed transcript row, a topic-gate edge case, a tailer repoint)
+	// is logged and the single bad iteration dropped — the loop, its per-session
+	// maps, and the whole daemon survive. The detached daemon has no visible stderr,
+	// so without this an unrecovered panic here would kill the daemon silently and
+	// the user's attached session would just vanish. Returns true only on clean stop.
+	tick := func() (done bool) {
+		defer diag.Recover("runtime.captureLoop")
 		select {
 		case <-rt.stop:
 			// Part B graceful stop: flush the resume store synchronously so the final
@@ -823,7 +846,7 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				_ = rt.store.FlushNow()
 			}
 			closeAllTails()
-			return
+			return true
 		case req := <-rt.repointCh:
 			// A post-/resume id divergence: repoint tab req[0]'s tailer at the live
 			// transcript req[1] so streaming continues from the new file. Only act on
@@ -854,7 +877,7 @@ func (rt *Runtime) captureLoop(instanceID string) {
 				snap := *te.st
 				te.mu.Unlock()
 				rt.checkpointTopic(sig.tabID, &snap)
-				continue
+				return false
 			}
 			// Stop: drain the tailer so the turn's tool_use rows are flushed, then run
 			// the gate and (if it fires) spawn the judge on a goroutine. The existing
@@ -1004,6 +1027,13 @@ func (rt *Runtime) captureLoop(instanceID string) {
 					}
 				}
 			}
+		}
+		return false
+	}
+
+	for {
+		if tick() {
+			return
 		}
 	}
 }

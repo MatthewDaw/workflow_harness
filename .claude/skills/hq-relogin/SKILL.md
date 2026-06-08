@@ -64,5 +64,5 @@ WebSocket handshake fails — events buffer locally and never reach HQ. Symptoms
 - This only touches HQ device auth — it does NOT affect your Claude Code /
   `claude login` session or your personal `~/.claude`.
 - If `claude+ login` reports the code expired before approval, just run it again.
-- Pairs with `/hq-refresh` / `/hq-update-skills`, which need a valid HQ
+- Pairs with `/hq-sync` / `/hq-update-skills`, which need a valid HQ
   token to reconcile the org catalog.

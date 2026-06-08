@@ -40,14 +40,16 @@ type settingsHookExec struct {
 	Command string `json:"command"` // the claude+ hook shim invocation
 }
 
-// InstallHooks merges a hooks block into the claude+ isolated config root's
+// InstallHooks merges a hooks block into the claude+ BASE config root's
 // settings.json (~/.claude+/settings.json) that forwards lifecycle events to the
-// daemon. claude+ launches Claude with CLAUDE_CONFIG_DIR pointed at this root, so
-// hooks must live here to fire under isolation. Writes are additive: existing
-// user hooks are preserved; only our managed entries (identified by the shim
-// command) are reconciled. Returns the settings path written.
+// daemon. The hooks are identical for every project, so they live in the base;
+// each per-project root inherits them via the settings.json auth-sync in
+// EnsureConfigDir, so they fire under isolation regardless of which project root
+// a session is launched against. Writes are additive: existing user hooks are
+// preserved; only our managed entries (identified by the shim command) are
+// reconciled. Returns the settings path written.
 func InstallHooks(hookCmd string) (string, error) {
-	dir, err := config.EnsureConfigDir()
+	dir, err := config.EnsureBaseDir()
 	if err != nil {
 		return "", err
 	}

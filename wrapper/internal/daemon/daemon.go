@@ -613,9 +613,25 @@ func (d *Daemon) attach(conn net.Conn, r *bufio.Reader, clientVersion int) {
 			d.mux.Kill(f.SessID)
 			send(Frame{Type: FrameSessAck, List: d.sessInfosFor(clientID)})
 		case FrameShutdown:
-			// Quit: terminate every session and stop the daemon process, then end
-			// this attach loop. d.Stop closes sessions (mux.CloseAll), the listener,
-			// and the registry record; it is idempotent.
+			// Quit (Ctrl-G q / desktop close): end every session with an explicit,
+			// ordered done so HQ retires each row IMMEDIATELY, then stop the daemon.
+			// Without the done emits, d.Stop's teardown (mux.CloseAll + rt.stop) races
+			// captureLoop's exit, which never gets to emit done — so the sessions would
+			// linger "active" in HQ until the ~60s heartbeat-stale window. notifyKill
+			// records the user-intent end so a deliberately-quit session is not
+			// --resume-d on the next launch; emitSession routes the done through the
+			// runtime's HQ path (a late duplicate done is harmless — done is idempotent).
+			for _, v := range d.mux.List() {
+				d.notifyKill(v.ID)
+				d.emitSession(v.ID, event.StatusChange(v.ID, event.StatusActive, event.StatusDone))
+			}
+			// Give the transport a beat to flush those done envelopes to HQ before we
+			// tear down. The ring buffer is durable (a missed flush replays on the next
+			// launch), so this is just to make the common case immediate; the client's
+			// Shutdown waits up to 2s for us to close the conn, well within budget.
+			time.Sleep(300 * time.Millisecond)
+			// d.Stop closes sessions (mux.CloseAll), the listener, and the registry
+			// record; it is idempotent.
 			d.Stop()
 			return
 		case FrameSessLs:

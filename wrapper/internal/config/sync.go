@@ -120,11 +120,11 @@ type RemoteSource interface {
 	Push(item Item, body string) error
 }
 
-// ComputeDrift reads the local registry, fetches HQ's effective set, and diffs
-// them. It is the passive meter feed (no writes) — the daemon calls it on a poll
-// and forwards DriftCount() to the status bar.
-func ComputeDrift(src RemoteSource) (DriftReport, error) {
-	local, err := ReadLocal()
+// ComputeDrift reads the given per-project registry (`plus`), fetches HQ's
+// effective set, and diffs them. It is the passive meter feed (no writes) — the
+// daemon calls it on a poll and forwards DriftCount() to the status bar.
+func ComputeDrift(src RemoteSource, plus string) (DriftReport, error) {
+	local, err := ReadLocal(plus)
 	if err != nil {
 		return DriftReport{}, err
 	}
@@ -136,13 +136,13 @@ func ComputeDrift(src RemoteSource) (DriftReport, error) {
 }
 
 // Reconcile actuates a drift report against HQ: HQ-only items (needs_pull) are
-// written to the local ~/.claude tree; local-only items (needs_push) are pushed
-// to HQ user scope. `differs` rows are left for the user to resolve explicitly
-// (we never silently overwrite an edited definition). Per-item failures are
-// collected and do not abort the run, so the operation is safe to retry; running
-// it again on a converged set is a no-op (idempotent). Returns counts actuated
-// plus any non-fatal errors.
-func Reconcile(report DriftReport, src RemoteSource, local []Item) (pulled, pushed int, errs []error) {
+// written into the given per-project tree (`plus`); local-only items (needs_push)
+// are pushed to HQ user scope. `differs` rows are left for the user to resolve
+// explicitly (we never silently overwrite an edited definition). Per-item
+// failures are collected and do not abort the run, so the operation is safe to
+// retry; running it again on a converged set is a no-op (idempotent). Returns
+// counts actuated plus any non-fatal errors.
+func Reconcile(report DriftReport, src RemoteSource, local []Item, plus string) (pulled, pushed int, errs []error) {
 	byKey := map[string]Item{}
 	for _, it := range local {
 		byKey[string(it.Kind)+"/"+it.Name] = it
@@ -156,7 +156,7 @@ func Reconcile(report DriftReport, src RemoteSource, local []Item) (pulled, push
 				errs = append(errs, fmt.Errorf("pull %s/%s: %w", row.Kind, row.Name, err))
 				continue
 			}
-			if err := ApplyPulled(ri, body); err != nil {
+			if err := ApplyPulled(plus, ri, body); err != nil {
 				errs = append(errs, fmt.Errorf("apply %s/%s: %w", row.Kind, row.Name, err))
 				continue
 			}

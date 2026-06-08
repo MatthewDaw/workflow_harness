@@ -12,7 +12,7 @@ both where AI did the work and where a human stayed in the loop.
   to Command HQ). The project was, in part, **built with itself**.
 - **Command HQ skills** (`.claude/skills/**`) — the bundled product skills were
   used as first-class commands during development: `/hq-update-progress`,
-  `/hq-weekly-update`, `/hq-add-skill`, `/hq-create-skill`, `/hq-refresh`,
+  `/hq-weekly-update`, `/hq-add-skill`, `/hq-create-skill`, `/hq-sync`,
   `/hq-relogin`, `/hq-startforge`/`/hq-endforge`, `/playwright-cli`.
 - **Multi-agent workflows** — Claude Code's `Workflow` and subagent (`Agent`)
   tooling were used to parallelize large refactors (see below).

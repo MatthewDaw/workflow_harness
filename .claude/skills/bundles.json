@@ -7,7 +7,7 @@
       "hq-endforge",
       "hq-init",
       "hq-optimize-agent",
-      "hq-refresh",
+      "hq-sync",
       "hq-relogin",
       "hq-startforge",
       "hq-update-progress",

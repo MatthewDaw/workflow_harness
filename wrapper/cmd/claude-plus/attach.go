@@ -28,6 +28,7 @@ import (
 //
 //	Ctrl-G n / Tab   next tab        Ctrl-G p   prev tab
 //	Ctrl-G 1..5      jump to a tab    Ctrl-G d   detach (daemon + session live on)
+//	Ctrl-G c         new session      Ctrl-G q   quit (end sessions + stop daemon)
 func runShell(c *daemon.Client, instance string) error {
 	inFd := int(os.Stdin.Fd())
 	outFd := int(os.Stdout.Fd())
@@ -190,6 +191,9 @@ func runShell(c *daemon.Client, instance string) error {
 				case actDetach:
 					_ = c.Detach()
 					return nil
+				case actQuit:
+					_ = c.Shutdown()
+					return nil
 				case actNewSession:
 					_ = c.NewSession()
 					markDirty()
@@ -270,6 +274,9 @@ func runShell(c *daemon.Client, instance string) error {
 				case actDetach:
 					_ = c.Detach()
 					return nil
+				case actQuit:
+					_ = c.Shutdown()
+					return nil
 				case actNewSession:
 					_ = c.NewSession()
 					markDirty()
@@ -333,6 +340,7 @@ const (
 	actHandled                     // consumed by the chrome
 	actDetach                      // leave the client; daemon survives
 	actNewSession                  // spawn another claude session in this instance
+	actQuit                        // end every session (HQ sees done) + stop the daemon
 )
 
 const ctrlG = 0x07
@@ -358,6 +366,8 @@ func resolvePrefixed(comp *shell.Compositor, b byte) keyAction {
 		return actNewSession
 	case 'd', ctrlG:
 		return actDetach
+	case 'q':
+		return actQuit
 	}
 	return actHandled
 }

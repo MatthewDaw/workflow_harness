@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+// testPlus returns the BASE ~/.claude+ as the per-project registry dir for tests
+// (under the temp HOME each test sets). The read/write/sync helpers now take the
+// dir explicitly; tests write to and read from this one path.
+func testPlus(t *testing.T) string {
+	t.Helper()
+	p, err := plusDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestDiffClassifies(t *testing.T) {
 	local := []Item{
 		{Kind: KindAgent, Name: "builder", Hash: "h1"},   // matches HQ -> in sync
@@ -49,7 +61,7 @@ func TestReadLocalReportsMalformed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agents, "empty.md"), []byte("   "), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	items, err := ReadLocal()
+	items, err := ReadLocal(testPlus(t))
 	if err != nil {
 		t.Fatalf("ReadLocal: %v", err)
 	}
@@ -136,7 +148,7 @@ func TestComputeDriftCountsRemote(t *testing.T) {
 	rem := newFakeRemote()
 	rem.addRemote(KindSkill, "hq-only", "pull me down")
 
-	report, err := ComputeDrift(rem)
+	report, err := ComputeDrift(rem, testPlus(t))
 	if err != nil {
 		t.Fatalf("ComputeDrift: %v", err)
 	}
@@ -159,15 +171,15 @@ func TestReconcileConvergesIdempotent(t *testing.T) {
 	rem := newFakeRemote()
 	rem.addRemote(KindSkill, "hq-only", "pull me down")
 
-	local, _ := ReadLocal()
+	local, _ := ReadLocal(testPlus(t))
 	report := Diff(local, mustFetch(t, rem))
-	pulled, pushed, errs := Reconcile(report, rem, local)
+	pulled, pushed, errs := Reconcile(report, rem, local, testPlus(t))
 	if pulled != 1 || pushed != 1 || len(errs) != 0 {
 		t.Fatalf("reconcile = pulled %d pushed %d errs %v, want 1/1/none", pulled, pushed, errs)
 	}
 
 	// After reconcile, the sets converge.
-	after, err := ComputeDrift(rem)
+	after, err := ComputeDrift(rem, testPlus(t))
 	if err != nil {
 		t.Fatalf("ComputeDrift after: %v", err)
 	}
@@ -176,9 +188,9 @@ func TestReconcileConvergesIdempotent(t *testing.T) {
 	}
 
 	// Running reconcile again on the converged set actuates nothing.
-	local2, _ := ReadLocal()
+	local2, _ := ReadLocal(testPlus(t))
 	report2 := Diff(local2, mustFetch(t, rem))
-	p2, pu2, e2 := Reconcile(report2, rem, local2)
+	p2, pu2, e2 := Reconcile(report2, rem, local2, testPlus(t))
 	if p2 != 0 || pu2 != 0 || len(e2) != 0 {
 		t.Fatalf("second reconcile should be a no-op, got pulled %d pushed %d errs %v", p2, pu2, e2)
 	}
@@ -196,9 +208,9 @@ func TestReconcileBodyErrorNonFatal(t *testing.T) {
 	rem.addRemote(KindSkill, "bad", "boom")
 	rem.bodyErr = string(KindSkill) + "/bad"
 
-	local, _ := ReadLocal()
+	local, _ := ReadLocal(testPlus(t))
 	report := Diff(local, mustFetch(t, rem))
-	pulled, _, errs := Reconcile(report, rem, local)
+	pulled, _, errs := Reconcile(report, rem, local, testPlus(t))
 	if pulled != 1 {
 		t.Fatalf("the good item should still pull, pulled=%d", pulled)
 	}
@@ -237,10 +249,10 @@ func TestMcpRoundTripInSync(t *testing.T) {
 			t.Setenv("USERPROFILE", home)
 
 			ri, body := mcpRemoteItem(t, s)
-			if err := ApplyPulled(ri, body); err != nil {
+			if err := ApplyPulled(testPlus(t), ri, body); err != nil {
 				t.Fatalf("ApplyPulled: %v", err)
 			}
-			local, err := ReadLocal()
+			local, err := ReadLocal(testPlus(t))
 			if err != nil {
 				t.Fatalf("ReadLocal: %v", err)
 			}
@@ -273,7 +285,7 @@ func TestMcpApplyPulledMergesPreservingUnrelated(t *testing.T) {
 	}
 
 	ri, body := mcpRemoteItem(t, remoteMcpServer{Name: "added", Transport: "stdio", Command: "new"})
-	if err := ApplyPulled(ri, body); err != nil {
+	if err := ApplyPulled(testPlus(t), ri, body); err != nil {
 		t.Fatalf("ApplyPulled: %v", err)
 	}
 
@@ -315,7 +327,7 @@ func TestMcpDriftClassifies(t *testing.T) {
 	driftyRemote, _ := mcpRemoteItem(t, remoteMcpServer{Name: "drifty", Transport: "stdio", Command: "hq-version"})
 	hqOnly, _ := mcpRemoteItem(t, remoteMcpServer{Name: "hq-only", Transport: "stdio", Command: "z"})
 
-	local, err := ReadLocal()
+	local, err := ReadLocal(testPlus(t))
 	if err != nil {
 		t.Fatalf("ReadLocal: %v", err)
 	}
@@ -343,14 +355,14 @@ func TestMcpReconcilePullIdempotent(t *testing.T) {
 	rem.items = append(rem.items, ri)
 	rem.bodies[string(KindMcp)+"/fs"] = body
 
-	local, _ := ReadLocal()
+	local, _ := ReadLocal(testPlus(t))
 	report := Diff(local, mustFetch(t, rem))
-	pulled, _, errs := Reconcile(report, rem, local)
+	pulled, _, errs := Reconcile(report, rem, local, testPlus(t))
 	if pulled != 1 || len(errs) != 0 {
 		t.Fatalf("reconcile pull = %d errs %v, want 1/none", pulled, errs)
 	}
 
-	after, err := ComputeDrift(rem)
+	after, err := ComputeDrift(rem, testPlus(t))
 	if err != nil {
 		t.Fatalf("ComputeDrift: %v", err)
 	}
@@ -359,9 +371,9 @@ func TestMcpReconcilePullIdempotent(t *testing.T) {
 	}
 
 	// Second reconcile actuates nothing.
-	local2, _ := ReadLocal()
+	local2, _ := ReadLocal(testPlus(t))
 	report2 := Diff(local2, mustFetch(t, rem))
-	p2, _, e2 := Reconcile(report2, rem, local2)
+	p2, _, e2 := Reconcile(report2, rem, local2, testPlus(t))
 	if p2 != 0 || len(e2) != 0 {
 		t.Fatalf("second reconcile should be a no-op, got pulled %d errs %v", p2, e2)
 	}
@@ -381,7 +393,7 @@ func TestReadLocalMcpMalformedNonFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items, err := ReadLocal()
+	items, err := ReadLocal(testPlus(t))
 	if err != nil {
 		t.Fatalf("ReadLocal should not error on malformed .mcp.json: %v", err)
 	}

@@ -42,7 +42,11 @@ func (d *Daemon) SetDrift(n int) {
 // a fetch error leaves the prior count untouched (transient HQ blips don't blank
 // the meter). Returns the error for the caller to log.
 func (d *Daemon) SyncConfigOnce(src config.RemoteSource) error {
-	report, err := config.ComputeDrift(src)
+	plus, err := config.ProjectConfigDir(d.repoRoot)
+	if err != nil {
+		return err
+	}
+	report, err := config.ComputeDrift(src, plus)
 	if err != nil {
 		return err
 	}

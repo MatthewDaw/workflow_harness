@@ -20,7 +20,7 @@ import (
 // when isolation is not active. The project hash is derived from the absolute
 // repo path. This is the same surface ce-sessions reads (KTD3).
 func TranscriptPath(repoRoot, sessionID string) (string, error) {
-	base, ok := config.ConfigDir()
+	base, ok := config.ConfigDir(repoRoot)
 	if !ok {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -39,7 +39,7 @@ func TranscriptPath(repoRoot, sessionID string) (string, error) {
 // the two never diverge. The <hash> is projectHash(repoRoot), reused (not
 // re-derived) so a Claude Code layout change is re-pinned in one place (R2).
 func MemoryDir(repoRoot string) (string, error) {
-	base, ok := config.ConfigDir()
+	base, ok := config.ConfigDir(repoRoot)
 	if !ok {
 		home, err := os.UserHomeDir()
 		if err != nil {

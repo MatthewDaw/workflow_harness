@@ -199,6 +199,11 @@ func (c *Client) Connected() bool { return c.connected.Load() }
 // Run is the connection manager: dial, replay the buffer, then pump live events
 // and read control frames, reconnecting with backoff on failure until Stop.
 func (c *Client) Run() {
+	// Backstop: this goroutine is launched bare (go rt.client.Run()) and the daemon
+	// has no visible stderr, so an unrecovered panic here would kill the daemon
+	// silently. Log it instead. Per-frame control handling is additionally guarded
+	// in serve so a single bad frame can't even reach this backstop.
+	defer diag.Recover("transport.client.Run")
 	backoff := time.Second
 	for {
 		select {
@@ -293,7 +298,14 @@ func (c *Client) serve(conn *websocket.Conn) {
 				return
 			}
 			if msg.Type == "control" && c.onCtrl != nil {
-				c.onCtrl(ControlFrame{SessionID: msg.SessionID, Action: msg.Action, Payload: msg.Payload.Text})
+				// This is a SEPARATE goroutine from Run, so Run's recover can't catch a
+				// panic here. The control handler calls back into the daemon (emit, kill,
+				// shutdown); guard each frame so one malformed/edge-case control can't
+				// crash the daemon — log it and keep reading the next frame.
+				func() {
+					defer diag.Recover("transport.onCtrl")
+					c.onCtrl(ControlFrame{SessionID: msg.SessionID, Action: msg.Action, Payload: msg.Payload.Text})
+				}()
 			}
 		}
 	}()

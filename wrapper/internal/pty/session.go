@@ -183,7 +183,7 @@ func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc, resu
 	// ~/.claude while auth/transcripts/settings persist across restarts. A failure
 	// here must never block a session — fall back to the inherited ~/.claude.
 	if spec.Isolate {
-		if dir, err := config.EnsureConfigDir(); err == nil {
+		if dir, err := config.EnsureConfigDir(repoRoot); err == nil {
 			spec.Env = append(spec.Env, "CLAUDE_CONFIG_DIR="+dir)
 		} else {
 			log.Printf("pty: isolated config root failed, using ~/.claude: %v", err)

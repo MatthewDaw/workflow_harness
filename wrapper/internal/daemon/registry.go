@@ -212,19 +212,29 @@ func ByIndex(n int) (Entry, error) {
 // calls it the moment a probe/attach reveals an incompatible daemon, then
 // respawns a fresh one.
 func stopStale(e Entry) {
-	terminatePID(e.PID)
-	// A messy exit (crash, hard kill, terminal close) skips the daemon's cleanup
-	// defer, so its record survives with a PID that may now be dead or recycled
-	// while the REAL daemon keeps listening — and keeps rewriting this per-repo
-	// record via its refresh loop, clobbering any fresh daemon and re-wedging
-	// attach. So also free the recorded port: if a *claude+* daemon (it answers our
-	// ping/pong) still holds it under a different PID, kill that process too. Never
-	// kill ourselves — the attaching client (or a test runner hosting an in-process
-	// fake daemon) is the current process — and never an unrelated process that
-	// merely recycled the port (the alive() gate ensures the holder speaks our
-	// protocol before we terminate it).
-	if lp := listenerPID(e.Sock); lp > 0 && lp != e.PID && lp != os.Getpid() && alive(e.Sock) {
-		terminatePID(lp)
+	// Kill ONLY a process we can positively confirm is the claude+ daemon for this
+	// record — never the recorded PID blindly. A messy exit (crash, hard kill,
+	// terminal close) skips the daemon's cleanup defer, so the record survives with
+	// a PID that is now DEAD, and the OS (Windows especially) recycles that PID fast
+	// to an unrelated live process. Because terminatePID is a TREE kill on Windows
+	// (taskkill /F /T), terminating a recycled PID would take down an innocent
+	// process AND its whole child tree — which is exactly the "a claude+ daemon dies
+	// for no reason" failure: a stale record's recycled PID lands on another repo's
+	// live daemon (or its claude session) and tree-kills it.
+	//
+	// So we gate every kill on alive(e.Sock): only when the recorded socket still
+	// answers our ping/pong is there a real claude+ daemon to retire. A live daemon
+	// rewrites its PID into this record every refresh tick, so when it answers, the
+	// listener on its port is the authoritative current PID — kill that (which also
+	// covers the case where the REAL daemon kept listening under a different PID than
+	// the stale record names). Never kill ourselves: the attaching client (or a test
+	// runner hosting an in-process fake daemon) is the current process. When the
+	// socket is dead there is nothing safe to kill — a fresh daemon binds a new port
+	// and overwrites this record anyway — so we just drop the stale record.
+	if alive(e.Sock) {
+		if lp := listenerPID(e.Sock); lp > 0 && lp != os.Getpid() {
+			terminatePID(lp)
+		}
 	}
 	_ = removeMeta(e.Repo)
 }
@@ -265,9 +275,13 @@ func ResetAll() int {
 		if b, rerr := os.ReadFile(m); rerr == nil {
 			var e Entry
 			if json.Unmarshal(b, &e) == nil {
-				terminatePID(e.PID)
-				if lp := listenerPID(e.Sock); lp > 0 && lp != os.Getpid() && alive(e.Sock) {
-					terminatePID(lp)
+				// Same recycled-PID hazard as stopStale: never tree-kill the recorded
+				// PID blindly. Only retire a confirmed-live claude+ daemon by the PID
+				// actually listening on its socket.
+				if alive(e.Sock) {
+					if lp := listenerPID(e.Sock); lp > 0 && lp != os.Getpid() {
+						terminatePID(lp)
+					}
 				}
 			}
 		}

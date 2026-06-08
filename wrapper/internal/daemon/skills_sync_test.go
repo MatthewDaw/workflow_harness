@@ -70,7 +70,13 @@ func TestReconcileSkillsPullsHQOnly(t *testing.T) {
 	rt.reconcileSkills()
 
 	home := os.Getenv("HOME")
-	skill := filepath.Join(home, ".claude+", "skills", "hq-only", "SKILL.md")
+	// The pull lands in THIS repo's per-project root (~/.claude+/roots/<slug>),
+	// resolved exactly as the runtime does.
+	plus, err := config.ProjectConfigDir(rt.d.repoRoot)
+	if err != nil {
+		t.Fatalf("ProjectConfigDir: %v", err)
+	}
+	skill := filepath.Join(plus, "skills", "hq-only", "SKILL.md")
 	b, err := os.ReadFile(skill)
 	if err != nil {
 		t.Fatalf("expected pulled skill at %s: %v", skill, err)
@@ -164,15 +170,19 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 
 	src := config.NewHTTPRemoteSource(srv.URL, "tok", "myproj")
 
-	report, err := config.ComputeDrift(src)
+	// The read/write/reconcile helpers take the per-project registry dir
+	// explicitly; this test materializes into a fixed dir under the temp HOME and
+	// asserts on it directly.
+	plus := filepath.Join(home, ".claude+")
+	report, err := config.ComputeDrift(src, plus)
 	if err != nil {
 		t.Fatalf("ComputeDrift: %v", err)
 	}
-	local, err := config.ReadLocal()
+	local, err := config.ReadLocal(plus)
 	if err != nil {
 		t.Fatalf("ReadLocal: %v", err)
 	}
-	pulled, _, errs := config.Reconcile(report, src, local)
+	pulled, _, errs := config.Reconcile(report, src, local, plus)
 	if len(errs) != 0 {
 		t.Fatalf("reconcile errs: %v", errs)
 	}
@@ -184,7 +194,6 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 		t.Fatal("catalog GETs must not carry a ?project query param (org-wide catalog)")
 	}
 
-	plus := filepath.Join(home, ".claude+")
 	// Enabled items materialize.
 	if _, err := os.Stat(filepath.Join(plus, "skills", "enabled-skill", "SKILL.md")); err != nil {
 		t.Fatalf("enabled skill should materialize: %v", err)
@@ -252,7 +261,8 @@ func TestEmptyOptInMaterializesNothing(t *testing.T) {
 	defer srv.Close()
 
 	src := config.NewHTTPRemoteSource(srv.URL, "tok", "p1")
-	report, err := config.ComputeDrift(src)
+	plus := filepath.Join(home, ".claude+")
+	report, err := config.ComputeDrift(src, plus)
 	if err != nil {
 		t.Fatalf("ComputeDrift: %v", err)
 	}

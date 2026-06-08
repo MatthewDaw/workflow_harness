@@ -48,18 +48,14 @@ func claudeDir() (string, error) {
 }
 
 // ReadLocal reads all local agents and skills, over the union of the user's own
-// registry (~/.claude) and the isolated claude+ registry (~/.claude+, where
-// product-bundled skills live — see overlay.go). Reading both means drift is
-// computed over everything the inner Claude can see, while a pull only ever
-// writes into ~/.claude+ (ApplyPulled), so bundled skills never pollute the
+// registry (~/.claude) and the given isolated claude+ registry (`plus`, a repo's
+// per-project root — see overlay.go's ProjectConfigDir). Reading both means
+// drift is computed over everything the inner Claude can see, while a pull only
+// ever writes into `plus` (ApplyPulled), so bundled skills never pollute the
 // user's personal ~/.claude. On a name collision the user's own ~/.claude entry
 // wins. Malformed files are reported (Err set) rather than aborting the scan.
-func ReadLocal() ([]Item, error) {
+func ReadLocal(plus string) ([]Item, error) {
 	userDir, err := claudeDir()
-	if err != nil {
-		return nil, err
-	}
-	plus, err := plusDir()
 	if err != nil {
 		return nil, err
 	}
@@ -160,19 +156,15 @@ func readMcpFile(path string) []Item {
 	return out
 }
 
-// ApplyPulled materializes an HQ item into the isolated claude+ tree
-// (~/.claude+): agents land at agents/<name>.md, skills at skills/<name>/SKILL.md.
-// It writes into ~/.claude+, never the user's personal ~/.claude, so pulled
-// product-bundled skills stay out of their normal Claude dataset. Parent
-// directories are created as needed. The write is additive and reversible (a pull
-// never deletes other definitions), and writing exactly `body` keeps the local
-// hash equal to the HQ hash, so a freshly pulled item reads back as in-sync
-// (reconcile is idempotent).
-func ApplyPulled(item RemoteItem, body string) error {
-	dir, err := plusDir()
-	if err != nil {
-		return err
-	}
+// ApplyPulled materializes an HQ item into the given isolated claude+ tree
+// (`dir`, a repo's per-project root): agents land at agents/<name>.md, skills at
+// skills/<name>/SKILL.md. It writes into `dir`, never the user's personal
+// ~/.claude, so pulled product-bundled skills stay out of their normal Claude
+// dataset. Parent directories are created as needed. The write is additive and
+// reversible (a pull never deletes other definitions), and writing exactly
+// `body` keeps the local hash equal to the HQ hash, so a freshly pulled item
+// reads back as in-sync (reconcile is idempotent).
+func ApplyPulled(dir string, item RemoteItem, body string) error {
 	var path string
 	switch item.Kind {
 	case KindAgent:
