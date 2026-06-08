@@ -251,6 +251,27 @@ command-hq-starter bundle`). Commit only the skill file(s), not unrelated
 
 ## 5 · Opt a project into the skill (per-project enablement)
 
+> **Never turn this step into a multiple-choice question.** Do NOT stop and ask
+> the user "connect repo / install locally / catalog-only?" — that interactive
+> menu is exactly the friction this skill exists to remove. Apply the deterministic
+> defaults below (auto-run any local install doc in the prompt; report-and-finish
+> when the repo isn't a connected HQ project) and only surface a prompt if a
+> command **fails** and needs a real decision.
+
+**If the prompt carried a literal install doc, run it — don't just catalog it.**
+When the user pasted real install instructions for an external tool (a
+`git clone … && ./setup`, a CLAUDE.md edit, an `npm install`, etc. — gstack is the
+canonical example), the catalog registration is only half the ask. Also perform
+the local install automatically, no questions:
+  1. Run the install commands verbatim (e.g. `git clone --single-branch --depth 1
+     <repo> ~/.claude/skills/<tool> && cd ~/.claude/skills/<tool> && ./setup`).
+  2. Make the CLAUDE.md edits the doc describes (e.g. add the tool's section,
+     listing its skills / browse rules).
+  3. Commit just those changes with the developer's own `git` (conventional
+     message, never `--no-verify`) so teammates get it via the repo.
+Report what you ran. If a step genuinely fails (clone error, `./setup` non-zero),
+say so plainly — that is the only case where you may pause for input.
+
 **Fail-fast gate — check FIRST, and STOP if it fails.** Per-project opt-in needs
 the repo to be a **connected HQ project** AND you to have its `projectId`. There
 is NO list endpoint to enumerate: `GET /projects` is admin-only (`401`), and
@@ -259,13 +280,15 @@ is NO list endpoint to enumerate: `GET /projects` is admin-only (`401`), and
 - If you already have a `projectId` (the user gave one, or a known connected
   project), use it.
 - Otherwise do **ONE** probe — `GET $HQ/projects/<candidate>` — and if it returns
-  `{"error":"not found"}`, this repo is **not an HQ project**: **STOP.** Do NOT
-  probe repo-derived ids, git remotes, or local state — that flailing cost ~1.5
-  min last time and a locally-run claude+ repo has no project record by design.
-  Registering in the org catalog IS the deliverable; tell the user verbatim:
+  `{"error":"not found"}`, this repo is **not an HQ project**: **STOP** the opt-in
+  attempt — but **do not ask** what to do instead. Do NOT probe repo-derived ids,
+  git remotes, or local state — that flailing cost ~1.5 min last time and a
+  locally-run claude+ repo has no project record by design. Registering in the org
+  catalog (plus the local install above, if a doc was given) IS the deliverable;
+  tell the user verbatim and then finish at step 6:
   *"Registered + bundled in the org catalog. It's not enabled on a project yet —
   connect this repo in the HQ web app (which mints a projectId) or toggle the
-  bundle on the HQ **Skills** tab."* Then finish at step 6.
+  bundle on the HQ **Skills** tab."*
 
 Once you HAVE a `projectId`, a whole bundle enables all its members in one call
 (`POST $HQ/projects/<projectId>/bundles/<bundleName>`); or enable a skill directly
