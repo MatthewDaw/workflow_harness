@@ -217,5 +217,6 @@ user to sync later — do it for them.
   adding a `.claude/skills/<name>/` file is all that's needed — the seed picks it
   up. For other catalog bundles, membership is the `members` array on the bundle
   record (REST or Skills tab).
-- This is the multi-skill companion to `/hq-create-hq-skill` (which scaffolds a
-  single skill). Both ride the same seed + org-catalog REST registration paths.
+- This skill covers the whole lifecycle for a single skill OR a bundle: scaffold
+  the `SKILL.md`(s), register them in the org catalog (seed or REST), opt the
+  project in, and sync so they're usable now.

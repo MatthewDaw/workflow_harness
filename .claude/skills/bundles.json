@@ -4,7 +4,6 @@
     "members": [
       "hq-add-mcp",
       "hq-add-skill",
-      "hq-create-skill",
       "hq-endforge",
       "hq-init",
       "hq-optimize-agent",

@@ -10,14 +10,14 @@ import { buildSeedSkills, STARTER_BUNDLE_NAME } from '../src/seed/skills.js';
  */
 describe('buildSeedSkills', () => {
   const files = [
-    { name: 'hq-create-skill', description: 'Scaffold a new HQ skill', body: '# hq-create-skill' },
+    { name: 'hq-add-skill', description: 'Scaffold a new HQ skill', body: '# hq-add-skill' },
     { name: 'hq-weekly-update', description: 'Weekly', body: '# hq-weekly-update' },
     { name: 'playwright-cli', description: 'Browser CLI', body: '# playwright-cli' },
   ];
   const manifest = {
     [STARTER_BUNDLE_NAME]: {
       description: 'Core HQ skills',
-      members: ['hq-create-skill', 'hq-weekly-update'],
+      members: ['hq-add-skill', 'hq-weekly-update'],
     },
   };
 
@@ -26,7 +26,7 @@ describe('buildSeedSkills', () => {
 
     const skills = records.filter((r) => r.kind === 'skill');
     expect(skills.map((s) => s.name).sort()).toEqual([
-      'hq-create-skill',
+      'hq-add-skill',
       'hq-weekly-update',
       'playwright-cli',
     ]);
@@ -34,14 +34,14 @@ describe('buildSeedSkills', () => {
       expect(s.source).toBe('built-in');
     }
     // Bundle members seed at org scope.
-    for (const name of ['hq-create-skill', 'hq-weekly-update']) {
+    for (const name of ['hq-add-skill', 'hq-weekly-update']) {
       expect(skills.find((s) => s.name === name)?.scope).toEqual({ tier: 'org', id: 'acme' });
     }
 
     const bundle = records.find((r) => r.kind === 'bundle');
     expect(bundle?.name).toBe(STARTER_BUNDLE_NAME);
     expect(bundle?.scope).toEqual({ tier: 'org', id: 'acme' });
-    expect(bundle?.members).toEqual(['hq-create-skill', 'hq-weekly-update']);
+    expect(bundle?.members).toEqual(['hq-add-skill', 'hq-weekly-update']);
   });
 
   it('keeps a non-bundle skill in the catalog but at the grant owner user scope', () => {
