@@ -91,16 +91,16 @@ jobs:
           CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           # The real device-token signing secret — never the literal fallback.
           DEVICE_TOKEN_SECRET: ${{ secrets.DEVICE_TOKEN_SECRET }}
-      # Seed the bundled product skills into HQ at org scope (plan U22) so the
-      # Skills tab shows the "command-hq-starter" bundle out of the box. The seed
-      # reads .claude/skills/ and the compiled backend record builder; idempotent
-      # (upsert), so it is safe to run on every deploy. SEED_ORG must match the org
-      # claim the deployed Cognito users carry (repo variable, default acme).
+      # Seed the bundled product skills into HQ for EVERY org (plan U22) so the
+      # Skills tab shows the "command-hq-starter" bundle out of the box in every
+      # tenant. `seed-all-orgs.mjs` enumerates the ORG# records and seeds the
+      # starter bundle into each (plus the user-grant built-ins once); it reads
+      # .claude/skills/ and the compiled backend record builder. Idempotent
+      # (upsert), so it is safe to run on every deploy.
       - name: Build shared + backend (seed reads packages/backend/dist)
         run: npm run build -w @harness/shared -w @harness/backend
-      - name: Seed bundled skills into HQ (org scope)
-        run: node infra/scripts/seed-skills.mjs
+      - name: Seed bundled skills into HQ (every org)
+        run: node infra/scripts/seed-all-orgs.mjs
         env:
-          SEED_ORG: ${{ vars.SEED_ORG || 'personasearch' }}
           HARNESS_TABLE: harness
           AWS_REGION: ${{ env.AWS_REGION }}

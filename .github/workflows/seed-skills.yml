@@ -1,8 +1,13 @@
 # Auto-seeds the bundled product skills into Command HQ whenever the repo's
 # skill definitions change on main (plan U22). The full deploy workflow only
-# runs on a manual dispatch, so this lightweight job keeps HQ's org-scope bundle
+# runs on a manual dispatch, so this lightweight job keeps the org-scope bundle
 # in step with `.claude/skills/` without a full redeploy: a skill edit landing on
 # main re-runs the idempotent seed within ~30s.
+#
+# It seeds EVERY org (`seed-all-orgs.mjs` enumerates the ORG# records and writes
+# the starter bundle into each), so a skill edit refreshes all tenants — not just
+# one `SEED_ORG`. The non-bundle built-ins are written once at the user-grant
+# scope. Idempotent (upsert), so re-running converges.
 name: seed-skills
 
 on:
@@ -41,9 +46,8 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Seed bundled skills into HQ (org scope)
-        run: node infra/scripts/seed-skills.mjs
+      - name: Seed bundled skills into HQ (every org)
+        run: node infra/scripts/seed-all-orgs.mjs
         env:
-          SEED_ORG: ${{ vars.SEED_ORG || 'personasearch' }}
           HARNESS_TABLE: harness
           AWS_REGION: ${{ env.AWS_REGION }}
