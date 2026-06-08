@@ -17,7 +17,7 @@ Author and register a **Command HQ MCP server** — the third pillar of a Claude
 setup alongside skills and agents — into the **org catalog**, then opt the
 current project into it. Runs in the developer's claude+ session, inside a
 connected repo. This is the MCP companion to `/hq-add-skill`: author → register
-via the existing REST → project opt-in → `claude+ sync-skills` to materialize.
+via the existing REST → project opt-in → `claude+ sync` to materialize.
 
 > **Scope model (live, 3-tier).** The catalog code is firmly 3-tier
 > (`org` / `user` / `project`; see `packages/backend/src/rest/scopeauth.ts`
@@ -142,7 +142,7 @@ do this from the HQ project **MCP Servers** tab.
 ## 4 · Materialize it in this session — always do this
 
 This step is **mandatory** — it's the difference between "registered in the
-catalog" and "usable right now." Run `claude+ sync-skills` (or `/hq-sync`) to pull
+catalog" and "usable right now." Run `claude+ sync` (or `/hq-sync`) to pull
 the linked project's enabled MCP servers into the isolated per-project claude+
 config root, so the session picks them up without restarting. Sync writes the
 server into the location Claude actually reads (`<root>/.claude.json` `mcpServers`,
@@ -165,4 +165,4 @@ Depends only on things that already exist: `mcpServerSchema` (the structured
 (`packages/backend/src/rest/mcpServers.ts`: `GET/POST/PUT/DELETE /mcp-servers`,
 `GET /mcp-servers/:name/usage`), the per-project opt-in
 (`POST/DELETE /projects/:id/mcp-servers/:name`), the version `promote` endpoint,
-and `claude+ sync-skills`. It invents no new backend surface.
+and `claude+ sync`. It invents no new backend surface.

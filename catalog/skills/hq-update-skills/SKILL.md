@@ -18,7 +18,7 @@ just-published bundled skill is usable without restarting a session.
 
 ## What it does
 
-Runs the wrapper's one-shot reconcile (`claude+ sync-skills`), which:
+Runs the wrapper's one-shot reconcile (`claude+ sync`), which:
 
 1. Fetches the catalog (`GET /skills`, `GET /agents`) — the **org catalog merged
    with the caller's own user-scoped items** (the 3-tier model in
@@ -56,16 +56,16 @@ In the developer's claude+ session, inside a connected repo (the device token +
 HQ endpoint established at `claude+ login` are reused):
 
 ```bash
-claude+ sync-skills
+claude+ sync
 ```
 
-Report the printed result to the user, e.g. `skills synced: pulled 2, pushed 0`.
+Report the printed result to the user, e.g. `synced (skills + agents + mcp): pulled 2, pushed 0`.
 A freshly-pulled skill is available immediately for the next turn (claude+'s
 inner Claude reads skills from `~/.claude+`).
 
 ## Then seed the deployed catalog so it's LIVE on the website
 
-`sync-skills` reconciles `~/.claude+` (this machine) and pushes local-only skills
+`claude+ sync` reconciles `~/.claude+` (this machine) and pushes local-only skills
 via the admin REST, but the **website's Skills tab reads the deployed org
 catalog**, which is only repopulated by the seed. When the goal is "run the skill
 and see it live on the website," always finish by seeding the deployed `harness`

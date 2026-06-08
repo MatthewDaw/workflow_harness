@@ -300,7 +300,7 @@ HQ project **Skills** / **Agents** tabs.
 This step is **mandatory, not optional** — it's the difference between "the skill
 is in the catalog" and "the user can run it right now." Always finish here:
 
-Run `claude+ sync-skills` (or `/hq-update-skills`) to pull the **linked project's
+Run `claude+ sync` (or `/hq-update-skills`) to pull the **linked project's
 enabled** skill(s) into the isolated `~/.claude+` registry so they're usable now.
 Writes go to `~/.claude+`, never your personal `~/.claude`. If you registered a
 skill but didn't opt the project in (step 5), the sync won't pull it — enable it on

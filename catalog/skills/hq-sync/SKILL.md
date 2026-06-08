@@ -52,8 +52,8 @@ into the claude+ root — your personal `~/.claude` is never touched.
 
 All three kinds — skills, agents, and MCP servers — are reconciled in the **same
 pass**, into this project's root, and each is set up **end to end** (see the
-contract below). (`claude+ sync-skills` is kind-generic despite its name; it pulls
-skills, agents, and MCP servers together, scoped to the linked project.)
+contract below). (`claude+ sync` reconciles all three — skills, agents, and MCP
+servers — together, scoped to the linked project.)
 
 1. **Reconcile the connected repo's local config (no deploy needed).** Resolve the
    repo root (`git rev-parse --show-toplevel`), then copy the repo's authoritative
@@ -170,13 +170,13 @@ Four moves, all landing in this project's root:
 2. **HQ → project root** (steps 2–3):
 
    ```bash
-   claude+ sync-skills
+   claude+ sync
    ```
 
-   `sync-skills` performs the HQ-side one-shot reconcile for **all three kinds**
+   `claude+ sync` performs the HQ-side one-shot reconcile for **all three kinds**
    (skills, agents, and MCP servers), into the linked project's root. Report its
-   printed `pulled N` count. Note the CLI message says only "skills synced" even
-   though agents and MCP servers are included in the same pass. If it prints
+   printed `pulled N` count (the CLI prints `synced (skills + agents + mcp): …`).
+   If it prints
    `401 Unauthorized`, the device isn't signed in — run `claude+ login` first (the
    repo step still works offline).
 3. **Finish end-to-end setup** (step 4). For each pulled item, complete the

@@ -94,7 +94,7 @@ read and write agents. No model keys, no Bedrock — the edits are applied direc
    `POST /agents/{name}/promote { variantId, rev? }` — callable by **any authed
    org member**, not admin-gated. This only repoints the TRUE pointer.
 6. **Confirm + materialize.** Print the agent's HQ URL so the change is visible,
-   then run `claude+ sync-skills` (or `/hq-sync`) so the linked project picks up
+   then run `claude+ sync` (or `/hq-sync`) so the linked project picks up
    the edited agent — and, per the agent-deps guarantee, any skill in its
    `skills[]` missing locally is pulled too, and any `mcpServers[]` is wired into
    the project's enabled set. Report the printed sync result. Do not end telling
