@@ -118,6 +118,11 @@ type RemoteSource interface {
 	Body(item RemoteItem) (string, error)
 	// Push uploads a local-only item to HQ at the caller's user scope.
 	Push(item Item, body string) error
+	// AgentSkills returns the skill names the named agent depends on
+	// (agentSchema.skills), captured during the most recent Fetch. Reconcile uses
+	// it to ensure an agent's skills are materialized after the agent itself
+	// (U-Agent-Deps). An unknown agent yields nil.
+	AgentSkills(agentName string) []string
 }
 
 // ComputeDrift reads the given per-project registry (`plus`), fetches HQ's
@@ -147,6 +152,17 @@ func Reconcile(report DriftReport, src RemoteSource, local []Item, plus string) 
 	for _, it := range local {
 		byKey[string(it.Kind)+"/"+it.Name] = it
 	}
+	// Track which skills are present (locally already, or pulled during this run) so
+	// the agent-dependency pass (U-Agent-Deps) only pulls skills that are still
+	// missing — and so it never double-pulls a skill the main loop already handled.
+	skillPresent := map[string]bool{}
+	for _, it := range local {
+		if it.Kind == KindSkill {
+			skillPresent[it.Name] = true
+		}
+	}
+	// Agents we materialized (or that are already present) and must ensure deps for.
+	var ensureDepsFor []string
 	for _, row := range report.Rows {
 		switch row.Drift {
 		case DriftNeedsPull:
@@ -161,6 +177,12 @@ func Reconcile(report DriftReport, src RemoteSource, local []Item, plus string) 
 				continue
 			}
 			pulled++
+			if row.Kind == KindSkill {
+				skillPresent[row.Name] = true
+			}
+			if row.Kind == KindAgent {
+				ensureDepsFor = append(ensureDepsFor, row.Name)
+			}
 		case DriftNeedsPush:
 			it, ok := byKey[string(row.Kind)+"/"+row.Name]
 			if !ok {
@@ -176,7 +198,56 @@ func Reconcile(report DriftReport, src RemoteSource, local []Item, plus string) 
 				continue
 			}
 			pushed++
+		case DriftInSync, DriftDiffers:
+			// An agent that is already present (or locally edited) still needs its
+			// skill deps ensured — the agent file landing does not guarantee its
+			// skills are on disk (U-Agent-Deps).
+			if row.Kind == KindAgent {
+				ensureDepsFor = append(ensureDepsFor, row.Name)
+			}
 		}
 	}
+
+	// U-Agent-Deps: ensure every skill each materialized/present agent depends on is
+	// on disk, pulling any that are still missing. The dep skill's body is available
+	// from the same Fetch (the backend union-adds an enabled agent's skills into the
+	// project's enabled set, so they are cached). A dep with no available body (or a
+	// write failure) is a non-fatal error — the agent file still landed, and the gate
+	// will flag the missing skill — so it never aborts the run.
+	depPulled := ensureAgentSkillDeps(src, plus, ensureDepsFor, skillPresent, &errs)
+	pulled += depPulled
 	return pulled, pushed, errs
+}
+
+// ensureAgentSkillDeps pulls each missing skill dependency of the given agents into
+// `plus`. skillPresent tracks skills already on disk / pulled this run (and is
+// updated as deps are pulled, so two agents sharing a dep pull it once). It returns
+// the number of dep skills newly pulled and appends any non-fatal errors. A dep
+// already present is a no-op (idempotent). Pure over the source's cached state so a
+// re-run on a converged set actuates nothing.
+func ensureAgentSkillDeps(src RemoteSource, plus string, agents []string, skillPresent map[string]bool, errs *[]error) (pulled int) {
+	for _, agent := range agents {
+		for _, skill := range src.AgentSkills(agent) {
+			if skill == "" || skillPresent[skill] {
+				continue
+			}
+			ri := RemoteItem{Kind: KindSkill, Name: skill}
+			body, err := src.Body(ri)
+			if err != nil {
+				*errs = append(*errs, fmt.Errorf("agent %q dep skill %q: %w", agent, skill, err))
+				// Mark present-attempted so a sibling agent does not retry the same
+				// unavailable dep and pile up duplicate errors.
+				skillPresent[skill] = true
+				continue
+			}
+			if err := ApplyPulled(plus, ri, body); err != nil {
+				*errs = append(*errs, fmt.Errorf("agent %q dep skill %q apply: %w", agent, skill, err))
+				skillPresent[skill] = true
+				continue
+			}
+			skillPresent[skill] = true
+			pulled++
+		}
+	}
+	return pulled
 }

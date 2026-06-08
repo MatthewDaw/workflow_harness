@@ -47,6 +47,12 @@ type HTTPRemoteSource struct {
 	// at the same org scope HQ serves back (org-only catalog). Guarded by
 	// bodiesMu alongside bodies since both are published by Fetch.
 	orgID string
+
+	// agentSkills maps an enabled agent's name to the skill names it depends on
+	// (agentSchema.skills), captured during Fetch so Reconcile can ensure each dep
+	// skill is materialized after the agent (U-Agent-Deps). Guarded by bodiesMu
+	// alongside bodies since both are published by Fetch.
+	agentSkills map[string][]string
 }
 
 // NewHTTPRemoteSource builds a source with a bounded HTTP client.
@@ -70,6 +76,11 @@ type remoteAgent struct {
 	Tools       []string `json:"tools"`
 	Model       string   `json:"model"`
 	Prompt      string   `json:"prompt"`
+	// Skills are the names of the skills this agent depends on (agentSchema.skills).
+	// After materializing the agent, the wrapper must ensure each of these skills is
+	// present in <root>/skills, pulling any that are missing (U-Agent-Deps) — an
+	// agent whose skills are absent is a broken install even if the agent file lands.
+	Skills []string `json:"skills"`
 }
 
 // renderAgentFile materializes a remoteAgent into the on-disk Claude Code
@@ -285,6 +296,7 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	// Build the body cache locally, then publish it under the lock in one shot so a
 	// concurrent Body() reader never observes a half-populated map (#12).
 	bodies := map[string]string{}
+	agentSkills := map[string][]string{}
 	var out []RemoteItem
 	orgID := ""
 
@@ -309,6 +321,11 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		// same string, so the body ApplyPulled writes reads back in-sync (parity).
 		rendered := renderAgentFile(a)
 		bodies[string(KindAgent)+"/"+a.Name] = rendered
+		// Record the agent's skill dependencies so Reconcile can ensure they are
+		// materialized after the agent (U-Agent-Deps).
+		if len(a.Skills) > 0 {
+			agentSkills[a.Name] = append([]string(nil), a.Skills...)
+		}
 		out = append(out, RemoteItem{Kind: KindAgent, Name: a.Name, Scope: a.Scope.String(), Hash: hashContent([]byte(rendered))})
 	}
 
@@ -377,8 +394,19 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	h.bodiesMu.Lock()
 	h.bodies = bodies
 	h.orgID = orgID
+	h.agentSkills = agentSkills
 	h.bodiesMu.Unlock()
 	return out, nil
+}
+
+// AgentSkills returns the skill names the named agent depends on, captured during
+// the most recent Fetch (U-Agent-Deps). Unknown agents (or a source not yet
+// fetched) yield nil. Used by Reconcile to ensure an agent's skills are present
+// after the agent is materialized.
+func (h *HTTPRemoteSource) AgentSkills(agentName string) []string {
+	h.bodiesMu.RLock()
+	defer h.bodiesMu.RUnlock()
+	return append([]string(nil), h.agentSkills[agentName]...)
 }
 
 // Body returns the content captured during the most recent Fetch.
