@@ -16,6 +16,7 @@ import {
 } from './runtime.js';
 import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
+import { resolvePrincipal } from './bearerAuth.js';
 
 /**
  * REST: skills + bundles — collapsed to a single ORG catalog.
@@ -66,9 +67,13 @@ export async function resolveSkills(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
+  // Accept EITHER the gateway Cognito JWT (HQ web) OR a raw bearer device token
+  // (the claude+ wrapper) — this route is HttpNoneAuthorizer so the gateway does
+  // not pre-reject the device token. Fall back to the device token's own org claim
+  // when there are no gateway claims to drive effectiveOrg.
+  const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
-  const org = await effectiveOrg(event, deps.repo);
+  const org = (await effectiveOrg(event, deps.repo)) ?? principal.org;
   if (!org) return ok({ skills: [] });
 
   // Pass the caller's userId so the merged org+user catalog is returned (a

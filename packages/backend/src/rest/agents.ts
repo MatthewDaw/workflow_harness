@@ -16,6 +16,7 @@ import {
 } from './runtime.js';
 import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
+import { resolvePrincipal } from './bearerAuth.js';
 
 /**
  * REST: agents — collapsed to a single ORG catalog (mirrors skills.ts).
@@ -44,9 +45,10 @@ export async function resolveAgents(
   event: APIGatewayProxyEventV2,
   deps: AgentsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
+  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer route).
+  const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
-  const org = await effectiveOrg(event, deps.repo);
+  const org = (await effectiveOrg(event, deps.repo)) ?? principal.org;
   if (!org) return ok({ agents: [] });
   // Pass the caller's userId so the merged org+user catalog is returned (a
   // user-scoped agent shadows an org-scoped one of the same name).

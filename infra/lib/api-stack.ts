@@ -224,7 +224,11 @@ export class ApiStack extends cdk.Stack {
       });
 
     r('/projects', [M.GET, M.POST], projectsFn, 'Projects');
-    r('/projects/{id}', [M.GET, M.DELETE], projectsFn, 'ProjectById');
+    // GET is PUBLIC at the gateway (HttpNoneAuthorizer) so the claude+ wrapper's
+    // device token reaches the handler, which verifies it in-handler via
+    // resolvePrincipal (device token OR Cognito). DELETE stays Cognito-gated.
+    r('/projects/{id}', [M.GET], projectsFn, 'ProjectByIdGet', new HttpNoneAuthorizer());
+    r('/projects/{id}', [M.DELETE], projectsFn, 'ProjectByIdDelete');
     r('/projects/{id}/requirements', [M.GET, M.PUT], projectsFn, 'ProjectRequirements');
     r('/projects/{id}/refresh', [M.POST], projectsFn, 'ProjectRefresh');
     r('/projects/{id}/docs', [M.GET], projectsFn, 'ProjectDocs');
@@ -257,11 +261,15 @@ export class ApiStack extends cdk.Stack {
     // the WS management API (see the WS grant + WS_CALLBACK_URL wiring below).
     r('/sessions/{id}/control', [M.POST], sessionsFn, 'SessionControl');
 
-    r('/agents', [M.GET, M.POST], agentsFn, 'Agents');
+    // GET public (device token via resolvePrincipal); POST stays Cognito-gated.
+    r('/agents', [M.GET], agentsFn, 'AgentsGet', new HttpNoneAuthorizer());
+    r('/agents', [M.POST], agentsFn, 'AgentsPost');
     r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName');
     r('/agents/{name}/scope', [M.POST], agentsFn, 'AgentScope');
 
-    r('/skills', [M.GET, M.POST], skillsFn, 'Skills');
+    // GET public (device token via resolvePrincipal); POST stays Cognito-gated.
+    r('/skills', [M.GET], skillsFn, 'SkillsGet', new HttpNoneAuthorizer());
+    r('/skills', [M.POST], skillsFn, 'SkillsPost');
     r('/skills/{name}', [M.GET, M.PUT, M.DELETE], skillsFn, 'SkillByName');
     r('/skills/{name}/members', [M.POST], skillsFn, 'SkillMembers');
     r('/skills/{name}/members/{member}', [M.DELETE], skillsFn, 'SkillMemberDelete');
@@ -277,7 +285,9 @@ export class ApiStack extends cdk.Stack {
     // router and is registered up with the other /projects routes above (against
     // projectsFn, using the {projectId} first-segment param the opt-in handler
     // reads). The routes below are the org-catalog CRUD only.
-    r('/mcp-servers', [M.GET, M.POST], mcpServersFn, 'McpServers');
+    // GET public (device token via resolvePrincipal); POST stays Cognito-gated.
+    r('/mcp-servers', [M.GET], mcpServersFn, 'McpServersGet', new HttpNoneAuthorizer());
+    r('/mcp-servers', [M.POST], mcpServersFn, 'McpServersPost');
     r('/mcp-servers/{name}', [M.GET, M.PUT, M.DELETE], mcpServersFn, 'McpServerByName');
     r('/mcp-servers/{name}/usage', [M.GET], mcpServersFn, 'McpServerUsage');
 

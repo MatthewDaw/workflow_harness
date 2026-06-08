@@ -25,6 +25,7 @@ import { isAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { flattenBundle } from './skills.js';
 import { STARTER_BUNDLE_NAME } from '../seed/skills.js';
+import { resolvePrincipal } from './bearerAuth.js';
 
 /**
  * REST: projects (U8).
@@ -125,7 +126,9 @@ export async function getProject(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
+  // Accept the gateway Cognito JWT OR a raw device token (the claude+ wrapper reads
+  // its project's enabled set here over HttpNoneAuthorizer).
+  const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
   const id = pathParam(event, 'id');
   if (!id) return badRequest('missing project id');
