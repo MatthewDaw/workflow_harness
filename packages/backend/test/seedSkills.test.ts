@@ -82,6 +82,13 @@ describe('buildSeedSkills', () => {
       expect(s.source).toBe('built-in');
       expect(s.createdBy).toEqual({ userId: 'system', name: 'system' });
       expect(s.body.length).toBeGreaterThan(0);
+      // Versioning: a seeded record is the BASE variant of its name at rev 1.
+      expect(s.baseName).toBe(s.name);
+      expect(s.variantId).toBe(s.name);
+      expect(s.version).toBe(1);
+      // Whole-dir storage: absent an explicit `files`, the seed falls back to a
+      // SKILL.md-only map carrying the body.
+      expect(s.files).toEqual({ 'SKILL.md': s.body });
     }
 
     // ...but only the hq-* skills are members of command-hq-starter.
@@ -91,6 +98,30 @@ describe('buildSeedSkills', () => {
     expect(bundle.members).toEqual(HQ_FILES.map((f) => f.name));
     expect(bundle.members).not.toContain('gstack');
     expect(bundle.members).not.toContain('compound-engineering');
+  });
+
+  it('preserves an explicit whole-directory files map (SKILL.md + siblings)', () => {
+    const withDir: SeedSkillFile[] = [
+      {
+        name: 'hq-update-progress',
+        description: 'push completion to GitHub',
+        body: '# hq-update-progress\nbody',
+        files: {
+          'SKILL.md': '# hq-update-progress\nbody',
+          'scripts/run.sh': 'echo hi',
+          'reference/notes.md': 'notes',
+        },
+      },
+    ];
+    const records = buildSeedSkills(ORG, withDir, {
+      [STARTER_BUNDLE_NAME]: { description: 'b', members: ['hq-update-progress'] },
+    });
+    const seeded = records.find((r) => r.name === 'hq-update-progress')!;
+    expect(seeded.files).toEqual({
+      'SKILL.md': '# hq-update-progress\nbody',
+      'scripts/run.sh': 'echo hi',
+      'reference/notes.md': 'notes',
+    });
   });
 
   it('seeds only seeded-bundle members at org scope; non-members go user-narrow', () => {
