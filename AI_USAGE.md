@@ -10,7 +10,7 @@ both where AI did the work and where a human stayed in the loop.
   the project's own **`claude+`** wrapper (the product being built — a per-repo
   daemon that hosts the real `claude` CLI, captures every session, and streams it
   to Command HQ). The project was, in part, **built with itself**.
-- **Command HQ skills** (`.claude/skills/**`) — the bundled product skills were
+- **Command HQ skills** (`catalog/skills/**`) — the bundled product skills were
   used as first-class commands during development: `/hq-update-progress`,
   `/hq-weekly-update`, `/hq-add-skill`, `/hq-sync`,
   `/hq-relogin`, `/hq-startforge`/`/hq-endforge`, `/playwright-cli`.

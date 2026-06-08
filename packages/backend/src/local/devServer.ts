@@ -402,7 +402,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 // The in-memory store starts empty, so without this the Skills tab is blank on
 // every fresh `npm run dev` — even though the repo ships the bundled Command HQ
 // skills. We mirror what a deploy does (infra/scripts/seed-skills.mjs): read the
-// repo's `.claude/skills/<name>/SKILL.md` set + `bundles.json` manifest and write
+// repo's `catalog/skills/<name>/SKILL.md` set + `bundles.json` manifest and write
 // them through the canonical `seedSkills` builder at the dev org. Idempotent, so
 // re-seeding is harmless if the process keeps state.
 
@@ -413,7 +413,7 @@ const REPO_ROOT = path.resolve(
   '..',
   '..',
 );
-const SKILLS_DIR = path.join(REPO_ROOT, '.claude', 'skills');
+const SKILLS_DIR = path.join(REPO_ROOT, 'catalog', 'skills');
 const BUNDLES_MANIFEST = path.join(SKILLS_DIR, 'bundles.json');
 
 /**

@@ -122,7 +122,7 @@ export async function createSkill(
   if (isBuiltin(existing) && !skill.repoId && !skill.authorUserId) {
     return conflict(
       `"${targetName}" is a canonical built-in skill — fork it (set repoId + authorUserId) ` +
-        `or change it in .claude/skills and re-seed; in-place writes are rejected.`,
+        `or change it in catalog/skills and re-seed; in-place writes are rejected.`,
     );
   }
 
@@ -231,7 +231,7 @@ export async function deleteSkill(
   const existing = await deps.repo.getSkill(orgScope(auth.org), name);
   if (isBuiltin(existing)) {
     return conflict(
-      `"${name}" is a canonical built-in skill — remove it from .claude/skills and ` +
+      `"${name}" is a canonical built-in skill — remove it from catalog/skills and ` +
         `re-seed; it cannot be deleted via REST.`,
     );
   }
@@ -266,7 +266,7 @@ export async function addMember(
   if (isBuiltin(bundle)) {
     return conflict(
       `"${name}" is a canonical built-in bundle — change its members in ` +
-        `.claude/skills/bundles.json and re-seed; in-place edits are rejected.`,
+        `catalog/skills/bundles.json and re-seed; in-place edits are rejected.`,
     );
   }
 
@@ -299,7 +299,7 @@ export async function removeMember(
   if (isBuiltin(bundle)) {
     return conflict(
       `"${name}" is a canonical built-in bundle — change its members in ` +
-        `.claude/skills/bundles.json and re-seed; in-place edits are rejected.`,
+        `catalog/skills/bundles.json and re-seed; in-place edits are rejected.`,
     );
   }
 
@@ -329,7 +329,7 @@ export async function dissolveBundle(
   if (isBuiltin(bundle)) {
     return conflict(
       `"${name}" is a canonical built-in bundle — change its members in ` +
-        `.claude/skills/bundles.json and re-seed; in-place edits are rejected.`,
+        `catalog/skills/bundles.json and re-seed; in-place edits are rejected.`,
     );
   }
 

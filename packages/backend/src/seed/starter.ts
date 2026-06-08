@@ -18,7 +18,7 @@ import {
  *  1. CLONE from a template org's catalog already in DynamoDB (the deploy seeds
  *     `org#acme` via infra/scripts/seed-skills.mjs). This is the deployed/Lambda
  *     path — the Lambda has no repo files — and is deterministic for tests.
- *  2. DISK fallback: read the repo's `.claude/skills/` set (local dev, where the
+ *  2. DISK fallback: read the repo's `catalog/skills/` set (local dev, where the
  *     dev server exports its path as `HQ_REPO_SKILLS_DIR`). Used when no template
  *     org is seeded yet.
  *
@@ -47,7 +47,7 @@ async function cloneStarterRecords(repo: Repo, templateOrg: string, org: string)
     .map((s) => skillSchema.parse({ ...s, scope: orgRef }));
 }
 
-/** Repo `.claude/skills` dir, exported by the dev server as `HQ_REPO_SKILLS_DIR`. */
+/** Repo `catalog/skills` dir, exported by the dev server as `HQ_REPO_SKILLS_DIR`. */
 function repoSkillsDir(): string | undefined {
   const dir = process.env.HQ_REPO_SKILLS_DIR;
   return dir && existsSync(dir) ? dir : undefined;
@@ -81,7 +81,7 @@ function parseFrontmatter(md: string): { name?: string; description: string } {
   return { name, description: desc.join(' ').trim() };
 }
 
-/** Build the org-scoped starter records from the repo's `.claude/skills` on disk. */
+/** Build the org-scoped starter records from the repo's `catalog/skills` on disk. */
 function diskStarterRecords(dir: string, org: string): Skill[] {
   const files: SeedSkillFile[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

@@ -5,13 +5,13 @@ import type { Repo } from '../db/repo.js';
  * Org-scope seed for the skills that ship bundled with Command HQ + claude+
  * (U22). A fresh deploy starts with an empty registry, so the Skills tab shows
  * nothing until something registers skills. This seed writes the repo's
- * `.claude/skills/` set into HQ so every user in the org sees the product
+ * `catalog/skills/` set into HQ so every user in the org sees the product
  * starter bundle out of the box — no device connected, no sync run.
  *
- * NOT every repo `.claude/skills/<name>` belongs in the org-wide default. Only
+ * NOT every repo `catalog/skills/<name>` belongs in the org-wide default. Only
  * skills that are MEMBERS of a seeded bundle (the `command-hq-starter` members)
  * — plus the bundle record itself — seed at ORG scope (what every new account
- * sees). The remaining `.claude/skills/<name>` folders ship in the repo but are
+ * sees). The remaining `catalog/skills/<name>` folders ship in the repo but are
  * NOT part of the org default; they would otherwise leak into every brand-new
  * account's catalog. We keep their SKILL.md in the repo and seed them at the
  * NARROWER user scope of a designated grant owner, so accounts granted that
@@ -23,7 +23,7 @@ import type { Repo } from '../db/repo.js';
  * idempotent (re-running leaves exactly one record per skill).
  */
 
-/** A skill definition parsed from a repo `.claude/skills/<name>/SKILL.md`. */
+/** A skill definition parsed from a repo `catalog/skills/<name>/SKILL.md`. */
 export interface SeedSkillFile {
   name: string;
   description: string;
@@ -65,7 +65,7 @@ export interface BundleSpec {
  * organized into bundles. Maps `<bundleName>` to its spec. A skill that no bundle
  * lists is seeded as a **standalone** catalog skill, so creating a new skill does
  * not bundle it with anything unless it is explicitly added here. Lives in the
- * repo at `.claude/skills/bundles.json`; the seed loads it and passes it in.
+ * repo at `catalog/skills/bundles.json`; the seed loads it and passes it in.
  */
 export type BundleManifest = Record<string, BundleSpec>;
 

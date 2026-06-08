@@ -9,7 +9,7 @@
 // It ALSO (re)seeds the template org (`acme` by default) so the create-time
 // clone has a canonical source to copy from going forward.
 //
-// Source of truth is the repo's `.claude/skills/<name>/SKILL.md` + `bundles.json`,
+// Source of truth is the repo's `catalog/skills/<name>/SKILL.md` + `bundles.json`,
 // run through the SAME `buildSeedSkills` builder + `skillKey` scheme the REST
 // layer reads, loaded from the compiled backend (packages/backend/dist) so the
 // seed can never drift. Run `npm run build -w @harness/backend` first.
@@ -28,7 +28,7 @@ import { DynamoDBDocumentClient, PutCommand, ScanCommand } from '@aws-sdk/lib-dy
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
-const skillsDir = path.join(repoRoot, '.claude', 'skills');
+const skillsDir = path.join(repoRoot, 'catalog', 'skills');
 const bundlesManifest = path.join(skillsDir, 'bundles.json');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 

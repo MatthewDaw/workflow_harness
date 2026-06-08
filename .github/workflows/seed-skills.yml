@@ -1,7 +1,7 @@
 # Auto-seeds the bundled product skills into Command HQ whenever the repo's
 # skill definitions change on main (plan U22). The full deploy workflow only
 # runs on a manual dispatch, so this lightweight job keeps the org-scope bundle
-# in step with `.claude/skills/` without a full redeploy: a skill edit landing on
+# in step with `catalog/skills/` without a full redeploy: a skill edit landing on
 # main re-runs the idempotent seed within ~30s.
 #
 # It seeds EVERY org (`seed-all-orgs.mjs` enumerates the ORG# records and writes
@@ -14,7 +14,7 @@ on:
   push:
     branches: ['main']
     paths:
-      - '.claude/skills/**'
+      - 'catalog/skills/**'
       - 'packages/backend/src/seed/**'
       - 'infra/scripts/seed-skills.mjs'
   workflow_dispatch:

@@ -2,7 +2,7 @@
 // + a `humanlayer-ace` bundle into ONE org's catalog — by default NOT org-wide.
 //
 // Unlike seed-skills.mjs / seed-all-orgs.mjs, this does NOT read the shared
-// `.claude/skills/bundles.json` (which feeds the acme template + every-org
+// `catalog/skills/bundles.json` (which feeds the acme template + every-org
 // backfill and would leak the set org-wide). It builds an in-memory manifest for
 // just these 27 skills and seeds them at org scope for the REQUIRED `SEED_ORG`,
 // so the set lands in that org's catalog and nowhere else.
@@ -21,7 +21,7 @@ import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
-const skillsDir = path.join(repoRoot, '.claude', 'skills');
+const skillsDir = path.join(repoRoot, 'catalog', 'skills');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
@@ -34,7 +34,7 @@ if (!ORG) {
 }
 
 // The 27 HumanLayer command-derived skills (the ACE workflow). Explicit list so
-// this never accidentally sweeps in other skills under .claude/skills/.
+// this never accidentally sweeps in other skills under catalog/skills/.
 const ACE_SKILLS = [
   'ci_commit',
   'ci_describe_pr',

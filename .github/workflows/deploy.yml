@@ -95,7 +95,7 @@ jobs:
       # Skills tab shows the "command-hq-starter" bundle out of the box in every
       # tenant. `seed-all-orgs.mjs` enumerates the ORG# records and seeds the
       # starter bundle into each (plus the user-grant built-ins once); it reads
-      # .claude/skills/ and the compiled backend record builder. Idempotent
+      # catalog/skills/ and the compiled backend record builder. Idempotent
       # (upsert), so it is safe to run on every deploy.
       - name: Build shared + backend (seed reads packages/backend/dist)
         run: npm run build -w @harness/shared -w @harness/backend

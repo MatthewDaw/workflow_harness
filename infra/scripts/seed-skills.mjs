@@ -4,7 +4,7 @@
 // device connects and syncs. Running this makes the "command-hq-starter" bundle
 // visible to every user in the org out of the box.
 //
-// Source of truth is the repo's `.claude/skills/<name>/SKILL.md`. The record
+// Source of truth is the repo's `catalog/skills/<name>/SKILL.md`. The record
 // shape + keys are reused from the compiled backend (packages/backend/dist) so
 // the seed can never drift from how the REST layer reads skills — run
 // `npm run build -w @harness/backend` first (the deploy workflow already does).
@@ -22,7 +22,7 @@ import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
-const skillsDir = path.join(repoRoot, '.claude', 'skills');
+const skillsDir = path.join(repoRoot, 'catalog', 'skills');
 const bundlesManifest = path.join(skillsDir, 'bundles.json');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
@@ -124,7 +124,7 @@ function readSkillFiles() {
 }
 
 /**
- * Load the bundle manifest (`.claude/skills/bundles.json`) — the single source of
+ * Load the bundle manifest (`catalog/skills/bundles.json`) — the single source of
  * truth for how skills are grouped into bundles. Absent manifest => no bundles
  * (every skill standalone). Each entry is `{ description, members[] }`.
  */

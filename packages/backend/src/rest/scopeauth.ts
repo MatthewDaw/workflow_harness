@@ -22,8 +22,9 @@ import { resolvePrincipal } from './bearerAuth.js';
  */
 
 /**
- * Is a catalog record CANONICAL — owned by the git seed (`.claude/skills|agents` →
- * `seed-*.mjs`), not by REST? The org catalog is the single runtime source of truth,
+ * Is a catalog record CANONICAL — owned by the git seed (`catalog/skills` /
+ * `.claude/agents` → `seed-*.mjs`), not by REST? The org catalog is the single
+ * runtime source of truth,
  * but a canonical record's BASE variant is updated ONLY by the seed; REST callers
  * fork it instead (the variant model) or change the repo and re-seed. This keeps the
  * default bundle reviewable/rollback-able in git while every read and every

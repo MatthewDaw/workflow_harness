@@ -78,7 +78,7 @@ anyone else's. The shared catalog stays safe.
 seed-owned record, `createdBy.userId === 'system'`) is owned by the git seed: an
 in-place `POST`/`PUT`/`DELETE` to its base, or a membership edit to a built-in
 bundle, is rejected with **409** — fork it (set `repoId` + `authorUserId`) or
-change `.claude/skills` and re-seed. The DB is still the single runtime source of
+change `catalog/skills` and re-seed. The DB is still the single runtime source of
 truth; this only protects the *default bundle's* canonical rows.
 
 The bundled `command-hq-starter` bundle is part of this same org catalog.
@@ -150,14 +150,14 @@ Agents mirror skills (`POST <HQ_API>/agents`, etc.). Reading the result:
 ### Fallback — the seed path (bootstrap / no admin)
 
 The seed (`infra/scripts/seed-skills.mjs` → `packages/backend/src/seed/skills.ts`
-`buildSeedSkills`) reads every `.claude/skills/*/SKILL.md` and writes each into the
+`buildSeedSkills`) reads every `catalog/skills/*/SKILL.md` and writes each into the
 **org catalog** as a standalone skill, stamping
 `createdBy:{userId:'system',name:'system'}`. **Bundling is opt-in via the manifest**
-`.claude/skills/bundles.json` — a new skill joins `command-hq-starter` (or any
+`catalog/skills/bundles.json` — a new skill joins `command-hq-starter` (or any
 bundle) only if you add its name to that bundle's `members`. Unless the user asks
 to bundle it, leave it standalone. The registration _is_ getting the file onto
 `main`, so **land it to `main` now — do not stop and ask**:
-  1. Stage and commit just the new `.claude/skills/<name>/` file(s) with the
+  1. Stage and commit just the new `catalog/skills/<name>/` file(s) with the
      developer's git (conventional message, e.g. `feat(skills): add /<name> to
 command-hq-starter bundle`). Commit only the skill file(s), not unrelated
      untracked paths.
@@ -179,9 +179,9 @@ command-hq-starter bundle`). Commit only the skill file(s), not unrelated
 
      - `SEED_ORG` must match the org the website serves (the deployed default is
        `personasearch`; confirm against `packages/web/.env*` `VITE_ORG` if unsure).
-     - The seed reads **every** `.claude/skills/*/SKILL.md` and writes the new
+     - The seed reads **every** `catalog/skills/*/SKILL.md` and writes the new
        skill into the org catalog as a **standalone** skill (no bundle) unless its
-       name is listed in `.claude/skills/bundles.json`.
+       name is listed in `catalog/skills/bundles.json`.
      - **Requires local AWS credentials** with write access to the `harness`
        table (same role the deploy uses). If the seed fails with a credentials /
        AccessDenied error, say so plainly and fall back to: trigger the
@@ -242,7 +242,7 @@ user to sync later — do it for them.
 ## Notes
 
 - Bundle membership is **data, not code**: for the `command-hq-starter` bundle,
-  adding a `.claude/skills/<name>/` file is all that's needed — the seed picks it
+  adding a `catalog/skills/<name>/` file is all that's needed — the seed picks it
   up. For other catalog bundles, membership is the `members` array on the bundle
   record (REST or Skills tab).
 - This skill covers the whole lifecycle for a single skill OR a bundle: scaffold
