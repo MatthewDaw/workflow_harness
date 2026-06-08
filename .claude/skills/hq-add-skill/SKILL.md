@@ -4,7 +4,8 @@ description: >-
   Add one skill or a whole bundle of skills to Command HQ from inside the claude+
   PTY. Reads the prompt to decide single-skill vs bundle, scaffolds each
   `.claude/skills/<name>/SKILL.md`, then registers them in the single org-scoped
-  Command HQ catalog (admin-gated writes) and explains the per-project opt-in. Use
+  Command HQ catalog (a direct, admin-gated REST write using the claude+ device
+  token) and explains the per-project opt-in. Use
   when the user says "/hq-add-skill", "add a skill", "add a bundle of skills",
   "register a skill in HQ", "enable a skill on this project", or "put this skill in
   command-hq-starter".
@@ -20,11 +21,15 @@ developer's claude+ session, inside a connected repo.
 > `org` / `user` / `project` (see `packages/backend/src/rest/scopeauth.ts`
 > `canReadScope` / `canWriteScope`). Skills and agents live in the **org catalog**
 > by default (`scope: { tier: "org", id: "<org>" }`), and an **org-scope write is
-> admin-gated** (`canWriteOrgCatalog` ⇒ the `custom:admin` claim). A user may
-> still write their **own** user scope without admin, and a project owner their own
-> project scope. The server **forces** `scope` and stamps `createdBy` from the
-> authenticated principal — you never set them. Projects then **opt in** to
-> individual items via `enabledSkills` / `enabledAgents`.
+> admin-gated**. Admin is decided **server-side** (`scopeauth.ts`
+> `resolveOrgCatalogAuth` / `isOrgAdmin`): the caller's profile marks them an admin
+> of the org (`profile.adminOrgs` includes it, or `profile.admin`), **or** the
+> gateway carries the `custom:admin` claim. Because it is derived from the profile
+> rather than a token claim, the **claude+ device token writes the catalog
+> directly** — the write routes are public at the gateway and the handler verifies
+> the bearer token + admin itself. The server **forces** `scope` and stamps
+> `createdBy` from the authenticated principal — you never set them. Projects then
+> **opt in** to individual items via `enabledSkills` / `enabledAgents`.
 >
 > **Versioning (live).** A version is `(baseName, repoId, userId)`. Editing the
 > org skill `S` from project `R` as person `P` **forks/updates** the variant
@@ -57,10 +62,12 @@ tier in the common path — the server forces `scope = orgScope(<org>)` and stam
 `createdBy: { userId, name }` from the authenticated principal, so you never set
 `scope` or `createdBy` yourself. The thing to know is *who may write*: an
 **org-scope** catalog write (`POST/PUT/DELETE /skills`, `/agents`) is
-**admin-gated** (`canWriteOrgCatalog` ⇒ the `custom:admin` claim). The underlying
-model is still 3-tier — a user can write their **own** user scope and a project
-owner their own project scope without admin — but for adding a shared skill you're
-writing the org catalog, which needs admin.
+**admin-gated**, decided server-side from the caller's profile
+(`profile.adminOrgs` / `profile.admin`) or the `custom:admin` claim. The claude+
+**device token** the PTY already holds satisfies this when your profile is an org
+admin, so the direct REST write below works from the session — no git, no AWS
+creds. (The underlying model is still 3-tier — a user can write their own user
+scope and a project owner their own project scope without admin.)
 
 **An edit is a fork, not a clobber.** Editing an existing org skill from a project
 context cuts a **new version/variant** keyed by `(name, repo, person)` and
@@ -96,17 +103,53 @@ source:"custom", members:[...], body:"<full SKILL.md text>", createdBy:{userId,n
 — but you supply only `name`, `kind`, `description`, `source`, `members`, `body`;
 the server forces `scope` and stamps `createdBy`.
 
-There are two registration paths; both land in the same org catalog:
+Two ways to land a skill in the org catalog. **Default: the direct REST write** —
+it works straight from the claude+ PTY with the device token, no git and no AWS
+creds. Fall back to the **seed path** only to bootstrap a fresh org's built-in
+defaults, or when you are not an org admin and must go through review.
 
-- **The org catalog via the seed path.** The seed
-  (`infra/scripts/seed-skills.mjs` → `packages/backend/src/seed/skills.ts`
-  `buildSeedSkills`) reads every `.claude/skills/*/SKILL.md` and writes each into
-  the **org catalog** as a standalone skill, stamping
-  `createdBy:{userId:'system',name:'system'}`. **Bundling is opt-in via the
-  manifest** `.claude/skills/bundles.json` — a new skill joins `command-hq-starter`
-  (or any bundle) only if you add its name to that bundle's `members`. Unless the
-  user asks to bundle it, leave it standalone. The registration _is_ getting the
-  file onto `main`, so **land it to `main` now — do not stop and ask**:
+### Default — direct catalog REST (device token)
+
+Register via the Command HQ skills REST, authorized with the device token claude+
+already holds (HQ API base from `claude+ login`). Admin is checked server-side
+from your profile, so an org-admin profile writes directly — these routes are
+public at the gateway and the handler verifies the bearer token + admin itself:
+
+```
+# create each member skill in the org catalog (server forces scope + createdBy)
+POST <HQ_API>/skills
+  { "name":"<name>", "kind":"skill", "description":"<desc>",
+    "source":"custom", "body":"<SKILL.md text>" }
+
+# create the bundle (members reference the skill names)
+POST <HQ_API>/skills
+  { "name":"<bundle>", "kind":"bundle", "description":"<desc>",
+    "source":"custom", "members":["<a>","<b>"] }
+
+# …or add a member to an existing bundle
+POST <HQ_API>/skills/<bundle>/members   { "member":"<name>" }
+```
+
+Agents mirror skills (`POST <HQ_API>/agents`, etc.). Reading the result:
+
+- **`201`/`200`** — live in the catalog immediately; no deploy, no seed. Go
+  straight to step 5 (opt the project in) and step 6 (sync).
+- **`403`** — your profile is not an org admin. Surface that and either ask an
+  admin to register it, or use the seed path below (review route).
+- **`401`** — the deployed API predates device-token catalog writes (the write
+  routes need `HttpNoneAuthorizer` + `resolveOrgCatalogAuth`). A
+  `cdk deploy ApiStack` brings it current; until then, use the seed path.
+
+### Fallback — the seed path (bootstrap / no admin)
+
+The seed (`infra/scripts/seed-skills.mjs` → `packages/backend/src/seed/skills.ts`
+`buildSeedSkills`) reads every `.claude/skills/*/SKILL.md` and writes each into the
+**org catalog** as a standalone skill, stamping
+`createdBy:{userId:'system',name:'system'}`. **Bundling is opt-in via the manifest**
+`.claude/skills/bundles.json` — a new skill joins `command-hq-starter` (or any
+bundle) only if you add its name to that bundle's `members`. Unless the user asks
+to bundle it, leave it standalone. The registration _is_ getting the file onto
+`main`, so **land it to `main` now — do not stop and ask**:
   1. Stage and commit just the new `.claude/skills/<name>/` file(s) with the
      developer's git (conventional message, e.g. `feat(skills): add /<name> to
 command-hq-starter bundle`). Commit only the skill file(s), not unrelated
@@ -145,28 +188,6 @@ command-hq-starter bundle`). Commit only the skill file(s), not unrelated
      top-level **Skills** grid after a hard refresh. If you added it to a bundle
      via the manifest, it's hidden under that bundle by default — toggle **"show
      in bundles"** on `/skills` or open the bundle to see it.
-
-- **Direct catalog REST (admin).** Register via the Command HQ skills REST,
-  authorized with the device/session token claude+ already holds (HQ API base from
-  `claude+ login`). The caller must be an org admin:
-
-  ```
-  # create each member skill in the org catalog (server forces scope + createdBy)
-  POST <HQ_API>/skills
-    { "name":"<name>", "kind":"skill", "description":"<desc>",
-      "source":"custom", "body":"<SKILL.md text>" }
-
-  # create the bundle (members reference the skill names)
-  POST <HQ_API>/skills
-    { "name":"<bundle>", "kind":"bundle", "description":"<desc>",
-      "source":"custom", "members":["<a>","<b>"] }
-
-  # …or add a member to an existing bundle
-  POST <HQ_API>/skills/<bundle>/members   { "member":"<name>" }
-  ```
-
-  Agents mirror skills (`POST <HQ_API>/agents`, etc.). If the caller is not an
-  admin, the write is rejected — surface that and ask an admin to register it.
 
 ## 5 · Opt a project into the skill (per-project enablement)
 

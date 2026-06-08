@@ -10,10 +10,9 @@ import {
   ok,
   parseBody,
   pathParam,
-  principalOf,
   unauthorized,
 } from './runtime.js';
-import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
+import { resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -29,8 +28,8 @@ import { resolvePrincipal } from './bearerAuth.js';
  *
  * MCP servers are FLAT: there is no bundle concept (no members/dissolve/scope
  * verbs). The record is a structured discriminated union on `transport`, not a
- * markdown body. Catalog writes are gated by `canWriteOrgCatalog` + `isAdmin`,
- * exactly like skills/agents.
+ * markdown body. Catalog writes are gated by `resolveOrgCatalogAuth` (device
+ * token OR Cognito JWT, with server-side admin), exactly like skills/agents.
  */
 
 export interface McpServersDeps {
@@ -57,11 +56,14 @@ export async function createMcpServer(
   event: APIGatewayProxyEventV2,
   deps: McpServersDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
+  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer
+  // route); admin is decided server-side from the profile so the device token
+  // (no role claim) can write.
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
+  if (!auth.org) return unauthorized();
+  const { principal, org } = auth;
 
   const name = pathParam(event, 'name');
   let body: unknown;
@@ -106,12 +108,14 @@ export async function promoteMcpServer(
   event: APIGatewayProxyEventV2,
   deps: McpServersDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  // Promote is NOT admin-gated (any authed org member may repoint TRUE), but it
+  // still accepts the device token via the shared resolver.
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
+  if (!auth.org) return unauthorized();
+  const org = auth.org;
 
   let body: unknown;
   try {
@@ -133,13 +137,12 @@ export async function getMcpServer(
   event: APIGatewayProxyEventV2,
   deps: McpServersDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return notFound();
-  const server = await deps.repo.getMcpServer(orgScope(org), name);
+  if (!auth.org) return notFound();
+  const server = await deps.repo.getMcpServer(orgScope(auth.org), name);
   if (!server) return notFound();
   return ok({ mcpServer: server });
 }
@@ -154,13 +157,12 @@ export async function getUsage(
   event: APIGatewayProxyEventV2,
   deps: McpServersDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return ok({ name, count: 0 });
-  const count = await usageCount(deps.repo, org, name);
+  if (!auth.org) return ok({ name, count: 0 });
+  const count = await usageCount(deps.repo, auth.org, name);
   return ok({ name, count });
 }
 
@@ -168,14 +170,13 @@ export async function deleteMcpServer(
   event: APIGatewayProxyEventV2,
   deps: McpServersDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
-  await deps.repo.deleteMcpServer(orgScope(org), name);
+  if (!auth.org) return unauthorized();
+  await deps.repo.deleteMcpServer(orgScope(auth.org), name);
   return ok({ deleted: true });
 }
 

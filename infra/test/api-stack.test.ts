@@ -66,6 +66,29 @@ describe('ApiStack', () => {
     });
   });
 
+  test('opens catalog WRITE + opt-in routes to the device token (AuthorizationType NONE)', () => {
+    // The claude+ device token is HS256; the gateway JWT authorizer would reject
+    // it, so every catalog write (and the project opt-in) is PUBLIC at the gateway
+    // and authenticated + admin-gated in-handler. This is what makes /hq-add-skill
+    // (and hq-add-mcp / hq-update-agent) able to author directly.
+    for (const routeKey of [
+      'POST /skills',
+      'PUT /skills/{name}',
+      'DELETE /skills/{name}',
+      'POST /skills/{name}/members',
+      'POST /skills/{name}/dissolve',
+      'POST /agents',
+      'POST /mcp-servers',
+      'POST /projects/{projectId}/skills/{skillName}',
+      'POST /projects/{projectId}/bundles/{bundleName}',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+        AuthorizationType: 'NONE',
+      });
+    }
+  });
+
   test('routes the MCP servers catalog (collection, by-name verbs, usage)', () => {
     // The MCP servers catalog mirrors skills MINUS the bundle/scope verbs: a
     // GET/POST collection, GET/PUT/DELETE by name, and a GET usage sub-route.

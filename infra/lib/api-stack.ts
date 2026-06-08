@@ -207,6 +207,11 @@ export class ApiStack extends cdk.Stack {
     }
 
     const M = apigwv2.HttpMethod;
+    // One shared HttpNoneAuthorizer reused across every public route (the
+    // canonical CDK pattern — it is a stateless no-op binding). Passing it on a
+    // route OVERRIDES the HTTP API's default JWT authorizer, making that route
+    // PUBLIC at the gateway so the claude+ HS256 device token reaches the Lambda.
+    const noAuth = new HttpNoneAuthorizer();
     const r = (
       routePath: string,
       methods: apigwv2.HttpMethod[],
@@ -227,7 +232,7 @@ export class ApiStack extends cdk.Stack {
     // GET is PUBLIC at the gateway (HttpNoneAuthorizer) so the claude+ wrapper's
     // device token reaches the handler, which verifies it in-handler via
     // resolvePrincipal (device token OR Cognito). DELETE stays Cognito-gated.
-    r('/projects/{id}', [M.GET], projectsFn, 'ProjectByIdGet', new HttpNoneAuthorizer());
+    r('/projects/{id}', [M.GET], projectsFn, 'ProjectByIdGet', noAuth);
     r('/projects/{id}', [M.DELETE], projectsFn, 'ProjectByIdDelete');
     r('/projects/{id}/requirements', [M.GET, M.PUT], projectsFn, 'ProjectRequirements');
     r('/projects/{id}/refresh', [M.POST], projectsFn, 'ProjectRefresh');
@@ -249,10 +254,15 @@ export class ApiStack extends cdk.Stack {
     // `pathParam(event, 'projectId')` (NOT 'id', unlike the /projects/{id}
     // routes above), so the first segment param MUST be `{projectId}` — the
     // gateway route param name has to match what the handler reads exactly.
-    r('/projects/{projectId}/skills/{skillName}', [M.POST, M.DELETE], projectsFn, 'ProjectSkillOptIn');
-    r('/projects/{projectId}/agents/{agentName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentOptIn');
-    r('/projects/{projectId}/mcp-servers/{name}', [M.POST, M.DELETE], projectsFn, 'ProjectMcpOptIn');
-    r('/projects/{projectId}/bundles/{bundleName}', [M.POST, M.DELETE], projectsFn, 'ProjectBundleOptIn');
+    // PUBLIC at the gateway (HttpNoneAuthorizer) so the claude+ device token
+    // reaches projectsFn; the opt-in handler (projectForOptIn) authenticates the
+    // caller (Cognito JWT OR device token) and enforces the admin-or-owner gate
+    // server-side, so a developer can enable/disable catalog items on their own
+    // project straight from claude+.
+    r('/projects/{projectId}/skills/{skillName}', [M.POST, M.DELETE], projectsFn, 'ProjectSkillOptIn', noAuth);
+    r('/projects/{projectId}/agents/{agentName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentOptIn', noAuth);
+    r('/projects/{projectId}/mcp-servers/{name}', [M.POST, M.DELETE], projectsFn, 'ProjectMcpOptIn', noAuth);
+    r('/projects/{projectId}/bundles/{bundleName}', [M.POST, M.DELETE], projectsFn, 'ProjectBundleOptIn', noAuth);
 
     r('/sessions', [M.GET], sessionsFn, 'Sessions');
     r('/sessions/{id}', [M.GET], sessionsFn, 'SessionById');
@@ -261,21 +271,28 @@ export class ApiStack extends cdk.Stack {
     // the WS management API (see the WS grant + WS_CALLBACK_URL wiring below).
     r('/sessions/{id}/control', [M.POST], sessionsFn, 'SessionControl');
 
-    // GET public (device token via resolvePrincipal); POST stays Cognito-gated.
-    r('/agents', [M.GET], agentsFn, 'AgentsGet', new HttpNoneAuthorizer());
-    r('/agents', [M.POST], agentsFn, 'AgentsPost');
-    r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName');
-    r('/agents/{name}/scope', [M.POST], agentsFn, 'AgentScope');
+    // PUBLIC at the gateway (device token reaches the Lambda); the agents Lambda
+    // authenticates + admin-gates server-side, exactly like skills above.
+    r('/agents', [M.GET], agentsFn, 'AgentsGet', noAuth);
+    r('/agents', [M.POST], agentsFn, 'AgentsPost', noAuth);
+    r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName', noAuth);
+    r('/agents/{name}/scope', [M.POST], agentsFn, 'AgentScope', noAuth);
 
-    // GET public (device token via resolvePrincipal); POST stays Cognito-gated.
-    r('/skills', [M.GET], skillsFn, 'SkillsGet', new HttpNoneAuthorizer());
-    r('/skills', [M.POST], skillsFn, 'SkillsPost');
-    r('/skills/{name}', [M.GET, M.PUT, M.DELETE], skillsFn, 'SkillByName');
-    r('/skills/{name}/members', [M.POST], skillsFn, 'SkillMembers');
-    r('/skills/{name}/members/{member}', [M.DELETE], skillsFn, 'SkillMemberDelete');
-    r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve');
-    r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage');
-    r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope');
+    // ALL skills routes are PUBLIC at the gateway (HttpNoneAuthorizer) so the
+    // claude+ wrapper's HS256 device token reaches the Lambda — the gateway JWT
+    // authorizer would reject HS256 outright. The skills Lambda authenticates
+    // in-handler (Cognito JWT OR device token via resolveOrgCatalogAuth) and
+    // enforces the admin gate SERVER-SIDE from the profile, so opening the gateway
+    // does not weaken catalog-write authorization. This is what lets /hq-add-skill
+    // author skills directly instead of round-tripping through the git seed.
+    r('/skills', [M.GET], skillsFn, 'SkillsGet', noAuth);
+    r('/skills', [M.POST], skillsFn, 'SkillsPost', noAuth);
+    r('/skills/{name}', [M.GET, M.PUT, M.DELETE], skillsFn, 'SkillByName', noAuth);
+    r('/skills/{name}/members', [M.POST], skillsFn, 'SkillMembers', noAuth);
+    r('/skills/{name}/members/{member}', [M.DELETE], skillsFn, 'SkillMemberDelete', noAuth);
+    r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve', noAuth);
+    r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage', noAuth);
+    r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope', noAuth);
 
     // MCP servers mirror the skills catalog routes MINUS the bundle verbs
     // (members/dissolve) and the retired-by-design scope verb — the catalog is a
@@ -285,11 +302,12 @@ export class ApiStack extends cdk.Stack {
     // router and is registered up with the other /projects routes above (against
     // projectsFn, using the {projectId} first-segment param the opt-in handler
     // reads). The routes below are the org-catalog CRUD only.
-    // GET public (device token via resolvePrincipal); POST stays Cognito-gated.
-    r('/mcp-servers', [M.GET], mcpServersFn, 'McpServersGet', new HttpNoneAuthorizer());
-    r('/mcp-servers', [M.POST], mcpServersFn, 'McpServersPost');
-    r('/mcp-servers/{name}', [M.GET, M.PUT, M.DELETE], mcpServersFn, 'McpServerByName');
-    r('/mcp-servers/{name}/usage', [M.GET], mcpServersFn, 'McpServerUsage');
+    // PUBLIC at the gateway (device token reaches the Lambda); the mcp-servers
+    // Lambda authenticates + admin-gates server-side, exactly like skills above.
+    r('/mcp-servers', [M.GET], mcpServersFn, 'McpServersGet', noAuth);
+    r('/mcp-servers', [M.POST], mcpServersFn, 'McpServersPost', noAuth);
+    r('/mcp-servers/{name}', [M.GET, M.PUT, M.DELETE], mcpServersFn, 'McpServerByName', noAuth);
+    r('/mcp-servers/{name}/usage', [M.GET], mcpServersFn, 'McpServerUsage', noAuth);
 
     r('/objectives', [M.GET, M.POST, M.PUT], objectivesFn, 'Objectives');
     r('/dod', [M.GET, M.PUT], dodFn, 'Dod');
@@ -310,20 +328,20 @@ export class ApiStack extends cdk.Stack {
     // HttpNoneAuthorizer and let the weekly handler verify the bearer token itself
     // (rest/bearerAuth.ts: device token OR Cognito), still enforcing project
     // ownership. This is what lets `/hq-weekly-update` publish from the PTY.
-    r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly', new HttpNoneAuthorizer());
+    r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly', noAuth);
     r(
       '/projects/{pid}/weekly/{week}',
       [M.GET, M.PUT],
       weeklyFn,
       'WeeklyByWeek',
-      new HttpNoneAuthorizer(),
+      noAuth,
     );
     r(
       '/projects/{pid}/weekly/{week}/publish',
       [M.POST],
       weeklyFn,
       'WeeklyPublish',
-      new HttpNoneAuthorizer(),
+      noAuth,
     );
 
     // Memories route mirrors weekly: HttpNoneAuthorizer so the claude+ daemon's
@@ -331,15 +349,15 @@ export class ApiStack extends cdk.Stack {
     // before it runs). The handler verifies the bearer token itself (device OR
     // Cognito) and scopes the reconcile to the caller's own author key, so a
     // collaborator's daemon can sync memories to a project they do not own.
-    r('/projects/{pid}/memories', [M.GET, M.PUT], memoriesFn, 'ProjectMemories', new HttpNoneAuthorizer());
+    r('/projects/{pid}/memories', [M.GET, M.PUT], memoriesFn, 'ProjectMemories', noAuth);
 
     // ---- Device-auth (claude+ device-code login) ------------------------------
     // start/poll are PUBLIC: the CLI hits them before it has any token. They must
     // OVERRIDE the HTTP API's defaultAuthorizer (JWT) via HttpNoneAuthorizer.
     // approve REQUIRES the JWT (a signed-in browser approves the device) — it
     // inherits the default authorizer (no override).
-    r('/device/start', [M.POST], deviceFn, 'DeviceStart', new HttpNoneAuthorizer());
-    r('/device/poll', [M.POST], deviceFn, 'DevicePoll', new HttpNoneAuthorizer());
+    r('/device/start', [M.POST], deviceFn, 'DeviceStart', noAuth);
+    r('/device/poll', [M.POST], deviceFn, 'DevicePoll', noAuth);
     r('/device/approve', [M.POST], deviceFn, 'DeviceApprove');
 
     // ---- WebSocket API (ingest + live + control) ------------------------------

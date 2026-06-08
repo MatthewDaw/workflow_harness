@@ -4,6 +4,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { orgScope, type Agent, type Skill } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
+import { signDeviceToken } from '../src/auth/verify.js';
 import {
   addMember,
   createSkill,
@@ -371,5 +372,97 @@ describe('POST /skills/:name/scope (retired)', () => {
       }),
     );
     expect(res).toMatchObject({ statusCode: 410 });
+  });
+});
+
+/**
+ * The claude+ wrapper writes the catalog with its HS256 DEVICE TOKEN (no Cognito
+ * gateway, no `custom:admin` claim). The write routes are HttpNoneAuthorizer, so
+ * the token arrives as a raw `Authorization: Bearer` header and the handler must
+ * (a) verify it via resolvePrincipal and (b) decide admin SERVER-SIDE from the
+ * caller's PROFILE (`adminOrgs`) — that combination is what makes /hq-add-skill
+ * able to register skills directly instead of routing through the git seed.
+ */
+describe('device-token catalog writes (claude+ wrapper, server-side admin)', () => {
+  const SECRET = new TextEncoder().encode('test-device-secret');
+
+  beforeEach(() => {
+    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
+  });
+
+  async function deviceEvent(
+    userId: string,
+    opts: { method: string; path?: Record<string, string>; body?: unknown; rawPath?: string },
+  ) {
+    const token = await signDeviceToken({ userId, org: ORG }, { secret: SECRET });
+    return httpEvent({
+      method: opts.method,
+      userId: null, // no Cognito jwt claims — only the bearer header
+      headers: { authorization: `Bearer ${token}` },
+      path: opts.path,
+      rawPath: opts.rawPath,
+      body: opts.body,
+    });
+  }
+
+  it('lets a device-token org admin (adminOrgs) create a skill', async () => {
+    await repo.putUser({ userId: MATT, org: ORG, orgs: [ORG], adminOrgs: [ORG], admin: true });
+    const res = await createSkill(
+      await deviceEvent(MATT, { method: 'POST', body: skill('reconcile', '# md') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 201 });
+    const stored = await repo.getSkill(SCOPE, 'reconcile');
+    expect(stored?.body).toBe('# md');
+    // Authorship is stamped from the verified device principal.
+    expect(stored?.createdBy).toEqual({ userId: MATT, name: MATT });
+  });
+
+  it('forbids a device-token member who is NOT an org admin', async () => {
+    // Profile exists and is in the org, but adminOrgs does not list it.
+    await repo.putUser({ userId: 'bob', org: ORG, orgs: [ORG], adminOrgs: [], admin: false });
+    const res = await createSkill(
+      await deviceEvent('bob', { method: 'POST', body: skill('reconcile') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+  });
+
+  it('forbids a device token with no profile (admin cannot be derived)', async () => {
+    const res = await createSkill(
+      await deviceEvent('ghost', { method: 'POST', body: skill('reconcile') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+  });
+
+  it('lets a device-token admin delete a skill', async () => {
+    await repo.putUser({ userId: MATT, org: ORG, orgs: [ORG], adminOrgs: [ORG], admin: true });
+    await repo.putSkill(skill('reconcile'));
+    const res = await deleteSkill(
+      await deviceEvent(MATT, { method: 'DELETE', path: { name: 'reconcile' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(await repo.getSkill(SCOPE, 'reconcile')).toBeUndefined();
+  });
+
+  it('lets a device-token caller read a skill by name (public GET route)', async () => {
+    await repo.putUser({ userId: MATT, org: ORG, orgs: [ORG] });
+    await repo.putSkill(skill('reconcile', 'body'));
+    const res = await getSkill(
+      await deviceEvent(MATT, { method: 'GET', path: { name: 'reconcile' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ skill: Skill }>(res as { body: string }).skill.body).toBe('body');
+  });
+
+  it('401s when the bearer token is absent entirely', async () => {
+    const res = await createSkill(
+      httpEvent({ method: 'POST', userId: null, body: skill('reconcile') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 401 });
   });
 });

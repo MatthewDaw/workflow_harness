@@ -21,7 +21,7 @@ import {
   queryParam,
   unauthorized,
 } from './runtime.js';
-import { isAdmin } from './scopeauth.js';
+import { isAdmin, isOrgAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { flattenBundle } from './skills.js';
 import { STARTER_BUNDLE_NAME } from '../seed/skills.js';
@@ -456,23 +456,31 @@ async function projectForOptIn(
   | { project: Project; principal: { userId: string; org: string }; org: string }
   | { error: APIGatewayProxyResultV2 }
 > {
-  const principal = principalOf(event);
+  // Accept the gateway Cognito JWT OR the claude+ device token (this opt-in route
+  // is HttpNoneAuthorizer, so the gateway does not pre-reject the HS256 token).
+  const principal = await resolvePrincipal(event);
   if (!principal) return { error: unauthorized() };
   const id = pathParam(event, 'projectId');
   if (!id) return { error: badRequest('missing project id') };
   const project = await deps.repo.getProject(id);
   if (!project) return { error: notFound() };
-  if (!isAdmin(event) && project.ownerUserId !== principal.userId) return { error: forbidden() };
 
   // The org to resolve catalog items against. The project belongs to exactly one
   // org (stamped at connect time), and its materialized config draws from THAT
   // org's catalog — so the item must be looked up there, NOT in the caller's raw
   // token claim (`principal.org`), which can differ from the user's effective org
-  // (the DB profile org that every read endpoint uses via `effectiveOrg`). Using
-  // the token org here was the bug: enabling 404'd because the catalog was queried
-  // in the wrong org. Fall back to the caller's effective org, then the token, for
-  // legacy projects with no stamped org.
-  const org = project.org ?? (await effectiveOrg(event, deps.repo)) ?? principal.org;
+  // (the DB profile org). Fall back to the caller's profile org, then the token,
+  // for legacy projects with no stamped org.
+  const profile = await deps.repo.getUser(principal.userId);
+  const org = project.org ?? profile?.org ?? principal.org;
+
+  // Admin-or-owner gate. Admin is derived SERVER-SIDE (profile.adminOrgs/admin OR
+  // the gateway custom:admin claim) against the project's org, so a device-token
+  // admin works; the owner check uses the resolved principal so a device-token
+  // project owner works too.
+  if (!isOrgAdmin(event, profile, project.org ?? org) && project.ownerUserId !== principal.userId)
+    return { error: forbidden() };
+
   return { project, principal, org };
 }
 

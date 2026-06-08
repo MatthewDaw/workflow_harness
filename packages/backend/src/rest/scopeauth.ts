@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
-import type { ScopeRef } from '@harness/shared';
+import type { ScopeRef, UserProfile } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import type { Principal } from '../auth/verify.js';
+import { resolvePrincipal } from './bearerAuth.js';
 
 /**
  * Authorization helpers shared by the scoped Agents/Skills registries (U9).
@@ -20,21 +21,66 @@ import type { Principal } from '../auth/verify.js';
  *             project id (cross-tenant write).
  */
 
-/**
- * May `principal` write the org catalog (skills/agents)? In the collapsed
- * org-only model every catalog item is org-scoped, so a write requires the
- * caller to be an admin of their own org. The principal is implicitly of their
- * own org, so this reduces to the admin claim.
- */
-export function canWriteOrgCatalog(_principal: Principal, admin: boolean): boolean {
-  return admin;
-}
-
 export function isAdmin(event: APIGatewayProxyEventV2): boolean {
   const claims = (
     event.requestContext as { authorizer?: { jwt?: { claims?: Record<string, unknown> } } }
   ).authorizer?.jwt?.claims;
   return claims?.['custom:admin'] === 'true' || claims?.['custom:admin'] === true;
+}
+
+/**
+ * Is the caller an admin of `org` for org-catalog writes? Admin is decided
+ * SERVER-SIDE and authoritatively from the PROFILE (`profile.admin` for the
+ * active org, or `profile.adminOrgs` listing the org) — the same source `GET /me`
+ * uses — OR'd with the gateway `custom:admin` claim for the Cognito-web path.
+ *
+ * Deriving it from the profile (not the token) is what lets the claude+ device
+ * token write the catalog: that token carries org + identity but NO role claim,
+ * so a token-only `isAdmin` could never authorize it. It is also revocable
+ * instantly (edit the profile) with no 180-day token re-mint.
+ */
+export function isOrgAdmin(
+  event: APIGatewayProxyEventV2,
+  profile: UserProfile | undefined,
+  org: string | undefined,
+): boolean {
+  if (isAdmin(event)) return true;
+  if (profile?.admin === true) return true;
+  return org ? (profile?.adminOrgs ?? []).includes(org) : false;
+}
+
+/**
+ * Resolved authorization context for an ORG-CATALOG request (skills/agents/
+ * mcp-servers). Accepts EITHER the gateway Cognito JWT (HQ web) OR the claude+
+ * device token (raw `Authorization: Bearer`) — the device token only reaches the
+ * handler on routes wired with `HttpNoneAuthorizer`, so the gateway does not
+ * pre-reject its HS256 signature.
+ */
+export interface OrgCatalogAuth {
+  principal: Principal;
+  /** Effective org: the profile's org, falling back to the token's org claim. */
+  org?: string;
+  /** Whether the caller may WRITE the org catalog (server-side admin gate). */
+  admin: boolean;
+}
+
+/**
+ * Resolve the caller, their effective org, and their org-catalog write authority
+ * in one place, accepting both auth paths. Returns `undefined` only when NO
+ * principal verifies (the caller answers 401); a verified-but-non-admin caller
+ * returns `{ admin: false }` (the caller answers 403). The org mirrors the read
+ * handlers' `effectiveOrg(...) ?? principal.org` fallback so a device token whose
+ * profile has no stamped org still scopes to its token org.
+ */
+export async function resolveOrgCatalogAuth(
+  event: APIGatewayProxyEventV2,
+  repo: Repo,
+): Promise<OrgCatalogAuth | undefined> {
+  const principal = await resolvePrincipal(event);
+  if (!principal) return undefined;
+  const profile = await repo.getUser(principal.userId);
+  const org = profile?.org ?? principal.org;
+  return { principal, org, admin: isOrgAdmin(event, profile, org) };
 }
 
 /**

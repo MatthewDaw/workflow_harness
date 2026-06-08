@@ -11,10 +11,9 @@ import {
   ok,
   parseBody,
   pathParam,
-  principalOf,
   unauthorized,
 } from './runtime.js';
-import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
+import { resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -60,11 +59,14 @@ export async function createAgent(
   event: APIGatewayProxyEventV2,
   deps: AgentsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
+  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer
+  // route); admin is decided server-side from the profile so the device token
+  // (no role claim) can write.
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
+  if (!auth.org) return unauthorized();
+  const { principal, org } = auth;
 
   const name = pathParam(event, 'name');
   let body: unknown;
@@ -108,12 +110,14 @@ export async function promoteAgent(
   event: APIGatewayProxyEventV2,
   deps: AgentsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  // Promote is NOT admin-gated (any authed org member may repoint TRUE), but it
+  // still accepts the device token via the shared resolver.
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
+  if (!auth.org) return unauthorized();
+  const org = auth.org;
 
   let body: unknown;
   try {
@@ -135,13 +139,12 @@ export async function getAgent(
   event: APIGatewayProxyEventV2,
   deps: AgentsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return notFound();
-  const agent = await deps.repo.getAgent(orgScope(org), name);
+  if (!auth.org) return notFound();
+  const agent = await deps.repo.getAgent(orgScope(auth.org), name);
   if (!agent) return notFound();
   return ok({ agent });
 }
@@ -150,14 +153,13 @@ export async function deleteAgent(
   event: APIGatewayProxyEventV2,
   deps: AgentsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
-  await deps.repo.deleteAgent(orgScope(org), name);
+  if (!auth.org) return unauthorized();
+  await deps.repo.deleteAgent(orgScope(auth.org), name);
   return ok({ deleted: true });
 }
 

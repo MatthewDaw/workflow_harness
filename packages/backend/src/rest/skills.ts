@@ -11,10 +11,9 @@ import {
   ok,
   parseBody,
   pathParam,
-  principalOf,
   unauthorized,
 } from './runtime.js';
-import { canWriteOrgCatalog, isAdmin } from './scopeauth.js';
+import { resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -91,11 +90,14 @@ export async function createSkill(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
+  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer
+  // route); admin is decided server-side from the profile so the device token
+  // (no role claim) can write.
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
+  if (!auth.org) return unauthorized();
+  const { principal, org } = auth;
 
   const name = pathParam(event, 'name');
   let body: unknown;
@@ -146,12 +148,14 @@ export async function promoteSkill(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  // Promote is NOT admin-gated (any authed org member may repoint TRUE), but it
+  // still accepts the device token via the shared resolver.
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
+  if (!auth.org) return unauthorized();
+  const org = auth.org;
 
   let body: unknown;
   try {
@@ -173,13 +177,12 @@ export async function getSkill(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return notFound();
-  const skill = await deps.repo.getSkill(orgScope(org), name);
+  if (!auth.org) return notFound();
+  const skill = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!skill) return notFound();
   return ok({ skill });
 }
@@ -194,13 +197,12 @@ export async function getUsage(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return ok({ name, count: 0 });
-  const count = await usageCount(deps.repo, org, name);
+  if (!auth.org) return ok({ name, count: 0 });
+  const count = await usageCount(deps.repo, auth.org, name);
   return ok({ name, count });
 }
 
@@ -208,14 +210,13 @@ export async function deleteSkill(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
-  await deps.repo.deleteSkill(orgScope(org), name);
+  if (!auth.org) return unauthorized();
+  await deps.repo.deleteSkill(orgScope(auth.org), name);
   return ok({ deleted: true });
 }
 
@@ -224,9 +225,9 @@ export async function addMember(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
 
@@ -239,9 +240,8 @@ export async function addMember(
   const member = (body as { member?: unknown })?.member;
   if (typeof member !== 'string' || !member) return badRequest('missing member');
 
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
-  const bundle = await deps.repo.getSkill(orgScope(org), name);
+  if (!auth.org) return unauthorized();
+  const bundle = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
@@ -260,16 +260,15 @@ export async function removeMember(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
   const name = pathParam(event, 'name');
   const member = pathParam(event, 'member');
   if (!name || !member) return badRequest('missing name or member');
 
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
-  const bundle = await deps.repo.getSkill(orgScope(org), name);
+  if (!auth.org) return unauthorized();
+  const bundle = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
@@ -286,20 +285,19 @@ export async function dissolveBundle(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = principalOf(event);
-  if (!principal) return unauthorized();
-  if (!canWriteOrgCatalog(principal, isAdmin(event))) return forbidden();
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
 
-  const org = await effectiveOrg(event, deps.repo);
-  if (!org) return unauthorized();
-  const bundle = await deps.repo.getSkill(orgScope(org), name);
+  if (!auth.org) return unauthorized();
+  const bundle = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
 
   const members = bundle.members;
-  await deps.repo.deleteSkill(orgScope(org), name);
+  await deps.repo.deleteSkill(orgScope(auth.org), name);
   return ok({ dissolved: true, members });
 }
 
