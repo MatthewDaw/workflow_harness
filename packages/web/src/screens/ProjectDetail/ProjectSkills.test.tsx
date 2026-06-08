@@ -78,6 +78,7 @@ const SKILLS: Skill[] = [
 interface StubReq {
   url: string;
   method: string;
+  body?: unknown;
 }
 
 function lastMatching(pred: (u: string, m: string) => boolean): StubReq | undefined {
@@ -106,6 +107,46 @@ describe('ProjectSkills (project opt-in)', () => {
         lastMatching((u, m) => m === 'DELETE' && u.includes('projects/weekly-compass/skills/gh')),
       ).toBeDefined(),
     );
+  });
+
+  it('pins a per-repo variant via enableProjectSkill carrying { variantId }', async () => {
+    renderWithProviders(<ProjectSkills />, {
+      route: '/projects/weekly-compass/skills',
+      routePath: '/projects/:projectId/skills',
+      seed: {
+        projects: [PROJECT],
+        skills: SKILLS,
+        skillVariants: {
+          gh: [
+            { variantId: 'gh#base', baseName: 'gh', name: 'gh', version: 1, isTrue: true },
+            {
+              variantId: 'gh#R#weekly#U#matt',
+              baseName: 'gh',
+              name: 'gh',
+              version: 2,
+              repoId: 'weekly',
+              authorUserId: 'matt',
+            },
+          ],
+        },
+      },
+    });
+    await screen.findByTestId('skill-card-gh');
+
+    // The enabled skill's footer carries a per-repo variant dropdown; picking the
+    // fork re-enables the skill with that variantId (the project's pin).
+    const select = (await screen.findByTestId('variant-select-gh')) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(2));
+    await userEvent.selectOptions(select, 'gh#R#weekly#U#matt');
+
+    await waitFor(() => {
+      const req = lastMatching(
+        (u, m) => m === 'POST' && u.includes('projects/weekly-compass/skills/gh'),
+      );
+      expect(req).toBeDefined();
+      const body = JSON.parse(String(req!.body));
+      expect(body.variantId).toBe('gh#R#weekly#U#matt');
+    });
   });
 
   it('adds a standalone skill from the catalog modal via enableProjectSkill', async () => {
