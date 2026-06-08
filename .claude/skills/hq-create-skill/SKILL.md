@@ -21,6 +21,16 @@ one correctly and getting it registered.
 > bundle. It joins `command-hq-starter` (or any other bundle) **only** when you
 > explicitly list it in the bundle manifest, `.claude/skills/bundles.json`.
 
+> **Scope + versioning (live).** The catalog code is 3-tier
+> (`org` / `user` / `project`; see `packages/backend/src/rest/scopeauth.ts`). A
+> seeded skill lands in the **org catalog** as its **base** variant (an org-scope
+> write is admin-gated). Identity for a *version* is `(baseName, repoId, userId)`:
+> editing the skill later from a project context **forks a new variant** + an
+> immutable revision instead of clobbering the base. One org-wide **TRUE** version
+> per name is the default shown/added; **any authed org member may promote** a
+> variant to true (`POST /skills/:name/promote`). This skill only *scaffolds* the
+> file — those flows kick in when it is edited/registered.
+
 ## When this runs
 
 In the developer's claude+ session (the PTY), from inside the monorepo. It writes
