@@ -204,3 +204,46 @@ describe('POST /agents/:name/scope (retired)', () => {
     expect(res).toMatchObject({ statusCode: 410 });
   });
 });
+
+/**
+ * Canonical built-in agents (seed-owned, `createdBy.userId === 'system'`) are
+ * fork-only via REST: the base is updated only by the git seed; edits must fork.
+ */
+describe('built-in agents are fork-only via REST (git-seed owned)', () => {
+  const builtinAgent = (name: string): Agent => ({
+    ...agent(name),
+    createdBy: { userId: 'system', name: 'system' },
+  });
+
+  it('rejects an in-place PUT to a built-in agent (409)', async () => {
+    await repo.putAgent(builtinAgent('forge'));
+    const res = await createAgent(
+      adminEvent({ method: 'PUT', userId: MATT, path: { name: 'forge' }, body: agent('forge') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+
+  it('rejects deleting a built-in agent (409)', async () => {
+    await repo.putAgent(builtinAgent('forge'));
+    const res = await deleteAgent(
+      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'forge' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+
+  it('ALLOWS forking a built-in agent (repoId + authorUserId set)', async () => {
+    await repo.putAgent(builtinAgent('forge'));
+    const res = await createAgent(
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'forge' },
+        body: { ...agent('forge'), repoId: 'repo1', authorUserId: MATT },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+  });
+});

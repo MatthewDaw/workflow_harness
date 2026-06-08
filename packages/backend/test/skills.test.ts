@@ -466,3 +466,78 @@ describe('device-token catalog writes (claude+ wrapper, server-side admin)', () 
     expect(res).toMatchObject({ statusCode: 401 });
   });
 });
+
+/**
+ * Canonical built-ins (`source:'built-in'`) are owned by the git seed: the DB is the
+ * single runtime source of truth, but a built-in's BASE variant is updated ONLY by
+ * the seed, never mutated in place through REST. Edits must FORK (set repoId +
+ * authorUserId), which the variant model already supports; deletes and built-in
+ * bundle-membership edits are rejected (manage via .claude/skills + re-seed).
+ */
+describe('built-ins are fork-only via REST (git-seed owned)', () => {
+  const builtinSkill = (name: string, body = ''): Skill => ({ ...skill(name, body), source: 'built-in' });
+
+  it('rejects an in-place PUT to a built-in base (409), leaving it untouched', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
+    const res = await createSkill(
+      adminEvent({ method: 'PUT', userId: MATT, path: { name: 'hq-add-skill' }, body: skill('hq-add-skill', 'edited') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+    const stored = await repo.getSkill(SCOPE, 'hq-add-skill');
+    expect(stored?.source).toBe('built-in');
+    expect(stored?.body).toBe('canonical');
+  });
+
+  it('rejects a POST that would clobber a built-in base (409)', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill'));
+    const res = await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('hq-add-skill', 'new') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+
+  it('ALLOWS forking a built-in (repoId + authorUserId set)', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill'));
+    const res = await createSkill(
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'hq-add-skill' },
+        body: { ...skill('hq-add-skill', 'my fork'), repoId: 'repo1', authorUserId: MATT },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+  });
+
+  it('rejects deleting a built-in (409)', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill'));
+    const res = await deleteSkill(
+      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'hq-add-skill' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+    expect(await repo.getSkill(SCOPE, 'hq-add-skill')).toBeDefined();
+  });
+
+  it('rejects mutating a built-in bundle membership (409)', async () => {
+    await repo.putSkill(skill('extra'));
+    await repo.putSkill({ ...bundle('command-hq-starter', ['a']), source: 'built-in' });
+    const res = await addMember(
+      adminEvent({ method: 'POST', userId: MATT, path: { name: 'command-hq-starter' }, body: { member: 'extra' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+
+  it('still allows editing a non-built-in skill in place', async () => {
+    await repo.putSkill(skill('reconcile', 'v1'));
+    const res = await createSkill(
+      adminEvent({ method: 'PUT', userId: MATT, path: { name: 'reconcile' }, body: skill('reconcile', 'v2') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+  });
+});

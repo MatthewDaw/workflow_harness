@@ -241,3 +241,46 @@ describe('versioning: create + promote', () => {
     expect((await repo.getTrueVariant(SCOPE, 'MCPSERVER', 'filesystem'))?.variantId).toBe('filesystem#R#r#U#bob');
   });
 });
+
+/**
+ * Canonical built-in MCP servers (seed-owned, `createdBy.userId === 'system'`) are
+ * fork-only via REST: the base is updated only by the git seed; edits must fork.
+ */
+describe('built-in mcp servers are fork-only via REST (git-seed owned)', () => {
+  const builtinServer = (name: string): McpServer => ({
+    ...stdioServer(name),
+    createdBy: { userId: 'system', name: 'system' },
+  });
+
+  it('rejects an in-place PUT to a built-in server (409)', async () => {
+    await repo.putMcpServer(builtinServer('filesystem'));
+    const res = await createMcpServer(
+      adminEvent({ method: 'PUT', userId: MATT, path: { name: 'filesystem' }, body: stdioServer('filesystem') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+
+  it('rejects deleting a built-in server (409)', async () => {
+    await repo.putMcpServer(builtinServer('filesystem'));
+    const res = await deleteMcpServer(
+      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'filesystem' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+
+  it('ALLOWS forking a built-in server (repoId + authorUserId set)', async () => {
+    await repo.putMcpServer(builtinServer('filesystem'));
+    const res = await createMcpServer(
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'filesystem' },
+        body: { ...stdioServer('filesystem'), repoId: 'repo1', authorUserId: MATT },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+  });
+});

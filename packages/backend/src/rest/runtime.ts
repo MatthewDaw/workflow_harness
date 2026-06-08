@@ -62,6 +62,10 @@ export const unauthorized = (): APIGatewayProxyResultV2 => json(401, { error: 'u
 export const forbidden = (): APIGatewayProxyResultV2 => json(403, { error: 'forbidden' });
 /** 410 Gone — for retired endpoints (e.g. the scope-change route in the org catalog). */
 export const gone = (message = 'gone'): APIGatewayProxyResultV2 => json(410, { error: message });
+/** 409 Conflict — the request conflicts with the resource's state (e.g. an attempt
+ * to mutate a canonical `built-in` in place; the caller must fork it or re-seed). */
+export const conflict = (message = 'conflict'): APIGatewayProxyResultV2 =>
+  json(409, { error: message });
 
 /** A path parameter, or undefined. */
 export function pathParam(event: APIGatewayProxyEventV2, name: string): string | undefined {

@@ -21,6 +21,25 @@ import { resolvePrincipal } from './bearerAuth.js';
  *             project id (cross-tenant write).
  */
 
+/**
+ * Is a catalog record CANONICAL — owned by the git seed (`.claude/skills|agents` →
+ * `seed-*.mjs`), not by REST? The org catalog is the single runtime source of truth,
+ * but a canonical record's BASE variant is updated ONLY by the seed; REST callers
+ * fork it instead (the variant model) or change the repo and re-seed. This keeps the
+ * default bundle reviewable/rollback-able in git while every read and every
+ * user-authored write still goes through the DB.
+ *
+ * The marker is uniform across skills/agents/mcp-servers: the seed stamps every
+ * built-in with `createdBy.userId === 'system'` (a real user write never is). Skills
+ * additionally carry `source:'built-in'`; agents/mcp-servers have no `source` field,
+ * so the `createdBy` marker is the one that spans all three.
+ */
+export function isBuiltin(
+  record: { source?: string; createdBy?: { userId?: string } } | undefined,
+): boolean {
+  return record?.source === 'built-in' || record?.createdBy?.userId === 'system';
+}
+
 export function isAdmin(event: APIGatewayProxyEventV2): boolean {
   const claims = (
     event.requestContext as { authorizer?: { jwt?: { claims?: Record<string, unknown> } } }

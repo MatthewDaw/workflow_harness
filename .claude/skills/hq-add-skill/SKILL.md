@@ -74,6 +74,13 @@ context cuts a **new version/variant** keyed by `(name, repo, person)` and
 snapshots an immutable revision — it never overwrites the org base variant or
 anyone else's. The shared catalog stays safe.
 
+**Canonical built-ins are fork-only.** A `source:'built-in'` skill (and any
+seed-owned record, `createdBy.userId === 'system'`) is owned by the git seed: an
+in-place `POST`/`PUT`/`DELETE` to its base, or a membership edit to a built-in
+bundle, is rejected with **409** — fork it (set `repoId` + `authorUserId`) or
+change `.claude/skills` and re-seed. The DB is still the single runtime source of
+truth; this only protects the *default bundle's* canonical rows.
+
 The bundled `command-hq-starter` bundle is part of this same org catalog.
 
 ## 3 · Scaffold the SKILL.md file(s)

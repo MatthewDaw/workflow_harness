@@ -3,6 +3,7 @@ import { agentSchema, orgScope, type Agent } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
+  conflict,
   created,
   defaultRepo,
   forbidden,
@@ -13,7 +14,7 @@ import {
   pathParam,
   unauthorized,
 } from './runtime.js';
-import { resolveOrgCatalogAuth } from './scopeauth.js';
+import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -82,9 +83,19 @@ export async function createAgent(
   if (!parsed.success) return badRequest(parsed.error.message);
   const agent: Agent = parsed.data;
 
+  // Canonical built-ins are owned by the git seed: reject an in-place write to the
+  // BASE variant (no repo/author). Forking (repoId + authorUserId) is still allowed.
+  const targetName = name ?? agent.name;
+  const existing = await deps.repo.getAgent(orgScope(org), targetName);
+  if (isBuiltin(existing) && !agent.repoId && !agent.authorUserId) {
+    return conflict(
+      `"${targetName}" is a canonical built-in agent — fork it (set repoId + authorUserId) ` +
+        `or change it in .claude/agents and re-seed; in-place writes are rejected.`,
+    );
+  }
+
   if (name) {
     // PUT /agents/:name — update; preserve the existing createdBy stamp.
-    const existing = await deps.repo.getAgent(orgScope(org), name);
     agent.createdBy = existing?.createdBy ?? agent.createdBy;
     agent.baseName = existing?.baseName ?? agent.baseName ?? name;
   } else {
@@ -159,6 +170,13 @@ export async function deleteAgent(
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
   if (!auth.org) return unauthorized();
+  const existing = await deps.repo.getAgent(orgScope(auth.org), name);
+  if (isBuiltin(existing)) {
+    return conflict(
+      `"${name}" is a canonical built-in agent — remove it from .claude/agents and ` +
+        `re-seed; it cannot be deleted via REST.`,
+    );
+  }
   await deps.repo.deleteAgent(orgScope(auth.org), name);
   return ok({ deleted: true });
 }

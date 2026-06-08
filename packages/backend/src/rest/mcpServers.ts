@@ -3,6 +3,7 @@ import { mcpServerSchema, orgScope, type McpServer } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
+  conflict,
   created,
   defaultRepo,
   forbidden,
@@ -12,7 +13,7 @@ import {
   pathParam,
   unauthorized,
 } from './runtime.js';
-import { resolveOrgCatalogAuth } from './scopeauth.js';
+import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -79,9 +80,19 @@ export async function createMcpServer(
   if (!parsed.success) return badRequest(parsed.error.message);
   const server: McpServer = parsed.data;
 
+  // Canonical built-ins are owned by the git seed: reject an in-place write to the
+  // BASE variant (no repo/author). Forking (repoId + authorUserId) is still allowed.
+  const targetName = name ?? server.name;
+  const existing = await deps.repo.getMcpServer(orgScope(org), targetName);
+  if (isBuiltin(existing) && !server.repoId && !server.authorUserId) {
+    return conflict(
+      `"${targetName}" is a canonical built-in MCP server — fork it (set repoId + ` +
+        `authorUserId) or change it in the repo and re-seed; in-place writes are rejected.`,
+    );
+  }
+
   if (name) {
     // PUT /mcp-servers/:name — update; preserve the existing createdBy stamp.
-    const existing = await deps.repo.getMcpServer(orgScope(org), name);
     server.createdBy = existing?.createdBy ?? server.createdBy;
     server.baseName = existing?.baseName ?? server.baseName ?? name;
   } else {
@@ -176,6 +187,13 @@ export async function deleteMcpServer(
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
   if (!auth.org) return unauthorized();
+  const existing = await deps.repo.getMcpServer(orgScope(auth.org), name);
+  if (isBuiltin(existing)) {
+    return conflict(
+      `"${name}" is a canonical built-in MCP server — remove it from the repo and ` +
+        `re-seed; it cannot be deleted via REST.`,
+    );
+  }
   await deps.repo.deleteMcpServer(orgScope(auth.org), name);
   return ok({ deleted: true });
 }

@@ -3,6 +3,7 @@ import { orgScope, skillSchema, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
+  conflict,
   created,
   defaultRepo,
   forbidden,
@@ -13,7 +14,7 @@ import {
   pathParam,
   unauthorized,
 } from './runtime.js';
-import { resolveOrgCatalogAuth } from './scopeauth.js';
+import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -113,9 +114,20 @@ export async function createSkill(
   if (!parsed.success) return badRequest(parsed.error.message);
   const skill: Skill = parsed.data;
 
+  // Canonical built-ins are owned by the git seed: reject an in-place write to the
+  // BASE variant (no repo/author). Forking (repoId + authorUserId) is still allowed —
+  // that is how a project customizes a built-in without touching the canonical.
+  const targetName = name ?? skill.name;
+  const existing = await deps.repo.getSkill(orgScope(org), targetName);
+  if (isBuiltin(existing) && !skill.repoId && !skill.authorUserId) {
+    return conflict(
+      `"${targetName}" is a canonical built-in skill — fork it (set repoId + authorUserId) ` +
+        `or change it in .claude/skills and re-seed; in-place writes are rejected.`,
+    );
+  }
+
   if (name) {
     // PUT /skills/:name — update; preserve the existing createdBy stamp.
-    const existing = await deps.repo.getSkill(orgScope(org), name);
     skill.createdBy = existing?.createdBy ?? skill.createdBy;
     // Carry the variant identity forward so an edit snapshots the NEXT revision
     // of the SAME variant rather than starting a new family at rev 1.
@@ -216,6 +228,13 @@ export async function deleteSkill(
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
   if (!auth.org) return unauthorized();
+  const existing = await deps.repo.getSkill(orgScope(auth.org), name);
+  if (isBuiltin(existing)) {
+    return conflict(
+      `"${name}" is a canonical built-in skill — remove it from .claude/skills and ` +
+        `re-seed; it cannot be deleted via REST.`,
+    );
+  }
   await deps.repo.deleteSkill(orgScope(auth.org), name);
   return ok({ deleted: true });
 }
@@ -244,6 +263,12 @@ export async function addMember(
   const bundle = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
+  if (isBuiltin(bundle)) {
+    return conflict(
+      `"${name}" is a canonical built-in bundle — change its members in ` +
+        `.claude/skills/bundles.json and re-seed; in-place edits are rejected.`,
+    );
+  }
 
   if (!bundle.members.includes(member)) {
     bundle.members = [...bundle.members, member];
@@ -271,6 +296,12 @@ export async function removeMember(
   const bundle = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
+  if (isBuiltin(bundle)) {
+    return conflict(
+      `"${name}" is a canonical built-in bundle — change its members in ` +
+        `.claude/skills/bundles.json and re-seed; in-place edits are rejected.`,
+    );
+  }
 
   bundle.members = bundle.members.filter((m) => m !== member);
   await deps.repo.putSkill(bundle);
@@ -295,6 +326,12 @@ export async function dissolveBundle(
   const bundle = await deps.repo.getSkill(orgScope(auth.org), name);
   if (!bundle) return notFound();
   if (bundle.kind !== 'bundle') return badRequest('not a bundle');
+  if (isBuiltin(bundle)) {
+    return conflict(
+      `"${name}" is a canonical built-in bundle — change its members in ` +
+        `.claude/skills/bundles.json and re-seed; in-place edits are rejected.`,
+    );
+  }
 
   const members = bundle.members;
   await deps.repo.deleteSkill(orgScope(auth.org), name);
