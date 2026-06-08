@@ -22,9 +22,10 @@ const (
 	KindAgent Kind = "agent"
 	KindSkill Kind = "skill"
 	// KindMcp is an MCP server, which (unlike agents/skills) does not live
-	// one-file-per-item: every server is an entry merged into a shared
-	// ~/.claude+/.mcp.json. Diff/Reconcile/DriftReport are kind-generic and need
-	// no change; the difference is confined to ReadLocal/ApplyPulled and mcp.go.
+	// one-file-per-item: every server is an entry merged into the per-project
+	// <root>/.claude.json mcpServers map (U-MCP-Target). Diff/Reconcile/DriftReport
+	// are kind-generic and need no change; the difference is confined to
+	// ReadLocal/ApplyPulled and mcp.go.
 	KindMcp Kind = "mcp"
 )
 
@@ -64,8 +65,11 @@ func ReadLocal(plus string) ([]Item, error) {
 	items = append(items, readDir(filepath.Join(userDir, "agents"), KindAgent)...)
 	items = append(items, readDir(filepath.Join(userDir, "skills"), KindSkill)...)
 	// MCP servers are not files-per-item: emit one Item per mcpServers entry in
-	// ~/.claude/.mcp.json. A malformed file surfaces as a single Err item (never
-	// a panic) and must not blank the other kinds.
+	// ~/.claude/.claude.json. A malformed file surfaces as a single Err item (never
+	// a panic) and must not blank the other kinds. (NOTE: ~/.claude/.claude.json
+	// rarely exists — the user's real one is at ~/.claude.json — but reading it is
+	// harmless: an absent file yields nothing, and the per-project root's
+	// .claude.json, read via `plus` below, is the one ApplyPulled writes.)
 	items = append(items, readMcpFile(filepath.Join(userDir, mcpFileName))...)
 
 	// Union in the isolated claude+ registry, skipping names already provided by
@@ -129,18 +133,18 @@ func readDir(root string, kind Kind) []Item {
 	return out
 }
 
-// readMcpFile reads a .mcp.json file and emits one Item{Kind: KindMcp} per
+// readMcpFile reads a .claude.json file and emits one Item{Kind: KindMcp} per
 // mcpServers entry, with Hash computed from the entry's canonical serialization
 // (so an on-disk server compares equal to its HQ-built twin). Path points at the
-// shared .mcp.json file. An absent file yields nothing. A malformed file surfaces
-// as a SINGLE Err item (named after the file) rather than a panic, and — because
-// it is one item — never blanks the agent/skill items collected alongside it. A
-// per-entry that fails to canonicalize is likewise flagged as an Err item for
-// that server name only.
+// shared .claude.json file. An absent file yields nothing. A malformed file
+// surfaces as a SINGLE Err item (named after the file) rather than a panic, and —
+// because it is one item — never blanks the agent/skill items collected alongside
+// it. A per-entry that fails to canonicalize is likewise flagged as an Err item
+// for that server name only.
 func readMcpFile(path string) []Item {
 	mf, err := parseMcpFile(path)
 	if err != nil {
-		return []Item{{Kind: KindMcp, Name: mcpFileName, Path: path, Err: "malformed .mcp.json: " + err.Error()}}
+		return []Item{{Kind: KindMcp, Name: mcpFileName, Path: path, Err: "malformed .claude.json: " + err.Error()}}
 	}
 	out := make([]Item, 0, len(mf.McpServers))
 	for name, raw := range mf.McpServers {

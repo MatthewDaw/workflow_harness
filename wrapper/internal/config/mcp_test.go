@@ -131,6 +131,149 @@ func TestParseMcpFileMalformedErrors(t *testing.T) {
 	}
 }
 
+// TestMergeAddsToEnabledMcpjsonServers proves a merge writes the server into
+// mcpServers AND adds its name to enabledMcpjsonServers (so Claude actually
+// launches it — U-MCP-Target), de-duplicated and preserving any names already
+// listed.
+func TestMergeAddsToEnabledMcpjsonServers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, mcpFileName)
+	// A real .claude.json already carries unrelated top-level keys plus a
+	// pre-approved server name we must not drop.
+	initial := `{
+  "numStartups": 7,
+  "enabledMcpjsonServers": ["already-there"],
+  "mcpServers": {}
+}`
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeMcpServer(path, "fs", mcpEntry{Type: "stdio", Command: "npx"}); err != nil {
+		t.Fatalf("mergeMcpServer: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(b, &top); err != nil {
+		t.Fatalf("written .claude.json is not valid JSON: %v", err)
+	}
+	// Unrelated key survives.
+	if _, ok := top["numStartups"]; !ok {
+		t.Error("unrelated top-level key numStartups was clobbered")
+	}
+	var enabled []string
+	if err := json.Unmarshal(top[enabledMcpjsonKey], &enabled); err != nil {
+		t.Fatalf("enabledMcpjsonServers not an array: %v", err)
+	}
+	if !contains(enabled, "fs") {
+		t.Errorf("synced server 'fs' not added to enabledMcpjsonServers: %v", enabled)
+	}
+	if !contains(enabled, "already-there") {
+		t.Errorf("pre-existing approval 'already-there' was dropped: %v", enabled)
+	}
+
+	// Idempotent: a second merge of the same name does not duplicate it.
+	if err := mergeMcpServer(path, "fs", mcpEntry{Type: "stdio", Command: "npx"}); err != nil {
+		t.Fatalf("second mergeMcpServer: %v", err)
+	}
+	b2, _ := os.ReadFile(path)
+	var top2 map[string]json.RawMessage
+	_ = json.Unmarshal(b2, &top2)
+	var enabled2 []string
+	_ = json.Unmarshal(top2[enabledMcpjsonKey], &enabled2)
+	if countOf(enabled2, "fs") != 1 {
+		t.Errorf("enabledMcpjsonServers should list 'fs' exactly once, got %v", enabled2)
+	}
+}
+
+// TestApplyPulledMergesIntoClaudeJsonPreservingAuth proves an MCP pull merges into
+// a .claude.json that holds auth/identity keys without clobbering them, and that a
+// re-read of the pulled server is in-sync (hash parity through .claude.json).
+func TestApplyPulledMergesIntoClaudeJsonPreservingAuth(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	plus, err := plusDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(plus, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A representative .claude.json: auth/identity/UI state plus a personal server.
+	initial := `{
+  "userID": "u-123",
+  "oauthAccount": {"emailAddress": "x@example.com"},
+  "mcpServers": {"personal": {"type": "stdio", "command": "personal-cmd"}}
+}`
+	if err := os.WriteFile(filepath.Join(plus, mcpFileName), []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ri, body := mcpRemoteItem(t, remoteMcpServer{Name: "fs", Transport: "stdio", Command: "npx", Args: []string{"-y", "s"}})
+	if err := ApplyPulled(testPlus(t), ri, body); err != nil {
+		t.Fatalf("ApplyPulled: %v", err)
+	}
+
+	b, _ := os.ReadFile(filepath.Join(plus, mcpFileName))
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(b, &top); err != nil {
+		t.Fatalf("post-merge .claude.json invalid: %v", err)
+	}
+	if _, ok := top["userID"]; !ok {
+		t.Error("auth key userID was clobbered by MCP merge")
+	}
+	if _, ok := top["oauthAccount"]; !ok {
+		t.Error("oauthAccount was clobbered by MCP merge")
+	}
+	mf, err := parseMcpFile(filepath.Join(plus, mcpFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mf.McpServers["personal"]; !ok {
+		t.Error("personal MCP server was lost on merge")
+	}
+	if _, ok := mf.McpServers["fs"]; !ok {
+		t.Error("pulled server 'fs' not written into .claude.json mcpServers")
+	}
+
+	// Hash parity: a fresh read of the pulled server is in-sync.
+	local, err := ReadLocal(testPlus(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := Diff(local, []RemoteItem{ri})
+	for _, row := range report.Rows {
+		if row.Kind == KindMcp && row.Name == "fs" && row.Drift != DriftInSync {
+			t.Fatalf("pulled fs should read back in-sync, got %s", row.Drift)
+		}
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func countOf(s []string, v string) int {
+	n := 0
+	for _, x := range s {
+		if x == v {
+			n++
+		}
+	}
+	return n
+}
+
 // TestHttpEntryRoundTripsHeaders proves an http server round-trips url+headers and
 // hashes consistently.
 func TestHttpEntryRoundTripsHeaders(t *testing.T) {
