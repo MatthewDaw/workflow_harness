@@ -133,18 +133,28 @@ func cmdLs() error {
 	return w.Flush()
 }
 
-// cmdAttachOrCreate resolves the repo for cwd, ensures its daemon is running,
-// and attaches. It is resilient to a messy previous exit: a leftover daemon that
-// is dead, incompatible, wedged, or answering garbage (e.g. the "protocol v0"
-// case) must never permanently block a restart. So on any failure it force-resets
-// ALL daemon state for the repo — killing the stale daemon by PID and by port,
-// clearing the record — and retries from scratch. The healthy fast path (attempt
-// 0, no reset) is unchanged: a good daemon is reused and attached immediately.
+// cmdAttachOrCreate resolves the repo for cwd and starts a claude+ session,
+// TAKING OVER the repo. There is only ever ONE claude+ session per repo: a launch
+// terminates any daemon already running for this repo and starts a fresh one, so a
+// wedged / incompatible / old-build daemon (e.g. the "protocol v0" case after a
+// rebuild) can never block — or be silently reattached by — a new launch. The
+// Claude conversation still comes back: ForceReset preserves the cross-restart
+// resume pointers, so the fresh daemon resumes the prior conversation.
+//
+// Implementation: ForceReset up front retires the prior daemon (kills the PID
+// listening on its recorded port, clears the record, waits for the socket to die)
+// so EnsureDaemon always spawns a fresh daemon from the CURRENT binary. The retry
+// loop repeats the teardown if a spawn races a dying daemon's last refresh write.
 func cmdAttachOrCreate() error {
 	repo, err := resolveRepoRoot()
 	if err != nil {
 		return err
 	}
+	// Single session per repo: terminate any existing daemon for this repo before
+	// starting, so the launch lands on a fresh daemon from this binary (not a stale
+	// or incompatible one). The resume pointers survive, so the conversation does.
+	daemon.ForceReset(repo)
+
 	const attempts = 3
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
