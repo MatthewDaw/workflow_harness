@@ -1209,10 +1209,20 @@ func tokenEstimate(parts ...string) int64 {
 	return n
 }
 
-// projectIDFor derives a stable, readable project id from the repo path (its
-// base directory name, slugified). Sessions in HQ are grouped under this id.
+// projectIDFor derives the HQ project id for a repo. It MUST match how HQ slugs a
+// connected project — from the repo's "owner/repo" (the value carried on
+// session.start's `repo` field via repoNameFor), lowercased with every run of
+// non-alphanumeric characters collapsed to a single dash.
+//
+// It previously slugged only the repo FOLDER name (e.g. `fractions-tutorial`),
+// which diverged from HQ's owner/repo id (`matthewdaw-fractions-tutorial`): the
+// per-project sync then GET /projects/{wrong-id} resolved to an empty project, so
+// the tight-mirror prune deleted EVERY catalog skill — including the hq-* control-
+// plane skills — even though the real project had them enabled. Slugging the same
+// owner/repo HQ does keeps the two in lockstep. (repoNameFor falls back to the
+// folder name when there is no git remote, preserving the old id for those.)
 func projectIDFor(repoRoot string) string {
-	base := strings.ToLower(filepath.Base(repoRoot))
+	base := strings.ToLower(repoNameFor(repoRoot))
 	var b strings.Builder
 	prevDash := false
 	for _, r := range base {

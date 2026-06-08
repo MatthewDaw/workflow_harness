@@ -51,3 +51,27 @@ func TestRepoNameForPrefersRemote(t *testing.T) {
 		t.Errorf("bad remote: got %q, want workflow-harness", got)
 	}
 }
+
+// TestProjectIDForMatchesHQOwnerRepoSlug guards the per-project sync: the daemon's
+// project id MUST equal HQ's slug of "owner/repo" (lowercase, non-alphanumeric
+// runs -> single dash). If it diverges, GET /projects/{id} resolves to an empty
+// project and the tight-mirror prune deletes every enabled catalog skill. Real
+// case: repo MatthewDaw/fractions_tutorial -> HQ id matthewdaw-fractions-tutorial
+// (NOT the folder-name slug fractions-tutorial).
+func TestProjectIDForMatchesHQOwnerRepoSlug(t *testing.T) {
+	orig := gitRemoteURL
+	t.Cleanup(func() { gitRemoteURL = orig })
+
+	gitRemoteURL = func(string) (string, bool) {
+		return "git@github.com:MatthewDaw/fractions_tutorial.git", true
+	}
+	if got := projectIDFor("/x/fractions_tutorial"); got != "matthewdaw-fractions-tutorial" {
+		t.Errorf("with remote: projectIDFor = %q, want matthewdaw-fractions-tutorial", got)
+	}
+
+	// No remote -> folder base-name slug (back-compat fallback).
+	gitRemoteURL = func(string) (string, bool) { return "", false }
+	if got := projectIDFor("/x/fractions_tutorial"); got != "fractions-tutorial" {
+		t.Errorf("no remote: projectIDFor = %q, want fractions-tutorial", got)
+	}
+}
