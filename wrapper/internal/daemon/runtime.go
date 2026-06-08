@@ -638,9 +638,12 @@ func (rt *Runtime) reconcileSkills() {
 		diag.Logf("skills auto-sync: resolve project config dir failed: %v", err)
 		return
 	}
-	report, err := config.ComputeDrift(src, plus)
+	// Fetch HQ's effective set FIRST. A successful fetch is what GATES the prune
+	// below: we only delete local-only items once we know the authoritative set —
+	// never on a 401 / transient error (that would wipe the root).
+	remote, err := src.Fetch()
 	if err != nil {
-		diag.Logf("skills auto-sync: compute drift failed: %v", err)
+		diag.Logf("skills auto-sync: fetch failed (no prune): %v", err)
 		return
 	}
 	local, err := config.ReadLocal(plus)
@@ -648,9 +651,19 @@ func (rt *Runtime) reconcileSkills() {
 		diag.Logf("skills auto-sync: read local failed: %v", err)
 		return
 	}
+	report := config.Diff(local, remote)
 	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
 	for _, e := range errs {
 		diag.Logf("skills auto-sync: %v", e)
+	}
+	// Tight mirror: delete project-root skills/agents no longer in HQ's effective
+	// set (or provided by the repo's own .claude). Safe — the fetch above
+	// succeeded, and PruneToEffective only ever deletes under the per-project root.
+	if removed, perrs := config.PruneToEffective(plus, rt.d.repoRoot, remote); removed > 0 || len(perrs) > 0 {
+		diag.Logf("skills auto-sync: pruned %d stale item(s)", removed)
+		for _, e := range perrs {
+			diag.Logf("skills auto-sync prune: %v", e)
+		}
 	}
 	if pulled > 0 || pushed > 0 {
 		diag.Logf("skills auto-sync: pulled %d, pushed %d", pulled, pushed)
@@ -685,7 +698,10 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 	if err != nil {
 		return 0, 0, config.VerifyReport{}, err
 	}
-	report, err := config.ComputeDrift(src, plus)
+	// Fetch HQ's effective set FIRST. A successful fetch is what GATES the prune
+	// below: a tight mirror must never delete local items on a 401 / transient
+	// error.
+	remote, err := src.Fetch()
 	if err != nil {
 		return 0, 0, config.VerifyReport{}, err
 	}
@@ -693,6 +709,7 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 	if err != nil {
 		return 0, 0, config.VerifyReport{}, err
 	}
+	report := config.Diff(local, remote)
 	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
 	// Reconcile errors are NON-FATAL here. A PUSH failure must not abort a
 	// pull-focused sync: publishing a local-only skill/agent to the org catalog is
@@ -702,6 +719,16 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 	// it. Log the reconcile errors; the gate is the arbiter of success.
 	for _, e := range errs {
 		diag.Logf("sync-skills: non-fatal reconcile error (e.g. cannot publish without admin): %v", e)
+	}
+	// Tight mirror: delete project-root skills/agents that are no longer in HQ's
+	// effective enabled set (or provided by the repo's own .claude). Safe — the
+	// fetch above succeeded, and PruneToEffective only ever deletes under the
+	// per-project root, never ~/.claude.
+	if removed, perrs := config.PruneToEffective(plus, repoRoot, remote); removed > 0 || len(perrs) > 0 {
+		diag.Logf("sync-skills: pruned %d stale item(s)", removed)
+		for _, e := range perrs {
+			diag.Logf("sync-skills prune: %v", e)
+		}
 	}
 	// U-Verify-Gate: after reconcile, verify the EFFECTIVE enabled set actually
 	// landed on disk (skill dirs + frontmatter; agent files + deps; MCP not failed).

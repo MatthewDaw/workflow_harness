@@ -163,11 +163,17 @@ func ProjectConfigDir(repoRoot string) (string, error) {
 }
 
 // EnsureBaseDir returns the stable BASE config root (~/.claude+), creating and
-// seeding it on first use. Auth + settings are copied once from ~/.claude (only
+// seeding its AUTH/IDENTITY files on first use (copied once from ~/.claude, only
 // when absent, so claude+'s own evolving state is never clobbered). It is
-// idempotent and additive — safe to call on every session start — and never
-// deletes anything. Used directly by InstallHooks (hooks live in the base
-// settings.json and propagate to each project root via the auth sync).
+// idempotent — safe to call on every session start. Used directly by InstallHooks
+// (hooks live in the base settings.json and propagate to each project root via the
+// auth sync).
+//
+// On this machine, claude+ skills/agents are ALWAYS scoped to a per-project root
+// (roots/<slug>); there is no global claude+ skill set. So EnsureBaseDir actively
+// DELETES any legacy base-level `skills`/`agents` (left over from the
+// pre-per-project-root design) and never recreates them — nothing reads them
+// (ReadLocal reads ~/.claude ∪ the per-project root only).
 func EnsureBaseDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -177,8 +183,10 @@ func EnsureBaseDir() (string, error) {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return "", err
 	}
+	// Remove any vestigial GLOBAL claude+ skills/agents. Best-effort and idempotent
+	// (a no-op once gone); never recreated.
 	for _, sub := range []string{"skills", "agents"} {
-		_ = os.MkdirAll(filepath.Join(base, sub), 0o755)
+		_ = os.RemoveAll(filepath.Join(base, sub))
 	}
 	// Seed auth/settings from ~/.claude once, so the first claude+ launch is
 	// already signed in. Skipped for any file the base already has.

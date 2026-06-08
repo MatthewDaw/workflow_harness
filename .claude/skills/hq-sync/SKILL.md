@@ -13,9 +13,13 @@ description: >-
   directories in full, agent definitions plus the skills they depend on, and MCP
   servers with their launch dependency, required env, and OAuth handshake actually
   completed — and plugin registration is finalized so new commands autocomplete. A
-  final verification gate fails loudly if any enabled item did not fully land.
-  Pull-focused and additive; your personal ~/.claude is never touched. Use when the
-  user says "/hq-sync", "sync my skills",
+  final verification gate fails loudly if any enabled item did not fully land. It
+  is a TIGHT MIRROR, not additive: a skill or agent removed from the project's
+  enabled set is DELETED from the project root, so the local claude+ set always
+  matches Command HQ. The prune only ever deletes inside the per-project root, and
+  only after a successful HQ fetch (a 401/transient error never wipes anything);
+  your personal ~/.claude and the repo's own .claude project skills are left alone.
+  Use when the user says "/hq-sync", "sync my skills",
   "refresh my skills", "sync agents and mcp servers", "pull the latest from HQ",
   "did anything change in command hq", "pick up my local edits", or after editing
   a skill/agent/MCP server in the repo or an admin publishing one.
