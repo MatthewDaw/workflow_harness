@@ -213,7 +213,68 @@ func ByIndex(n int) (Entry, error) {
 // respawns a fresh one.
 func stopStale(e Entry) {
 	terminatePID(e.PID)
+	// A messy exit (crash, hard kill, terminal close) skips the daemon's cleanup
+	// defer, so its record survives with a PID that may now be dead or recycled
+	// while the REAL daemon keeps listening — and keeps rewriting this per-repo
+	// record via its refresh loop, clobbering any fresh daemon and re-wedging
+	// attach. So also free the recorded port: if a *claude+* daemon (it answers our
+	// ping/pong) still holds it under a different PID, kill that process too. Never
+	// kill ourselves — the attaching client (or a test runner hosting an in-process
+	// fake daemon) is the current process — and never an unrelated process that
+	// merely recycled the port (the alive() gate ensures the holder speaks our
+	// protocol before we terminate it).
+	if lp := listenerPID(e.Sock); lp > 0 && lp != e.PID && lp != os.Getpid() && alive(e.Sock) {
+		terminatePID(lp)
+	}
 	_ = removeMeta(e.Repo)
+}
+
+// ForceReset tears down ALL daemon state for repoRoot so a launch can always
+// succeed no matter how messy the previous exit was. It retires the recorded
+// daemon (by PID, and by port if a claude+ daemon still holds it), removes the
+// record, and waits — bounded — for the port to stop answering so a respawn can
+// never race a dying daemon's last refresh write. Safe to call when no daemon
+// exists. This is the backstop the attach retry loop uses between attempts.
+func ForceReset(repoRoot string) {
+	if e, ok, err := Find(repoRoot); err == nil && ok {
+		stopStale(e)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) && alive(e.Sock) {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	_ = removeMeta(repoRoot)
+}
+
+// ResetAll force-retires every known daemon and clears the registry, returning
+// the number of records cleared. Cross-restart session-resume pointers
+// (*.sessions.json) are preserved so a reset never loses conversation continuity.
+// It backs `claude+ reset`, the manual escape hatch that guarantees a clean
+// restart even if a daemon is wedged in a way the automatic recovery missed.
+func ResetAll() int {
+	dir, err := baseDir()
+	if err != nil {
+		return 0
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	cleared := 0
+	for _, m := range matches {
+		if strings.HasSuffix(m, ".sessions.json") {
+			continue // preserve cross-restart resume pointers
+		}
+		if b, rerr := os.ReadFile(m); rerr == nil {
+			var e Entry
+			if json.Unmarshal(b, &e) == nil {
+				terminatePID(e.PID)
+				if lp := listenerPID(e.Sock); lp > 0 && lp != os.Getpid() && alive(e.Sock) {
+					terminatePID(lp)
+				}
+			}
+		}
+		_ = os.Remove(m)
+		cleared++
+	}
+	return cleared
 }
 
 // Prune removes registry records for daemons that are no longer usable: the

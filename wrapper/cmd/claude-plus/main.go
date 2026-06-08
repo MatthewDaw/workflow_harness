@@ -5,6 +5,7 @@
 //
 //	claude+              attach-or-create the daemon for the current repo
 //	claude+ ls           list running daemons (index, repo, host, sessions, state, uptime)
+//	claude+ reset        force-retire all daemons + clear the registry (recover a wedged state)
 //	claude+ login        device-code sign-in to Command HQ (writes credentials)
 //	claude+ --session=N  attach to the daemon at registry index N
 //	claude+ --version    print the version
@@ -55,6 +56,11 @@ func main() {
 			return
 		case "sync-skills":
 			if err := cmdSyncSkills(); err != nil {
+				fail(err)
+			}
+			return
+		case "reset":
+			if err := cmdReset(); err != nil {
 				fail(err)
 			}
 			return
@@ -128,20 +134,45 @@ func cmdLs() error {
 }
 
 // cmdAttachOrCreate resolves the repo for cwd, ensures its daemon is running,
-// and attaches.
+// and attaches. It is resilient to a messy previous exit: a leftover daemon that
+// is dead, incompatible, wedged, or answering garbage (e.g. the "protocol v0"
+// case) must never permanently block a restart. So on any failure it force-resets
+// ALL daemon state for the repo — killing the stale daemon by PID and by port,
+// clearing the record — and retries from scratch. The healthy fast path (attempt
+// 0, no reset) is unchanged: a good daemon is reused and attached immediately.
 func cmdAttachOrCreate() error {
 	repo, err := resolveRepoRoot()
 	if err != nil {
 		return err
 	}
-	if _, err := daemon.EnsureDaemon(repo); err != nil {
-		return fmt.Errorf("start daemon: %w", err)
+	const attempts = 3
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if _, err := daemon.EnsureDaemon(repo); err != nil {
+			lastErr = fmt.Errorf("start daemon: %w", err)
+			daemon.ForceReset(repo)
+			continue
+		}
+		c, err := daemon.Dial(repo)
+		if err == nil {
+			return runShell(c, filepath.Base(repo))
+		}
+		lastErr = fmt.Errorf("attach: %w", err)
+		// Any attach failure — incompatible/garbage daemon, a clobber race, a hung
+		// listener — gets a total teardown so the next attempt starts clean.
+		daemon.ForceReset(repo)
 	}
-	c, err := daemon.Dial(repo)
-	if err != nil {
-		return fmt.Errorf("attach: %w", err)
-	}
-	return runShell(c, filepath.Base(repo))
+	return fmt.Errorf("%w (gave up after %d attempts; run `claude+ reset` to clear all daemon state)", lastErr, attempts)
+}
+
+// cmdReset is the manual escape hatch: it force-retires every known daemon and
+// clears the registry so `claude+` can always start fresh, even if a daemon got
+// wedged in a way the automatic per-launch recovery did not catch. Session-resume
+// pointers are preserved, so conversations still come back on the next launch.
+func cmdReset() error {
+	n := daemon.ResetAll()
+	fmt.Printf("claude+ reset: cleared %d daemon record(s); next launch starts fresh\n", n)
+	return nil
 }
 
 // cmdAttachIndex attaches to the daemon at the given `ls` index.

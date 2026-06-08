@@ -9,12 +9,23 @@
 // @harness/shared) is bundled in.
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const backendDist = path.resolve(here, '..', '..', 'packages', 'backend', 'dist');
+const repoRoot = path.resolve(here, '..', '..');
+const backendDist = path.resolve(repoRoot, 'packages', 'backend', 'dist');
 const outRoot = path.resolve(here, '..', 'cdk.bundles');
+
+// We bundle from dist, so the backend (and its @harness/shared dep) must be
+// compiled first. Workspace (-w) commands only resolve from the repo root, so
+// build there. This keeps the bundler self-sufficient: a fresh checkout can run
+// it (or `npm test` in infra) without a separate manual build step.
+execSync('npm run build -w @harness/shared -w @harness/backend', {
+  cwd: repoRoot,
+  stdio: 'inherit',
+});
 
 const handlers = [
   'rest/projects',

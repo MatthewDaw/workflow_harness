@@ -4,6 +4,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
+    "bundle": "node scripts/bundle-backend.mjs",
+    "pretest": "node scripts/bundle-backend.mjs",
     "test": "jest",
     "cdk": "cdk"
   },

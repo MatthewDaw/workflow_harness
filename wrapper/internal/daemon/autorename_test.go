@@ -61,14 +61,15 @@ func startTestDaemonSpawn(t *testing.T, spawn pty.SpawnFunc) (*Daemon, string) {
 
 // TestAutoRenamePushesSessionListToAttachedClient is the regression proof for
 // the stale-tab bug: when a session is auto-named on its first prompt (the
-// onFirst path in runtime.go — ApplyAutoName followed by a session.rename event
-// on the bus), the daemon MUST push a fresh session list to attached clients so
-// their sub-tab row (compositor.SetSubs) shows the new name. Before the fix the
-// rename only arrived as a Stream event (FrameEvent), which does NOT update the
-// sub-tab Name, so the tab stayed stale.
+// onFirst path in runtime.go — ApplyAutoName, a session.rename event on the bus,
+// then broadcastSessList), the daemon MUST push a fresh session list to attached
+// clients so their sub-tab row (compositor.SetSubs) shows the new name. The
+// rename event alone only feeds the Stream panel (FrameEvent), which does NOT
+// update the sub-tab Name — broadcastSessList is what fans a FrameSessAck to each
+// attached client's listSink (registered in attach()).
 //
-// This test fails without the FrameSessAck push in attach()'s event sink and
-// passes with it.
+// This test drives that exact production sequence and fails if broadcastSessList
+// no longer reaches attached clients.
 func TestAutoRenamePushesSessionListToAttachedClient(t *testing.T) {
 	d, repo := startTestDaemonSpawn(t, longSpawn)
 	defer d.Stop()
@@ -98,6 +99,10 @@ func TestAutoRenamePushesSessionListToAttachedClient(t *testing.T) {
 		t.Fatalf("ApplyAutoName did not rename session %s", sid)
 	}
 	d.PublishEvent(event.Envelope{V: 1, TS: time.Now().UnixMilli(), Event: event.SessionRename(sid, name)})
+	// Mirror the production auto-name path (runtime.go onFirst): after the rename
+	// + event emit, push a fresh session list so attached clients' tab strip
+	// updates. This is the step the stale-tab fix added.
+	d.broadcastSessList()
 
 	// The attached client must receive a session-list update whose focused
 	// sub-tab Name equals the auto-generated slug.
@@ -122,8 +127,9 @@ func TestAutoRenamePushesSessionListToAttachedClient(t *testing.T) {
 }
 
 // TestAutoTitlePushesSessionListToAttachedClient covers the onExchange path:
-// the LLM-generated title (ApplyTitle) also emits session.rename and must push
-// a fresh list so the sub-tab upgrades from the provisional slug to the title.
+// the LLM-generated title (ApplyTitle) also emits session.rename and calls
+// broadcastSessList, pushing a fresh list so the sub-tab upgrades from the
+// provisional slug to the title.
 func TestAutoTitlePushesSessionListToAttachedClient(t *testing.T) {
 	d, repo := startTestDaemonSpawn(t, longSpawn)
 	defer d.Stop()
@@ -154,6 +160,9 @@ func TestAutoTitlePushesSessionListToAttachedClient(t *testing.T) {
 		t.Fatalf("ApplyTitle did not rename session %s", sid)
 	}
 	d.PublishEvent(event.Envelope{V: 1, TS: time.Now().UnixMilli(), Event: event.SessionRename(sid, title)})
+	// Mirror the production auto-title path (runtime.go onExchange): push a fresh
+	// session list so attached clients' tab strip upgrades to the LLM title.
+	d.broadcastSessList()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

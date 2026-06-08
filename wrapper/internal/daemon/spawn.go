@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/workflow-harness/claude-plus/internal/capture"
 	"github.com/workflow-harness/claude-plus/internal/diag"
 )
 
@@ -112,6 +113,20 @@ var spawnDaemon = func(repoRoot string) error {
 	return cmd.Process.Release()
 }
 
+// conversationResumable reports whether a Claude conversation transcript exists
+// for tabID under repoRoot — i.e. whether `claude --resume <tabID>` has anything
+// to reattach to. A missing or empty transcript means the session never got a real
+// conversation (a common messy-exit residue), so resuming it would error; callers
+// drop the pointer and let a fresh session spawn instead.
+func conversationResumable(repoRoot, tabID string) bool {
+	p, err := capture.TranscriptPath(repoRoot, tabID)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir() && info.Size() > 0
+}
+
 // RunDaemon is the entrypoint for the detached `__daemon` child process: it
 // constructs the daemon, wires the capture+transport runtime (if HQ is
 // configured), and serves until stopped.
@@ -136,6 +151,17 @@ func RunDaemon(repoRoot string) error {
 	}
 	if store != nil {
 		for _, ps := range store.Sessions() {
+			// A messy exit can leave a resume pointer for a session whose Claude
+			// conversation never materialized (or was later deleted): `claude --resume
+			// <id>` then fails with "No conversation found", surfacing a broken session
+			// on startup. Resume ONLY when the transcript actually exists; otherwise
+			// drop the dead pointer so the next attach spawns a clean fresh session
+			// instead. Keeps restart robust no matter how messy the prior exit was.
+			if !conversationResumable(repoRoot, ps.TabID) {
+				diag.Logf("resume: dropping dead pointer %s (no conversation transcript)", ps.TabID)
+				store.Remove(ps.TabID)
+				continue
+			}
 			s, serr := d.Mux().SpawnResumed(ps.TabID, ps.Name)
 			if serr != nil {
 				diag.Logf("resume: SpawnResumed %s failed: %v", ps.TabID, serr)

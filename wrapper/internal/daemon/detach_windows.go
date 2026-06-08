@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +64,36 @@ func terminatePID(pid int) {
 	if p, err := os.FindProcess(pid); err == nil {
 		_ = p.Kill()
 	}
+}
+
+// listenerPID returns the PID LISTENING on sock's TCP port (loopback), or 0 when
+// nothing listens. It lets the registry free a port held by a wedged/stale daemon
+// when the recorded PID is no longer reliable — dead or recycled after a messy
+// exit — which is what otherwise lets an old daemon keep clobbering the per-repo
+// record and wedging attach.
+func listenerPID(sock string) int {
+	_, port, err := net.SplitHostPort(sock)
+	if err != nil || port == "" {
+		return 0
+	}
+	out, err := exec.Command("netstat", "-ano", "-p", "tcp").Output()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		// Proto  LocalAddr  ForeignAddr  State  PID
+		if len(fields) < 5 || !strings.EqualFold(fields[3], "LISTENING") {
+			continue
+		}
+		if !strings.HasSuffix(fields[1], ":"+port) {
+			continue
+		}
+		if pid, err := strconv.Atoi(fields[len(fields)-1]); err == nil {
+			return pid
+		}
+	}
+	return 0
 }
 
 // processAlive reports whether a PID names a live process. On Windows

@@ -1,3 +1,7 @@
 build/bin
 node_modules
-frontend/dist
+# Ignore the built frontend assets, but keep the directory (with its placeholder)
+# tracked so `//go:embed all:frontend/dist` in main.go always has a target — a
+# fresh checkout can `go build ./...` without first running the JS/wails build.
+frontend/dist/*
+!frontend/dist/.gitkeep
