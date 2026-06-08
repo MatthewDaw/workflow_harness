@@ -80,6 +80,13 @@ pulls."
      record it as **unknown / not-yet-enforced** rather than a hard fail.
      This evaluation is **ADVISORY** — it shapes the report and may temper the
      estimate, but it **never blocks** the push (next steps run regardless).
+
+   **Getting the `projectId` — never guess it.** claude+ injects the authoritative HQ
+   project id into the session as `$CLAUDE_PLUS_PROJECT_ID` (alongside `$CLAUDE_PLUS_REPO`
+   and `$CLAUDE_PLUS_API_URL`), mirrored in `$CLAUDE_CONFIG_DIR/hq-project.json`. Use
+   `$CLAUDE_PLUS_PROJECT_ID` directly as the `projectId` in any `/projects/<projectId>/…`
+   call. Do NOT derive, slug, or probe candidate ids. If `$CLAUDE_PLUS_PROJECT_ID` is empty,
+   this session is not running under claude+ — say so and stop; do not guess.
 5. **Compute completion per doc.** For each doc, score each requirement as
    built / partial / not-built (a partial counts ~0.5), weight by the doc's own
    structure, and roll up to a 0–100 integer. Score `docs/PRD.md` the same way,

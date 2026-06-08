@@ -277,35 +277,22 @@ the repo to be a **connected HQ project** AND you to have its `projectId`. There
 is NO list endpoint to enumerate: `GET /projects` is admin-only (`401`), and
 `/me/projects` / `/org/projects` don't exist. So:
 
-- If you already have a `projectId` (the user gave one, or a known connected
-  project), use it.
-- Otherwise **derive the candidate the way HQ and the daemon do** and probe THAT
-  one id. A connected project's id is the slug of the repo's **`owner/repo`** (NOT
-  the bare repo name, NOT the folder name): take the git remote's `owner/repo`,
-  lowercase it, and collapse every run of non-alphanumeric characters to a single
-  dash. Example: remote `git@github.com:MatthewDaw/fractions_tutorial.git` →
-  `matthewdaw-fractions-tutorial` (this is exactly `projectIDFor` in
-  `wrapper/internal/daemon/runtime.go`, guarded by `reponame_test.go`). Concretely:
+**Getting the `projectId` — never guess it.** claude+ injects the authoritative HQ
+project id into the session as `$CLAUDE_PLUS_PROJECT_ID` (alongside `$CLAUDE_PLUS_REPO`
+and `$CLAUDE_PLUS_API_URL`), mirrored in `$CLAUDE_CONFIG_DIR/hq-project.json`. Use
+`$CLAUDE_PLUS_PROJECT_ID` directly as the `projectId` in any `/projects/<projectId>/…`
+call. Do NOT derive, slug, or probe candidate ids. If `$CLAUDE_PLUS_PROJECT_ID` is empty,
+this session is not running under claude+ — say so and stop; do not guess.
 
-  ```bash
-  remote=$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null)
-  # strip scheme/host/.git, keep last two path segments as owner/repo, then slug
-  ownerRepo=$(echo "$remote" | sed -E 's#^.*[:/]([^/]+/[^/]+?)(\.git)?/?$#\1#')
-  candidate=$(echo "$ownerRepo" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
-  ```
-
-  Do **ONE** probe — `GET $HQ/projects/<candidate>`. If it returns a project, you
-  have the `projectId` — proceed to opt-in. Only if that correctly-derived id
-  returns `{"error":"not found"}` is this repo genuinely **not an HQ project**:
-  **STOP** the opt-in attempt — but **do not ask** what to do instead. Do NOT then
-  flail across other id shapes (bare repo name, folder name, local state) — the
-  owner/repo slug is the one and only id HQ mints, so if it misses, no record
-  exists (a locally-run claude+ repo with no remote has none by design).
-  Registering in the org catalog (plus the local install above, if a doc was
-  given) IS the deliverable; tell the user verbatim and then finish at step 6:
-  *"Registered + bundled in the org catalog. It's not enabled on a project yet —
-  connect this repo in the HQ web app (which mints a projectId) or toggle the
-  bundle on the HQ **Skills** tab."*
+Do **ONE** confirming probe of that id — `GET $HQ/projects/$CLAUDE_PLUS_PROJECT_ID`.
+A `200` means connected: proceed to opt-in / bundle enable against
+`$CLAUDE_PLUS_PROJECT_ID`. A `{"error":"not found"}` means this repo is genuinely
+**not a connected HQ project**: **STOP** the opt-in attempt — but **do not ask** what
+to do instead. Registering in the org catalog (plus the local install above, if a doc
+was given) IS the deliverable; tell the user verbatim and then finish at step 6:
+*"Registered + bundled in the org catalog. It's not enabled on a project yet —
+connect this repo in the HQ web app (which mints a projectId) or toggle the
+bundle on the HQ **Skills** tab."*
 
 Once you HAVE a `projectId`, a whole bundle enables all its members in one call
 (`POST $HQ/projects/<projectId>/bundles/<bundleName>`); or enable a skill directly

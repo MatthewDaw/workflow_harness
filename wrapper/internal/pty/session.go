@@ -188,6 +188,15 @@ func newSession(id, name, repoRoot string, cols, rows int, spawn SpawnFunc, resu
 		} else {
 			log.Printf("pty: isolated config root failed, using ~/.claude: %v", err)
 		}
+		// Inject this project's HQ identity so the inner session (and any tool it
+		// runs) sees the SAME project id / repo / API base the daemon derives, all
+		// from the single config.ProjectIDFor derivation.
+		spec.Env = append(spec.Env,
+			"CLAUDE_PLUS_PROJECT_ID="+config.ProjectIDFor(repoRoot),
+			"CLAUDE_PLUS_REPO="+config.RepoNameFor(repoRoot))
+		if base, ok := config.APIBase(); ok {
+			spec.Env = append(spec.Env, "CLAUDE_PLUS_API_URL="+base)
+		}
 	}
 
 	// Resolve a bare command name against PATH up front. go-pty/os-exec would

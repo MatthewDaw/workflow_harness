@@ -3,10 +3,8 @@ package daemon
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -608,7 +606,7 @@ func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *
 	// configured; otherwise the meter stays at 0 (no remote to compare against).
 	if base, ok := loadAPIBase(); ok {
 		if cfg, ok := loadHQConfig(); ok {
-			src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(d.repoRoot))
+			src := config.NewHTTPRemoteSource(base, cfg.Token, config.ProjectIDFor(d.repoRoot))
 			rt.cfgSrc = src
 			// Auto-sync skills once at startup so applicable (org+user+project)
 			// skills are present before the first session even announces (#1).
@@ -691,7 +689,7 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 	if !ok {
 		return 0, 0, config.VerifyReport{}, fmt.Errorf("not signed in to HQ (run `claude+ login`)")
 	}
-	src := config.NewHTTPRemoteSource(base, cfg.Token, projectIDFor(repoRoot))
+	src := config.NewHTTPRemoteSource(base, cfg.Token, config.ProjectIDFor(repoRoot))
 	// EnsureConfigDir (not ProjectConfigDir): seed the root's personal .claude.json
 	// before any pull merges HQ MCP servers into it (see reconcileSkills).
 	plus, err := config.EnsureConfigDir(repoRoot)
@@ -750,7 +748,7 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 // /projects/{id}/memories, which replaces the caller's entire set server-side
 // (adds, updates, AND deletions on disk all propagate; an empty set clears it).
 // It mirrors SyncSkillsNow's config resolution (API base + device token the same
-// way) and projectIDFor(repoRoot). A missing base/token is a no-op (return nil),
+// way) and config.ProjectIDFor(repoRoot). A missing base/token is a no-op (return nil),
 // NOT an error: a daemon running without `claude+ login` simply doesn't sync —
 // this is the end-of-turn reconcile and must never destabilize an unauthenticated
 // session. ReadLocalMemories' error is tolerated (a missing memory/ dir yields an
@@ -771,7 +769,7 @@ func SyncMemoriesNow(repoRoot string) error {
 	// A missing dir / read hiccup yields an empty set; reconcile it anyway (an empty
 	// PUT clears the author's set, which is the correct full-reconcile semantics).
 	items, _ := config.ReadLocalMemories(memoryDir)
-	return config.ReconcileMemories(base, cfg.Token, projectIDFor(repoRoot), items)
+	return config.ReconcileMemories(base, cfg.Token, config.ProjectIDFor(repoRoot), items)
 }
 
 // syncSkillsOnce triggers the skills auto-sync the first time a given session is
@@ -824,25 +822,12 @@ func (rt *Runtime) configSyncLoop(src config.RemoteSource) {
 	}
 }
 
-// loadAPIBase resolves HQ's REST base URL (distinct from the WebSocket URL):
-// the CLAUDE_PLUS_API_URL env var, or the third line of the credentials file.
+// loadAPIBase resolves HQ's REST base URL (distinct from the WebSocket URL). The
+// derivation now lives in the config package (config.APIBase) so the daemon, the
+// per-session launch path, and the config-dir manifest share ONE resolver; this
+// keeps the function name/signature for the daemon's existing callers.
 func loadAPIBase() (string, bool) {
-	if base := os.Getenv("CLAUDE_PLUS_API_URL"); base != "" {
-		return base, true
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", false
-	}
-	b, err := os.ReadFile(filepath.Join(home, ".claude-plus", "credentials"))
-	if err != nil {
-		return "", false
-	}
-	lines := splitLines(string(b))
-	if len(lines) >= 3 && lines[2] != "" {
-		return lines[2], true
-	}
-	return "", false
+	return config.APIBase()
 }
 
 // captureLoop announces each session to HQ (session.start) and tails its
@@ -869,11 +854,11 @@ func (rt *Runtime) captureLoop(instanceID string) {
 	tk := time.NewTicker(time.Second)
 	defer tk.Stop()
 	host := rt.host
-	projectID := projectIDFor(rt.d.repoRoot)
+	projectID := config.ProjectIDFor(rt.d.repoRoot)
 	// repoName is the human-readable repo display name (git "owner/repo" or the
 	// repo folder name). Computed once per capture loop and carried on every
 	// session.start so HQ can register the Project under a meaningful name.
-	repoName := repoNameFor(rt.d.repoRoot)
+	repoName := config.RepoNameFor(rt.d.repoRoot)
 	emit := rt.emit
 
 	// closeAllTails stops every per-session tailer (daemon shutdown).
@@ -1207,118 +1192,6 @@ func tokenEstimate(parts ...string) int64 {
 		n += int64(len(p) / 4)
 	}
 	return n
-}
-
-// projectIDFor derives the HQ project id for a repo. It MUST match how HQ slugs a
-// connected project — from the repo's "owner/repo" (the value carried on
-// session.start's `repo` field via repoNameFor), lowercased with every run of
-// non-alphanumeric characters collapsed to a single dash.
-//
-// It previously slugged only the repo FOLDER name (e.g. `fractions-tutorial`),
-// which diverged from HQ's owner/repo id (`matthewdaw-fractions-tutorial`): the
-// per-project sync then GET /projects/{wrong-id} resolved to an empty project, so
-// the tight-mirror prune deleted EVERY catalog skill — including the hq-* control-
-// plane skills — even though the real project had them enabled. Slugging the same
-// owner/repo HQ does keeps the two in lockstep. (repoNameFor falls back to the
-// folder name when there is no git remote, preserving the old id for those.)
-func projectIDFor(repoRoot string) string {
-	base := strings.ToLower(repoNameFor(repoRoot))
-	var b strings.Builder
-	prevDash := false
-	for _, r := range base {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			prevDash = false
-		} else if !prevDash {
-			b.WriteByte('-')
-			prevDash = true
-		}
-	}
-	s := strings.Trim(b.String(), "-")
-	if s == "" {
-		return "project"
-	}
-	return s
-}
-
-// gitRemoteURL returns the origin remote URL for repoRoot, or ("", false) if
-// there is no git repo / no origin remote / git is unavailable. It is a package
-// var so tests can stub it without invoking real git.
-var gitRemoteURL = func(repoRoot string) (string, bool) {
-	cmd := exec.Command("git", "-C", repoRoot, "remote", "get-url", "origin")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", false
-	}
-	url := strings.TrimSpace(string(out))
-	if url == "" {
-		return "", false
-	}
-	return url, true
-}
-
-// repoNameFor derives a human-readable repo display name for repoRoot. It
-// prefers the git origin remote reduced to "owner/repo" (host and trailing
-// .git stripped); when there is no usable remote it falls back to the repo
-// folder's base name. This is the value carried on session.start's `repo`
-// field and used by HQ as the Project's display name + repo.
-func repoNameFor(repoRoot string) string {
-	if url, ok := gitRemoteURL(repoRoot); ok {
-		if name := ownerRepoFromRemote(url); name != "" {
-			return name
-		}
-	}
-	return filepath.Base(repoRoot)
-}
-
-// ownerRepoFromRemote reduces a git remote URL to "owner/repo", stripping the
-// scheme/host and any trailing ".git". It handles both SCP-style
-// ("git@github.com:owner/repo.git") and URL-style
-// ("https://github.com/owner/repo.git") remotes. Returns "" if it can't
-// extract a sensible owner/repo pair.
-func ownerRepoFromRemote(url string) string {
-	s := strings.TrimSpace(url)
-	s = strings.TrimSuffix(s, "/")
-	// Drop a trailing ".git" suffix.
-	s = strings.TrimSuffix(s, ".git")
-	if s == "" {
-		return ""
-	}
-	// Normalize separators: SCP form uses ':' after the host; URL form uses '/'.
-	// Strip an explicit scheme first (e.g. "https://", "ssh://", "git://").
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
-		// Strip optional "user@" before host.
-		if at := strings.Index(s, "@"); at >= 0 {
-			s = s[at+1:]
-		}
-	} else if at := strings.Index(s, "@"); at >= 0 {
-		// SCP-style "git@host:owner/repo".
-		s = s[at+1:]
-	}
-	// At this point s is "host[:/]owner/repo...". Replace the first ':' with '/'
-	// so the path splits uniformly.
-	s = strings.Replace(s, ":", "/", 1)
-	parts := strings.Split(s, "/")
-	// Drop empty segments (e.g. from leading host// artifacts).
-	clean := parts[:0]
-	for _, p := range parts {
-		if p != "" {
-			clean = append(clean, p)
-		}
-	}
-	if len(clean) < 3 {
-		// Need at least host + owner + repo; otherwise no meaningful owner/repo.
-		if len(clean) == 2 {
-			// No host segment (e.g. already "owner/repo"): take it as-is.
-			return clean[0] + "/" + clean[1]
-		}
-		return ""
-	}
-	// Last two segments are owner/repo; everything before is host/path.
-	owner := clean[len(clean)-2]
-	repo := clean[len(clean)-1]
-	return owner + "/" + repo
 }
 
 // installHooks resolves this binary's path and writes the managed hooks block

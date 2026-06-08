@@ -117,6 +117,13 @@ project must be owned by the caller — HQ enforces `ownerUserId === principal.u
 - **Draft:** `PUT /projects/:pid/weekly/:week`
 - **Publish:** `POST /projects/:pid/weekly/:week/publish`
 
+**Getting the `projectId` — never guess it.** claude+ injects the authoritative HQ
+project id into the session as `$CLAUDE_PLUS_PROJECT_ID` (alongside `$CLAUDE_PLUS_REPO`
+and `$CLAUDE_PLUS_API_URL`), mirrored in `$CLAUDE_CONFIG_DIR/hq-project.json`. Use
+`$CLAUDE_PLUS_PROJECT_ID` directly as the `projectId` in any `/projects/<projectId>/…`
+call. Do NOT derive, slug, or probe candidate ids. If `$CLAUDE_PLUS_PROJECT_ID` is empty,
+this session is not running under claude+ — say so and stop; do not guess.
+
 Request body (JSON) the skill sends and the backend must validate + store:
 
 ```jsonc
@@ -138,7 +145,8 @@ Request body (JSON) the skill sends and the backend must validate + store:
 ```
 
 `projectId` and `isoWeek` come from the path, not the body (the backend injects
-them, as it does today). The response echoes the stored `update`.
+them, as it does today). The `:pid` path segment is `$CLAUDE_PLUS_PROJECT_ID`; the
+response echoes the stored `update`.
 
 **Assumptions the backend weekly unit (U4) must match:**
 
@@ -177,8 +185,8 @@ them, as it does today). The response echoes the stored `update`.
      "conformityScore": 50,
    }
    ```
-6. `PUT /projects/workflow-harness/weekly/2026-W23` then
-   `POST /projects/workflow-harness/weekly/2026-W23/publish`.
+6. `PUT /projects/$CLAUDE_PLUS_PROJECT_ID/weekly/2026-W23` then
+   `POST /projects/$CLAUDE_PLUS_PROJECT_ID/weekly/2026-W23/publish`.
 7. Print: "Published 2026-W23 to HQ (conformity 50). See Weekly screen:
    https://d13sqkbwzqe38l.cloudfront.net/ → Project › Weekly."
 

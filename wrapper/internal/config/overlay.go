@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -237,6 +238,24 @@ func EnsureConfigDir(repoRoot string) (string, error) {
 	// refresh flows back out to the base for the others.
 	for _, name := range authSyncFiles {
 		syncAuthFile(base, root, name)
+	}
+	// Drop a best-effort manifest recording this project's HQ identity (the single
+	// ProjectIDFor derivation, its repo display name, and the resolved HQ API base)
+	// so tooling and the launched session can read the id off disk without
+	// re-deriving it. Write errors are IGNORED — a manifest is never required to
+	// launch a session.
+	apiBase, _ := APIBase()
+	manifest := struct {
+		ProjectID string `json:"projectId"`
+		Repo      string `json:"repo"`
+		APIBase   string `json:"apiBase"`
+	}{
+		ProjectID: ProjectIDFor(repoRoot),
+		Repo:      RepoNameFor(repoRoot),
+		APIBase:   apiBase,
+	}
+	if data, err := json.Marshal(manifest); err == nil {
+		_ = os.WriteFile(filepath.Join(root, "hq-project.json"), data, 0o644)
 	}
 	return root, nil
 }

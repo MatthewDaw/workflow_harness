@@ -55,6 +55,13 @@ the local file and re-run so the pinned variant re-pulls.
 In the developer's claude+ session, inside a connected repo (the device token +
 HQ endpoint established at `claude+ login` are reused):
 
+**Getting the `projectId` — never guess it.** claude+ injects the authoritative HQ
+project id into the session as `$CLAUDE_PLUS_PROJECT_ID` (alongside `$CLAUDE_PLUS_REPO`
+and `$CLAUDE_PLUS_API_URL`), mirrored in `$CLAUDE_CONFIG_DIR/hq-project.json`. Use
+`$CLAUDE_PLUS_PROJECT_ID` directly as the `projectId` in any `/projects/<projectId>/…`
+call. Do NOT derive, slug, or probe candidate ids. If `$CLAUDE_PLUS_PROJECT_ID` is empty,
+this session is not running under claude+ — say so and stop; do not guess.
+
 ```bash
 claude+ sync
 ```
@@ -100,7 +107,7 @@ bundle to see it (a hard page refresh picks up the new catalog).
 
 - `pulled 0, pushed 0` — already in sync; nothing to do.
 - A catalog skill you expected didn't pull — the linked project hasn't **opted in**
-  to it. Enable it on the project first (`POST /projects/:id/skills/:name`, or
+  to it. Enable it on the project first (`POST /projects/$CLAUDE_PLUS_PROJECT_ID/skills/:name`, or
   enable an agent that brings it, or the HQ project Skills/Agents tabs), then re-run.
 - `not signed in to HQ` — run `claude+ login` first, then retry.
 - A `differs` item — surface it to the user; they decide whether to keep the

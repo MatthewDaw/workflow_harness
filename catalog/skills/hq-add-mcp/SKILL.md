@@ -133,6 +133,13 @@ POST   <HQ_API>/projects/<projectId>/mcp-servers/<name>
 DELETE <HQ_API>/projects/<projectId>/mcp-servers/<name>
 ```
 
+**Getting the `projectId` — never guess it.** claude+ injects the authoritative HQ
+project id into the session as `$CLAUDE_PLUS_PROJECT_ID` (alongside `$CLAUDE_PLUS_REPO`
+and `$CLAUDE_PLUS_API_URL`), mirrored in `$CLAUDE_CONFIG_DIR/hq-project.json`. Use
+`$CLAUDE_PLUS_PROJECT_ID` directly as the `projectId` in any `/projects/<projectId>/…`
+call. Do NOT derive, slug, or probe candidate ids. If `$CLAUDE_PLUS_PROJECT_ID` is empty,
+this session is not running under claude+ — say so and stop; do not guess.
+
 Each returns the updated `Project` with `enabledMcpServers` populated. Auth gate:
 org admin **or** the project owner. The server name must already exist in the
 catalog (else `404`). Enabling an **agent** that declares the server in its
