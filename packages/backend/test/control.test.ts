@@ -81,7 +81,6 @@ async function seedSession(): Promise<void> {
     ownerUserId: OWNER,
     status: 'active',
     tokens: 0,
-    costUsd: 0,
     startedAt: 1,
     lastEventAt: 1,
     maxSeq: 0,

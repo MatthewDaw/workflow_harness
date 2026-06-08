@@ -12,7 +12,6 @@ const SESSION: SessionProjection = {
   agent: 'a',
   status: 'active',
   tokens: 0,
-  costUsd: 0,
   startedAt: 0,
   lastEventAt: 0,
   maxSeq: 1,

@@ -61,7 +61,6 @@ function session(
     ownerUserId: owner,
     status,
     tokens: 0,
-    costUsd: 0,
     startedAt: 1,
     lastEventAt: 1,
     maxSeq: 0,

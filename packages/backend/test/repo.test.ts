@@ -82,7 +82,6 @@ describe('session projections', () => {
     host: 'matt@mbp',
     status: 'active',
     tokens: 48000,
-    costUsd: 0.62,
     startedAt: 1717200000000,
     lastEventAt: 1717200900000,
   };

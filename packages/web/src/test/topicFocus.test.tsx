@@ -20,7 +20,6 @@ const BASE: SessionProjection = {
   agent: 'builder',
   status: 'active',
   tokens: 48000,
-  costUsd: 0.62,
   startedAt: 1000,
   lastEventAt: 5000,
   maxSeq: 5,
