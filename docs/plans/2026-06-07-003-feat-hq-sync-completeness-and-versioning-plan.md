@@ -204,10 +204,24 @@ shape and the delivery model. *No code until this resolves.*
 **U-Agent-Deps.** Wrapper enforces agent skill dependencies (KTD2): after writing an
 agent, pull any name in its `skills[]` missing from `<root>/skills/`.
 
-**U-MCP-Target.** Spike + implement the correct MCP write location (KTD3): write to the
-location Claude loads, add file-based servers to `enabledMcpjsonServers` in `.claude.json`,
-merge-not-clobber. Reconcile the `.mcp.json` vs `.claude.json` inconsistency in code + the
-001/002 docs.
+**U-MCP-Target.** *Spike RESOLVED (2026-06-07):* the real fractions root has **no
+`.mcp.json`**; Claude reads MCP from **`.claude.json`** (`mcpServers: {}`,
+`enabledMcpjsonServers: []`, both top-level and per-project under `projects[<cwd>]`). The
+wrapper today writes `.mcp.json` — a file Claude never reads — so synced MCP servers are
+invisible. Implement: write servers into `.claude.json` `mcpServers` (+ file-based into
+`enabledMcpjsonServers`), merge-not-clobber; fix the 001/002 doc inconsistency.
+
+> **CONFLICT (new, needs a decision):** `.claude.json` is also in `authSyncFiles` — the
+> per-project-root change made it **bidirectionally newer-wins synced** between the base and
+> each root. If MCP servers live in `.claude.json`, the auth-sync's whole-file copy can
+> clobber a root's MCP entries with the base's (empty `mcpServers`), or leak one root's
+> servers to others via the base. Options: **(a)** drop `.claude.json` from whole-file
+> auth-sync and instead sync only the *auth-bearing keys* (oauthAccount, userID, etc.) while
+> leaving `mcpServers`/`enabledMcpjsonServers`/`projects` per-root; **(b)** keep a separate
+> auth file and write MCP only to the root's `.claude.json` (no sync of that file);
+> **(c)** sync `.claude.json` with a key-merge instead of whole-file copy. **(a) or (c)** is
+> likely right — this must be settled before U-MCP-Target/U-MCP-Auth-Report write code, or
+> the auth-sync and MCP-write will fight. (Decision pending — see checkpoint.)
 
 **U-MCP-Auth-Report.** Read/write `mcp-needs-auth-cache.json`: after writing an MCP server,
 verify launch dependency + static env, and classify each server `ok` / `needs-auth` /

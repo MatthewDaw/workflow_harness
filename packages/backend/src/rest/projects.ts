@@ -24,6 +24,7 @@ import {
 import { isAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { flattenBundle } from './skills.js';
+import { STARTER_BUNDLE_NAME } from '../seed/skills.js';
 
 /**
  * REST: projects (U8).
@@ -169,6 +170,30 @@ export async function createProject(
   if (!parsed.success) return badRequest(parsed.error.message);
 
   const project: Project = parsed.data;
+
+  // Auto-enable the command-hq-starter bundle on every new project so HQ's hq-*
+  // management skills are usable from claude+ immediately, without a manual opt-in
+  // (the exact gap that left existing projects with empty enabled sets and no
+  // /hq-* autocomplete). Best-effort: only when the creator has an org whose
+  // catalog carries the bundle; an org-less project, a catalog without the bundle,
+  // or a transient read error leaves the project as-is rather than blocking create.
+  if (org) {
+    try {
+      const catalog = await deps.repo.listSkills(org);
+      const byName = new Map(catalog.map((s) => [s.name, s]));
+      const bundle = byName.get(STARTER_BUNDLE_NAME);
+      if (bundle && bundle.kind === 'bundle') {
+        const leaves = flattenBundle(bundle, byName);
+        project.enabledBundles = [
+          ...new Set([...(project.enabledBundles ?? []), STARTER_BUNDLE_NAME]),
+        ];
+        project.enabledSkills = [...new Set([...(project.enabledSkills ?? []), ...leaves])];
+      }
+    } catch {
+      // never block project creation on starter enablement
+    }
+  }
+
   await deps.repo.putProject(project);
   return created({ project });
 }

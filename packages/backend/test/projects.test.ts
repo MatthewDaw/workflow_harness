@@ -3,7 +3,7 @@ import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { LearningRecord, Project, SessionProjection, Skill } from '@harness/shared';
-import { orgScope } from '@harness/shared';
+import { orgScope, skillSchema } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import {
   createProject,
@@ -597,6 +597,53 @@ describe('POST /projects', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 400 });
+  });
+
+  it('auto-enables the command-hq-starter bundle on a new project', async () => {
+    // Seed the org catalog with the starter bundle + two members.
+    const orgRef = orgScope('acme');
+    await repo.putSkill(skillSchema.parse({ name: 'hq-sync', scope: orgRef, kind: 'skill' }));
+    await repo.putSkill(skillSchema.parse({ name: 'hq-add-skill', scope: orgRef, kind: 'skill' }));
+    await repo.putSkill(
+      skillSchema.parse({
+        name: 'command-hq-starter',
+        scope: orgRef,
+        kind: 'bundle',
+        members: ['hq-sync', 'hq-add-skill'],
+      }),
+    );
+
+    const res = await createProject(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        org: 'acme',
+        body: { id: 'fresh', name: 'Fresh', repo: 'gh/acme/fresh' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 201 });
+
+    const stored = await repo.getProject('fresh');
+    expect(stored?.enabledBundles).toContain('command-hq-starter');
+    expect(stored?.enabledSkills).toEqual(expect.arrayContaining(['hq-sync', 'hq-add-skill']));
+  });
+
+  it('creates an org-less project without starter when the org has no catalog', async () => {
+    // No bundle seeded → project is created but nothing is auto-enabled.
+    const res = await createProject(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        org: 'acme',
+        body: { id: 'bare', name: 'Bare', repo: 'gh/acme/bare' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 201 });
+    const stored = await repo.getProject('bare');
+    expect(stored?.enabledBundles ?? []).not.toContain('command-hq-starter');
+    expect(stored?.enabledSkills ?? []).toHaveLength(0);
   });
 });
 
