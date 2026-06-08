@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/workflow-harness/claude-plus/internal/daemon"
 )
 
 // Default HQ endpoints (the deployed Command HQ). They can be overridden with
@@ -120,7 +122,22 @@ func cmdLogin(args []string) error {
 
 	fmt.Println()
 	fmt.Println("Signed in. Credentials saved to ~/.claude-plus/credentials.")
-	fmt.Println("Next: run `claude+` in any repo and your sessions will stream to Command HQ.")
+
+	// Immediately materialize this repo's enabled skills/agents/MCP with the fresh
+	// token, so a single in-session `! claude+ login` both authenticates AND pulls
+	// everything down — no second command. SyncSkillsNow re-reads the credentials
+	// file we just wrote, so it does not depend on any running daemon's cached
+	// token. Best-effort: a sync failure (e.g. run outside a repo) never fails the
+	// login itself.
+	if repo, rerr := resolveRepoRoot(); rerr == nil {
+		if pulled, _, gate, serr := daemon.SyncSkillsNow(repo); serr == nil {
+			fmt.Printf("Synced this repo: pulled %d item(s).\n", pulled)
+			for _, na := range gate.NeedsAuth() {
+				fmt.Printf("  · MCP %q needs interactive auth: %s\n", na.Name, na.Detail)
+			}
+		}
+	}
+	fmt.Println("Next: start a fresh claude+ session here so the new /commands load into autocomplete.")
 	return nil
 }
 
