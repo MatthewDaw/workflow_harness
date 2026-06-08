@@ -100,7 +100,11 @@ func ReadLocal(plus string) ([]Item, error) {
 }
 
 // readDir scans a single registry directory. Agents are *.md files; skills are
-// either *.md files or directories containing a SKILL.md.
+// either *.md files or directories containing a SKILL.md plus optional sibling
+// scripts/resources. For a directory-form skill the hash covers the WHOLE tree
+// (U-Skill-Dirs) via hashSkillFiles, so editing a sibling file drifts — not just
+// SKILL.md. A single-SKILL.md directory hashes byte-identically to the legacy
+// raw-body form (skillFilesCanonical's fast path), so legacy skills stay in-sync.
 func readDir(root string, kind Kind) []Item {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -109,14 +113,14 @@ func readDir(root string, kind Kind) []Item {
 	var out []Item
 	for _, e := range entries {
 		name := strings.TrimSuffix(e.Name(), ".md")
-		var path string
 		if e.IsDir() {
-			path = filepath.Join(root, e.Name(), "SKILL.md")
-		} else if strings.HasSuffix(e.Name(), ".md") {
-			path = filepath.Join(root, e.Name())
-		} else {
+			out = append(out, readSkillDirItem(root, e.Name(), kind))
 			continue
 		}
+		if !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(root, e.Name())
 		it := Item{Kind: kind, Name: name, Path: path}
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -131,6 +135,32 @@ func readDir(root string, kind Kind) []Item {
 		out = append(out, it)
 	}
 	return out
+}
+
+// readSkillDirItem builds the Item for a directory-form skill: it walks the whole
+// tree (so sibling edits drift) and hashes it via hashSkillFiles. Path points at
+// the skill's SKILL.md (the entry file the verify gate and UI reference). A skill
+// directory missing SKILL.md, an empty SKILL.md, or an unreadable file is flagged
+// as an Err item rather than silently hashing a partial/invalid tree.
+func readSkillDirItem(root, dirName string, kind Kind) Item {
+	name := dirName
+	skillRoot := filepath.Join(root, dirName)
+	it := Item{Kind: kind, Name: name, Path: filepath.Join(skillRoot, skillMainFile)}
+	files, ok := readSkillDir(skillRoot)
+	if !ok {
+		it.Err = "unreadable skill directory"
+		return it
+	}
+	main, hasMain := files[skillMainFile]
+	if !hasMain {
+		it.Err = "missing " + skillMainFile
+		return it
+	}
+	if len(strings.TrimSpace(main)) == 0 {
+		it.Err = "empty definition"
+	}
+	it.Hash = hashSkillFiles(files)
+	return it
 }
 
 // readMcpFile reads a .claude.json file and emits one Item{Kind: KindMcp} per
@@ -174,7 +204,16 @@ func ApplyPulled(dir string, item RemoteItem, body string) error {
 	case KindAgent:
 		path = filepath.Join(dir, "agents", item.Name+".md")
 	case KindSkill:
-		path = filepath.Join(dir, "skills", item.Name, "SKILL.md")
+		// Skills can ship a WHOLE directory (SKILL.md plus sibling scripts/resources)
+		// carried in the body envelope (U-Skill-Dirs). Decode the files map (a legacy
+		// body-only skill decodes to just {"SKILL.md": body}) and materialize the
+		// whole tree. writeSkillDir is additive and matches the hash skillFilesCanonical
+		// computes, so a freshly pulled skill reads back in-sync.
+		skillRoot := filepath.Join(dir, "skills", item.Name)
+		if err := os.MkdirAll(skillRoot, 0o755); err != nil {
+			return err
+		}
+		return writeSkillDir(skillRoot, decodeSkillBody(body))
 	case KindMcp:
 		// MCP servers MERGE into .mcp.json rather than overwrite a per-item file:
 		// the body is the canonical on-disk entry JSON (built by remote.Fetch from

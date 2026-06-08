@@ -167,12 +167,48 @@ type remoteSkill struct {
 	Name        string `json:"name"`
 	Scope       scope  `json:"scope"`
 	Description string `json:"description"`
-	// Body is the full SKILL.md text HQ now serves on GET /skills and
-	// GET /skills/{name}. When present it is the authoritative content to
-	// materialize locally (ApplyPulled writes it to skills/<name>/SKILL.md);
-	// older HQ responses omit it, so we fall back to Description for hashing and
-	// pulling to stay backward compatible.
+	// Body is the full SKILL.md text HQ serves on GET /skills and
+	// GET /skills/{name}. When present it is the authoritative SKILL.md content to
+	// materialize locally; older HQ responses omit it, so we fall back to
+	// Description for hashing and pulling to stay backward compatible.
 	Body string `json:"body"`
+	// Files is the WHOLE skill directory tree (U-Skill-Dirs): relative path within
+	// the skill dir -> file contents (e.g. "SKILL.md", "scripts/run.sh"). When HQ
+	// serves it, the wrapper materializes every file (not just SKILL.md) and hashes
+	// the whole tree so a sibling edit drifts. Legacy records omit it and fall back
+	// to the Body/Description single-file path (fully back-compatible).
+	Files map[string]string `json:"files"`
+}
+
+// skillFilesFor resolves a remoteSkill to the files map the wrapper materializes
+// and hashes. Precedence: an explicit `files` map (whole-directory skill) wins;
+// otherwise the single SKILL.md body (Body, then Description) is wrapped as
+// {"SKILL.md": content}. A `files` map that omits SKILL.md is backfilled from the
+// Body/Description so the entry file is never missing. The result feeds BOTH the
+// hash (hashSkillFiles) and the materialized body (encodeSkillBody), keeping a
+// pulled skill in-sync.
+func skillFilesFor(s remoteSkill) map[string]string {
+	if len(s.Files) > 0 {
+		files := make(map[string]string, len(s.Files))
+		for p, c := range s.Files {
+			files[p] = c
+		}
+		if _, ok := files[skillMainFile]; !ok {
+			body := s.Body
+			if body == "" {
+				body = s.Description
+			}
+			if body != "" {
+				files[skillMainFile] = body
+			}
+		}
+		return files
+	}
+	content := s.Body
+	if content == "" {
+		content = s.Description
+	}
+	return map[string]string{skillMainFile: content}
 }
 
 // remoteMcpServer is HQ's structured MCP catalog record (GET /mcp-servers). It is
@@ -294,15 +330,14 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		if !enabledSkills[s.Name] {
 			continue
 		}
-		// Prefer the full SKILL.md body when HQ serves it (the authoritative local
-		// content); fall back to the description for older HQ responses. Hash the
-		// same text we will write so a pulled skill reads back in-sync.
-		content := s.Body
-		if content == "" {
-			content = s.Description
-		}
-		bodies[string(KindSkill)+"/"+s.Name] = content
-		out = append(out, RemoteItem{Kind: KindSkill, Name: s.Name, Scope: s.Scope.String(), Hash: hashContent([]byte(content))})
+		// Resolve the whole skill directory (U-Skill-Dirs): an explicit `files` map
+		// when HQ serves it, else the single SKILL.md body/description. The cached
+		// body is the encoded files envelope (a legacy single-file skill is still the
+		// raw SKILL.md text), and the hash covers the WHOLE tree — both computed over
+		// the same files map so a pulled skill reads back in-sync (sibling-aware).
+		files := skillFilesFor(s)
+		bodies[string(KindSkill)+"/"+s.Name] = encodeSkillBody(files)
+		out = append(out, RemoteItem{Kind: KindSkill, Name: s.Name, Scope: s.Scope.String(), Hash: hashSkillFiles(files)})
 	}
 
 	// MCP servers: read the org catalog, intersect with the project's opt-in, and
