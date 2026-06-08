@@ -694,8 +694,14 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 		return 0, 0, config.VerifyReport{}, err
 	}
 	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
-	if len(errs) > 0 {
-		return pulled, pushed, config.VerifyReport{}, errs[0]
+	// Reconcile errors are NON-FATAL here. A PUSH failure must not abort a
+	// pull-focused sync: publishing a local-only skill/agent to the org catalog is
+	// admin-gated (POST /skills|/agents), so a non-admin device token legitimately
+	// gets 401 — that is expected and is not a sync failure. A failed PULL is not
+	// swallowed: the item simply won't be on disk, so the verify gate below catches
+	// it. Log the reconcile errors; the gate is the arbiter of success.
+	for _, e := range errs {
+		diag.Logf("sync-skills: non-fatal reconcile error (e.g. cannot publish without admin): %v", e)
 	}
 	// U-Verify-Gate: after reconcile, verify the EFFECTIVE enabled set actually
 	// landed on disk (skill dirs + frontmatter; agent files + deps; MCP not failed).

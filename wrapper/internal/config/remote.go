@@ -278,9 +278,23 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	enabledAgents := map[string]bool{}
 	enabledMcp := map[string]bool{}
 	if h.ProjectID != "" {
-		var proj remoteProject
-		if err := h.getJSON("/projects/"+url.PathEscape(h.ProjectID), &proj); err != nil {
+		// The REST handler returns the project NESTED under a "project" key
+		// (`{project, instances, sessions}`); some shapes (and the unit tests) put
+		// the enabled arrays at the top level. Accept BOTH: decode an envelope that
+		// carries the flat fields (embedded) AND an optional nested project, and
+		// prefer the nested one when present. Without this, a real GET /projects/{id}
+		// response reads as empty -> nothing materializes (the bug that made a
+		// successful sync still pull 0).
+		var env struct {
+			remoteProject
+			Project *remoteProject `json:"project"`
+		}
+		if err := h.getJSON("/projects/"+url.PathEscape(h.ProjectID), &env); err != nil {
 			return nil, err
+		}
+		proj := env.remoteProject
+		if env.Project != nil {
+			proj = *env.Project
 		}
 		for _, n := range proj.EnabledSkills {
 			enabledSkills[n] = true
