@@ -92,6 +92,13 @@ var spawnDaemon = func(repoRoot string) error {
 	if err != nil {
 		return err
 	}
+	// Re-exec needs a path the OS loader accepts. On Windows that means a real
+	// executable extension: a binary launched from Git Bash as an extension-less
+	// `claude+` reports os.Executable() WITHOUT `.exe`, and exec.Command then fails
+	// with "executable file not found in %PATH%" even though the file exists. Resolve
+	// to the adjacent `<self>.exe` when needed so daemon self-spawn works regardless
+	// of how the launcher was named. No-op on unix.
+	self = resolveExe(self)
 	cmd := exec.Command(self, "__daemon", repoRoot)
 	cmd.Stdin = nil
 	cmd.Stdout = nil

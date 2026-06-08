@@ -132,13 +132,12 @@ func runShell(c *daemon.Client, instance string) error {
 	markDirty() // initial paint
 	prefix := false
 
-	// Double-click detection lives here because Compositor.Click is a pure
-	// hit-test with no timing: a second left-click on the SAME session sub-tab
-	// within the window opens the inline rename draft (the terminal analogue of
-	// the desktop double-click <input>); otherwise the hit just focuses it.
-	var lastClickSess string
-	var lastClickAt time.Time
-	const dblClickWindow = 400 * time.Millisecond
+	// Double-click detection is delegated to a clickTracker because
+	// Compositor.Click is a pure hit-test with no timing: a second left-click on
+	// the SAME session sub-tab within the window opens the inline rename draft
+	// (the terminal analogue of the desktop double-click <input>); otherwise the
+	// hit just focuses it.
+	var tracker clickTracker
 
 	for {
 		select {
@@ -200,61 +199,28 @@ func runShell(c *daemon.Client, instance string) error {
 				continue
 			}
 			if ev.mouse {
-				// A click while a rename draft is open commits it first (onBlur
-				// parity with the desktop <input>), then the click is processed.
-				if comp.Editing() {
-					if id, name, ok := comp.CommitRename(); ok {
-						_ = c.Rename(id, name)
-					}
+				// handleMouse applies the chrome-local effects and reports the
+				// daemon-facing ones; we just dispatch those. A commit can ride
+				// along with another action (a click elsewhere blurs the draft,
+				// then does its own thing), so the fields are not exclusive.
+				eff := tracker.handleMouse(comp, ev, time.Now())
+				if eff.renameID != "" {
+					_ = c.Rename(eff.renameID, eff.renameName)
+				}
+				if eff.sendInput != nil {
+					_ = c.Input(eff.sendInput)
+				}
+				if eff.focusID != "" {
+					_ = c.Focus(eff.focusID)
+				}
+				if eff.closeID != "" {
+					_ = c.CloseSession(eff.closeID)
+				}
+				if eff.newSession {
+					_ = c.NewSession()
+				}
+				if eff.dirty {
 					markDirty()
-				}
-				// When the focused session has enabled mouse tracking (claude does,
-				// in the alternate screen), any mouse event over the body belongs to
-				// claude — forward it verbatim so wheel-scroll and selection work
-				// exactly as they would running claude directly. The chrome's own
-				// scrollback viewport is always empty in the alt screen, so without
-				// this the wheel did nothing. Chrome rows (tabs, sub-tabs, status)
-				// fall outside the body region and stay with the chrome below.
-				if comp.ActiveIsSession() {
-					if col, row, inBody := comp.BodyMouse(ev.x, ev.y); inBody && comp.FocusedMouseTracking() {
-						_ = c.Input(encodeSGRMouse(ev.button, col, row, ev.press))
-						continue
-					}
-				}
-				if ev.press && ev.button == 0 { // plain left-click
-					res := comp.Click(ev.x, ev.y)
-					switch {
-					case res.NewSession:
-						_ = c.NewSession()
-						markDirty()
-					case res.CloseSessID != "":
-						_ = c.CloseSession(res.CloseSessID)
-						markDirty()
-					case res.FocusSessID != "":
-						// Second click on the same sub-tab inside the window =
-						// double-click -> open the inline rename draft.
-						if res.FocusSessID == lastClickSess && time.Since(lastClickAt) < dblClickWindow {
-							comp.BeginRename(res.FocusSessID)
-							lastClickSess = "" // consume; a 3rd click shouldn't re-trigger
-						} else {
-							_ = c.Focus(res.FocusSessID)
-							lastClickSess, lastClickAt = res.FocusSessID, time.Now()
-						}
-						markDirty()
-					case res.Changed:
-						markDirty()
-					}
-				} else if ev.press && comp.ActiveIsSession() {
-					// Wheel events scroll the focused session body's scrollback.
-					// SGR codes: 64 = wheel up (toward history), 65 = wheel down.
-					switch ev.button {
-					case 64:
-						comp.ScrollUp(3)
-						markDirty()
-					case 65:
-						comp.ScrollDown(3)
-						markDirty()
-					}
 				}
 				continue
 			}
@@ -421,6 +387,97 @@ func handleKey(c *daemon.Client, comp *shell.Compositor, b byte, prefix *bool) k
 		}
 	}
 	return actForward
+}
+
+// dblClickWindow is the maximum gap between two left-clicks on the same session
+// sub-tab for the second to count as a double-click (which opens the inline
+// rename draft rather than re-focusing the tab).
+const dblClickWindow = 400 * time.Millisecond
+
+// clickTracker carries the cross-event state that double-click detection needs —
+// the last sub-tab clicked and when — which Compositor.Click, a pure timing-free
+// hit-test, deliberately does not hold.
+type clickTracker struct {
+	lastSess string
+	lastAt   time.Time
+}
+
+// mouseEffect is the daemon-facing result of handling one mouse event. The
+// chrome-local effects (active-tab switch, focus highlight, rename draft, scroll)
+// are already applied inside handleMouse; the caller only dispatches the set
+// fields to the daemon and repaints when dirty. Fields are not mutually
+// exclusive: a click that blurs an open draft both commits (renameID) and then
+// performs its own action (e.g. focusID).
+type mouseEffect struct {
+	renameID, renameName string // commit an open rename draft: id + trimmed name
+	sendInput            []byte // forward an SGR mouse sequence to the focused session
+	focusID              string // focus this session sub-tab
+	closeID              string // close this session
+	newSession           bool   // spawn a new session
+	dirty                bool   // a repaint is needed
+}
+
+// handleMouse resolves one mouse event against the chrome. `now` is injected so
+// the double-click timing is unit-testable.
+//
+// The commit-open-draft step is gated on ev.press for a specific reason: a
+// double-click arrives as press, release, press, release. The second press opens
+// the rename draft; the button RELEASE that immediately follows is part of that
+// same gesture, not a click elsewhere — so it must NOT commit the freshly opened
+// (still-unchanged) draft. The original code committed on ANY mouse event, so
+// that trailing release closed the draft instantly and the user could never type
+// into it. Only a later press (a genuine click elsewhere) blurs and commits.
+func (ct *clickTracker) handleMouse(comp *shell.Compositor, ev inputEvent, now time.Time) mouseEffect {
+	var eff mouseEffect
+	if ev.press && comp.Editing() {
+		if id, name, ok := comp.CommitRename(); ok {
+			eff.renameID, eff.renameName = id, name
+		}
+		eff.dirty = true
+	}
+	// When the focused session has enabled mouse tracking (claude does, in the
+	// alternate screen), a body event belongs to claude — forward it verbatim so
+	// wheel-scroll and selection behave exactly as running claude directly. Chrome
+	// rows (tabs, sub-tabs, status) fall outside the body and stay with the chrome.
+	if comp.ActiveIsSession() {
+		if col, row, inBody := comp.BodyMouse(ev.x, ev.y); inBody && comp.FocusedMouseTracking() {
+			eff.sendInput = encodeSGRMouse(ev.button, col, row, ev.press)
+			return eff
+		}
+	}
+	if ev.press && ev.button == 0 { // plain left-click
+		switch res := comp.Click(ev.x, ev.y); {
+		case res.NewSession:
+			eff.newSession, eff.dirty = true, true
+		case res.CloseSessID != "":
+			eff.closeID, eff.dirty = res.CloseSessID, true
+		case res.FocusSessID != "":
+			// Second click on the same sub-tab inside the window = double-click ->
+			// open the inline rename draft instead of re-focusing.
+			if res.FocusSessID == ct.lastSess && now.Sub(ct.lastAt) < dblClickWindow {
+				comp.BeginRename(res.FocusSessID)
+				ct.lastSess = "" // consume; a 3rd click shouldn't re-trigger
+			} else {
+				eff.focusID = res.FocusSessID
+				ct.lastSess, ct.lastAt = res.FocusSessID, now
+			}
+			eff.dirty = true
+		case res.Changed:
+			eff.dirty = true
+		}
+	} else if ev.press && comp.ActiveIsSession() {
+		// Wheel over the chrome scrolls the focused session's scrollback.
+		// SGR codes: 64 = wheel up (toward history), 65 = wheel down.
+		switch ev.button {
+		case 64:
+			comp.ScrollUp(3)
+			eff.dirty = true
+		case 65:
+			comp.ScrollDown(3)
+			eff.dirty = true
+		}
+	}
+	return eff
 }
 
 // inputEvent is a decoded stdin event: either raw key bytes (to interpret as

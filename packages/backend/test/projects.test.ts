@@ -9,7 +9,9 @@ import {
   createProject,
   deleteProjectHandler,
   disableProjectBundle,
+  enableProjectAgent,
   enableProjectBundle,
+  enableProjectMcpServer,
   getProject,
   getProjectDocContent,
   getProjectDocs,
@@ -649,6 +651,113 @@ describe('DELETE /projects/:id', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     expect(await repo.getProject('weekly-compass')).toBeUndefined();
+  });
+});
+
+describe('project agent + mcp-server opt-in (catalog scoped to the project org)', () => {
+  async function seedAgent(name: string, org = 'acme'): Promise<void> {
+    await repo.putAgent({
+      name,
+      scope: orgScope(org),
+      model: 'claude-sonnet-4',
+      prompt: 'p',
+      description: '',
+      skills: [],
+      tools: [],
+      mcpServers: [],
+    });
+  }
+  async function seedMcp(name: string, org = 'acme'): Promise<void> {
+    await repo.putMcpServer({
+      name,
+      scope: orgScope(org),
+      transport: 'stdio',
+      command: 'cmd',
+      args: [],
+      env: {},
+    });
+  }
+
+  it('enables an org-catalog agent for the project', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await seedAgent('codebase-analyzer');
+    const res = await enableProjectAgent(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { projectId: 'weekly-compass', agentName: 'codebase-analyzer' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect((await repo.getProject('weekly-compass'))?.enabledAgents).toEqual(['codebase-analyzer']);
+  });
+
+  it('enables an org-catalog mcp server for the project', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    await seedMcp('humanlayer-approvals');
+    const res = await enableProjectMcpServer(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { projectId: 'weekly-compass', name: 'humanlayer-approvals' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect((await repo.getProject('weekly-compass'))?.enabledMcpServers).toEqual([
+      'humanlayer-approvals',
+    ]);
+  });
+
+  // Regression: catalog items must be resolved against the PROJECT's org, not the
+  // caller's raw token `custom:org` claim — which can drift from the user's
+  // effective (DB profile) org. A user whose token org points elsewhere must still
+  // enable items that live in the project's org. This previously 404'd because the
+  // handlers looked the item up under `principal.org` (the token claim).
+  it('enables agent + mcp when the token org differs from the project org', async () => {
+    await repo.putProject(project('weekly-compass', MATT, 'test org'));
+    await seedAgent('codebase-analyzer', 'test org');
+    await seedMcp('humanlayer-approvals', 'test org');
+
+    const agentRes = await enableProjectAgent(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        org: 'stale-token-org', // token claim points at the WRONG org
+        path: { projectId: 'weekly-compass', agentName: 'codebase-analyzer' },
+      }),
+      deps,
+    );
+    expect(agentRes).toMatchObject({ statusCode: 200 });
+
+    const mcpRes = await enableProjectMcpServer(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        org: 'stale-token-org',
+        path: { projectId: 'weekly-compass', name: 'humanlayer-approvals' },
+      }),
+      deps,
+    );
+    expect(mcpRes).toMatchObject({ statusCode: 200 });
+
+    const p = await repo.getProject('weekly-compass');
+    expect(p?.enabledAgents).toEqual(['codebase-analyzer']);
+    expect(p?.enabledMcpServers).toEqual(['humanlayer-approvals']);
+  });
+
+  it('404s an agent not in the project org catalog', async () => {
+    await repo.putProject(project('weekly-compass', MATT));
+    const res = await enableProjectAgent(
+      httpEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { projectId: 'weekly-compass', agentName: 'ghost' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
   });
 });
 

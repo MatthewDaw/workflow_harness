@@ -5,7 +5,9 @@ package daemon
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -17,6 +19,29 @@ func detachAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
+}
+
+// resolveExe makes the daemon self-spawn path loadable by the Windows process
+// creator. Git Bash happily runs an extension-less PE named `claude+`, but then
+// os.Executable() reports that extension-less path and exec.Command cannot launch
+// it ("executable file not found in %PATH%"), so daemon self-spawn dies. When the
+// reported path lacks a Windows executable extension, prefer the adjacent
+// `<self>.exe` if it exists; otherwise fall back to appending `.exe` (the name the
+// loader will actually try). A path that already has an extension is returned
+// unchanged.
+func resolveExe(self string) string {
+	if ext := strings.ToLower(filepath.Ext(self)); ext == ".exe" || ext == ".com" || ext == ".bat" || ext == ".cmd" {
+		return self
+	}
+	if withExe := self + ".exe"; fileExists(withExe) {
+		return withExe
+	}
+	return self + ".exe"
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
 }
 
 // terminatePID forcibly stops the daemon process AND its child tree on Windows.
