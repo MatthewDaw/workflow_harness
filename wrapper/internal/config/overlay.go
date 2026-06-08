@@ -66,20 +66,27 @@ var seededFiles = []seededFile{
 }
 
 // authSyncFiles are the per-project root files kept convergent with the BASE on
-// every spawn (newer-wins, both directions). Only true auth/identity files belong
-// here: a credential the inner Claude refreshes in one project must reach the
-// others. `.mcp.json` and `settings.json` are NOT here — they are seeded once and
-// then owned per-project (see seedOnceFiles), so a project's pulled MCP servers
-// and its own permissions/model/hooks settings never leak into another project.
-var authSyncFiles = []string{".credentials.json", ".claude.json"}
+// every spawn (newer-wins, both directions). ONLY the OAuth credential belongs
+// here: a token the inner Claude refreshes in one project must reach the others.
+// Everything else is seeded once and owned per-project (see seedOnceFiles).
+//
+// `.claude.json` is deliberately NOT here even though it carries account/identity:
+// it is a large file that also holds per-project Claude state under
+// `projects[<cwd>]` AND the `mcpServers`/`enabledMcpjsonServers` lists Claude
+// actually reads. Whole-file syncing it across roots would cross-contaminate
+// per-project state and clobber a root's MCP servers. Auth survives without it —
+// the real token lives in `.credentials.json` — so `.claude.json` is owned
+// per-project (seedOnceFiles) and MCP servers are merged into it there.
+var authSyncFiles = []string{".credentials.json"}
 
 // seedOnceFiles are copied from the BASE into a project root exactly once (only
-// when absent), then owned per-project. `.mcp.json` carries the user's personal
-// MCP servers, onto which ApplyPulled merges this project's HQ servers — so a
-// later base copy must never clobber them. `settings.json` carries per-project
-// permissions/model plus the managed hooks block (installed into the root by the
-// daemon), which must not be whole-file synced across projects.
-var seedOnceFiles = []string{".mcp.json", "settings.json"}
+// when absent), then owned per-project. `.mcp.json` (legacy) and `.claude.json`
+// carry the user's personal MCP servers, onto which the sync merges this project's
+// HQ servers — so a later base copy must never clobber them. `settings.json`
+// carries per-project permissions/model plus the managed hooks block (installed
+// into the root by the daemon). `.claude.json` additionally holds per-project
+// Claude state that must not leak across projects.
+var seedOnceFiles = []string{".mcp.json", "settings.json", ".claude.json"}
 
 // plusDir resolves the BASE ~/.claude+ (canonical auth + the parent of every
 // per-project root). Kept as the package's single home-relative anchor.
