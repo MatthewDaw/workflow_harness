@@ -18,7 +18,9 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "humanlayer:setup": "node infra/scripts/setup-humanlayer.mjs",
+    "humanlayer:verify": "node infra/scripts/verify-humanlayer.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

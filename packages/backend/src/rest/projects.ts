@@ -425,7 +425,7 @@ async function projectForOptIn(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<
-  | { project: Project; principal: { userId: string; org: string } }
+  | { project: Project; principal: { userId: string; org: string }; org: string }
   | { error: APIGatewayProxyResultV2 }
 > {
   const principal = principalOf(event);
@@ -435,7 +435,17 @@ async function projectForOptIn(
   const project = await deps.repo.getProject(id);
   if (!project) return { error: notFound() };
   if (!isAdmin(event) && project.ownerUserId !== principal.userId) return { error: forbidden() };
-  return { project, principal };
+
+  // The org to resolve catalog items against. The project belongs to exactly one
+  // org (stamped at connect time), and its materialized config draws from THAT
+  // org's catalog — so the item must be looked up there, NOT in the caller's raw
+  // token claim (`principal.org`), which can differ from the user's effective org
+  // (the DB profile org that every read endpoint uses via `effectiveOrg`). Using
+  // the token org here was the bug: enabling 404'd because the catalog was queried
+  // in the wrong org. Fall back to the caller's effective org, then the token, for
+  // legacy projects with no stamped org.
+  const org = project.org ?? (await effectiveOrg(event, deps.repo)) ?? principal.org;
+  return { project, principal, org };
 }
 
 /** POST /projects/:projectId/skills/:skillName — idempotent enable. */
@@ -445,12 +455,12 @@ export async function enableProjectSkill(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await projectForOptIn(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { project, principal } = resolved;
+  const { project, org } = resolved;
   const skillName = pathParam(event, 'skillName');
   if (!skillName) return badRequest('missing skill name');
 
   // The skill must exist in the org catalog.
-  const skill = await deps.repo.getSkill(orgScope(principal.org), skillName);
+  const skill = await deps.repo.getSkill(orgScope(org), skillName);
   if (!skill) return notFound();
 
   const updated = await deps.repo.addSkillToProject(project.id, skillName);
@@ -481,15 +491,15 @@ export async function enableProjectAgent(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await projectForOptIn(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { project, principal } = resolved;
+  const { project, org } = resolved;
   const agentName = pathParam(event, 'agentName');
   if (!agentName) return badRequest('missing agent name');
 
   // The agent must exist in the org catalog.
-  const agent = await deps.repo.getAgent(orgScope(principal.org), agentName);
+  const agent = await deps.repo.getAgent(orgScope(org), agentName);
   if (!agent) return notFound();
 
-  const updated = await deps.repo.addAgentToProject(project.id, agentName, principal.org);
+  const updated = await deps.repo.addAgentToProject(project.id, agentName, org);
   if (!updated) return notFound();
   return ok({ project: updated });
 }
@@ -517,12 +527,12 @@ export async function enableProjectMcpServer(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await projectForOptIn(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { project, principal } = resolved;
+  const { project, org } = resolved;
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing mcp server name');
 
   // The server must exist in the org catalog.
-  const server = await deps.repo.getMcpServer(orgScope(principal.org), name);
+  const server = await deps.repo.getMcpServer(orgScope(org), name);
   if (!server) return notFound();
 
   const updated = await deps.repo.addMcpServerToProject(project.id, name);
@@ -562,12 +572,12 @@ export async function enableProjectBundle(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await projectForOptIn(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { project, principal } = resolved;
+  const { project, org } = resolved;
   const bundleName = pathParam(event, 'bundleName');
   if (!bundleName) return badRequest('missing bundle name');
 
   // Resolve the bundle against the org catalog; it must exist AND be a bundle.
-  const catalog = await deps.repo.listSkills(principal.org);
+  const catalog = await deps.repo.listSkills(org);
   const byName = new Map(catalog.map((s) => [s.name, s]));
   const bundle = byName.get(bundleName);
   if (!bundle || bundle.kind !== 'bundle') return notFound();
@@ -594,11 +604,11 @@ export async function disableProjectBundle(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await projectForOptIn(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { project, principal } = resolved;
+  const { project, org } = resolved;
   const bundleName = pathParam(event, 'bundleName');
   if (!bundleName) return badRequest('missing bundle name');
 
-  const catalog = await deps.repo.listSkills(principal.org);
+  const catalog = await deps.repo.listSkills(org);
   const byName = new Map(catalog.map((s) => [s.name, s]));
 
   // The leaves this bundle would contribute (empty if it vanished from the catalog).
