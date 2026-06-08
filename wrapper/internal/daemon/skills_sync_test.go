@@ -40,6 +40,8 @@ func (f *fakeSource) Push(config.Item, string) error { return nil }
 
 func (f *fakeSource) AgentSkills(string) []string { return nil }
 
+func (f *fakeSource) DeclaredSkills() []string { return nil }
+
 // hashLike reproduces config.hashContent for a body so the remote hash differs
 // from "absent locally" (forcing a needs_pull). We don't need the exact hash —
 // any stable non-empty value works because the local skill is missing.

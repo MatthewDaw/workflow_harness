@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,17 @@ type HTTPRemoteSource struct {
 	// skill is materialized after the agent (U-Agent-Deps). Guarded by bodiesMu
 	// alongside bodies since both are published by Fetch.
 	agentSkills map[string][]string
+
+	// declaredSkills is the project's FULL declared enabled skill set captured
+	// during Fetch: every name in project.enabledSkills UNION the live-flattened
+	// members of every enabled bundle. It is a superset of the effective set Fetch
+	// returns — the effective set is only the subset that resolved to a real catalog
+	// skill record, while a name that is enabled but unresolvable (a bundle name put
+	// in enabledSkills, a dangling bundle member, or a record absent for this org)
+	// is declared but never materialized. The verify gate asserts every declared
+	// name landed, so such a skill fails the sync loudly instead of silently never
+	// appearing. Guarded by bodiesMu alongside bodies since Fetch publishes it.
+	declaredSkills []string
 }
 
 // NewHTTPRemoteSource builds a source with a bounded HTTP client.
@@ -446,12 +458,36 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		out = append(out, RemoteItem{Kind: KindMcp, Name: m.Name, Scope: m.Scope.String(), Hash: hashContent(canon)})
 	}
 
+	// Snapshot the FULL declared enabled skill set (enabledSkills after bundle
+	// expansion) so the verify gate can assert every declared name materialized —
+	// not just the subset that resolved to a catalog record above. A declared name
+	// with no leaf in `out` is exactly the silent gap this catches.
+	declared := make([]string, 0, len(enabledSkills))
+	for n := range enabledSkills {
+		declared = append(declared, n)
+	}
+	sort.Strings(declared)
+
 	h.bodiesMu.Lock()
 	h.bodies = bodies
 	h.orgID = orgID
 	h.agentSkills = agentSkills
+	h.declaredSkills = declared
 	h.bodiesMu.Unlock()
 	return out, nil
+}
+
+// DeclaredSkills returns the project's FULL declared enabled skill set captured
+// during the most recent Fetch: every project.enabledSkills name plus the
+// live-flattened members of every enabled bundle. The verify gate asserts each is
+// materialized on disk, so an enabled-but-unresolvable skill (a bundle name
+// mistakenly in enabledSkills, a dangling bundle member, or a catalog record
+// absent for this project's org) fails the gate loudly instead of silently never
+// landing. A source not yet fetched yields nil.
+func (h *HTTPRemoteSource) DeclaredSkills() []string {
+	h.bodiesMu.RLock()
+	defer h.bodiesMu.RUnlock()
+	return append([]string(nil), h.declaredSkills...)
 }
 
 // AgentSkills returns the skill names the named agent depends on, captured during

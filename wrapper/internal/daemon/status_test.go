@@ -51,6 +51,7 @@ func (s staticRemote) Fetch() ([]config.RemoteItem, error)    { return s.items, 
 func (s staticRemote) Body(config.RemoteItem) (string, error) { return "", nil }
 func (s staticRemote) Push(config.Item, string) error         { return nil }
 func (s staticRemote) AgentSkills(string) []string            { return nil }
+func (s staticRemote) DeclaredSkills() []string               { return nil }
 
 // TestSyncConfigOnceSetsDrift proves the drift meter reflects real HQ drift: with
 // an HQ-only item and no matching local definition, the snapshot's Drift is 1.

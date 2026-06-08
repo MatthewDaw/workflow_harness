@@ -138,6 +138,7 @@ func VerifyEffectiveSet(src RemoteSource, plus string) (VerifyReport, error) {
 func verifyAgainst(remote []RemoteItem, src RemoteSource, plus string) VerifyReport {
 	// Index materialized skills (dir form) so agent-dep checks are O(1).
 	skillPresent := map[string]bool{}
+	reportedSkills := map[string]bool{} // skill names already in the report (no dups)
 	var mcpNames []string
 
 	var report VerifyReport
@@ -148,10 +149,38 @@ func verifyAgainst(remote []RemoteItem, src RemoteSource, plus string) VerifyRep
 			if st == VerifyOK {
 				skillPresent[ri.Name] = true
 			}
+			reportedSkills[ri.Name] = true
 			report.Items = append(report.Items, VerifyItem{Kind: KindSkill, Name: ri.Name, Status: st, Detail: detail})
 		case KindMcp:
 			mcpNames = append(mcpNames, ri.Name)
 		}
+	}
+
+	// Declared-set coverage — the guarantee behind /hq-sync. The `remote` loop above
+	// only sees the EFFECTIVE set: skills that resolved to a real catalog record AND
+	// are enabled. A skill the project DECLARES enabled but that has no resolvable
+	// record — a bundle name placed in enabledSkills, a dangling bundle member, or a
+	// record absent for this project's org — never appears in `remote`, so without
+	// this pass it would silently never land yet the gate would still pass. Assert
+	// every declared name is materialized on disk; flag any that is not so the sync
+	// fails loudly and names it. (A declared name already reported, or one present on
+	// disk from the repo's own .claude, is not re-flagged.)
+	for _, name := range src.DeclaredSkills() {
+		if reportedSkills[name] {
+			continue
+		}
+		reportedSkills[name] = true
+		if st, _ := verifySkill(plus, name); st == VerifyOK {
+			skillPresent[name] = true
+			report.Items = append(report.Items, VerifyItem{Kind: KindSkill, Name: name, Status: VerifyOK})
+			continue
+		}
+		report.Items = append(report.Items, VerifyItem{
+			Kind:   KindSkill,
+			Name:   name,
+			Status: VerifyMissing,
+			Detail: "enabled on this project but did not materialize — it has no skill record in this project's org catalog, or it names a bundle (enable the bundle via /bundles, or enable its leaf skills directly)",
+		})
 	}
 
 	// Agents need the skill-present index complete, so verify them in a second pass.

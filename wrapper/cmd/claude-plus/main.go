@@ -262,6 +262,14 @@ func cmdSync() error {
 	if err != nil {
 		return err
 	}
+	// Resolve and SHOW the HQ project id + the exact config root being written. The
+	// root slug is keyed on the local repo PATH while the project id is keyed on the
+	// git remote — derived independently — so two checkouts of one repo get two
+	// roots, and skills enabled on a divergent/duplicate project record land on a
+	// record this checkout never reads. Printing both makes that divergence visible
+	// instead of surfacing as a silent "pulled 0".
+	projectID := config.ProjectIDFor(cwd)
+	root, _ := config.ProjectConfigDir(cwd)
 	pulled, pushed, gate, err := daemon.SyncSkillsNow(cwd)
 	// Surface needs-auth servers regardless of gate pass/fail — they are actionable
 	// and are not the reason for any failure.
@@ -273,8 +281,17 @@ func cmdSync() error {
 		// exits non-zero on a partial install.
 		return err
 	}
-	fmt.Printf("synced (skills + agents + mcp): pulled %d, pushed %d (into ~/.claude+); verify: %s\n",
-		pulled, pushed, gate.Summary())
+	// An empty effective set on a connected project is almost always a wrong/duplicate
+	// project record or a divergent root — not a real "nothing enabled" (every
+	// connected project carries at least command-hq-starter). Call it out so the user
+	// re-checks the binding instead of trusting a clean-looking sync.
+	if len(gate.Items) == 0 {
+		fmt.Printf("warning: project %q has no enabled skills/agents/mcp servers — "+
+			"if you expected some, this checkout may be bound to a different or duplicate "+
+			"project record (config root %s)\n", projectID, root)
+	}
+	fmt.Printf("synced (skills + agents + mcp) for project %q: pulled %d, pushed %d → %s; verify: %s\n",
+		projectID, pulled, pushed, root, gate.Summary())
 	return nil
 }
 

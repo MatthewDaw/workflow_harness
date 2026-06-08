@@ -121,6 +121,67 @@ func TestVerifyAgentBareNoFrontmatterFails(t *testing.T) {
 	}
 }
 
+// TestVerifyDeclaredBundleNameFails proves the guarantee behind /hq-sync: a skill
+// the project DECLARES enabled but that never resolved to a materializable record
+// (e.g. a bundle name mistakenly placed in enabledSkills, so Fetch skipped it and
+// it is absent from the effective `remote` set) fails the gate loudly — it is not
+// silently ignored just because it never appeared on disk. This is the exact gap
+// that left registered/enabled gstack skills undiscoverable after a "successful"
+// sync.
+func TestVerifyDeclaredBundleNameFails(t *testing.T) {
+	plus := t.TempDir()
+	rem := newFakeRemote()
+	// Effective set is empty (the bundle was skipped by Fetch), but the project
+	// declared "gstack" enabled.
+	rem.items = nil
+	rem.declared = []string{"gstack"}
+
+	report := verifyAgainst(rem.items, rem, plus)
+	if report.OK() {
+		t.Fatal("a declared-but-unmaterialized skill must fail the gate")
+	}
+	if report.Err() == nil {
+		t.Fatal("a partial install must return a non-nil error")
+	}
+	var sawGstackMissing bool
+	for _, it := range report.Items {
+		if it.Kind == KindSkill && it.Name == "gstack" && it.Status == VerifyMissing {
+			sawGstackMissing = true
+			if it.Detail == "" {
+				t.Error("a declared-but-missing skill should carry an actionable detail")
+			}
+		}
+	}
+	if !sawGstackMissing {
+		t.Fatalf("declared skill gstack should be flagged missing, got %+v", report.Items)
+	}
+}
+
+// TestVerifyDeclaredCoveredOnDiskPasses proves a declared skill that DID materialize
+// (present on disk, e.g. pulled or repo-local) passes the gate and is not duplicated
+// when it is also in the effective `remote` set.
+func TestVerifyDeclaredCoveredOnDiskPasses(t *testing.T) {
+	plus := t.TempDir()
+	writeSkillFile(t, plus, "browse", "---\nname: browse\n---\nBrowse.\n")
+	rem := newFakeRemote()
+	rem.items = []RemoteItem{{Kind: KindSkill, Name: "browse"}}
+	rem.declared = []string{"browse"} // both effective AND declared
+
+	report := verifyAgainst(rem.items, rem, plus)
+	if !report.OK() {
+		t.Fatalf("a materialized declared skill should pass, got %+v", report.Items)
+	}
+	var count int
+	for _, it := range report.Items {
+		if it.Kind == KindSkill && it.Name == "browse" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("declared skill also in the effective set must not be double-reported, got %d items", count)
+	}
+}
+
 // TestVerifyMcpFailedFailsGate proves an enabled MCP server absent from
 // .claude.json fails the gate.
 func TestVerifyMcpFailedFailsGate(t *testing.T) {

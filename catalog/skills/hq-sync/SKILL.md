@@ -150,11 +150,22 @@ the cached `.claude-plugin/plugin.json`), and `gitCommitSha` (the marketplace cl
 HEAD). This is exactly the step whose absence leaves a freshly-pulled bundle invisible.
 
 ### Verification gate
-Recompute the effective enabled set and assert, per item: skill dir + `name`
-frontmatter; agent file + valid frontmatter + its skills present; MCP server
+Recompute the **full declared enabled set** and assert, per item: skill dir +
+`name` frontmatter; agent file + valid frontmatter + its skills present; MCP server
 connected/authed (not in the needs-auth cache); plugin registered. Emit a per-kind
 table. If anything fails, report it as an explicit failure with the item and the
 missing piece — a partial install must never be reported as success.
+
+> **Declared set, not just the resolvable subset.** The gate asserts every skill
+> the project *declares* enabled — `enabledSkills` **plus the flattened members of
+> every `enabledBundle`** — actually landed on disk, not merely the subset that
+> resolved to a catalog record. This is the guarantee that closes the recurring
+> "registered but undiscoverable" hole: a name that is enabled but has no
+> materializable record — a **bundle name mistakenly added to `enabledSkills`**
+> (enable a bundle via `POST …/bundles/<bundle>`, never `…/skills/<bundle>`), a
+> **dangling bundle member**, or a record **missing for this project's org** — is
+> flagged MISSING and fails the sync loudly, instead of silently never appearing in
+> the session. `claude+ sync` already runs this gate and exits non-zero on any gap.
 
 ## How to run
 
@@ -174,11 +185,16 @@ Four moves, all landing in this project's root:
    ```
 
    `claude+ sync` performs the HQ-side one-shot reconcile for **all three kinds**
-   (skills, agents, and MCP servers), into the linked project's root. Report its
-   printed `pulled N` count (the CLI prints `synced (skills + agents + mcp): …`).
-   If it prints
-   `401 Unauthorized`, the device isn't signed in — run `claude+ login` first (the
-   repo step still works offline).
+   (skills, agents, and MCP servers), into the linked project's root. It prints the
+   **resolved project id and the exact config root** it wrote
+   (`synced … for project "<id>" … → <root>; verify: …`). **Confirm that project id
+   matches `$CLAUDE_PLUS_PROJECT_ID`** — if they differ, or the command prints
+   `warning: project "<id>" has no enabled skills…`, this checkout is bound to a
+   different or **duplicate project record** (the root slug is keyed on the repo
+   *path*, the project id on the git *remote* — two checkouts of one repo get two
+   roots, and skills enabled on the wrong record never reach this session). Resolve
+   that before trusting the sync. If it prints `401 Unauthorized`, the device isn't
+   signed in — run `claude+ login` first (the repo step still works offline).
 3. **Finish end-to-end setup** (step 4). For each pulled item, complete the
    **end-to-end setup contract** above: copy agents' dependent skills, install MCP
    launch dependencies, populate MCP env, complete any OAuth handshake (clear the

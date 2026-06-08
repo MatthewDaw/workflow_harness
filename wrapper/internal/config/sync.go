@@ -123,6 +123,15 @@ type RemoteSource interface {
 	// it to ensure an agent's skills are materialized after the agent itself
 	// (U-Agent-Deps). An unknown agent yields nil.
 	AgentSkills(agentName string) []string
+	// DeclaredSkills returns the project's FULL declared enabled skill set captured
+	// during the most recent Fetch: every project.enabledSkills name plus the
+	// flattened members of every enabled bundle. It is a SUPERSET of the effective
+	// items Fetch returns — a declared name with no resolvable catalog record (a
+	// bundle name in enabledSkills, a dangling bundle member, or a record missing
+	// for this org) is declared but never materialized. The verification gate
+	// asserts every declared name landed, so such a skill fails loudly instead of
+	// silently never appearing in the session. An unfetched source yields nil.
+	DeclaredSkills() []string
 }
 
 // ComputeDrift reads the given per-project registry (`plus`), fetches HQ's

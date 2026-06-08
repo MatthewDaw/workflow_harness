@@ -94,6 +94,7 @@ type fakeRemote struct {
 	bodies   map[string]string
 	bodyErr  string              // "kind/name" whose Body() returns an error
 	depsByAg map[string][]string // agent name -> skill deps (U-Agent-Deps)
+	declared []string            // project's declared enabled skills (gate coverage)
 }
 
 func newFakeRemote() *fakeRemote {
@@ -128,6 +129,13 @@ func (f *fakeRemote) Push(item Item, body string) error {
 
 func (f *fakeRemote) AgentSkills(agentName string) []string {
 	return f.depsByAg[agentName]
+}
+
+// DeclaredSkills returns the project's declared enabled skill set the gate asserts
+// is materialized. Defaults to nil (the effective set is the whole story) unless a
+// test sets `declared` to exercise the enabled-but-unresolvable coverage path.
+func (f *fakeRemote) DeclaredSkills() []string {
+	return f.declared
 }
 
 // seedLocalAgent writes a local agent file under a temp ~/.claude and returns its
