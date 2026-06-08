@@ -12,6 +12,7 @@ import {
   flattenBundle,
   getSkill,
   getUsage,
+  promoteSkill,
   removeMember,
   resolveSkills,
 } from '../src/rest/skills.js';
@@ -253,6 +254,106 @@ describe('skill body round-trip', () => {
       deps,
     );
     expect(bodyOf<{ skill: Skill }>(read as { body: string }).skill.body).toBe('# Reconcile\nmd');
+  });
+});
+
+/**
+ * VERSIONING (KTD6) at the REST layer: create mints rev 1 of the base variant
+ * and initializes TRUE; an update snapshots the NEXT revision of the same variant
+ * rather than clobbering; promote (any authed member) repoints TRUE.
+ */
+describe('versioning: create snapshots rev 1 + initializes TRUE', () => {
+  it('stamps baseName/variantId/version on create and sets the TRUE pointer', async () => {
+    const res = await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'v1') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 201 });
+    const { skill: created } = bodyOf<{ skill: Skill }>(res as { body: string });
+    expect(created.variantId).toBe('reconcile');
+    expect(created.baseName).toBe('reconcile');
+    expect(created.version).toBe(1);
+
+    const truth = await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile');
+    expect(truth).toMatchObject({ baseName: 'reconcile', variantId: 'reconcile', rev: 1 });
+  });
+});
+
+describe('versioning: update snapshots the next revision (no clobber)', () => {
+  it('advances the base variant to rev 2 and keeps a rev-1 snapshot', async () => {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'v1') }),
+      deps,
+    );
+    const put = await createSkill(
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        body: skill('reconcile', 'v2'),
+      }),
+      deps,
+    );
+    expect(put).toMatchObject({ statusCode: 200 });
+    expect(bodyOf<{ skill: Skill }>(put as { body: string }).skill.version).toBe(2);
+
+    const revs = await repo.listRevisions(SCOPE, 'SKILL', 'reconcile');
+    expect(revs.map((r) => r.version).sort()).toEqual([1, 2]);
+    // The rev-1 snapshot is immutable — still the old body.
+    expect((await repo.getRevision(SCOPE, 'SKILL', 'reconcile', 1))?.body).toBe('v1');
+  });
+});
+
+describe('POST /skills/:name/promote (any authed member)', () => {
+  it('repoints TRUE to the given variant (not admin-gated)', async () => {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'base') }),
+      deps,
+    );
+    // A non-admin member promotes a (hypothetical) fork variant.
+    const res = await promoteSkill(
+      httpEvent({
+        method: 'POST',
+        userId: 'bob',
+        org: ORG,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile#R#r#U#bob', rev: 1 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const truth = await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile');
+    expect(truth).toEqual({ baseName: 'reconcile', variantId: 'reconcile#R#r#U#bob', rev: 1 });
+  });
+
+  it('400s when variantId is missing', async () => {
+    const res = await promoteSkill(
+      httpEvent({
+        method: 'POST',
+        userId: 'bob',
+        org: ORG,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: {},
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 400 });
+  });
+
+  it('401s an unauthenticated promote', async () => {
+    const res = await promoteSkill(
+      httpEvent({
+        method: 'POST',
+        userId: null,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 401 });
   });
 });
 

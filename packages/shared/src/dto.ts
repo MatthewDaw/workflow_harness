@@ -71,6 +71,107 @@ export const createdBySchema = z.object({
 export type CreatedBy = z.infer<typeof createdBySchema>;
 
 /**
+ * VERSIONING MODEL (KTD6). A catalog item (skill / agent / mcpServer) is
+ * versioned per VARIANT, where a variant is identified by `(baseName, repoId,
+ * userId)`: editing item S from project R by person P forks/updates the variant
+ * `(S, R, P)`; the org-seeded item is the BASE variant (empty repoId + userId).
+ * Every edit SNAPSHOTS an immutable revision (monotonic `version`/`rev` per
+ * variant). One ORG-WIDE "true" variant per `baseName` is the default the UI
+ * shows and a project adds.
+ *
+ * These fields are MIXED INTO the existing skill/agent/mcpServer schemas (below)
+ * and are all OPTIONAL / DEFAULTED, so a legacy record (no version fields)
+ * still validates — it is treated as the base variant of its name at rev 1.
+ */
+export const versionFieldsSchema = z.object({
+  /**
+   * The stable identity of this variant's family: the org-catalog name the
+   * variant forks from. Defaults to the record's own `name` for legacy records
+   * (where `name === baseName`).
+   */
+  baseName: z.string().optional(),
+  /**
+   * Opaque, deterministic id of the variant `(baseName, repoId, userId)`.
+   * The base variant uses `baseName` itself; forks append `#R#<repoId>#U#<userId>`.
+   * Optional on read so legacy records validate; minted on write.
+   */
+  variantId: z.string().optional(),
+  /** The project/repo this variant was forked from. Empty/absent = the base variant. */
+  repoId: z.string().optional(),
+  /** The user who authored this variant. Empty/absent = the base variant. */
+  authorUserId: z.string().optional(),
+  /**
+   * Monotonic revision number for this variant. Starts at 1 (minted on write by
+   * `putNewVersion`). OPTIONAL on read — a legacy record has no `version`, and
+   * consumers treat an absent `version` as rev 1 — so parsing a record never
+   * fabricates a `version` field that the record did not actually carry.
+   */
+  version: z.number().int().positive().optional(),
+  /** Epoch-ms this revision was snapshotted. Optional for legacy records. */
+  createdAt: z.number().int().nonnegative().optional(),
+});
+export type VersionFields = z.infer<typeof versionFieldsSchema>;
+
+/**
+ * The per-name ORG-WIDE "true" pointer payload: which variant+revision is the
+ * default shown in the UI and added to a project. Any authed org member may
+ * repoint it via promote; promotion never edits or deletes a variant.
+ */
+export const truePointerSchema = z.object({
+  baseName: z.string().min(1),
+  variantId: z.string().min(1),
+  /** The promoted revision; absent means "the variant's latest". */
+  rev: z.number().int().positive().optional(),
+});
+export type TruePointer = z.infer<typeof truePointerSchema>;
+
+/**
+ * A project enabled-set ENTRY carrying the chosen variant (U-Ver-Pin). A repo's
+ * enabled skill/agent/mcp may pin a specific variant (default = the current org
+ * TRUE variant). To stay BACK-COMPAT with the bare-string entries every existing
+ * project record stores, the entry is a UNION: either a plain `string` (just the
+ * name; resolves to the TRUE variant at sync) OR `{ name, variantId? }`.
+ * `normalizeEnabledEntry` collapses both forms to the object shape.
+ */
+export const enabledEntrySchema = z.union([
+  z.string().min(1),
+  z.object({ name: z.string().min(1), variantId: z.string().optional() }),
+]);
+export type EnabledEntry = z.infer<typeof enabledEntrySchema>;
+
+/** The object form of an enabled-set entry. */
+export interface NormalizedEnabledEntry {
+  name: string;
+  variantId?: string;
+}
+
+/** Collapse a bare-string OR `{name, variantId}` enabled-set entry to the object form. */
+export function normalizeEnabledEntry(entry: EnabledEntry): NormalizedEnabledEntry {
+  return typeof entry === 'string' ? { name: entry } : { name: entry.name, variantId: entry.variantId };
+}
+
+/** The bare name of an enabled-set entry, regardless of form. */
+export function enabledEntryName(entry: EnabledEntry): string {
+  return typeof entry === 'string' ? entry : entry.name;
+}
+
+/** The pinned variantId of an enabled-set entry, or undefined for a bare-string entry. */
+export function enabledEntryVariant(entry: EnabledEntry): string | undefined {
+  return typeof entry === 'string' ? undefined : entry.variantId;
+}
+
+/**
+ * Deterministically mint the variantId for a variant family member.
+ * The BASE variant (no repo + no user) is just `baseName`; a fork appends the
+ * repo + author so `(baseName, repoId, authorUserId)` maps 1:1 to an id. This is
+ * the same string used as the revision-row infix in keys.ts.
+ */
+export function variantIdFor(baseName: string, repoId?: string, authorUserId?: string): string {
+  if (!repoId && !authorUserId) return baseName;
+  return `${baseName}#R#${repoId ?? ''}#U#${authorUserId ?? ''}`;
+}
+
+/**
  * A user's PROFILE record (`USER#<userId> / PROFILE`). This is the SOURCE OF
  * TRUTH for org membership: a user with `org` unset genuinely has NO org and is
  * forced through onboarding (create/join). Membership used to come from the
@@ -217,7 +318,7 @@ export const agentSchema = z.object({
   mcpServers: z.array(z.string()).default([]),
   /** Authorship stamp set on create; optional on read for back-compat. */
   createdBy: createdBySchema.optional(),
-});
+}).merge(versionFieldsSchema);
 export type Agent = z.infer<typeof agentSchema>;
 
 /**
@@ -254,39 +355,45 @@ export type McpTransport = z.infer<typeof mcpTransportSchema>;
  * resolution is a documented follow-up. Never log these values.
  */
 export const mcpServerSchema = z.discriminatedUnion('transport', [
-  z.object({
-    name: z.string().min(1),
-    /** Catalog scope. Org-only today, but kept as a full `scopeRefSchema` for
-     * parity with skills/agents (every existing org-scoped record validates). */
-    scope: scopeRefSchema,
-    transport: z.literal('stdio'),
-    /** The executable the daemon spawns for a local (stdio) server. */
-    command: z.string().min(1),
-    /** Arguments passed to `command`. Defaults to []. */
-    args: z.array(z.string()).default([]),
-    /** Environment variables for the subprocess (plaintext secrets — see note). */
-    env: z.record(z.string()).default({}),
-    /** Authorship stamp set on create; optional on read for back-compat. */
-    createdBy: createdBySchema.optional(),
-  }),
-  z.object({
-    name: z.string().min(1),
-    scope: scopeRefSchema,
-    transport: z.literal('http'),
-    /** The remote endpoint URL the daemon connects to. */
-    url: z.string().url(),
-    /** Static request headers (plaintext secrets — see note). Defaults to {}. */
-    headers: z.record(z.string()).default({}),
-    createdBy: createdBySchema.optional(),
-  }),
-  z.object({
-    name: z.string().min(1),
-    scope: scopeRefSchema,
-    transport: z.literal('sse'),
-    url: z.string().url(),
-    headers: z.record(z.string()).default({}),
-    createdBy: createdBySchema.optional(),
-  }),
+  z
+    .object({
+      name: z.string().min(1),
+      /** Catalog scope. Org-only today, but kept as a full `scopeRefSchema` for
+       * parity with skills/agents (every existing org-scoped record validates). */
+      scope: scopeRefSchema,
+      transport: z.literal('stdio'),
+      /** The executable the daemon spawns for a local (stdio) server. */
+      command: z.string().min(1),
+      /** Arguments passed to `command`. Defaults to []. */
+      args: z.array(z.string()).default([]),
+      /** Environment variables for the subprocess (plaintext secrets — see note). */
+      env: z.record(z.string()).default({}),
+      /** Authorship stamp set on create; optional on read for back-compat. */
+      createdBy: createdBySchema.optional(),
+    })
+    .merge(versionFieldsSchema),
+  z
+    .object({
+      name: z.string().min(1),
+      scope: scopeRefSchema,
+      transport: z.literal('http'),
+      /** The remote endpoint URL the daemon connects to. */
+      url: z.string().url(),
+      /** Static request headers (plaintext secrets — see note). Defaults to {}. */
+      headers: z.record(z.string()).default({}),
+      createdBy: createdBySchema.optional(),
+    })
+    .merge(versionFieldsSchema),
+  z
+    .object({
+      name: z.string().min(1),
+      scope: scopeRefSchema,
+      transport: z.literal('sse'),
+      url: z.string().url(),
+      headers: z.record(z.string()).default({}),
+      createdBy: createdBySchema.optional(),
+    })
+    .merge(versionFieldsSchema),
 ]);
 export type McpServer = z.infer<typeof mcpServerSchema>;
 
@@ -315,6 +422,15 @@ export const skillSchema = z.object({
    */
   body: z.string().default(''),
   /**
+   * WHOLE-DIRECTORY skill storage (U-Skill-Dirs). A skill is a directory:
+   * `SKILL.md` PLUS sibling scripts/resources. This maps each file's relative
+   * path WITHIN the skill dir (e.g. `SKILL.md`, `scripts/run.sh`) to its
+   * contents, so the daemon can materialize the entire `.claude/skills/<name>/`
+   * tree — not just the body. Optional for back-compat: legacy body-only records
+   * (no `files`) still materialize just `SKILL.md` from `body`.
+   */
+  files: z.record(z.string()).optional(),
+  /**
    * Read-only annotation populated by the resolve endpoint for bundles: the
    * transitively-flattened leaf-skill member names (nested bundles expanded).
    * Never written by clients; present only on GET /skills responses.
@@ -323,7 +439,7 @@ export const skillSchema = z.object({
   /** Who created the catalog record (the seed stamps `system`; REST stamps the
    * authenticated principal). Optional for legacy records written before it. */
   createdBy: createdBySchema.optional(),
-});
+}).merge(versionFieldsSchema);
 export type Skill = z.infer<typeof skillSchema>;
 
 export const OBJECTIVE_LEVELS = [

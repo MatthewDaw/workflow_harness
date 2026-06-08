@@ -84,6 +84,27 @@ function parseFrontmatter(md) {
   return { name, description: descParts.join(' ').trim() };
 }
 
+/**
+ * Read the WHOLE skill directory tree into a `{ relPath: contents }` map
+ * (U-Skill-Store): SKILL.md PLUS sibling scripts/resources. POSIX-relative paths.
+ */
+function readSkillDir(dir) {
+  const out = {};
+  const walk = (cur, rel) => {
+    for (const entry of readdirSync(cur, { withFileTypes: true })) {
+      const abs = path.join(cur, entry.name);
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs, relPath);
+      } else if (entry.isFile()) {
+        out[relPath] = readFileSync(abs, 'utf8');
+      }
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
 function readSkillFiles() {
   if (!existsSync(skillsDir)) {
     console.error(`[seed-all-orgs] no skills dir at ${skillsDir}`);
@@ -92,11 +113,12 @@ function readSkillFiles() {
   const files = [];
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const skillMd = path.join(skillsDir, entry.name, 'SKILL.md');
+    const dir = path.join(skillsDir, entry.name);
+    const skillMd = path.join(dir, 'SKILL.md');
     if (!existsSync(skillMd)) continue;
     const body = readFileSync(skillMd, 'utf8');
     const { name, description } = parseFrontmatter(body);
-    files.push({ name: name ?? entry.name, description, body });
+    files.push({ name: name ?? entry.name, description, body, files: readSkillDir(dir) });
   }
   return files.sort((a, b) => a.name.localeCompare(b.name));
 }

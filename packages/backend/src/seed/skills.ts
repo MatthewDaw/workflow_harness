@@ -29,6 +29,13 @@ export interface SeedSkillFile {
   description: string;
   /** Full SKILL.md body, so a daemon can materialize it locally on sync. */
   body: string;
+  /**
+   * WHOLE-DIRECTORY contents (U-Skill-Store): every file under the skill dir
+   * keyed by its path RELATIVE to that dir (e.g. `SKILL.md`, `scripts/run.sh`),
+   * so a skill ships SKILL.md PLUS sibling scripts/resources. Optional: when
+   * absent, the record carries only `body` (legacy body-only back-compat).
+   */
+  files?: Record<string, string>;
 }
 
 /**
@@ -95,6 +102,8 @@ export function buildSeedSkills(
     for (const m of spec.members) if (known.has(m)) orgDefault.add(m);
   }
 
+  // Seeded records are the BASE variant of their name (rev 1, empty repo/user).
+  // `variantId === baseName === name` for the base variant; `version: 1`.
   const skills = files.map((f) =>
     skillSchema.parse({
       name: f.name,
@@ -103,7 +112,13 @@ export function buildSeedSkills(
       description: f.description,
       source: 'built-in',
       body: f.body,
+      // Whole-directory storage: ship every file under the skill dir. Falls back
+      // to a SKILL.md-only map when a caller passes only `body`.
+      files: f.files ?? { 'SKILL.md': f.body },
       createdBy,
+      baseName: f.name,
+      variantId: f.name,
+      version: 1,
     }),
   );
 
@@ -116,6 +131,9 @@ export function buildSeedSkills(
       source: 'built-in',
       members: spec.members.filter((m) => known.has(m)),
       createdBy,
+      baseName: name,
+      variantId: name,
+      version: 1,
     }),
   );
 

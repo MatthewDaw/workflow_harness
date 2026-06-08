@@ -10,6 +10,12 @@ import {
   MCP_TRANSPORTS,
   projectSchema,
   agentSchema,
+  skillSchema,
+  truePointerSchema,
+  variantIdFor,
+  normalizeEnabledEntry,
+  enabledEntryName,
+  enabledEntryVariant,
 } from '../src/dto.js';
 
 const orgScope = { tier: 'org', id: 'acme' } as const;
@@ -180,6 +186,106 @@ describe('MCP server attachment back-compat', () => {
       model: 'claude-opus-4-8',
     });
     expect(agent.mcpServers).toEqual([]);
+  });
+});
+
+/**
+ * VERSIONING MODEL (KTD6). The variant/revision fields are MIXED INTO skill /
+ * agent / mcpServer and are all optional/back-compat: a legacy record (no
+ * version fields) still validates and gains NO fabricated fields.
+ */
+describe('versioning fields (back-compat)', () => {
+  it('a legacy skill (no version fields) still validates and stays minimal', () => {
+    const skill = skillSchema.parse({
+      name: 'reconcile',
+      scope: orgScope,
+      kind: 'skill',
+    });
+    // No version field is fabricated on a legacy record.
+    expect(skill.version).toBeUndefined();
+    expect(skill.variantId).toBeUndefined();
+    expect(skill.baseName).toBeUndefined();
+    expect(skill.repoId).toBeUndefined();
+    expect(skill.files).toBeUndefined();
+  });
+
+  it('round-trips a forked skill variant with version fields + whole-dir files', () => {
+    const skill = skillSchema.parse({
+      name: 'reconcile',
+      scope: orgScope,
+      kind: 'skill',
+      baseName: 'reconcile',
+      variantId: 'reconcile#R#weekly-compass#U#matt',
+      repoId: 'weekly-compass',
+      authorUserId: 'matt',
+      version: 3,
+      createdAt: 1717200000000,
+      files: { 'SKILL.md': '# Reconcile', 'scripts/run.sh': 'echo hi' },
+    });
+    expect(skill.version).toBe(3);
+    expect(skill.variantId).toBe('reconcile#R#weekly-compass#U#matt');
+    expect(skill.files).toEqual({ 'SKILL.md': '# Reconcile', 'scripts/run.sh': 'echo hi' });
+  });
+
+  it('a legacy agent / mcp server validates without version fields', () => {
+    const agent = agentSchema.parse({ name: 'planner', scope: orgScope, model: 'opus' });
+    expect(agent.version).toBeUndefined();
+    const mcp = mcpServerSchema.parse({
+      name: 'fs',
+      scope: orgScope,
+      transport: 'stdio',
+      command: 'npx',
+    });
+    expect((mcp as { version?: number }).version).toBeUndefined();
+  });
+
+  it('rejects a non-positive version', () => {
+    expect(
+      skillSchema.safeParse({ name: 's', scope: orgScope, kind: 'skill', version: 0 }).success,
+    ).toBe(false);
+  });
+});
+
+describe('variantIdFor', () => {
+  it('returns the baseName itself for the base variant (no repo + no user)', () => {
+    expect(variantIdFor('reconcile')).toBe('reconcile');
+    expect(variantIdFor('reconcile', undefined, undefined)).toBe('reconcile');
+  });
+
+  it('appends repo + user for a fork', () => {
+    expect(variantIdFor('reconcile', 'weekly-compass', 'matt')).toBe(
+      'reconcile#R#weekly-compass#U#matt',
+    );
+  });
+});
+
+describe('truePointerSchema', () => {
+  it('parses a pointer with an explicit rev', () => {
+    expect(truePointerSchema.parse({ baseName: 's', variantId: 's', rev: 2 })).toEqual({
+      baseName: 's',
+      variantId: 's',
+      rev: 2,
+    });
+  });
+
+  it('allows an absent rev (means latest)', () => {
+    const p = truePointerSchema.parse({ baseName: 's', variantId: 's' });
+    expect(p.rev).toBeUndefined();
+  });
+});
+
+describe('enabled-set entry pins (U-Ver-Pin, back-compat)', () => {
+  it('normalizes a bare-string entry (no variant pin)', () => {
+    expect(normalizeEnabledEntry('reconcile')).toEqual({ name: 'reconcile' });
+    expect(enabledEntryName('reconcile')).toBe('reconcile');
+    expect(enabledEntryVariant('reconcile')).toBeUndefined();
+  });
+
+  it('normalizes an object entry carrying a variantId', () => {
+    const entry = { name: 'reconcile', variantId: 'reconcile#R#r#U#u' };
+    expect(normalizeEnabledEntry(entry)).toEqual(entry);
+    expect(enabledEntryName(entry)).toBe('reconcile');
+    expect(enabledEntryVariant(entry)).toBe('reconcile#R#r#U#u');
   });
 });
 

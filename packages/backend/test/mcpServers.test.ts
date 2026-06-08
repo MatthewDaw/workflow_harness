@@ -9,6 +9,7 @@ import {
   deleteMcpServer,
   getMcpServer,
   getUsage,
+  promoteMcpServer,
   resolveMcpServers,
 } from '../src/rest/mcpServers.js';
 import { installInMemoryTable } from './helpers/memtable.js';
@@ -205,5 +206,38 @@ describe('usage / blast radius', () => {
       deps,
     );
     expect(bodyOf<{ count: number }>(res as { body: string }).count).toBe(2);
+  });
+});
+
+/**
+ * VERSIONING (KTD6): create snapshots rev 1 of the base variant + initializes the
+ * TRUE pointer; promote (any authed member) repoints TRUE.
+ */
+describe('versioning: create + promote', () => {
+  it('stamps version fields on create and initializes the TRUE pointer', async () => {
+    const res = await createMcpServer(adminEvent({ method: 'POST', userId: MATT, body: stdioServer('filesystem') }), deps);
+    expect(res).toMatchObject({ statusCode: 201 });
+    const created = bodyOf<{ mcpServer: McpServer }>(res as { body: string }).mcpServer;
+    expect(created.variantId).toBe('filesystem');
+    expect(created.version).toBe(1);
+    const truth = await repo.getTrueVariant(SCOPE, 'MCPSERVER', 'filesystem');
+    expect(truth).toMatchObject({ baseName: 'filesystem', variantId: 'filesystem', rev: 1 });
+  });
+
+  it('a non-admin member may promote (not admin-gated)', async () => {
+    await createMcpServer(adminEvent({ method: 'POST', userId: MATT, body: stdioServer('filesystem') }), deps);
+    const res = await promoteMcpServer(
+      httpEvent({
+        method: 'POST',
+        userId: 'bob',
+        org: ORG,
+        path: { name: 'filesystem' },
+        rawPath: '/mcp-servers/filesystem/promote',
+        body: { variantId: 'filesystem#R#r#U#bob', rev: 1 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect((await repo.getTrueVariant(SCOPE, 'MCPSERVER', 'filesystem'))?.variantId).toBe('filesystem#R#r#U#bob');
   });
 });

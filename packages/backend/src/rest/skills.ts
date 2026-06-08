@@ -110,13 +110,58 @@ export async function createSkill(
     // PUT /skills/:name — update; preserve the existing createdBy stamp.
     const existing = await deps.repo.getSkill(orgScope(org), name);
     skill.createdBy = existing?.createdBy ?? skill.createdBy;
+    // Carry the variant identity forward so an edit snapshots the NEXT revision
+    // of the SAME variant rather than starting a new family at rev 1.
+    skill.baseName = existing?.baseName ?? skill.baseName ?? name;
   } else {
     // POST — stamp authorship from the principal.
     skill.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
+    skill.baseName = skill.baseName ?? skill.name;
   }
 
-  await deps.repo.putSkill(skill);
-  return name ? ok({ skill }) : created({ skill });
+  // VERSIONING (KTD6): every create/update SNAPSHOTS an immutable revision and
+  // upserts the live record, forking/advancing the variant `(baseName, repoId,
+  // person)` instead of clobbering. The base (org-seeded) variant has empty
+  // repo/author. `putNewVersion` also writes the live record under `skillKey`,
+  // so the existing read path is unchanged.
+  const stamped = await deps.repo.putNewVersion('SKILL', skill, {
+    repoId: skill.repoId,
+    authorUserId: skill.authorUserId,
+  });
+  return name ? ok({ skill: stamped }) : created({ skill: stamped });
+}
+
+/**
+ * POST /skills/:name/promote — repoint the org-wide TRUE variant for a baseName.
+ * NOT admin-gated: ANY authed org member may promote (the decided model). Body:
+ * `{ variantId, rev? }`. Promotion ONLY repoints TRUE; it never edits or deletes
+ * a variant. Returns the new pointer.
+ */
+export async function promoteSkill(
+  event: APIGatewayProxyEventV2,
+  deps: SkillsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+  const name = pathParam(event, 'name');
+  if (!name) return badRequest('missing name');
+  const org = await effectiveOrg(event, deps.repo);
+  if (!org) return unauthorized();
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const variantId = (body as { variantId?: unknown })?.variantId;
+  if (typeof variantId !== 'string' || !variantId) return badRequest('missing variantId');
+  const revRaw = (body as { rev?: unknown })?.rev;
+  const rev = typeof revRaw === 'number' ? revRaw : undefined;
+
+  const pointer = { baseName: name, variantId, ...(rev !== undefined ? { rev } : {}) };
+  await deps.repo.setTrueVariant(orgScope(org), 'SKILL', pointer);
+  return ok({ true: pointer });
 }
 
 export async function getSkill(
@@ -261,6 +306,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
   // The scope-change endpoint is retired in the org-only catalog.
   if (method === 'POST' && path.endsWith('/scope')) return gone('scope changes are retired');
+  if (method === 'POST' && path.endsWith('/promote')) return promoteSkill(event, deps);
   if (method === 'POST' && path.endsWith('/members')) return addMember(event, deps);
   if (method === 'DELETE' && pathParam(event, 'member')) return removeMember(event, deps);
   if (method === 'POST' && path.endsWith('/dissolve')) return dissolveBundle(event, deps);

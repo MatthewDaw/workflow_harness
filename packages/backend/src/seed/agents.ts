@@ -43,6 +43,9 @@ export function buildSeedAgents(org: string, files: SeedAgentFile[]): Agent[] {
   const scope = orgScope(org);
   const createdBy = { userId: 'system', name: 'system' } as const;
 
+  // Seeded records are the BASE variant of their name (rev 1, empty repo/user):
+  // variantId === baseName === name, version 1 — so a later edit forks/advances
+  // cleanly and a re-seed never resets the catalog.
   return files.map((f) =>
     agentSchema.parse({
       name: f.name,
@@ -53,6 +56,9 @@ export function buildSeedAgents(org: string, files: SeedAgentFile[]): Agent[] {
       tools: f.tools,
       skills: [],
       createdBy,
+      baseName: f.name,
+      variantId: f.name,
+      version: 1,
     }),
   );
 }

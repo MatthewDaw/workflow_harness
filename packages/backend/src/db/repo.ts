@@ -20,6 +20,7 @@ import type {
   SessionProjection,
   SessionVector,
   Skill,
+  TruePointer,
   UserProfile,
   WeeklyUpdate,
 } from '@harness/shared';
@@ -29,8 +30,10 @@ import {
   orgScope,
   projectSchema,
   resolveScoped,
+  truePointerSchema,
   userProfileSchema,
   userScope,
+  variantIdFor,
 } from '@harness/shared';
 import * as k from './keys.js';
 
@@ -585,6 +588,186 @@ export class Repo {
     );
   }
 
+  // --- Versioning: variants + revisions + TRUE pointer (KTD6) -------------
+  //
+  // A catalog item is versioned per VARIANT, where a variant is `(baseName,
+  // repoId, userId)`. Every content edit SNAPSHOTS an immutable revision row;
+  // the "current"/latest record stays under its plain item key (skillKey etc.)
+  // so existing reads are unchanged. One per-baseName ORG-WIDE TRUE pointer says
+  // which variant+rev is the default the UI shows and a project adds. Promotion
+  // only repoints TRUE — it never edits or deletes a variant.
+
+  /**
+   * Snapshot a NEW revision of a variant. Computes the variant's next rev
+   * (max existing + 1), stamps `baseName`/`variantId`/`version`/`createdAt` onto
+   * the record, writes the immutable revision row, and upserts the live "current"
+   * item record under its plain item key. The FIRST time a baseName is seen, the
+   * TRUE pointer is initialized to this variant+rev (so a freshly-created item is
+   * immediately the org default); subsequent edits leave TRUE untouched (promotion
+   * is explicit). Returns the stamped record (with `variantId`/`version` set).
+   */
+  async putNewVersion<T extends { name: string; scope: ScopeRef } & Record<string, unknown>>(
+    kind: k.CatalogKind,
+    item: T,
+    opts: { repoId?: string; authorUserId?: string; now?: number } = {},
+  ): Promise<T> {
+    const scope = item.scope;
+    const baseName = (item.baseName as string | undefined) ?? item.name;
+    const repoId = opts.repoId ?? (item.repoId as string | undefined);
+    const authorUserId = opts.authorUserId ?? (item.authorUserId as string | undefined);
+    const variantId = variantIdFor(baseName, repoId, authorUserId);
+    const now = opts.now ?? Date.now();
+
+    const existing = await this.listRevisions(scope, kind, baseName, { repoId, userId: authorUserId });
+    const nextRev = existing.reduce((m, r) => Math.max(m, (r.version as number) ?? 1), 0) + 1;
+
+    const stamped = {
+      ...item,
+      baseName,
+      variantId,
+      version: nextRev,
+      createdAt: now,
+      ...(repoId !== undefined ? { repoId } : {}),
+      ...(authorUserId !== undefined ? { authorUserId } : {}),
+    } as T;
+
+    // Immutable revision snapshot.
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: {
+          ...k.revisionKey(scope, kind, baseName, nextRev, { repoId, userId: authorUserId }),
+          ...stamped,
+        },
+      }),
+    );
+    // Live "current" record under the plain item key (unchanged read path).
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...this.itemKey(kind, scope, item.name), ...stamped },
+      }),
+    );
+    // Initialize the TRUE pointer the first time this baseName is seen.
+    const truth = await this.getTrueVariant(scope, kind, baseName);
+    if (!truth) {
+      await this.setTrueVariant(scope, kind, { baseName, variantId, rev: nextRev });
+    }
+    return stamped;
+  }
+
+  /** The "current" item key for a catalog kind (the live, latest record). */
+  private itemKey(kind: k.CatalogKind, scope: ScopeRef, name: string): k.PrimaryKey {
+    switch (kind) {
+      case 'SKILL':
+        return k.skillKey(scope, name);
+      case 'AGENT':
+        return k.agentKey(scope, name);
+      case 'MCPSERVER':
+        return k.mcpServerKey(scope, name);
+    }
+  }
+
+  /**
+   * Every revision row for a baseName across ALL its variants (or one variant
+   * when `repoId`/`userId` are given). Ordered by SK (variant, then rev).
+   */
+  async listRevisions(
+    scope: ScopeRef,
+    kind: k.CatalogKind,
+    baseName: string,
+    opts: { repoId?: string; userId?: string } = {},
+  ): Promise<Array<Record<string, unknown>>> {
+    const one = opts.repoId !== undefined || opts.userId !== undefined;
+    const { PK, skPrefix } = one
+      ? k.variantRevisionPrefix(scope, kind, baseName, opts)
+      : k.revisionPrefix(scope, kind, baseName);
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+      }),
+    );
+    // The shared revision prefix also matches the `#TRUE` pointer when (and only
+    // when) it begins with the same baseName, so filter side-records that are not
+    // `#r<N>` rows.
+    return (res.Items ?? []).filter((it) => /#r\d+$/.test((it as { SK: string }).SK)) as Array<
+      Record<string, unknown>
+    >;
+  }
+
+  /** One specific revision snapshot of a variant, or undefined. */
+  async getRevision(
+    scope: ScopeRef,
+    kind: k.CatalogKind,
+    baseName: string,
+    rev: number,
+    opts: { repoId?: string; userId?: string } = {},
+  ): Promise<Record<string, unknown> | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({
+        TableName: this.table,
+        Key: k.revisionKey(scope, kind, baseName, rev, opts),
+      }),
+    );
+    return res.Item as Record<string, unknown> | undefined;
+  }
+
+  /**
+   * The distinct variants of a baseName: the LATEST revision row per variantId.
+   * Used by the per-repo dropdown ("pick another variant") and the UI's variant
+   * list. Ordered by variantId for determinism.
+   */
+  async listVariants(
+    scope: ScopeRef,
+    kind: k.CatalogKind,
+    baseName: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const revs = await this.listRevisions(scope, kind, baseName);
+    const latestByVariant = new Map<string, Record<string, unknown>>();
+    for (const r of revs) {
+      const vid = (r.variantId as string) ?? baseName;
+      const cur = latestByVariant.get(vid);
+      if (!cur || ((r.version as number) ?? 1) > ((cur.version as number) ?? 1)) {
+        latestByVariant.set(vid, r);
+      }
+    }
+    return [...latestByVariant.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, r]) => r);
+  }
+
+  /** The per-baseName ORG-WIDE TRUE pointer, or undefined if none set yet. */
+  async getTrueVariant(
+    scope: ScopeRef,
+    kind: k.CatalogKind,
+    baseName: string,
+  ): Promise<TruePointer | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.truePointerKey(scope, kind, baseName) }),
+    );
+    if (!res.Item) return undefined;
+    const parsed = truePointerSchema.safeParse(res.Item);
+    return parsed.success ? parsed.data : (res.Item as TruePointer);
+  }
+
+  /**
+   * Repoint the per-baseName TRUE pointer to a variant (+ optional rev). This is
+   * the ONLY write `promote` makes — it never edits or deletes a variant, so any
+   * authed org member may call it. Idempotent (overwrites the single pointer row).
+   */
+  async setTrueVariant(
+    scope: ScopeRef,
+    kind: k.CatalogKind,
+    pointer: TruePointer,
+  ): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.truePointerKey(scope, kind, pointer.baseName), ...pointer },
+      }),
+    );
+  }
+
   /**
    * The catalog of agents visible to a viewer. With no `userId` this is the
    * org-only catalog (back-compat with every existing caller/test). With a
@@ -635,7 +818,16 @@ export class Repo {
         ExpressionAttributeValues: { ':pk': k.scopePartition(scope), ':sk': skPrefix },
       }),
     );
-    return (res.Items ?? []) as T[];
+    // The catalog prefix scan (`SKILL#`/`AGENT#`/`MCPSERVER#`) now also matches
+    // the versioning side-records (revision snapshots `#r<N>` and TRUE pointers
+    // `#TRUE`) that share the same partition + prefix. Return only the live
+    // "current" item records, never their history/pointers.
+    return (res.Items ?? []).filter((it) => {
+      const sk = (it as { SK?: string }).SK;
+      // An item with no SK attribute (e.g. a projected/mocked row) is kept — only
+      // skip rows whose SK is an actual versioning side-record.
+      return sk === undefined || !k.isVersionSideRecord(sk);
+    }) as T[];
   }
 
   // --- Project opt-in: enabledSkills / enabledAgents (org catalog) --------

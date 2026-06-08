@@ -9,6 +9,7 @@ import {
   deleteAgent,
   getAgent,
   handler as agentsHandler,
+  promoteAgent,
   resolveAgents,
 } from '../src/rest/agents.js';
 import { installInMemoryTable } from './helpers/memtable.js';
@@ -147,6 +148,43 @@ describe('DELETE /agents/:name', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('versioning: create snapshots rev 1 + promote repoints TRUE', () => {
+  it('stamps version fields on create and initializes the TRUE pointer', async () => {
+    const res = await createAgent(
+      httpEvent({ method: 'POST', userId: MATT, org: ORG, admin: true, body: agent('builder') }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 201 });
+    const created = bodyOf<{ agent: Agent }>(res as { body: string }).agent;
+    expect(created.variantId).toBe('builder');
+    expect(created.version).toBe(1);
+    const truth = await repo.getTrueVariant(SCOPE, 'AGENT', 'builder');
+    expect(truth).toMatchObject({ baseName: 'builder', variantId: 'builder', rev: 1 });
+  });
+
+  it('a non-admin member may promote (not admin-gated)', async () => {
+    await createAgent(
+      httpEvent({ method: 'POST', userId: MATT, org: ORG, admin: true, body: agent('builder') }),
+      deps,
+    );
+    const res = await promoteAgent(
+      httpEvent({
+        method: 'POST',
+        userId: 'bob',
+        org: ORG,
+        path: { name: 'builder' },
+        rawPath: '/agents/builder/promote',
+        body: { variantId: 'builder#R#r#U#bob', rev: 1 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect((await repo.getTrueVariant(SCOPE, 'AGENT', 'builder'))?.variantId).toBe(
+      'builder#R#r#U#bob',
+    );
   });
 });
 

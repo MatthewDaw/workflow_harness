@@ -133,6 +133,89 @@ export const mcpServerKey = (scope: ScopeRef, name: string): PrimaryKey => ({
 
 export const scopePartition = (scope: ScopeRef): string => `SCOPE#${scopeId(scope)}`;
 
+/**
+ * VERSIONING KEYS (KTD6). Catalog items (skill / agent / mcp) snapshot an
+ * immutable REVISION on every content change and carry a per-name ORG-WIDE TRUE
+ * pointer. All these rows live in the SAME scope partition as the item record
+ * (`SCOPE#org#<org>`), so a variant family + its revisions + its TRUE pointer
+ * are one partition read.
+ *
+ * Variant identity is `(baseName, repoId, userId)`. The BASE variant (org-seeded)
+ * has empty repo + user and its variantId is just `<baseName>`; a fork's
+ * variantId is `<baseName>#R#<repoId>#U#<userId>`. The revision-row SK mirrors
+ * that variant id exactly:
+ *
+ *   base variant rev N:  SKILL#<baseName>#r<N>
+ *   fork variant rev N:  SKILL#<baseName>#R#<repoId>#U#<userId>#r<N>
+ *
+ * The TRUE pointer is one row per baseName:  SKILL#<baseName>#TRUE
+ * (same pattern for AGENT# / MCPSERVER#).
+ */
+export type CatalogKind = 'SKILL' | 'AGENT' | 'MCPSERVER';
+
+/** The variant-id infix shared by the revision SK and the DTO `variantId`. */
+export function variantInfix(baseName: string, repoId?: string, userId?: string): string {
+  if (!repoId && !userId) return baseName;
+  return `${baseName}#R#${repoId ?? ''}#U#${userId ?? ''}`;
+}
+
+/** Revision row key: an immutable snapshot of one variant at revision `rev`. */
+export const revisionKey = (
+  scope: ScopeRef,
+  kind: CatalogKind,
+  baseName: string,
+  rev: number,
+  opts: { repoId?: string; userId?: string } = {},
+): PrimaryKey => ({
+  PK: `SCOPE#${scopeId(scope)}`,
+  SK: `${kind}#${variantInfix(baseName, opts.repoId, opts.userId)}#r${pad(rev, SEQ_WIDTH)}`,
+});
+
+/** Prefix that gathers EVERY revision of EVERY variant of a baseName. */
+export const revisionPrefix = (
+  scope: ScopeRef,
+  kind: CatalogKind,
+  baseName: string,
+): { PK: string; skPrefix: string } => ({
+  PK: `SCOPE#${scopeId(scope)}`,
+  // `<baseName>#` matches both `<baseName>#r..` (base variant revs) and
+  // `<baseName>#R#..` (fork variant revs), but NOT a different baseName that
+  // merely shares a prefix, because every rev SK has a `#` after the baseName.
+  skPrefix: `${kind}#${baseName}#`,
+});
+
+/** Prefix that gathers the revisions of ONE specific variant. */
+export const variantRevisionPrefix = (
+  scope: ScopeRef,
+  kind: CatalogKind,
+  baseName: string,
+  opts: { repoId?: string; userId?: string } = {},
+): { PK: string; skPrefix: string } => ({
+  PK: `SCOPE#${scopeId(scope)}`,
+  skPrefix: `${kind}#${variantInfix(baseName, opts.repoId, opts.userId)}#r`,
+});
+
+/** The per-baseName ORG-WIDE TRUE pointer row (which variant+rev is the default). */
+export const truePointerKey = (
+  scope: ScopeRef,
+  kind: CatalogKind,
+  baseName: string,
+): PrimaryKey => ({
+  PK: `SCOPE#${scopeId(scope)}`,
+  SK: `${kind}#${baseName}#TRUE`,
+});
+
+/**
+ * Is an SK a versioning side-record (a `#r<N>` revision snapshot or a `#TRUE`
+ * pointer) rather than a "current" catalog item record? The catalog list reads
+ * (`SKILL#`/`AGENT#`/`MCPSERVER#` prefix scans) must skip these so they only
+ * return the live item records, not their revision history / pointers.
+ */
+export function isVersionSideRecord(sk: string | undefined): boolean {
+  if (!sk) return false;
+  return sk.endsWith('#TRUE') || /#r\d+$/.test(sk);
+}
+
 export const objectiveKey = (org: string, path: string): PrimaryKey => ({
   PK: `ORG#${org}`,
   SK: `RCDO#${path}`,
