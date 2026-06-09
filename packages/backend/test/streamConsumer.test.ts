@@ -5,6 +5,7 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import type { DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
 import type { Envelope, Event, ObjectiveNode, Project, Skill } from '@harness/shared';
+import type { AssociationResult, TopicFinding } from '../src/ideas/associate.js';
 import { Repo } from '../src/db/repo.js';
 import {
   consume,
@@ -434,5 +435,80 @@ describe('stream consumer — skill embedding on write (U3)', () => {
     const res = await consume(streamEvent(skillRecord(s)), { repo, embed, vectors });
 
     expect(res.batchItemFailures).toEqual([{ itemIdentifier: `skill-reconcile-live` }]);
+  });
+});
+
+/**
+ * U8 — a `session.topic` EVT# record ALSO triggers topic→skill association
+ * (the retrieval half). The injected `associateTopic` is a spy so the test
+ * asserts the topic branch fires with the event's finding, WITHOUT disturbing
+ * the existing reprojection branch (the projection still folds the topic). The
+ * spy stands in for the network-touching `ideas/associate` runtime.
+ */
+describe('stream consumer — topic association branch (U8)', () => {
+  function topicEnvelope(seq: number): Envelope {
+    return env(seq, {
+      kind: 'session.topic',
+      sessionId: SESSION,
+      segmentId: 'seg-1',
+      topicLabel: 'decimal money handling',
+      description: 'Always use a decimal type for currency, never a float.',
+    });
+  }
+
+  function spyAssociate() {
+    const calls: TopicFinding[] = [];
+    const fn = vi.fn(async (finding: TopicFinding): Promise<AssociationResult> => {
+      calls.push(finding);
+      return { outcome: 'candidates', org: 'acme', finding, candidates: [] };
+    });
+    return { fn, calls };
+  }
+
+  it('fires association for a session.topic event with the event finding', async () => {
+    // The session must exist so reprojection has something to fold the topic into.
+    await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
+    const { fn: associateTopic, calls } = spyAssociate();
+
+    const res = await consume(streamEvent(eventRecord(topicEnvelope(1))), {
+      repo,
+      associateTopic,
+    });
+
+    expect(res.batchItemFailures).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      sessionId: SESSION,
+      segmentId: 'seg-1',
+      topicLabel: 'decimal money handling',
+      description: 'Always use a decimal type for currency, never a float.',
+      seq: 1,
+    });
+    // The reprojection branch was NOT disturbed: the topic folded into the projection.
+    const proj = await repo.getSessionById(SESSION);
+    expect(proj?.topic).toBe('decimal money handling');
+    expect(proj?.maxSeq).toBe(1);
+  });
+
+  it('does NOT fire association for a non-topic event', async () => {
+    await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
+    const { fn: associateTopic, calls } = spyAssociate();
+
+    const msg: Event = { kind: 'assistant.msg', sessionId: SESSION, tokens: 10 };
+    await consume(streamEvent(eventRecord(env(1, msg))), { repo, associateTopic });
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it('surfaces an association failure as a batch-item-failure (not a silent drop)', async () => {
+    await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
+    const associateTopic = vi.fn(async (): Promise<AssociationResult> => {
+      throw new Error('ThrottlingException');
+    });
+
+    const topicRec = eventRecord(topicEnvelope(1));
+    const res = await consume(streamEvent(topicRec), { repo, associateTopic });
+
+    expect(res.batchItemFailures).toEqual([{ itemIdentifier: 'evt-1' }]);
   });
 });
