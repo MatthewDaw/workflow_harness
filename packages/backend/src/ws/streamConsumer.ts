@@ -21,14 +21,16 @@ import {
   type S3Vectors,
 } from '../embeddings/s3vectors.js';
 import {
-  associateTopic as defaultAssociateTopic,
+  associateAndFinalize as defaultAssociateAndFinalize,
   type AssociateDeps,
-  type AssociationResult,
+  type PipelineResult,
+  type RouteOutcome,
   type TopicFinding,
 } from '../ideas/associate.js';
 import {
   emitEmbedOutcome,
   emitAssociationOutcome,
+  type AssociationMetricOutcome,
   type MetricSink,
 } from '../observability/metrics.js';
 
@@ -66,14 +68,15 @@ export interface StreamConsumerDeps {
   embed?: (text: string) => Promise<Embedding>;
   vectors?: S3Vectors;
   /**
-   * Topic→skill association (U8). A `session.topic` EVT# record triggers the
-   * retrieval half of association: resolve the org, embed the topic, pull the
-   * org's top-k candidate skills above the floor. Injectable so tests mock it
-   * without the network; defaults to the `ideas/associate` runtime. The U9
-   * rerank + U10 idea creation consume `associateTopic`'s result downstream and
-   * are NOT wired here — this branch only produces the candidate seam.
+   * Topic→skill association (U8/U9/U10). A `session.topic` EVT# record drives the
+   * FULL pipeline end-to-end: resolve the org, embed the topic, retrieve the
+   * org's top-k candidate skills (U8), judge-rerank to the single best skill
+   * (U9), and create/merge the idea on that skill — or route the topic to the
+   * unassigned bin when nothing clears the floor / the judge rejects (U10).
+   * Injectable so tests mock it without the network; defaults to the
+   * `ideas/associate` runtime `associateAndFinalize`.
    */
-  associateTopic?: (finding: TopicFinding, deps: AssociateDeps) => Promise<AssociationResult>;
+  associateAndFinalize?: (finding: TopicFinding, deps: AssociateDeps) => Promise<PipelineResult>;
   /**
    * Where observability metrics (U23) are written. Defaults to stdout (CloudWatch
    * EMF). Injectable so tests assert the emitted embed / association outcomes
@@ -240,15 +243,32 @@ async function reembedSkill(
 }
 
 /**
- * Run topic→skill association (U8 retrieval half) for a `session.topic` event.
- * Builds the `TopicFinding` from the event and delegates to `associateTopic`,
- * which resolves the org from the session's project (NEVER `principal.org`),
- * embeds the topic description, and returns the candidate seam for U9.
+ * Map a pipeline `RouteOutcome` onto the U23 `AssociationOutcome` metric
+ * dimension. The metric was defined over the U8 retrieval outcome
+ * (`candidates|unassigned|unresolved`); the consumer now runs the FULL pipeline,
+ * whose terminal outcome is `routed|unassigned|unresolved`. A `routed` topic is
+ * exactly one that cleared the pre-judge floor (≥1 candidate reached the judge)
+ * AND the judge accepted it, so it folds into the existing `candidates`
+ * dimension — preserving the `unassigned`/total = association-to-bin rate the
+ * plan calls out as the must-be-observable signal (a `routed` is NOT a bin).
+ */
+function routeOutcomeMetric(outcome: RouteOutcome): AssociationMetricOutcome {
+  return outcome === 'routed' ? 'candidates' : outcome;
+}
+
+/**
+ * Run the FULL topic→skill ideas pipeline for a `session.topic` event (U8→U10).
+ * Builds the `TopicFinding` from the event and delegates to
+ * `associateAndFinalize`, which resolves the org from the session's project
+ * (NEVER `principal.org`), embeds the topic, retrieves the org's top-k
+ * candidates (U8), judge-reranks to the single best skill (U9), and either
+ * creates/merges the idea on that skill or routes the topic to the unassigned
+ * bin (U10). End-to-end: a `session.topic` event now PRODUCES or MERGES an idea
+ * (or a bin entry), not just a candidate seam.
  *
- * The result is the typed candidate list U9's rerank will consume — it is NOT
- * persisted here (no idea, no bin write; those are U9/U10). The seam:
- *  - `candidates`  → U9 reranks → best skill → U10 idea.
- *  - `unassigned`  → U9 routes to the unassigned bin.
+ *  - `routed`      → idea created/merged on the chosen skill (move-on-re-eval).
+ *  - `unassigned`  → bin entry written (no candidate cleared the floor, or the
+ *                    judge rejected / was below the confidence bar).
  *  - `unresolved`  → no-op (org/description unresolvable; never a wrong-org guess).
  *
  * Errors propagate (not swallowed) so the record is redelivered/DLQ'd.
@@ -257,8 +277,8 @@ async function associateTopicEvent(
   deps: StreamConsumerDeps,
   event: { sessionId: string; segmentId: string; topicLabel: string; description?: string },
   seq: number,
-): Promise<AssociationResult> {
-  const associate = deps.associateTopic ?? defaultAssociateTopic;
+): Promise<PipelineResult> {
+  const associate = deps.associateAndFinalize ?? defaultAssociateAndFinalize;
   const finding: TopicFinding = {
     sessionId: event.sessionId,
     segmentId: event.segmentId,
@@ -270,17 +290,18 @@ async function associateTopicEvent(
     repo: deps.repo,
     // `associate` takes a `BedrockEmbedder` (not the raw `embed` fn the skill
     // path uses), so we forward only the shared S3 Vectors client and let the
-    // embedder default inside `associateTopic`. Tests mock `associateTopic`
-    // itself, so this wiring stays simple.
+    // embedder/judge/writer default inside `associateAndFinalize`. Tests mock
+    // `associateAndFinalize` itself (or inject the collaborators), so this wiring
+    // stays simple.
     ...(deps.vectors ? { vectors: deps.vectors } : {}),
   });
   // Count the association outcome (U23). The `unassigned` rate over total is the
   // association-to-bin rate the plan calls out as the must-be-observable signal —
   // a catalog mis-route or a mis-tuned similarity floor shows here as a rising bin
   // rate instead of an inexplicably empty ideas list. A THROWN association (embed
-  // throttle, query outage) never reaches this line — it propagates to the
+  // throttle, query/judge outage) never reaches this line — it propagates to the
   // batch-item-failure path and shows up as an `EmbedOutcome=failure` + DLQ depth.
-  emitAssociationOutcome(result.outcome, deps.metrics);
+  emitAssociationOutcome(routeOutcomeMetric(result.route.outcome), deps.metrics);
   return result;
 }
 
@@ -316,12 +337,11 @@ async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): 
     const parsed = safeParseEnvelope(newImg);
     if (!parsed.success) return; // not a well-formed envelope; ignore noise
     await reprojectEvent(deps.repo, parsed.data);
-    // A `session.topic` ALSO triggers topic→skill association (U8): embed the
-    // topic and pull the org's top-k candidate skills above the floor. This is
-    // the retrieval half ONLY — the result is the seam U9's rerank consumes; we
-    // produce it here and stop (U9/U10 are not wired in this unit). Done after
-    // the reprojection so the session projection (the org-resolution path) is
-    // current. The result is intentionally not persisted yet.
+    // A `session.topic` ALSO drives the FULL topic→skill ideas pipeline
+    // (U8→U10): embed the topic, retrieve the org's top-k candidate skills above
+    // the floor (U8), judge-rerank to the best skill (U9), and create/merge the
+    // idea on that skill — or route to the unassigned bin (U10). Done AFTER the
+    // reprojection so the session projection (the org-resolution path) is current.
     if (parsed.data.event.kind === 'session.topic') {
       await associateTopicEvent(deps, parsed.data.event, parsed.data.seq);
     }
