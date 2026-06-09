@@ -138,6 +138,8 @@ export class ApiStack extends cdk.Stack {
     const sessionsFn = makeFn('RestSessionsFn', 'rest_sessions');
     const agentsFn = makeFn('RestAgentsFn', 'rest_agents');
     const skillsFn = makeFn('RestSkillsFn', 'rest_skills');
+    // Skill ideas — the candidate-learnings surfacing read path (skill-idea loop, U11).
+    const ideasFn = makeFn('RestIdeasFn', 'rest_ideas');
     // The bundle key mirrors the esbuild entry name (`rest/mcpServers` →
     // `rest_mcpServers`, see infra/scripts/bundle-backend.mjs) — the convention is
     // filename-derived (`/`→`_`), exactly like `rest_skills` ↔ rest/skills.ts.
@@ -156,6 +158,7 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(sessionsFn);
     grantReadWrite(agentsFn);
     grantReadWrite(skillsFn);
+    grantReadWrite(ideasFn);
     grantReadWrite(mcpServersFn);
     grantReadWrite(objectivesFn);
     grantReadWrite(weeklyFn);
@@ -293,6 +296,10 @@ export class ApiStack extends cdk.Stack {
     r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve', noAuth);
     r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage', noAuth);
     r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope', noAuth);
+    // Candidate learnings (skill-idea loop, U11): corroborated-only ideas a working
+    // session may surface when the skill loads. `noAuth` so the claude+ device token
+    // reaches the handler, which gates server-side (the gate is a security boundary).
+    r('/skills/{name}/candidate-learnings', [M.GET], ideasFn, 'SkillCandidateLearnings', noAuth);
 
     // MCP servers mirror the skills catalog routes MINUS the bundle verbs
     // (members/dissolve) and the retired-by-design scope verb — the catalog is a
