@@ -216,6 +216,56 @@ export function isVersionSideRecord(sk: string | undefined): boolean {
   return sk.endsWith('#TRUE') || /#r\d+$/.test(sk);
 }
 
+/**
+ * SKILL IDEAS (skill-idea loop, U6). An idea is CO-LOCATED with skills in the
+ * org scope partition (`SCOPE#org#<org>`) but under an `IDEA#` SK prefix:
+ *
+ *   IDEA#<skillBaseName>#<ideaId>
+ *
+ * The `IDEA#` prefix never collides with the `SKILL#` prefix the catalog list
+ * scans, so ideas are invisible to `listSkills` (and `isVersionSideRecord` is
+ * irrelevant here — ideas are not version side-records). `ideaPrefixForSkill`
+ * gathers every idea of one skill family in one `begins_with` read;
+ * `ideaPrefixForOrg` gathers every idea in the org.
+ */
+export const ideaKey = (org: string, skillBaseName: string, ideaId: string): PrimaryKey => ({
+  PK: `SCOPE#org#${org}`,
+  SK: `IDEA#${skillBaseName}#${ideaId}`,
+});
+
+/** Every idea attached to ONE skill family in an org. */
+export const ideaPrefixForSkill = (
+  org: string,
+  skillBaseName: string,
+): { PK: string; skPrefix: string } => ({
+  PK: `SCOPE#org#${org}`,
+  // The trailing `#` after the baseName makes this an exact-family prefix: it
+  // matches `IDEA#<baseName>#<ideaId>` but NOT a different baseName that merely
+  // shares a leading substring.
+  skPrefix: `IDEA#${skillBaseName}#`,
+});
+
+/** Every idea in an org, across all skills. */
+export const ideaPrefixForOrg = (org: string): { PK: string; skPrefix: string } => ({
+  PK: `SCOPE#org#${org}`,
+  skPrefix: 'IDEA#',
+});
+
+/**
+ * The org's UNASSIGNED bin (the new-skill backlog). Shares the org scope
+ * partition under an `IDEABIN#` SK prefix:  IDEABIN#<entryId>.
+ */
+export const unassignedBinKey = (org: string, entryId: string): PrimaryKey => ({
+  PK: `SCOPE#org#${org}`,
+  SK: `IDEABIN#${entryId}`,
+});
+
+/** Every unassigned-bin entry in an org. */
+export const unassignedBinPrefix = (org: string): { PK: string; skPrefix: string } => ({
+  PK: `SCOPE#org#${org}`,
+  skPrefix: 'IDEABIN#',
+});
+
 export const objectiveKey = (org: string, path: string): PrimaryKey => ({
   PK: `ORG#${org}`,
   SK: `RCDO#${path}`,
