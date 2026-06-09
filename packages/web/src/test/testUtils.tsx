@@ -64,6 +64,12 @@ export interface SeedData {
    * promote UI resolve real rows in tests.
    */
   skillVariants?: Record<string, unknown[]>;
+  /**
+   * Per-name skill idea lists (skill-idea loop, U13/U14), keyed by skill name.
+   * Served by `GET /skills/:name/ideas` so the HQ ideas dropdown resolves real
+   * rows in tests. Each entry is an `Idea` decorated with `corroborationCount`.
+   */
+  skillIdeas?: Record<string, unknown[]>;
   mcpServers?: McpServer[];
   weekly?: Record<string, WeeklyUpdate[]>;
   /** Detailed-requirements doc tree, keyed by projectId (U11). */
@@ -165,6 +171,10 @@ export function installFetchStub(seed: SeedData) {
     // below so `skills/<name>/variants` doesn't fall through to a 200 [].
     const skillVariants = /^skills\/([^/]+)\/variants$/.exec(path);
     if (skillVariants) return json({ variants: seed.skillVariants?.[skillVariants[1]!] ?? [] });
+    // All-ideas read for the HQ ideas dropdown (skill-idea loop, U13/U14). Matched
+    // before the project opt-in routes so it doesn't fall through to a 200 [].
+    const skillIdeas = /^skills\/([^/]+)\/ideas$/.exec(path);
+    if (skillIdeas) return json({ ideas: seed.skillIdeas?.[skillIdeas[1]!] ?? [] });
     const skillPromote = /^skills\/([^/]+)\/promote$/.exec(path);
     if (skillPromote) return json({ name: skillPromote[1], variantId: '', rev: 1 });
     if (path === 'sessions') return json(seed.sessions ?? []);

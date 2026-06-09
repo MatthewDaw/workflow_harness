@@ -14,6 +14,7 @@ import type {
   Envelope,
   LearningRecord,
   LearningStream,
+  Idea,
 } from '@harness/shared';
 
 /**
@@ -65,6 +66,15 @@ export interface ProjectDoc {
   /** GitHub-sourced completion 0–100 parsed from the doc's `completion:` front-matter. */
   completion: number;
 }
+
+/**
+ * One skill idea as the all-ideas endpoint serves it (U13/U14): the shared
+ * `Idea` plus its DERIVED corroboration count (distinct sessions). The HQ
+ * dropdown reads `corroborationCount` + `status` directly so it never has to
+ * recompute the count from `sources`. Declared here (like ProjectDoc above)
+ * because the ideas dropdown is the sole web consumer.
+ */
+export type SkillIdea = Idea & { corroborationCount: number };
 
 /** Markdown body of a single detailed-requirements doc (U11). */
 export interface ProjectDocContent {
@@ -216,6 +226,7 @@ export const baseApi = createApi({
     'Dod',
     'Learnings',
     'Memory',
+    'Idea',
   ],
   endpoints: (build) => ({
     /**
@@ -452,6 +463,22 @@ export const baseApi = createApi({
       query: (name) => `skills/${encodeURIComponent(name)}/variants`,
       transformResponse: unwrapArray<SkillVariant>('variants'),
       providesTags: (_r, _e, name) => [{ type: 'Variant', id: name }],
+    }),
+
+    /**
+     * Every idea proposed for one skill (skill-idea loop, U13/U14): corroborated,
+     * uncorroborated, AND folded history — no gate, no cap (the corroborated-only
+     * gate lives on the separate candidate-learnings path). The Command HQ skill
+     * view reads this to render the per-skill ideas dropdown. Mirrors
+     * `getProjectLearnings`: `unwrapArray('ideas')` tolerates the bare-array test
+     * stub and the wrapped `{ ideas: [...] }` backend shape, and the per-skill
+     * `Idea` tag means a fold/mark-folded of that skill's idea invalidates just
+     * this list.
+     */
+    getSkillIdeas: build.query<SkillIdea[], string>({
+      query: (name) => `skills/${encodeURIComponent(name)}/ideas`,
+      transformResponse: unwrapArray<SkillIdea>('ideas'),
+      providesTags: (_r, _e, name) => [{ type: 'Idea', id: name }],
     }),
 
     /**
@@ -886,6 +913,7 @@ export const {
   useGetAgentsQuery,
   useGetSkillsQuery,
   useGetSkillVariantsQuery,
+  useGetSkillIdeasQuery,
   usePromoteSkillMutation,
   useGetMcpServersQuery,
   useGetMcpServerQuery,
