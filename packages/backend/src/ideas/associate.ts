@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { orgScope, type IdeaSource, type UnassignedEntry } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { type BedrockEmbedder, getEmbedder } from '../embeddings/bedrock.js';
 import {
@@ -6,6 +8,12 @@ import {
   type QueryHit,
   type S3Vectors,
 } from '../embeddings/s3vectors.js';
+import {
+  getRerankJudge,
+  judgeConfidenceBar,
+  type JudgeCandidate,
+  type RerankJudge,
+} from '../rerank/judge.js';
 
 /**
  * U8 — Topic ingestion & top-k skill retrieval (the RETRIEVAL half of
@@ -107,6 +115,10 @@ export interface AssociationResult {
   outcome: AssociationOutcome;
   /** Resolved owning org (present unless `unresolved`). */
   org?: string;
+  /** The session's owning project (provenance; present once the org resolved). */
+  projectId?: string;
+  /** The project's repo (provenance for variant-scoped folding; if stamped). */
+  repoId?: string;
   /** The originating topic (carried through to U9/U10). */
   finding: TopicFinding;
   /** Floor-passing candidates, sorted strongest-first (only on `candidates`). */
@@ -118,6 +130,8 @@ export interface AssociateDeps {
   repo: Repo;
   embedder?: BedrockEmbedder;
   vectors?: S3Vectors;
+  /** The Bedrock Claude-Haiku rerank judge (U9). Defaults to the process judge. */
+  judge?: RerankJudge;
 }
 
 /**
@@ -170,12 +184,18 @@ export async function associateTopic(
   if (!resolved) {
     return { outcome: 'unresolved', finding, candidates: [] };
   }
-  const { org } = resolved;
+  const { org, projectId } = resolved;
+  // Provenance carried onto every resolved result (bin entry / U10 idea source).
+  const prov = {
+    org,
+    projectId,
+    ...(resolved.repoId !== undefined ? { repoId: resolved.repoId } : {}),
+  };
 
   // 2. Nothing to embed without a topic description → no-op (not a wrong-org guess).
   const description = finding.description?.trim();
   if (!description) {
-    return { outcome: 'unresolved', org, finding, candidates: [] };
+    return { outcome: 'unresolved', ...prov, finding, candidates: [] };
   }
 
   // 3. Embed the topic and pull the org's top-k skills above the pre-judge floor.
@@ -198,8 +218,161 @@ export async function associateTopic(
 
   // 4. All below floor → mark for the unassigned-bin path (U9 writes the bin).
   if (candidates.length === 0) {
-    return { outcome: 'unassigned', org, finding, candidates: [] };
+    return { outcome: 'unassigned', ...prov, finding, candidates: [] };
   }
 
-  return { outcome: 'candidates', org, finding, candidates };
+  return { outcome: 'candidates', ...prov, finding, candidates };
+}
+
+/**
+ * U9 — judge rerank → the chosen skill, or the unassigned bin.
+ *
+ * The DECISION half of association. It runs U8 retrieval, then for a `candidates`
+ * result asks the Bedrock Claude-Haiku judge to pick the SINGLE best skill (or
+ * reject all). The pipeline has TWO thresholds: U8's similarity FLOOR (does
+ * anything reach the judge) and the judge CONFIDENCE BAR (does the judge's pick
+ * clear the bar). The outcomes:
+ *
+ *  - `routed`     — the judge accepted a skill above the bar. Carries the chosen
+ *                   `skillBaseName` + confidence. This is the SEAM U10 consumes:
+ *                   U10 turns it into a merged/created idea (NOT done here).
+ *  - `unassigned` — no candidate cleared the floor (U8), OR the judge said `none`,
+ *                   OR the judge's pick was below the confidence bar (R6). In all
+ *                   three cases the topic is WRITTEN to the org's unassigned bin
+ *                   via `repo.putUnassigned`, carrying topic provenance (R7), and
+ *                   the written entry is returned.
+ *  - `unresolved` — the session/org/description could not be resolved (a no-op,
+ *                   never a wrong-org guess; nothing written).
+ *
+ * Idea creation (U10) is deliberately NOT implemented here — `routed` is the
+ * clean seam it will consume. Errors (embed/query/judge) are NOT swallowed; they
+ * propagate so the stream consumer marks a batch-item-failure and the stream
+ * redelivers/DLQs the record rather than silently dropping a topic.
+ */
+export type RouteOutcome = 'routed' | 'unassigned' | 'unresolved';
+
+/** Why a topic was sent to the unassigned bin (observability). */
+export type UnassignedReason = 'no-candidates' | 'judge-none' | 'below-confidence';
+
+export interface RouteResult {
+  outcome: RouteOutcome;
+  /** Resolved owning org (present unless `unresolved`). */
+  org?: string;
+  /** The originating topic (carried through to U10 on `routed`). */
+  finding: TopicFinding;
+  /** The chosen skill (only on `routed`) — the SEAM U10 consumes. */
+  skillBaseName?: string;
+  /** The judge's confidence in the pick (only on `routed`). */
+  confidence?: number;
+  /** Why the topic was binned (only on `unassigned`). */
+  reason?: UnassignedReason;
+  /** The bin entry written (only on `unassigned`). */
+  binEntry?: UnassignedEntry;
+}
+
+/** Build the provenance source for a binned topic (mirrors an idea source). */
+function topicSource(
+  finding: TopicFinding,
+  projectId?: string,
+  repoId?: string,
+): IdeaSource {
+  return {
+    sessionId: finding.sessionId,
+    segmentId: finding.segmentId,
+    seq: finding.seq ?? 0,
+    snippet: finding.description?.trim() ?? '',
+    ...(projectId !== undefined ? { projectId } : {}),
+    ...(repoId !== undefined ? { repoId } : {}),
+  };
+}
+
+/** Write the topic to the org's unassigned bin with full provenance (R6/R7). */
+async function bin(
+  repo: Repo,
+  org: string,
+  finding: TopicFinding,
+  projectId: string | undefined,
+  repoId: string | undefined,
+  reason: UnassignedReason,
+): Promise<RouteResult> {
+  const now = Date.now();
+  const entry: UnassignedEntry = {
+    entryId: randomUUID(),
+    org,
+    text: finding.description?.trim() ?? finding.topicLabel,
+    sources: [topicSource(finding, projectId, repoId)],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await repo.putUnassigned(entry);
+  return { outcome: 'unassigned', org, finding, reason, binEntry: entry };
+}
+
+/**
+ * Run the full association decision: retrieve (U8) → judge rerank (U9) → the
+ * chosen skill or the unassigned bin. See `RouteResult` for the outcomes; this
+ * leaves idea creation to U10 (the `routed` result is its input seam).
+ */
+export async function routeTopic(
+  finding: TopicFinding,
+  deps: AssociateDeps,
+): Promise<RouteResult> {
+  const retrieval = await associateTopic(finding, deps);
+
+  if (retrieval.outcome === 'unresolved') {
+    return { outcome: 'unresolved', org: retrieval.org, finding };
+  }
+
+  const org = retrieval.org!;
+  const { projectId, repoId } = retrieval;
+
+  // No candidate cleared the pre-judge floor → straight to the bin (U8 seam).
+  if (retrieval.outcome === 'unassigned') {
+    return bin(deps.repo, org, finding, projectId, repoId, 'no-candidates');
+  }
+
+  // Ask the judge to pick the single best skill among the floor-passing set.
+  const judge = deps.judge ?? getRerankJudge();
+  const candidates = await loadCandidateDescriptions(deps.repo, org, retrieval.candidates);
+  const verdict = await judge.judge(
+    { topicLabel: finding.topicLabel, description: finding.description!.trim() },
+    candidates,
+  );
+
+  if (verdict.outcome === 'none') {
+    return bin(deps.repo, org, finding, projectId, repoId, 'judge-none');
+  }
+  // Below the confidence bar → bin (R6), exactly like a `none`.
+  if (verdict.confidence < judgeConfidenceBar()) {
+    return bin(deps.repo, org, finding, projectId, repoId, 'below-confidence');
+  }
+
+  // Accepted → the SEAM U10 consumes (idea creation NOT done here).
+  return {
+    outcome: 'routed',
+    org,
+    finding,
+    skillBaseName: verdict.skillBaseName,
+    confidence: verdict.confidence,
+  };
+}
+
+/**
+ * Hydrate each candidate `skillBaseName` with its current description for the
+ * judge. A candidate whose skill row can't be read (deleted/cascaded between
+ * retrieval and judge) is still offered with an empty description rather than
+ * dropped — the judge reasons over name alone in that rare case.
+ */
+async function loadCandidateDescriptions(
+  repo: Repo,
+  org: string,
+  candidates: CandidateSkill[],
+): Promise<JudgeCandidate[]> {
+  const scope = orgScope(org);
+  return Promise.all(
+    candidates.map(async (c) => {
+      const skill = await repo.getSkill(scope, c.skillBaseName);
+      return { skillBaseName: c.skillBaseName, description: skill?.description ?? '' };
+    }),
+  );
 }
