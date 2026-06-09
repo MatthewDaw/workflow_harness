@@ -11,6 +11,7 @@ import type {
   DefinitionOfDone,
   DeviceAuth,
   Envelope,
+  Idea,
   LearningRecord,
   McpServer,
   Memory,
@@ -21,6 +22,7 @@ import type {
   SessionVector,
   Skill,
   TruePointer,
+  UnassignedEntry,
   UserProfile,
   WeeklyUpdate,
 } from '@harness/shared';
@@ -1226,6 +1228,135 @@ export class Repo {
       }),
     );
     return (res.Items ?? []) as LearningRecord[];
+  }
+
+  // --- Skill ideas + unassigned bin (skill-idea loop, U6) ----------------
+  //
+  // Ideas are co-located with skills in the org scope partition under an `IDEA#`
+  // SK prefix, so they are invisible to `listSkills` (which scans `SKILL#`).
+  // Corroboration is DERIVED (distinct sessionIds in `sources`), never stored.
+  // The bin is the org's new-skill backlog under `IDEABIN#`.
+
+  /**
+   * Upsert an idea UNCONDITIONALLY (create or full overwrite). The SK is
+   * `IDEA#<skillBaseName>#<ideaId>`, so re-putting the same id overwrites in
+   * place. Use `corroborateIdeaConditional` for the optimistic-concurrency path
+   * (adding a source / flipping status) where a concurrent fold must not clobber.
+   */
+  async putIdea(idea: Idea): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.ideaKey(idea.org, idea.skillBaseName, idea.ideaId), ...idea },
+      }),
+    );
+  }
+
+  async getIdea(
+    org: string,
+    skillBaseName: string,
+    ideaId: string,
+  ): Promise<Idea | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.ideaKey(org, skillBaseName, ideaId) }),
+    );
+    return res.Item as Idea | undefined;
+  }
+
+  /** Every idea attached to one skill family, in one partition read. */
+  async listIdeasForSkill(org: string, skillBaseName: string): Promise<Idea[]> {
+    const { PK, skPrefix } = k.ideaPrefixForSkill(org, skillBaseName);
+    return this.queryPrefix<Idea>(PK, skPrefix);
+  }
+
+  /** Every idea in an org, across all skills, in one partition read. */
+  async listIdeasForOrg(org: string): Promise<Idea[]> {
+    const { PK, skPrefix } = k.ideaPrefixForOrg(org);
+    return this.queryPrefix<Idea>(PK, skPrefix);
+  }
+
+  async deleteIdea(org: string, skillBaseName: string, ideaId: string): Promise<void> {
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.table, Key: k.ideaKey(org, skillBaseName, ideaId) }),
+    );
+  }
+
+  /**
+   * Optimistic-concurrency idea write, mirroring `putSessionProjectionConditional`.
+   * `expectedVersion` is the `corroborationVersion` the caller read before
+   * mutating (adding a source, flipping status, recording a fold):
+   *  - `undefined` requires the idea not to exist yet (first write),
+   *  - a number requires the stored `corroborationVersion` to still equal it.
+   *
+   * On success the idea is written with `corroborationVersion` bumped to
+   * `(expectedVersion ?? -1) + 1`, so the next conditional writer must observe
+   * this write. A `ConditionalCheckFailedException` (a concurrent writer — e.g. a
+   * fold that flipped `status` — advanced it) is surfaced as `{ written: false }`
+   * so the caller can re-read, re-merge, and retry instead of clobbering the
+   * concurrent update. The fold↔corroboration race is therefore safe.
+   */
+  async corroborateIdeaConditional(
+    idea: Idea,
+    expectedVersion: number | undefined,
+  ): Promise<{ written: boolean }> {
+    const next: Idea = { ...idea, corroborationVersion: (expectedVersion ?? -1) + 1 };
+    const guard =
+      expectedVersion === undefined
+        ? { ConditionExpression: 'attribute_not_exists(PK)' }
+        : {
+            ConditionExpression: 'corroborationVersion = :expected',
+            ExpressionAttributeValues: { ':expected': expectedVersion },
+          };
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: { ...k.ideaKey(next.org, next.skillBaseName, next.ideaId), ...next },
+          ...guard,
+        }),
+      );
+      return { written: true };
+    } catch (err) {
+      if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+        return { written: false };
+      }
+      throw err;
+    }
+  }
+
+  /** Upsert an unassigned-bin entry (the org's new-skill backlog). */
+  async putUnassigned(entry: UnassignedEntry): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.unassignedBinKey(entry.org, entry.entryId), ...entry },
+      }),
+    );
+  }
+
+  /** Every unassigned-bin entry in an org, in one partition read. */
+  async listUnassignedForOrg(org: string): Promise<UnassignedEntry[]> {
+    const { PK, skPrefix } = k.unassignedBinPrefix(org);
+    return this.queryPrefix<UnassignedEntry>(PK, skPrefix);
+  }
+
+  /** Paginated `PK = :pk AND begins_with(SK, :sk)` read (follows LastEvaluatedKey). */
+  private async queryPrefix<T>(PK: string, skPrefix: string): Promise<T[]> {
+    const items: Record<string, unknown>[] = [];
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(
+        new QueryCommand({
+          TableName: this.table,
+          KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+          ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
+      );
+      for (const it of res.Items ?? []) items.push(it as Record<string, unknown>);
+      exclusiveStartKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (exclusiveStartKey);
+    return items as T[];
   }
 
   // --- Device-auth (wrapper device-code login) ---------------------------

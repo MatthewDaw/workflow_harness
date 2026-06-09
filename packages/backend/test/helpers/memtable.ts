@@ -32,8 +32,21 @@ export function installInMemoryTable(
 
   ddbMock.on(PutCommand).callsFake((input) => {
     const item = input.Item as Record<string, unknown> & KeyShape;
-    if (input.ConditionExpression?.includes('attribute_not_exists(PK)')) {
+    const cond = input.ConditionExpression ?? '';
+    if (cond.includes('attribute_not_exists(PK)')) {
       if (store.has(keyOf(item))) throw new ConditionalCheckFailed();
+    }
+    // Generic optimistic-concurrency guard `<attr> = :expected` (e.g. the idea
+    // corroboration write's `corroborationVersion = :expected`). The stored item's
+    // attribute must still equal the supplied value, else a concurrent writer won.
+    const eqMatch = cond.match(/^\s*(\w+)\s*=\s*(:\w+)\s*$/);
+    if (eqMatch) {
+      const existing = store.get(keyOf(item));
+      const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
+      const expected = values[eqMatch[2] as string];
+      if (!existing || (existing as Record<string, unknown>)[eqMatch[1] as string] !== expected) {
+        throw new ConditionalCheckFailed();
+      }
     }
     store.set(keyOf(item), { ...item });
     return {};

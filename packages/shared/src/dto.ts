@@ -618,6 +618,98 @@ export const learningRecordSchema = z.object({
 });
 export type LearningRecord = z.infer<typeof learningRecordSchema>;
 
+// --- Skill ideas (skill-idea loop, U6) -----------------------------------
+//
+// An IDEA is a SYNTHESIZED, skill-ready learned concept attached to its
+// best-matching skill — prose that could be folded into a skill body as-is, NOT
+// a raw transcript. Ideas are co-located with skills in the org scope partition
+// (`SCOPE#org#<org>`) but live under an `IDEA#` SK prefix, so the `SKILL#`-prefix
+// catalog scan never returns them. Corroboration is DERIVED: `|distinct
+// sessionId|` over `sources` (deduped across segments), so one long multi-segment
+// session counts once. An idea is "corroborated" at `>= K` distinct sessions.
+
+export const IDEA_STATUSES = ['open', 'folded'] as const;
+export const ideaStatusSchema = z.enum(IDEA_STATUSES);
+export type IdeaStatus = z.infer<typeof ideaStatusSchema>;
+
+/**
+ * One contribution to an idea, keyed by `sessionId`. The corroboration unit is
+ * the SESSION, so the `sources` array carries AT MOST one entry per distinct
+ * `sessionId` (segments within a session collapse onto the same entry). The
+ * `snippet` is provenance/evidence ONLY — it is never the idea's prose; the
+ * synthesized concept lives on the idea's `text`.
+ */
+export const ideaSourceSchema = z.object({
+  /** The corroboration unit. Distinct sessionIds drive the corroboration count. */
+  sessionId: z.string().min(1),
+  /** The segment within the session this finding came from (one of possibly many). */
+  segmentId: z.string().min(1),
+  /** Envelope per-session monotonic seq, for ordering/observability. */
+  seq: z.number().int().nonnegative(),
+  /** Raw evidence/provenance for this source — NOT the synthesized idea text. */
+  snippet: z.string().default(''),
+  /** Where the finding originated, for provenance + variant-scoped folding. */
+  projectId: z.string().optional(),
+  repoId: z.string().optional(),
+});
+export type IdeaSource = z.infer<typeof ideaSourceSchema>;
+
+/**
+ * A skill-attached idea. Persisted under `SCOPE#org#<org>` / `IDEA#<skillBaseName>#<ideaId>`
+ * (see keys.ts `ideaKey`). Corroboration is NOT stored — it is derived as the
+ * count of distinct `sessionId`s in `sources` (use `corroborationCount`).
+ *
+ * `corroborationVersion` is the optimistic-concurrency token: every conditional
+ * corroboration update requires it to still equal what the writer read, so a
+ * fold↔corroboration race never clobbers (mirrors the session projection's
+ * `maxSeq` guard).
+ */
+export const ideaSchema = z.object({
+  /** Stable id within `(org, skillBaseName)`. */
+  ideaId: z.string().min(1),
+  /** The skill family this idea is attached to (the idea is invisible to listSkills). */
+  skillBaseName: z.string().min(1),
+  /** Owning org — every idea row is org-partitioned for isolation. */
+  org: z.string().min(1),
+  /** The SYNTHESIZED, skill-ready concept — prose foldable into a skill body. */
+  text: z.string().default(''),
+  /** Distinct-session contributions; corroboration = `|distinct sessionId|`. */
+  sources: z.array(ideaSourceSchema).default([]),
+  status: ideaStatusSchema.default('open'),
+  /** Set when folded: the skill revision the lesson was folded into. */
+  foldedIntoRev: z.number().int().positive().optional(),
+  /** The embedding model version the idea's vector was generated with. */
+  ideaEmbeddingVersion: z.string().optional(),
+  /** Optimistic-concurrency token for conditional corroboration updates. */
+  corroborationVersion: z.number().int().nonnegative().default(0),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type Idea = z.infer<typeof ideaSchema>;
+
+/** The corroboration count of an idea: distinct sessions, deduped across segments. */
+export function corroborationCount(idea: Pick<Idea, 'sources'>): number {
+  return new Set(idea.sources.map((s) => s.sessionId)).size;
+}
+
+/**
+ * An entry in the org's UNASSIGNED bin — a topic the judge rejected from every
+ * candidate skill (the new-skill backlog). Lives under `SCOPE#org#<org>` /
+ * `IDEABIN#<entryId>` so the whole bin is one partition read, scoped per org.
+ */
+export const unassignedEntrySchema = z.object({
+  /** Stable id within `(org)`. */
+  entryId: z.string().min(1),
+  org: z.string().min(1),
+  /** The topic text / synthesized finding that found no home. */
+  text: z.string().default(''),
+  /** Provenance of the rejected finding (same shape as an idea source). */
+  sources: z.array(ideaSourceSchema).default([]),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type UnassignedEntry = z.infer<typeof unassignedEntrySchema>;
+
 /**
  * A project memory synced up from a developer's machine. Claude Code persists
  * per-project "memories" as small markdown files (one fact per file, with
