@@ -31,11 +31,24 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
 const ddbMock = mockClient(DynamoDBDocumentClient);
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
 const repo = new Repo(doc, 'harness-test');
-const deps = { repo };
+
+/**
+ * U21 — the delete path removes the skill's vector. We inject a fake S3Vectors
+ * that records `deleteVectors` calls so delete tests never touch AWS and we can
+ * assert the right index + key were used.
+ */
+const deletedVectors: Array<{ index: string; keys: string[] }> = [];
+const fakeVectors = {
+  deleteVectors: async (index: string, keys: string[]) => {
+    deletedVectors.push({ index, keys });
+  },
+} as unknown as import('../src/embeddings/s3vectors.js').S3Vectors;
+const deps = { repo, vectors: fakeVectors };
 
 beforeEach(() => {
   ddbMock.reset();
   installInMemoryTable(ddbMock);
+  deletedVectors.length = 0;
 });
 
 const MATT = 'matt';
@@ -173,6 +186,97 @@ describe('DELETE /skills/:name', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 403 });
+  });
+
+  // U21 — skill delete/rename → idea orphan policy.
+  it('cascades the skill\'s ideas to the bin and removes its vector', async () => {
+    await repo.putSkill(skill('reconcile'));
+    // Two ideas attached to the skill family; one is corroborated by two
+    // distinct sessions (corroboration must survive the cascade as signal).
+    await repo.putIdea({
+      ideaId: 'i-1',
+      skillBaseName: 'reconcile',
+      org: ORG,
+      text: 'Always reconcile in the ledger currency, never the display currency.',
+      sources: [
+        { sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: 'ev1' },
+        { sessionId: 's-2', segmentId: 'seg-1', seq: 2, snippet: 'ev2' },
+      ],
+      status: 'open',
+      corroborationVersion: 0,
+      createdAt: 10,
+      updatedAt: 10,
+    });
+    await repo.putIdea({
+      ideaId: 'i-2',
+      skillBaseName: 'reconcile',
+      org: ORG,
+      text: 'Round half-to-even at the boundary.',
+      sources: [{ sessionId: 's-3', segmentId: 'seg-1', seq: 1, snippet: 'ev3' }],
+      status: 'open',
+      corroborationVersion: 0,
+      createdAt: 11,
+      updatedAt: 11,
+    });
+
+    const res = await deleteSkill(
+      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'reconcile' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+
+    // Skill gone, idea rows gone.
+    expect(await repo.getSkill(SCOPE, 'reconcile')).toBeUndefined();
+    expect(await repo.listIdeasForSkill(ORG, 'reconcile')).toEqual([]);
+
+    // Ideas landed in the bin with corroboration (distinct-session sources)
+    // and provenance (text) preserved.
+    const bin = await repo.listUnassignedForOrg(ORG);
+    expect(bin).toHaveLength(2);
+    const byText = new Map(bin.map((e) => [e.entryId, e]));
+    const moved = byText.get('reconcile#i-1')!;
+    expect(moved.text).toContain('ledger currency');
+    expect(new Set(moved.sources.map((s) => s.sessionId))).toEqual(new Set(['s-1', 's-2']));
+
+    // The skill's vector was deleted with the right index + `<org>#<baseName>` key.
+    expect(deletedVectors).toEqual([{ index: 'skills', keys: [`${ORG}#reconcile`] }]);
+  });
+
+  it('cascades by baseName, not the display name, for a forked skill', async () => {
+    // A skill whose row name differs from its family baseName.
+    await repo.putSkill({ ...skill('reconcile#R#repo#U#matt'), baseName: 'reconcile' });
+    await repo.putIdea({
+      ideaId: 'i-1',
+      skillBaseName: 'reconcile',
+      org: ORG,
+      text: 'lesson',
+      sources: [{ sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: '' }],
+      status: 'open',
+      corroborationVersion: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    await deleteSkill(
+      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'reconcile#R#repo#U#matt' } }),
+      deps,
+    );
+
+    expect(await repo.listIdeasForSkill(ORG, 'reconcile')).toEqual([]);
+    expect(await repo.listUnassignedForOrg(ORG)).toHaveLength(1);
+    // Vector key uses the family baseName.
+    expect(deletedVectors).toEqual([{ index: 'skills', keys: [`${ORG}#reconcile`] }]);
+  });
+
+  it('deletes a skill with no ideas (vector still removed, bin untouched)', async () => {
+    await repo.putSkill(skill('reconcile'));
+    const res = await deleteSkill(
+      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'reconcile' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(await repo.listUnassignedForOrg(ORG)).toEqual([]);
+    expect(deletedVectors).toEqual([{ index: 'skills', keys: [`${ORG}#reconcile`] }]);
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  DeleteVectorsCommand,
   PutVectorsCommand,
   QueryVectorsCommand,
   S3VectorsClient,
@@ -31,6 +32,23 @@ const DEFAULT_VECTOR_BUCKET = 'command-hq-skill-idea-vectors';
  * chunk writes at this boundary.
  */
 export const PUT_BATCH_LIMIT = 500;
+
+/**
+ * U1's two fixed index names within the single vector bucket. Orgs are isolated
+ * at query time via the `org` metadata filter, NOT per-org indexes (see header).
+ */
+export const SKILL_VECTOR_INDEX = 'skills';
+export const IDEA_VECTOR_INDEX = 'ideas';
+
+/**
+ * The deterministic vector key for a skill family within the `skills` index:
+ * `<org>#<skillBaseName>`. One vector per skill family per org. Used by the
+ * write path (U3) and the delete path (U21): on skill delete/rename this key is
+ * removed from the index so the dead skill never matches a topic query again.
+ */
+export function skillVectorKey(org: string, skillBaseName: string): string {
+  return `${org}#${skillBaseName}`;
+}
 
 /** Resolve the configured vector bucket name (env overrideable; U1 literal default). */
 export function vectorBucketName(): string {
@@ -105,6 +123,27 @@ export class S3Vectors {
             data: { float32: it.vector },
             metadata: it.metadata as DocumentType,
           })),
+        }),
+      );
+    }
+  }
+
+  /**
+   * Delete `keys` from `indexName`, chunked at the same per-request limit as
+   * `putVectors` (additive U21 mirror of `putVectors`). Used when a skill is
+   * deleted/renamed: its skill vector key (`<org>#<skillBaseName>`) must be
+   * removed so the dead skill never matches a topic query again. Errors are NOT
+   * swallowed — a failed chunk propagates so the caller can retry/DLQ. Deleting
+   * a key that does not exist is a no-op on the service side.
+   */
+  async deleteVectors(indexName: string, keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    for (const batch of chunk(keys, PUT_BATCH_LIMIT)) {
+      await this.client.send(
+        new DeleteVectorsCommand({
+          vectorBucketName: this.bucket,
+          indexName,
+          keys: batch,
         }),
       );
     }

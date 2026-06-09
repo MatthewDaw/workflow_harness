@@ -305,6 +305,11 @@ export class ApiStack extends cdk.Stack {
     // session may surface when the skill loads. `noAuth` so the claude+ device token
     // reaches the handler, which gates server-side (the gate is a security boundary).
     r('/skills/{name}/candidate-learnings', [M.GET], ideasFn, 'SkillCandidateLearnings', noAuth);
+    // All ideas (skill-idea loop, U13): EVERY idea for a skill — corroborated,
+    // uncorroborated, and folded history — for the Command HQ dropdown. Reuses the
+    // same `ideasFn`/bundle and `noAuth` device-token contract; the handler
+    // dispatches on the `/ideas` suffix.
+    r('/skills/{name}/ideas', [M.GET], ideasFn, 'SkillIdeas', noAuth);
 
     // MCP servers mirror the skills catalog routes MINUS the bundle verbs
     // (members/dissolve) and the retired-by-design scope verb — the catalog is a

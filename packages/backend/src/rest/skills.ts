@@ -18,6 +18,12 @@ import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 import { withAuthorNames } from './authorNames.js';
+import {
+  getS3Vectors,
+  SKILL_VECTOR_INDEX,
+  skillVectorKey,
+  type S3Vectors,
+} from '../embeddings/s3vectors.js';
 
 /**
  * REST: skills + bundles — collapsed to a single ORG catalog.
@@ -39,6 +45,11 @@ import { withAuthorNames } from './authorNames.js';
 
 export interface SkillsDeps {
   repo: Repo;
+  /**
+   * S3 Vectors client for the U21 delete path. Optional + injectable for tests;
+   * the runtime handler defaults to the process-wide `getS3Vectors()`.
+   */
+  vectors?: S3Vectors;
 }
 
 /**
@@ -252,7 +263,23 @@ export async function deleteSkill(
         `re-seed; it cannot be deleted via REST.`,
     );
   }
+  // U21 — skill delete/rename → idea orphan policy. Ideas key off
+  // `baseName` + org (the base variant has `name === baseName`). BEFORE
+  // dropping the skill row, cascade its ideas to the org's unassigned bin
+  // (preserving corroboration + provenance) and delete the idea rows, so no
+  // idea is left pointing at a now-nonexistent skill. Rename is delete+create
+  // today, so this same cascade covers a rename: the old name's ideas land in
+  // the bin and re-associate onto the new name on its next topic event.
+  const baseName = existing?.baseName ?? name;
+  await deps.repo.cascadeSkillIdeasToBin(auth.org, baseName);
+
   await deps.repo.deleteSkill(orgScope(auth.org), name);
+
+  // Remove the skill's vector so the dead skill never matches a topic query.
+  // The vector key is `<org>#<baseName>` in the fixed `skills` index (U2/U3).
+  const vectors = deps.vectors ?? getS3Vectors();
+  await vectors.deleteVectors(SKILL_VECTOR_INDEX, [skillVectorKey(auth.org, baseName)]);
+
   return ok({ deleted: true });
 }
 
