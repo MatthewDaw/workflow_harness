@@ -216,6 +216,48 @@ function parseVariantId(baseName: string, variantId: string): { repoId?: string;
 }
 
 /**
+ * U19 — VARIANT-SCOPED FOLDING. Derive the variant the fold should target from
+ * the IDEA'S PROVENANCE rather than only the request body. An idea's `sources`
+ * carry the `repoId` (and `projectId`) of the sessions that produced it; when
+ * every contributing source agrees on a single `repoId`, the lesson is specific
+ * to that repo's variant line and the fold should land THERE (forking the
+ * built-in into `<base>#R#<repoId>#U#<author>`) rather than on the org base.
+ * When the sources carry no `repoId`, or DISAGREE (a cross-repo lesson), the
+ * provenance implies nothing and the fold targets the org base (empty repo) —
+ * the caller may still fork explicitly via the request body.
+ *
+ * Precedence: an EXPLICIT `repoId` in the request body always wins (the human
+ * picked a target); provenance only fills in a `repoId` the body omitted. The
+ * `authorUserId` follows the same rule — body first, else the verified caller
+ * (a fork is authored by whoever performs the fold). Returns `{}` when the fold
+ * targets the base.
+ */
+export function foldTargetVariant(
+  idea: Idea,
+  body: { repoId?: string; authorUserId?: string },
+  callerUserId: string,
+): { repoId?: string; authorUserId?: string } {
+  // An explicit body repoId is authoritative. Otherwise infer from provenance:
+  // the single repoId shared by EVERY source. Disagreement (or none) => base.
+  let repoId = body.repoId;
+  if (repoId === undefined) {
+    const repoIds = new Set(
+      idea.sources.map((s) => s.repoId).filter((r): r is string => typeof r === 'string' && r !== ''),
+    );
+    if (repoIds.size === 1 && idea.sources.every((s) => typeof s.repoId === 'string' && s.repoId)) {
+      repoId = [...repoIds][0];
+    }
+  }
+  // A fork (repoId set) is authored by the body's author if given, else the
+  // verified caller. The base variant (no repoId) carries no author.
+  const authorUserId = body.authorUserId ?? (repoId ? callerUserId : undefined);
+  return {
+    ...(repoId !== undefined ? { repoId } : {}),
+    ...(authorUserId !== undefined ? { authorUserId } : {}),
+  };
+}
+
+/**
  * U18 — replay the skill's golden cases against the CANDIDATE revision body
  * being promoted, returning any REGRESSIONS (cases the candidate no longer
  * satisfies). ADVISORY: this never throws and never blocks the promote — a
@@ -373,12 +415,21 @@ export async function foldIdea(
     return conflict(`idea "${ideaId}" is already folded into rev ${idea.foldedIntoRev ?? '?'}`);
   }
 
-  // Resolve the fold target. The base variant has empty repo/author; a fork sets
-  // both (the variant model). For a canonical built-in the base is git-seed owned,
-  // so an in-place fold is rejected exactly like createSkill — the caller must fork.
-  const repoId = typeof b.repoId === 'string' ? b.repoId : undefined;
-  const authorUserId =
-    typeof b.authorUserId === 'string' ? b.authorUserId : repoId ? principal.userId : undefined;
+  // Resolve the fold target (U19 — variant-scoped folding). The variant is
+  // implied by the IDEA'S PROVENANCE (the `repoId` its sources agree on) when the
+  // request body does not pick one explicitly; absent/conflicting provenance
+  // targets the org base. The base variant has empty repo/author; a fork sets both
+  // (the variant model). For a canonical built-in the base is git-seed owned, so an
+  // in-place fold is rejected exactly like createSkill — the fold must fork, which
+  // a repo-scoped idea does automatically via its provenance.
+  const { repoId, authorUserId } = foldTargetVariant(
+    idea,
+    {
+      repoId: typeof b.repoId === 'string' ? b.repoId : undefined,
+      authorUserId: typeof b.authorUserId === 'string' ? b.authorUserId : undefined,
+    },
+    principal.userId,
+  );
 
   const existing = await deps.repo.getSkill(orgScope(org), name);
   if (!existing) return notFound();

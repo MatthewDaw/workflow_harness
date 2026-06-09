@@ -12,6 +12,7 @@ import {
   dissolveBundle,
   flattenBundle,
   foldIdea,
+  foldTargetVariant,
   getSkill,
   getUsage,
   promoteSkill,
@@ -1006,6 +1007,171 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
     expect(new Set(after?.sources.map((s) => s.sessionId))).toEqual(
       new Set(['s-1', 's-2', 's-3']),
     );
+  });
+
+  // U19 — VARIANT-SCOPED FOLDING. The fold targets the variant implied by the
+  // idea's PROVENANCE: when the contributing sources all carry the same `repoId`,
+  // the lesson is repo-specific and the fold forks that variant line even though
+  // the request body names no repo. Cross-repo / no-repo provenance targets base.
+  it('folds into the repo variant implied by the idea provenance (no body repoId)', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
+    // Every source agrees on repo "repoX" — a repo-scoped lesson.
+    await repo.putIdea(
+      idea({
+        skillBaseName: 'hq-add-skill',
+        sources: [
+          { sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: 'ev1', repoId: 'repoX' },
+          { sessionId: 's-2', segmentId: 'seg-1', seq: 2, snippet: 'ev2', repoId: 'repoX' },
+        ],
+      }),
+    );
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'hq-add-skill', ideaId: 'i-1' },
+        rawPath: '/skills/hq-add-skill/ideas/i-1/fold',
+        // No repoId in the body — it must come from provenance.
+        body: { body: 'canonical + repo-scoped fold' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    // Forked the repoX variant (no 409 against the built-in), authored by the caller.
+    expect(stamped.repoId).toBe('repoX');
+    expect(stamped.authorUserId).toBe(MATT);
+    expect(stamped.variantId).toBe('hq-add-skill#R#repoX#U#matt');
+    // The canonical base is untouched; a new variant revision exists.
+    expect((await repo.getSkill(SCOPE, 'hq-add-skill'))?.body).toBe('canonical + repo-scoped fold');
+    const variantRevs = await repo.listRevisions(SCOPE, 'SKILL', 'hq-add-skill', {
+      repoId: 'repoX',
+      userId: MATT,
+    });
+    expect(variantRevs).toHaveLength(1);
+  });
+
+  it('an explicit body repoId overrides the idea provenance', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
+    await repo.putIdea(
+      idea({
+        skillBaseName: 'hq-add-skill',
+        sources: [
+          { sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: 'ev1', repoId: 'repoX' },
+        ],
+      }),
+    );
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'hq-add-skill', ideaId: 'i-1' },
+        rawPath: '/skills/hq-add-skill/ideas/i-1/fold',
+        body: { body: 'fork override', repoId: 'repoChosen', authorUserId: 'bob' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    expect(stamped.repoId).toBe('repoChosen');
+    expect(stamped.authorUserId).toBe('bob');
+  });
+
+  it('rejects an in-place built-in fold when provenance is empty or conflicting (targets base)', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
+    // Sources disagree on repo → no single repoId → base target → built-in guard 409.
+    await repo.putIdea(
+      idea({
+        skillBaseName: 'hq-add-skill',
+        sources: [
+          { sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: 'ev1', repoId: 'repoA' },
+          { sessionId: 's-2', segmentId: 'seg-1', seq: 2, snippet: 'ev2', repoId: 'repoB' },
+        ],
+      }),
+    );
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'hq-add-skill', ideaId: 'i-1' },
+        rawPath: '/skills/hq-add-skill/ideas/i-1/fold',
+        body: { body: 'edited base' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+    expect((await repo.getSkill(SCOPE, 'hq-add-skill'))?.body).toBe('canonical');
+  });
+});
+
+/**
+ * U19 — the pure provenance→variant selector, isolated from the handler.
+ */
+describe('U19: foldTargetVariant (provenance → variant)', () => {
+  const baseIdea = (sources: Idea['sources']): Idea => ({
+    ideaId: 'i-1',
+    skillBaseName: 'reconcile',
+    org: ORG,
+    text: '',
+    sources,
+    status: 'open',
+    corroborationVersion: 0,
+    createdAt: 0,
+    updatedAt: 0,
+  });
+
+  it('infers the single repoId shared by all sources, authored by the caller', () => {
+    const target = foldTargetVariant(
+      baseIdea([
+        { sessionId: 's-1', segmentId: 'a', seq: 1, snippet: '', repoId: 'r1' },
+        { sessionId: 's-2', segmentId: 'b', seq: 2, snippet: '', repoId: 'r1' },
+      ]),
+      {},
+      'matt',
+    );
+    expect(target).toEqual({ repoId: 'r1', authorUserId: 'matt' });
+  });
+
+  it('targets the base when sources disagree on repoId', () => {
+    const target = foldTargetVariant(
+      baseIdea([
+        { sessionId: 's-1', segmentId: 'a', seq: 1, snippet: '', repoId: 'r1' },
+        { sessionId: 's-2', segmentId: 'b', seq: 2, snippet: '', repoId: 'r2' },
+      ]),
+      {},
+      'matt',
+    );
+    expect(target).toEqual({});
+  });
+
+  it('targets the base when a source is missing a repoId (partial provenance)', () => {
+    const target = foldTargetVariant(
+      baseIdea([
+        { sessionId: 's-1', segmentId: 'a', seq: 1, snippet: '', repoId: 'r1' },
+        { sessionId: 's-2', segmentId: 'b', seq: 2, snippet: '' },
+      ]),
+      {},
+      'matt',
+    );
+    expect(target).toEqual({});
+  });
+
+  it('targets the base when no source carries a repoId', () => {
+    const target = foldTargetVariant(
+      baseIdea([{ sessionId: 's-1', segmentId: 'a', seq: 1, snippet: '' }]),
+      {},
+      'matt',
+    );
+    expect(target).toEqual({});
+  });
+
+  it('an explicit body repoId/author overrides provenance', () => {
+    const target = foldTargetVariant(
+      baseIdea([{ sessionId: 's-1', segmentId: 'a', seq: 1, snippet: '', repoId: 'r1' }]),
+      { repoId: 'chosen', authorUserId: 'bob' },
+      'matt',
+    );
+    expect(target).toEqual({ repoId: 'chosen', authorUserId: 'bob' });
   });
 });
 

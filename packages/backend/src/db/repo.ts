@@ -702,8 +702,17 @@ export class Repo {
     });
     const nextRev = existing.reduce((m, r) => Math.max(m, (r.version as number) ?? 1), 0) + 1;
 
+    // Strip any stray primary-key attributes the caller carried onto the item.
+    // A caller that builds the item from a `getSkill`/`getAgent` read brings the
+    // SOURCE row's `PK`/`SK` along; spreading that into the rows below would let
+    // the live record's `SK` overwrite the revision row's `SK` (both collapse onto
+    // the same key and only ONE row is written — the revision snapshot is lost).
+    // The row key is supplied explicitly per write, so these must never ride along.
+    const itemNoKeys = { ...item };
+    delete (itemNoKeys as Record<string, unknown>).PK;
+    delete (itemNoKeys as Record<string, unknown>).SK;
     const stamped = {
-      ...item,
+      ...itemNoKeys,
       baseName,
       variantId,
       version: nextRev,
