@@ -8,7 +8,9 @@ import { signDeviceToken } from '../src/auth/verify.js';
 import {
   CANDIDATE_CAP,
   CORROBORATION_K,
+  type IdeaWithCorroboration,
   resolveCandidateLearnings,
+  resolveSkillIdeas,
 } from '../src/rest/ideas.js';
 import { handler as ideasHandler } from '../src/rest/ideas.js';
 import { installInMemoryTable } from './helpers/memtable.js';
@@ -54,6 +56,7 @@ function idea(
     skillBaseName?: string;
     updatedAt?: number;
     extraSegmentsOnFirst?: number;
+    foldedIntoRev?: number;
   },
 ): Idea {
   const sources: IdeaSource[] = [];
@@ -69,6 +72,7 @@ function idea(
     text: `lesson ${ideaId}`,
     sources,
     status: opts.status ?? 'open',
+    ...(opts.foldedIntoRev !== undefined ? { foldedIntoRev: opts.foldedIntoRev } : {}),
     corroborationVersion: 0,
     createdAt: 1,
     updatedAt: opts.updatedAt ?? 1,
@@ -179,5 +183,110 @@ describe('candidate-learnings via device token (claude+ wrapper, noAuth route)',
     const res = await ideasHandler(event);
     const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
     expect(learnings.map((i) => i.ideaId)).toEqual(['strong']);
+  });
+});
+
+/**
+ * GET /skills/{name}/ideas (U13/R18). The Command HQ surface: EVERY idea for the
+ * skill regardless of status — corroborated, uncorroborated, and folded history
+ * alike — each decorated with its derived corroboration count, ordered
+ * strongest-and-freshest-first. No gate, no cap: unlike candidate-learnings, this
+ * is a human read, not session-injected. Folded ideas carry `foldedIntoRev`, and
+ * the read is org-scoped via the effective (PROFILE-driven) org.
+ */
+describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
+  it('returns ideas of EVERY status: corroborated, uncorroborated, and folded', async () => {
+    await repo.putIdea(idea('corroborated', { sessions: CORROBORATION_K }));
+    await repo.putIdea(idea('uncorroborated', { sessions: 1 }));
+    await repo.putIdea(idea('folded', { sessions: CORROBORATION_K, status: 'folded', foldedIntoRev: 3 }));
+    const res = await resolveSkillIdeas(getEvent(SKILL), deps);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    expect(ideas.map((i) => i.ideaId).sort()).toEqual(['corroborated', 'folded', 'uncorroborated']);
+  });
+
+  it('carries the corroboration count (distinct sessions, deduped across segments) on each idea', async () => {
+    await repo.putIdea(idea('three', { sessions: 3, extraSegmentsOnFirst: 4 })); // extra segments do NOT raise the count
+    await repo.putIdea(idea('one', { sessions: 1 }));
+    const res = await resolveSkillIdeas(getEvent(SKILL), deps);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const byId = Object.fromEntries(ideas.map((i) => [i.ideaId, i.corroborationCount]));
+    expect(byId).toEqual({ three: 3, one: 1 });
+  });
+
+  it('orders by corroboration desc, then recency desc — no cap (every idea returned)', async () => {
+    // SIX ideas, more than CANDIDATE_CAP, to prove there is no cap on this path.
+    await repo.putIdea(idea('c2-old', { sessions: 2, updatedAt: 100 }));
+    await repo.putIdea(idea('c2-new', { sessions: 2, updatedAt: 200 }));
+    await repo.putIdea(idea('c6', { sessions: 6, updatedAt: 1 }));
+    await repo.putIdea(idea('c5', { sessions: 5, updatedAt: 1 }));
+    await repo.putIdea(idea('c4', { sessions: 4, updatedAt: 1 }));
+    await repo.putIdea(idea('c1', { sessions: 1, updatedAt: 1 }));
+    const res = await resolveSkillIdeas(getEvent(SKILL), deps);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    expect(ideas).toHaveLength(6); // CANDIDATE_CAP is 5; the all-ideas path is uncapped.
+    expect(ideas.map((i) => i.ideaId)).toEqual(['c6', 'c5', 'c4', 'c2-new', 'c2-old', 'c1']);
+  });
+
+  it('folded ideas carry foldedIntoRev and their status', async () => {
+    await repo.putIdea(idea('done', { sessions: CORROBORATION_K, status: 'folded', foldedIntoRev: 7 }));
+    const res = await resolveSkillIdeas(getEvent(SKILL), deps);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0]).toMatchObject({ ideaId: 'done', status: 'folded', foldedIntoRev: 7 });
+  });
+
+  it('carries provenance (sources) for the history view', async () => {
+    await repo.putIdea(idea('p', { sessions: 2 }));
+    const res = await resolveSkillIdeas(getEvent(SKILL), deps);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    expect(ideas[0]!.sources).toHaveLength(2);
+    expect(ideas[0]!.sources[0]).toMatchObject({ sessionId: 'p-sess-0', segmentId: 'p-sess-0-seg' });
+  });
+
+  it('is org-scoped — org A never sees org B ideas (no cross-org leak)', async () => {
+    await repo.putIdea(idea('mine-open', { sessions: 1, org: ORG }));
+    await repo.putIdea(idea('mine-folded', { sessions: 1, org: ORG, status: 'folded', foldedIntoRev: 2 }));
+    await repo.putIdea(idea('theirs', { sessions: 9, org: 'other-org' }));
+    const res = await resolveSkillIdeas(getEvent(SKILL, ORG), deps);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    expect(ideas.map((i) => i.ideaId).sort()).toEqual(['mine-folded', 'mine-open']);
+  });
+
+  it('scopes by the EFFECTIVE org (profile.org), not the raw token org', async () => {
+    await repo.putUser({ userId: 'matt', org: 'profile-org' });
+    await repo.putIdea(idea('in-profile-org', { sessions: 1, org: 'profile-org' }));
+    await repo.putIdea(idea('in-token-org', { sessions: 1, org: ORG }));
+    const res = await resolveSkillIdeas(getEvent(SKILL, ORG), deps);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    expect(ideas.map((i) => i.ideaId)).toEqual(['in-profile-org']);
+  });
+
+  it('401s an unauthenticated request', async () => {
+    const res = await resolveSkillIdeas(getEvent(SKILL, ORG, null), deps);
+    expect(res).toMatchObject({ statusCode: 401 });
+  });
+
+  it('400s when the skill name path param is missing', async () => {
+    const res = await resolveSkillIdeas(httpEvent({ method: 'GET', userId: 'matt', org: ORG }), deps);
+    expect(res).toMatchObject({ statusCode: 400 });
+  });
+
+  it('dispatches the /ideas suffix to the all-ideas path via the handler (device token)', async () => {
+    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
+    const SECRET = new TextEncoder().encode('test-device-secret');
+    await repo.putIdea(idea('open-one', { sessions: 1, org: ORG }));
+    await repo.putIdea(idea('folded-one', { sessions: 1, org: ORG, status: 'folded', foldedIntoRev: 1 }));
+    const token = await signDeviceToken({ userId: 'matt', org: ORG }, { secret: SECRET });
+    const event = httpEvent({
+      method: 'GET',
+      userId: null,
+      rawPath: `/skills/${SKILL}/ideas`,
+      headers: { authorization: `Bearer ${token}` },
+      path: { name: SKILL },
+    });
+    const res = await ideasHandler(event);
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    // Both statuses returned — proves the handler routed to all-ideas, not the gated path.
+    expect(ideas.map((i) => i.ideaId).sort()).toEqual(['folded-one', 'open-one']);
   });
 });
