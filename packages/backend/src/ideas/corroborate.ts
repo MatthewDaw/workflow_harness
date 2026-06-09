@@ -33,6 +33,28 @@ import { getIdeaWriter, type IdeaFinding, type IdeaWriter } from './synth.js';
  * The threshold biases STRICT (under-merge rather than over) so genuinely
  * different lessons never falsely corroborate; `/skill-idea-iterate` is where a
  * human merges near-duplicates the strict matcher missed (plan KTD).
+ *
+ * U20 — FOLDED-IDEA LIFECYCLE & RESURRECTION RULE.
+ *
+ * Once an idea is FOLDED its lesson is in the skill body and it has dropped from
+ * candidate-learnings (U11 gates on `status === 'open'`); it persists only as HQ
+ * history (U13 returns all ideas). When a new finding matches a FOLDED idea on
+ * the same skill, we must NOT:
+ *   - reopen it (flip `status` back to `open`) — that would re-surface a lesson
+ *     already in the body into the live block; or
+ *   - re-synthesize its `text` / bump its live corroboration; or
+ *   - create a FRESH idea for the same lesson — the strict matcher would later
+ *     re-corroborate that twin to K and re-surface the just-folded lesson.
+ * Instead the session attaches as POST-FOLD EVIDENCE on the folded idea
+ * (`postFoldSources`), visible in HQ but never in a working session. The original
+ * fold sessions in the live `sources` set are not re-counted as post-fold.
+ *
+ * MONOTONIC, NO-DECAY corroboration (plan: "Corroboration decay/staleness — v1
+ * is monotonic"). Neither the live `sources` set nor `postFoldSources` ever
+ * shrinks: a session, once counted, stays counted; corroboration only ever grows
+ * (or, for a folded idea, accrues as separate post-fold evidence). There is no
+ * time-based decay in v1 — a lesson that recurs is corroboration that sharpens,
+ * not a count that ages out.
  */
 
 /**
@@ -80,10 +102,19 @@ export interface CorroborateResult {
   /**
    * Whether this finding's session was newly counted. `false` means the session
    * was already in the idea's set, so corroboration did NOT change (AE4 no-op).
+   * Always `false` when the matched idea was FOLDED — a folded idea's live
+   * corroboration never changes; see `postFoldAttached`.
    */
   sessionCounted: boolean;
   /** Whether the idea is now corroborated (`|distinct sessions| >= K`). */
   corroborated: boolean;
+  /**
+   * U20 — the finding matched an ALREADY-FOLDED idea and was attached as
+   * post-fold evidence (`postFoldSources`) rather than reopening it, re-counting
+   * it, or spawning a re-surfacing duplicate. `true` only on a folded-idea match
+   * where the session was newly recorded as post-fold evidence.
+   */
+  postFoldAttached: boolean;
 }
 
 /** Injectable collaborators (tests pass mocks; the runtime uses the defaults). */
@@ -157,6 +188,44 @@ export async function corroborateFinding(
     // then re-synthesize the concept and add this session (no-op if counted).
     const ideaId = (top.metadata as { ideaId?: string }).ideaId ?? top.key;
     const existing = await repo.getIdea(finding.org, finding.skillBaseName, ideaId);
+    if (existing && existing.status === 'folded') {
+      // U20 — the matched idea is FOLDED: its lesson is already in the body and it
+      // has dropped from candidate-learnings. Do NOT reopen, re-synthesize, or
+      // re-count it, and do NOT spawn a fresh duplicate that would re-surface the
+      // lesson. Attach this session as POST-FOLD EVIDENCE (visible in HQ history,
+      // never in a working session). A session already recorded — in the live
+      // `sources` (an original fold session) or in `postFoldSources` — is a pure
+      // no-op (monotonic, no double counting).
+      const alreadyLive = existing.sources.some((s) => s.sessionId === finding.sessionId);
+      const postFold = existing.postFoldSources ?? [];
+      const { sources: nextPostFold, added } = alreadyLive
+        ? { sources: postFold, added: false }
+        : withSession(postFold, source);
+      if (!added) {
+        return {
+          idea: existing,
+          created: false,
+          sessionCounted: false,
+          corroborated: corroborationCount(existing) >= CORROBORATION_K,
+          postFoldAttached: false,
+        };
+      }
+      const updated: Idea = {
+        ...existing,
+        postFoldSources: nextPostFold,
+        updatedAt: now,
+      };
+      const res = await repo.corroborateIdeaConditional(updated, existing.corroborationVersion);
+      const idea = res.written ? updated : existing;
+      return {
+        idea,
+        created: false,
+        // The LIVE corroboration set is untouched; post-fold evidence is separate.
+        sessionCounted: false,
+        corroborated: corroborationCount(idea) >= CORROBORATION_K,
+        postFoldAttached: res.written,
+      };
+    }
     if (existing) {
       const { sources, added } = withSession(existing.sources, source);
       // Re-synthesize only when this session adds new evidence; a re-emit from an
@@ -167,6 +236,7 @@ export async function corroborateFinding(
           created: false,
           sessionCounted: false,
           corroborated: corroborationCount(existing) >= CORROBORATION_K,
+          postFoldAttached: false,
         };
       }
       const mergedText = await writer.merge(existing.text, finding.content);
@@ -186,6 +256,7 @@ export async function corroborateFinding(
         created: false,
         sessionCounted: res.written,
         corroborated: corroborationCount(idea) >= CORROBORATION_K,
+        postFoldAttached: false,
       };
     }
     // The vector pointed at a missing idea (deleted/cascaded) — fall through to create.
@@ -199,6 +270,7 @@ export async function corroborateFinding(
     org: finding.org,
     text: newConcept,
     sources: [source],
+    postFoldSources: [],
     status: 'open',
     ideaEmbeddingVersion: embedding.embeddingVersion,
     corroborationVersion: 0,
@@ -227,6 +299,7 @@ export async function corroborateFinding(
     created: res.written,
     sessionCounted: res.written,
     corroborated: corroborationCount(idea) >= CORROBORATION_K,
+    postFoldAttached: false,
   };
 }
 
