@@ -349,6 +349,18 @@ export class ApiStack extends cdk.Stack {
     // same `ideasFn`/bundle and `noAuth` device-token contract; the handler
     // dispatches on the `/ideas` suffix.
     r('/skills/{name}/ideas', [M.GET], ideasFn, 'SkillIdeas', noAuth);
+    // Unassigned bin (skill-idea loop, U15): the org's new-skill backlog — topics
+    // the judge rejected from every candidate skill, with frequency. Reuses the
+    // same `ideasFn`/bundle and `noAuth` device-token contract. READ is open to
+    // any org member; the promote-to-skill action is admin-gated server-side.
+    r('/ideas/unassigned', [M.GET], ideasFn, 'IdeasUnassigned', noAuth);
+    r(
+      '/ideas/unassigned/{entryId}/promote-to-skill',
+      [M.POST],
+      ideasFn,
+      'IdeasUnassignedPromote',
+      noAuth,
+    );
 
     // MCP servers mirror the skills catalog routes MINUS the bundle verbs
     // (members/dissolve) and the retired-by-design scope verb — the catalog is a

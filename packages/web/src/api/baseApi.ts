@@ -16,6 +16,7 @@ import type {
   LearningRecord,
   LearningStream,
   Idea,
+  UnassignedEntry,
 } from '@harness/shared';
 
 /**
@@ -76,6 +77,15 @@ export interface ProjectDoc {
  * because the ideas dropdown is the sole web consumer.
  */
 export type SkillIdea = Idea & { corroborationCount: number };
+
+/**
+ * One unassigned-bin entry as the backlog endpoint serves it (skill-idea loop,
+ * U15): the shared `UnassignedEntry` plus its DERIVED frequency (distinct
+ * sessions). The bin screen reads `frequency` directly so a recurring
+ * off-catalog topic — a strong new-skill candidate — sorts to the top without
+ * recomputing the count from `sources`.
+ */
+export type UnassignedIdea = UnassignedEntry & { frequency: number };
 
 /** Markdown body of a single detailed-requirements doc (U11). */
 export interface ProjectDocContent {
@@ -258,6 +268,7 @@ export const baseApi = createApi({
     'Learnings',
     'Memory',
     'Idea',
+    'Bin',
   ],
   endpoints: (build) => ({
     /**
@@ -523,6 +534,20 @@ export const baseApi = createApi({
       query: (name) => `skills/${encodeURIComponent(name)}/ideas`,
       transformResponse: unwrapArray<SkillIdea>('ideas'),
       providesTags: (_r, _e, name) => [{ type: 'Idea', id: name }],
+    }),
+
+    /**
+     * The org's unassigned bin (skill-idea loop, U15): topics the judge rejected
+     * from every candidate skill — the new-skill backlog — each with its
+     * frequency (distinct sessions). Org-scoped server-side via the effective
+     * org; READ is open to any member (acting on an entry is admin-gated on the
+     * backend). Mirrors `getSkillIdeas`: `unwrapArray('entries')` tolerates the
+     * bare-array test stub and the wrapped `{ entries: [...] }` backend shape.
+     */
+    getUnassignedIdeas: build.query<UnassignedIdea[], void>({
+      query: () => 'ideas/unassigned',
+      transformResponse: unwrapArray<UnassignedIdea>('entries'),
+      providesTags: ['Bin'],
     }),
 
     /**
@@ -1041,6 +1066,7 @@ export const {
   useGetSkillsQuery,
   useGetSkillVariantsQuery,
   useGetSkillIdeasQuery,
+  useGetUnassignedIdeasQuery,
   usePromoteSkillMutation,
   useGetMcpServersQuery,
   useGetMcpServerQuery,

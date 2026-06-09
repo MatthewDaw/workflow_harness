@@ -2,15 +2,18 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Idea, IdeaSource } from '@harness/shared';
+import type { Idea, IdeaSource, UnassignedEntry } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import { signDeviceToken } from '../src/auth/verify.js';
 import {
   CANDIDATE_CAP,
   CORROBORATION_K,
   type IdeaWithCorroboration,
+  type UnassignedEntryWithFrequency,
+  actOnUnassignedEntry,
   resolveCandidateLearnings,
   resolveSkillIdeas,
+  resolveUnassignedBin,
 } from '../src/rest/ideas.js';
 import { handler as ideasHandler } from '../src/rest/ideas.js';
 import { installInMemoryTable } from './helpers/memtable.js';
@@ -288,5 +291,169 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
     const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
     // Both statuses returned — proves the handler routed to all-ideas, not the gated path.
     expect(ideas.map((i) => i.ideaId).sort()).toEqual(['folded-one', 'open-one']);
+  });
+});
+
+/**
+ * GET /ideas/unassigned + POST /ideas/unassigned/{entryId}/promote-to-skill
+ * (U15/R6/R7). The unassigned bin is the org's new-skill backlog — topics the
+ * judge rejected from every candidate skill. READ is open to any org member and
+ * carries each entry's frequency (distinct sessions, deduped across segments),
+ * ordered most-frequent-then-freshest. ACTING on an entry is admin-gated
+ * server-side (non-admins read but can't action). Org is the effective
+ * (PROFILE-driven) org, so an org-A read never sees org-B bin entries.
+ */
+describe('GET /ideas/unassigned (the org bin, U15)', () => {
+  function binEntry(
+    entryId: string,
+    opts: {
+      sessions: number;
+      org?: string;
+      updatedAt?: number;
+      extraSegmentsOnFirst?: number;
+    },
+  ): UnassignedEntry {
+    const sources: IdeaSource[] = [];
+    for (let i = 0; i < opts.sessions; i++) sources.push(source(`${entryId}-sess-${i}`));
+    for (let i = 0; i < (opts.extraSegmentsOnFirst ?? 0); i++) {
+      sources.push({ sessionId: `${entryId}-sess-0`, segmentId: `extra-${i}`, seq: seq++, snippet: '' });
+    }
+    return {
+      entryId,
+      org: opts.org ?? ORG,
+      text: `topic ${entryId}`,
+      sources,
+      createdAt: 1,
+      updatedAt: opts.updatedAt ?? 1,
+    };
+  }
+
+  function binEvent(org = ORG, userId: string | null = 'matt') {
+    return httpEvent({ method: 'GET', userId, org, rawPath: '/ideas/unassigned' });
+  }
+
+  it('lists the org bin entries with their frequency (distinct sessions)', async () => {
+    await repo.putUnassigned(binEntry('a', { sessions: 3 }));
+    await repo.putUnassigned(binEntry('b', { sessions: 1 }));
+    const res = await resolveUnassignedBin(binEvent(), deps);
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const byId = Object.fromEntries(entries.map((e) => [e.entryId, e.frequency]));
+    expect(byId).toEqual({ a: 3, b: 1 });
+  });
+
+  it('counts the distinct SESSION, not segments, for frequency', async () => {
+    await repo.putUnassigned(binEntry('multiseg', { sessions: 2, extraSegmentsOnFirst: 5 }));
+    const res = await resolveUnassignedBin(binEvent(), deps);
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    expect(entries[0]!.frequency).toBe(2); // extra segments on the first session do NOT raise it
+  });
+
+  it('orders recurring topics most-frequent-first, then freshest', async () => {
+    await repo.putUnassigned(binEntry('f2-old', { sessions: 2, updatedAt: 100 }));
+    await repo.putUnassigned(binEntry('f2-new', { sessions: 2, updatedAt: 200 }));
+    await repo.putUnassigned(binEntry('f5', { sessions: 5, updatedAt: 1 }));
+    const res = await resolveUnassignedBin(binEvent(), deps);
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    expect(entries.map((e) => e.entryId)).toEqual(['f5', 'f2-new', 'f2-old']);
+  });
+
+  it('is org-scoped — org A never sees org B bin entries (no cross-org leak)', async () => {
+    await repo.putUnassigned(binEntry('mine', { sessions: 1, org: ORG }));
+    await repo.putUnassigned(binEntry('theirs', { sessions: 9, org: 'other-org' }));
+    const res = await resolveUnassignedBin(binEvent(ORG), deps);
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    expect(entries.map((e) => e.entryId)).toEqual(['mine']);
+  });
+
+  it('scopes by the EFFECTIVE org (profile.org), not the raw token org', async () => {
+    await repo.putUser({ userId: 'matt', org: 'profile-org' });
+    await repo.putUnassigned(binEntry('in-profile-org', { sessions: 1, org: 'profile-org' }));
+    await repo.putUnassigned(binEntry('in-token-org', { sessions: 1, org: ORG }));
+    const res = await resolveUnassignedBin(binEvent(ORG), deps);
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    expect(entries.map((e) => e.entryId)).toEqual(['in-profile-org']);
+  });
+
+  it('a non-admin org member can READ the bin', async () => {
+    await repo.putUser({ userId: 'matt', org: ORG }); // member, not admin
+    await repo.putUnassigned(binEntry('a', { sessions: 1 }));
+    const res = await resolveUnassignedBin(binEvent(), deps);
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    expect(entries.map((e) => e.entryId)).toEqual(['a']);
+  });
+
+  it('401s an unauthenticated request', async () => {
+    const res = await resolveUnassignedBin(binEvent(ORG, null), deps);
+    expect(res).toMatchObject({ statusCode: 401 });
+  });
+
+  it('dispatches the /ideas/unassigned path to the bin via the handler (device token)', async () => {
+    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
+    const SECRET = new TextEncoder().encode('test-device-secret');
+    await repo.putUnassigned(binEntry('a', { sessions: 1, org: ORG }));
+    const token = await signDeviceToken({ userId: 'matt', org: ORG }, { secret: SECRET });
+    const event = httpEvent({
+      method: 'GET',
+      userId: null,
+      rawPath: '/ideas/unassigned',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const res = await ideasHandler(event);
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    expect(entries.map((e) => e.entryId)).toEqual(['a']);
+  });
+});
+
+describe('POST /ideas/unassigned/{entryId}/promote-to-skill (admin-gated action, U15)', () => {
+  function actionEvent(opts: { admin: boolean; userId?: string | null; entryId?: string; org?: string }) {
+    return httpEvent({
+      method: 'POST',
+      userId: opts.userId === undefined ? 'matt' : opts.userId,
+      org: opts.org ?? ORG,
+      admin: opts.admin,
+      rawPath: `/ideas/unassigned/${opts.entryId ?? 'e-1'}/promote-to-skill`,
+      path: { entryId: opts.entryId ?? 'e-1' },
+    });
+  }
+
+  const entry: UnassignedEntry = {
+    entryId: 'e-1',
+    org: ORG,
+    text: 'recurring off-catalog topic',
+    sources: [source('s-1')],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  it('lets an admin act on a bin entry', async () => {
+    await repo.putUnassigned(entry);
+    const res = await actOnUnassignedEntry(actionEvent({ admin: true }), deps);
+    expect(res).toMatchObject({ statusCode: 200 });
+    const body = bodyOf<{ entryId: string; acknowledged: boolean }>(res as { body: string });
+    expect(body).toEqual({ entryId: 'e-1', acknowledged: true });
+  });
+
+  it('FORBIDS a non-admin member from acting (reads but cannot action)', async () => {
+    await repo.putUser({ userId: 'matt', org: ORG }); // member, not admin
+    await repo.putUnassigned(entry);
+    const res = await actOnUnassignedEntry(actionEvent({ admin: false }), deps);
+    expect(res).toMatchObject({ statusCode: 403 });
+  });
+
+  it('401s an unauthenticated action', async () => {
+    const res = await actOnUnassignedEntry(actionEvent({ admin: false, userId: null }), deps);
+    expect(res).toMatchObject({ statusCode: 401 });
+  });
+
+  it('400s acting on an unknown bin entry', async () => {
+    const res = await actOnUnassignedEntry(actionEvent({ admin: true, entryId: 'nope' }), deps);
+    expect(res).toMatchObject({ statusCode: 400 });
+  });
+
+  it('the handler routes the promote-to-skill POST to the admin-gated action', async () => {
+    await repo.putUnassigned(entry);
+    const res = await ideasHandler(actionEvent({ admin: true }));
+    expect(res).toMatchObject({ statusCode: 200 });
   });
 });

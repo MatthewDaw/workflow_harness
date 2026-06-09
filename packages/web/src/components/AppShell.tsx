@@ -19,6 +19,7 @@ const NAV = [
   { to: '/workflows', label: 'Workflows' },
   { to: '/skills', label: 'Skills' },
   { to: '/mcp-servers', label: 'MCP Servers' },
+  { to: '/bin', label: 'Bin' },
   { to: '/link-device', label: 'Get started' },
 ];
 
