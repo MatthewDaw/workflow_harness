@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { orgScope, type IdeaSource, type UnassignedEntry } from '@harness/shared';
+import { orgScope, type Idea, type IdeaSource, type UnassignedEntry } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { type BedrockEmbedder, getEmbedder } from '../embeddings/bedrock.js';
 import {
@@ -14,6 +14,14 @@ import {
   type JudgeCandidate,
   type RerankJudge,
 } from '../rerank/judge.js';
+import {
+  CORROBORATION_K,
+  corroborateFinding,
+  type CorroborateDeps,
+  type CorroborateResult,
+  type Finding,
+} from './corroborate.js';
+import { type IdeaWriter } from './synth.js';
 
 /**
  * U8 — Topic ingestion & top-k skill retrieval (the RETRIEVAL half of
@@ -132,6 +140,8 @@ export interface AssociateDeps {
   vectors?: S3Vectors;
   /** The Bedrock Claude-Haiku rerank judge (U9). Defaults to the process judge. */
   judge?: RerankJudge;
+  /** The Bedrock idea-writer (U7/U10). Defaults to the process writer. */
+  writer?: IdeaWriter;
 }
 
 /**
@@ -210,8 +220,7 @@ export async function associateTopic(
 
   const candidates: CandidateSkill[] = hits
     .map((h) => ({
-      skillBaseName:
-        (h.metadata as { skillBaseName?: string }).skillBaseName ?? h.key,
+      skillBaseName: (h.metadata as { skillBaseName?: string }).skillBaseName ?? h.key,
       score: h.score,
     }))
     .sort((a, b) => b.score - a.score);
@@ -258,6 +267,10 @@ export interface RouteResult {
   outcome: RouteOutcome;
   /** Resolved owning org (present unless `unresolved`). */
   org?: string;
+  /** The session's owning project (provenance; present once the org resolved). */
+  projectId?: string;
+  /** The project's repo (provenance for variant-scoped folding; if stamped). */
+  repoId?: string;
   /** The originating topic (carried through to U10 on `routed`). */
   finding: TopicFinding;
   /** The chosen skill (only on `routed`) — the SEAM U10 consumes. */
@@ -271,11 +284,7 @@ export interface RouteResult {
 }
 
 /** Build the provenance source for a binned topic (mirrors an idea source). */
-function topicSource(
-  finding: TopicFinding,
-  projectId?: string,
-  repoId?: string,
-): IdeaSource {
+function topicSource(finding: TopicFinding, projectId?: string, repoId?: string): IdeaSource {
   return {
     sessionId: finding.sessionId,
     segmentId: finding.segmentId,
@@ -313,10 +322,7 @@ async function bin(
  * chosen skill or the unassigned bin. See `RouteResult` for the outcomes; this
  * leaves idea creation to U10 (the `routed` result is its input seam).
  */
-export async function routeTopic(
-  finding: TopicFinding,
-  deps: AssociateDeps,
-): Promise<RouteResult> {
+export async function routeTopic(finding: TopicFinding, deps: AssociateDeps): Promise<RouteResult> {
   const retrieval = await associateTopic(finding, deps);
 
   if (retrieval.outcome === 'unresolved') {
@@ -347,10 +353,13 @@ export async function routeTopic(
     return bin(deps.repo, org, finding, projectId, repoId, 'below-confidence');
   }
 
-  // Accepted → the SEAM U10 consumes (idea creation NOT done here).
+  // Accepted → the SEAM U10 consumes (idea creation done in finalizeRoute).
+  // Provenance (projectId/repoId) rides along so U10 can stamp the idea source.
   return {
     outcome: 'routed',
     org,
+    ...(projectId !== undefined ? { projectId } : {}),
+    ...(repoId !== undefined ? { repoId } : {}),
     finding,
     skillBaseName: verdict.skillBaseName,
     confidence: verdict.confidence,
@@ -376,3 +385,164 @@ async function loadCandidateDescriptions(
     }),
   );
 }
+
+/**
+ * U10 — idea creation & re-evaluation MOVE semantics (the FINAL pipeline step).
+ *
+ * U9 stops at `routed` (the judge accepted a skill); this turns that verdict into
+ * a merged/created idea on the chosen skill by mapping the route into the
+ * `Finding` shape `corroborateFinding` (U7) expects and calling it — the
+ * synthesize-and-merge-or-create (and the idempotent distinct-session count)
+ * happen there. This module does NOT re-implement that; it only MAPS + invokes
+ * (and handles the cross-skill move below).
+ *
+ * RE-EVALUATION MOVE (R13). Association is per `(sessionId, segmentId)` and a
+ * topic EVOLVES: the same segment can re-evaluate to a DIFFERENT best skill than
+ * it did before. When that happens we MOVE the session's contribution — REMOVE
+ * this session from the prior skill's idea (decrementing its corroboration) and
+ * ADD it to the newly-chosen skill — rather than spraying partial credit across
+ * both skills. A session that drifts X→Y must leave X's count, not double-count.
+ *
+ * The move is done by scanning the org's ideas for any idea on a skill OTHER than
+ * the chosen one whose live `sources` already counts this session, and removing
+ * the session there (a conditional write so a concurrent fold/corroboration can't
+ * be clobbered). FOLDED ideas are left alone — their lesson is already in the
+ * body and their live `sources` are immutable history (U20); we never strip a
+ * session out of a folded idea. Then the chosen skill's idea is corroborated as
+ * usual, which re-adds the session there.
+ */
+
+/** The result of finalizing a `routed` association into an idea. */
+export interface FinalizeResult {
+  /** The corroboration outcome on the CHOSEN skill (create/merge + count). */
+  corroboration: CorroborateResult;
+  /**
+   * Ideas the session was MOVED OFF of (R13) — a prior, different skill's idea
+   * that lost this session because the topic re-evaluated elsewhere. Empty when
+   * this is the session's first/stable home. Each carries the post-removal idea.
+   */
+  movedFrom: Idea[];
+}
+
+/**
+ * Map a `routed` `RouteResult` into the corroborate `Finding` shape. The chosen
+ * `skillBaseName` and the resolved provenance (org / projectId / repoId) come
+ * from the route; the synthesis inputs (description + impl learnings + raw
+ * snippet) come from the originating topic finding. One segment per call (the
+ * `(sessionId, segmentId)` the topic event carried).
+ */
+function buildFinding(route: RouteResult): Finding {
+  const finding = route.finding;
+  const snippet = finding.description?.trim() ?? '';
+  return {
+    org: route.org!,
+    skillBaseName: route.skillBaseName!,
+    content: {
+      ...(finding.description !== undefined ? { description: finding.description } : {}),
+      ...(finding.implLearnings !== undefined ? { implLearnings: finding.implLearnings } : {}),
+      snippet,
+    },
+    sessionId: finding.sessionId,
+    segments: [{ segmentId: finding.segmentId, seq: finding.seq ?? 0, snippet }],
+    ...(route.projectId !== undefined ? { projectId: route.projectId } : {}),
+    ...(route.repoId !== undefined ? { repoId: route.repoId } : {}),
+  };
+}
+
+/**
+ * R13 — strip a session from every OPEN idea on a skill OTHER than `keepSkill`,
+ * so a topic that drifts to a new best skill MOVES rather than double-counts.
+ * Returns the post-removal ideas it touched. Folded ideas are never stripped
+ * (their live sources are immutable history; U20). Uses the conditional write so
+ * a concurrent corroboration/fold is not clobbered — a lost race leaves the
+ * stale session in place, which a later re-eval will clear (eventual, not racy).
+ */
+async function moveSessionFromOtherSkills(
+  repo: Repo,
+  org: string,
+  sessionId: string,
+  keepSkill: string,
+): Promise<Idea[]> {
+  const all = await repo.listIdeasForOrg(org);
+  const moved: Idea[] = [];
+  for (const idea of all) {
+    if (idea.skillBaseName === keepSkill) continue; // the new home — leave it.
+    if (idea.status === 'folded') continue; // immutable history (U20).
+    if (!idea.sources.some((s) => s.sessionId === sessionId)) continue; // not here.
+    const sources = idea.sources.filter((s) => s.sessionId !== sessionId);
+    const updated: Idea = { ...idea, sources, updatedAt: Date.now() };
+    const res = await repo.corroborateIdeaConditional(updated, idea.corroborationVersion);
+    if (res.written) moved.push(updated);
+  }
+  return moved;
+}
+
+/**
+ * U10 — finalize a `routed` association into a merged/created idea on the chosen
+ * skill, MOVING the session off any prior, different skill first (R13). The
+ * `route` MUST be a `routed` result (it carries the chosen `skillBaseName` and
+ * the resolved org/provenance); a non-`routed` route throws rather than guessing.
+ *
+ * Order matters: we move the session OFF other skills BEFORE corroborating onto
+ * the new one, so a same-call no-op can't briefly drop the count to zero on a
+ * skill that is in fact the same one (the move skips `keepSkill`). Provenance
+ * (R15) rides through `buildFinding` onto the idea source.
+ */
+export async function finalizeRoute(
+  route: RouteResult,
+  deps: AssociateDeps,
+): Promise<FinalizeResult> {
+  if (route.outcome !== 'routed' || !route.org || !route.skillBaseName) {
+    throw new Error('finalizeRoute requires a routed RouteResult');
+  }
+  const org = route.org;
+  const skillBaseName = route.skillBaseName;
+  const sessionId = route.finding.sessionId;
+
+  // R13: move the session off any prior, different skill's idea first.
+  const movedFrom = await moveSessionFromOtherSkills(deps.repo, org, sessionId, skillBaseName);
+
+  // Map → the corroborate Finding and create/merge on the chosen skill (U7).
+  const corroDeps: CorroborateDeps = {
+    repo: deps.repo,
+    ...(deps.embedder !== undefined ? { embedder: deps.embedder } : {}),
+    ...(deps.vectors !== undefined ? { vectors: deps.vectors } : {}),
+    ...(deps.writer !== undefined ? { writer: deps.writer } : {}),
+  };
+  const corroboration = await corroborateFinding(buildFinding(route), corroDeps);
+
+  return { corroboration, movedFrom };
+}
+
+/**
+ * The FULL ideas pipeline for one topic finding: retrieve (U8) → judge rerank
+ * (U9) → create/merge the idea + move-on-re-eval (U10). On a `routed` verdict the
+ * idea is created/merged here; on `unassigned`/`unresolved` the route result is
+ * returned untouched (the bin write already happened in `routeTopic`, or it was a
+ * no-op). The `finalize` is present only when an idea was actually written.
+ */
+export interface PipelineResult {
+  route: RouteResult;
+  /** Present only when the route was `routed` and an idea was created/merged. */
+  finalize?: FinalizeResult;
+}
+
+/**
+ * Run the end-to-end ideas pipeline for a topic finding. This is the single
+ * entry point the stream consumer (U8 trigger) calls; it composes `routeTopic`
+ * and `finalizeRoute` so callers don't re-stitch the seam.
+ */
+export async function associateAndFinalize(
+  finding: TopicFinding,
+  deps: AssociateDeps,
+): Promise<PipelineResult> {
+  const route = await routeTopic(finding, deps);
+  if (route.outcome !== 'routed') {
+    return { route };
+  }
+  const finalize = await finalizeRoute(route, deps);
+  return { route, finalize };
+}
+
+/** Re-exported so callers can gate on the corroboration K without a second import. */
+export { CORROBORATION_K };
