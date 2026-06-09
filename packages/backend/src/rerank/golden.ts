@@ -28,7 +28,7 @@ import type { GoldenCase, GoldenReplayResult } from '@harness/shared';
  */
 
 /** The Claude Haiku model id. Overridable via env so a model bump needs no code change. */
-const DEFAULT_MODEL_ID = 'anthropic.claude-3-5-haiku-20241022-v1:0';
+const DEFAULT_MODEL_ID = 'us.anthropic.claude-3-5-haiku-20241022-v1:0';
 /** The Anthropic-on-Bedrock invoke contract version. */
 const ANTHROPIC_VERSION = 'bedrock-2023-05-31';
 /** A verdict is a small JSON object — cap the response tightly. */

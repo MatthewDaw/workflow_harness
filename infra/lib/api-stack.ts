@@ -7,6 +7,7 @@ import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { StartingPosition, FilterCriteria, FilterRule } from 'aws-cdk-lib/aws-lambda';
 import { HttpNoneAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2';
@@ -133,6 +134,22 @@ export class ApiStack extends cdk.Stack {
 
     const grantRead = (fn: lambda.Function) => this.table.grantReadData(fn);
     const grantReadWrite = (fn: lambda.Function) => this.table.grantReadWriteData(fn);
+    // The skill-idea loop calls Bedrock (Titan embeddings + Claude-Haiku rerank /
+    // idea-writer / golden judge). Claude Haiku has no on-demand throughput and must
+    // be invoked via its US cross-region INFERENCE PROFILE, which requires
+    // InvokeModel on BOTH the profile ARN and the underlying foundation models in
+    // every region the profile may route to. Grant only the Lambdas that call Bedrock.
+    const grantBedrock = (fn: lambda.Function) =>
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['bedrock:InvokeModel'],
+          resources: [
+            `arn:aws:bedrock:*:${cdk.Stack.of(this).account}:inference-profile/us.anthropic.*`,
+            'arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-haiku-*',
+            'arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2*',
+          ],
+        }),
+      );
 
     // ---- HTTP API (REST) ------------------------------------------------------
     const projectsFn = makeFn('RestProjectsFn', 'rest_projects');
@@ -169,6 +186,10 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(deviceFn);
     grantReadWrite(dodFn);
     grantReadWrite(orgsFn);
+    // Bedrock invokers: skills handler runs the golden-replay judge on promote.
+    // (The stream consumer — embed + rerank + idea-writer — is granted at its
+    // definition below. ideasFn is read-only and is deliberately not granted.)
+    grantBedrock(skillsFn);
 
     const region = cdk.Stack.of(this).region;
     const jwtIssuer = `https://cognito-idp.${region}.amazonaws.com/${props.userPool.userPoolId}`;
@@ -497,6 +518,9 @@ export class ApiStack extends cdk.Stack {
     // project's stored progress changes. It reads + writes the table.
     const streamConsumerFn = makeFn('StreamConsumerFn', 'ws_streamConsumer');
     grantReadWrite(streamConsumerFn);
+    // The stream consumer embeds skills on write and runs the topic→idea pipeline
+    // (Titan embeddings + Claude-Haiku rerank + idea-writer), so it invokes Bedrock.
+    grantBedrock(streamConsumerFn);
 
     // A DLQ captures records that exhaust retries so a poison batch cannot block
     // the shard indefinitely; bisectBatchOnError isolates the offending record.
