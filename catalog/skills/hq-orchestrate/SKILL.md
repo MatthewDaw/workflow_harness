@@ -46,6 +46,14 @@ No Bedrock, no server-side model call — every supervisor judgement and every
 worker is Claude Code reasoning, here, on the subscription. The backend only
 **stores** agents/workflows; it never executes them.
 
+**Where the agents/skills live.** Only the `command-hq-starter` bundle's SKILL.md
+*source* is in git (`catalog/skills/`). Every catalog **agent**, every other
+**skill**, and every **workflow** lives in the HQ catalog (DynamoDB), addressed
+by name and retrieved over REST (`GET /agents/<name>`, `GET /skills/<name>`,
+`GET /workflows/<name>`) with the device/session bearer token. So a worker does
+not get its instructions from the worktree filesystem — it **pulls them from the
+catalog** at startup (see "What a worker inherits" below).
+
 ## Inputs it gathers
 
 Gather these up front; ask only for the ones missing.
@@ -99,11 +107,28 @@ Gather these up front; ask only for the ones missing.
    (`{ name, nodes }`) so the run is reviewable in HQ; skip if the user doesn't
    want it saved.
 
-5. **Spawn workers by dependency order.** Compute the **ready set** — tickets
-   whose `dependsOn` are all already done — and, up to the parallelism cap, spawn
-   one **background claude worker per ready ticket**, each in its own
-   `git worktree add ../wt-<ticketId> -b work/<ticketId> main` with the ticket's
-   `prompt` as its task. Tickets with unmet deps wait.
+5. **Spawn workers by dependency order — with a retrieval bootstrap, not an
+   inlined dump.** Compute the **ready set** — tickets whose `dependsOn` are all
+   already done — and, up to the parallelism cap, spawn one **background claude
+   worker per ready ticket**, each in its own
+   `git worktree add ../wt-<ticketId> -b work/<ticketId> main`. The worker starts
+   with a **fresh, empty context**; it inherits nothing from the supervisor. So
+   rather than paste the whole agent prompt + every skill into the spawn, give the
+   worker a short **bootstrap prompt** that names what it is and **tells it how to
+   fetch the rest itself** (the catalog is the source of truth — keep the spawn
+   light). The bootstrap carries only:
+   - **identity** — `agent: <name>` (+ its scope `{tier,id}`) and `runId`;
+   - **its ticket** — `ticketId`, the ticket `prompt`, and the ticket's place in
+     the DAG (what it depends on, what depends on it);
+   - **retrieval instructions** — the explicit steps to hydrate its own context
+     before touching code: `GET /agents/<name>` for its full system prompt +
+     declared `skills`/`tools`; `GET /skills/<s>` for each declared skill body;
+     and the bearer-token source (`~/.claude-plus/credentials`) + `$CLAUDE_PLUS_API_URL`
+     to make those calls. (A worker spawned as a materialized `.claude/agents/<name>.md`
+     subagent already loads the prompt as its system prompt; the retrieval step
+     still fetches the **skill bodies**, which are catalog records, not files in
+     the worktree.)
+   Tickets with unmet deps wait.
 
 6. **Supervise every loop tick — check, then nudge.** On each `/loop` wake, for
    every in-flight worker the supervisor reads the worker's progress (its output /
@@ -134,6 +159,45 @@ Gather these up front; ask only for the ones missing.
    Then **cancel the supervisor's own `/loop` cron job** and clear the marker —
    the run is over and nothing keeps waking. Print a final summary: tickets
    completed, validation verdict, the merge SHAs.
+
+## What a worker inherits (and how it pulls the rest)
+
+A spawned worker does **not** inherit the supervisor's conversation, the skill
+bodies the supervisor loaded, or the agent prompts it read from HQ. It boots with
+an empty context. The design is **pull, not push**: the supervisor hands the
+worker a light bootstrap and the worker **retrieves** its full context from the
+catalog as its first action. This keeps spawns cheap, keeps the catalog
+(DynamoDB) the single source of truth, and means a worker re-hydrates the same
+way on a retry.
+
+The bootstrap prompt the supervisor spawns each worker with looks like:
+
+```
+You are the worker for ticket <ticketId> in orchestration run <runId>.
+You run AS the catalog agent "<agent>" (scope <tier>:<id>).
+
+FIRST — hydrate your own context before writing any code:
+  HQ="$CLAUDE_PLUS_API_URL"; TOK="$(sed -n 2p ~/.claude-plus/credentials)"
+  1. GET $HQ/agents/<agent>?tier=<tier>&id=<id>  → adopt its `prompt` as your
+     operating instructions; note its `skills` and `tools`.
+  2. For each skill name in that agent's `skills`: GET $HQ/skills/<name> → read
+     the returned `body` (the SKILL.md) and follow it when relevant.
+  (These are catalog records in DynamoDB, not files in this worktree — fetch them.)
+
+THEN do your ticket:
+<the ticket prompt>
+
+Depends on (already done): <dep ticket ids>.  Feeds: <downstream ticket ids>.
+Work only in this worktree on branch work/<ticketId>. Stay in scope; if you find
+yourself reimplementing something that already exists, stop and reuse it.
+Heed any steering messages the supervisor sends.
+```
+
+Because agents and skills are **name-pointers resolved from the catalog**, the
+worker fetches exactly the versions HQ currently serves — no drift from whatever
+happens to be on disk. (Materializing the agent as a `.claude/agents/<name>.md`
+subagent is an optimization for the system-prompt half; the **skill bodies** are
+still catalog records the worker pulls by REST.)
 
 ## Resume (each /loop tick)
 
@@ -180,7 +244,9 @@ Test expectation: none — SKILL.md authoring. Verified by running it: it loads 
 supervisor / ticket-assigner / (optional) validation agents from the agents REST,
 forces the supervisor to opus, establishes the goal (typed or via a state-assessor
 that can short-circuit when no work is needed), assigns a dependency-ordered
-ticket DAG, spawns parallel workers in per-ticket worktrees up to the cap,
+ticket DAG, spawns parallel workers in per-ticket worktrees up to the cap — each
+handed a light **retrieval bootstrap** that tells it to pull its own agent prompt
++ skill bodies from the catalog (DynamoDB) over REST rather than inheriting them —
 supervises them on a self-cancelling `/loop` cron (checking on-target /
 complete / clean / non-duplicative and sending nudges, never silent restarts),
 optionally runs validation, lands the work to main, and cancels its own cron when
