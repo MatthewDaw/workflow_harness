@@ -161,6 +161,18 @@ export async function corroborateFinding(
   deps: CorroborateDeps,
 ): Promise<CorroborateResult> {
   const { repo } = deps;
+  // ORG GUARD (F2, cross-org isolation). Every idea-index query and idea row this
+  // function writes is org-partitioned (`orgFilter: finding.org` / `SCOPE#org#<org>`).
+  // A blank/whitespace org would query the idea index UNSCOPED-in-spirit (the
+  // `{ org: '' }` filter matches an empty-org partition, not the caller's) and
+  // write a row into a bogus `SCOPE#org#` partition — both isolation hazards. The
+  // upstream `associate.resolveOrg` already refuses a blank org, but corroboration
+  // takes `org` as a raw field, so we re-assert the guard here (defense-in-depth):
+  // reject rather than default to a wrong/empty org.
+  const org = finding.org?.trim();
+  if (!org) {
+    throw new Error('corroborateFinding requires a non-blank org (cross-org isolation, F2)');
+  }
   const embedder = deps.embedder ?? getEmbedder();
   const vectors = deps.vectors ?? getS3Vectors();
   const writer = deps.writer ?? getIdeaWriter();
