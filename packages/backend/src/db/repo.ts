@@ -11,6 +11,7 @@ import type {
   DefinitionOfDone,
   DeviceAuth,
   Envelope,
+  GoldenCase,
   Idea,
   LearningRecord,
   McpServer,
@@ -1610,6 +1611,45 @@ export class Repo {
   async listUnassignedForOrg(org: string): Promise<UnassignedEntry[]> {
     const { PK, skPrefix } = k.unassignedBinPrefix(org);
     return this.queryPrefix<UnassignedEntry>(PK, skPrefix);
+  }
+
+  // --- Golden-set regression cases (skill-idea loop, U18) ----------------
+  //
+  // Golden cases are co-located with skills under an `IDEAGOLD#` SK prefix, so
+  // (like ideas) they are invisible to `listSkills`. Each fold records one case
+  // (the before→after expectation); a later promote replays the family's cases
+  // against the candidate body via the Bedrock golden judge. The `caseId` is the
+  // folded `ideaId`, so re-folding the same idea overwrites its case in place.
+
+  /**
+   * Upsert a golden case UNCONDITIONALLY. The SK is `IDEAGOLD#<baseName>#<caseId>`,
+   * so re-putting the same `caseId` overwrites in place (re-folding an idea
+   * refreshes its before→after rather than duplicating the case).
+   */
+  async putGoldenCase(c: GoldenCase): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.goldenCaseKey(c.org, c.skillBaseName, c.caseId), ...c },
+      }),
+    );
+  }
+
+  async getGoldenCase(
+    org: string,
+    skillBaseName: string,
+    caseId: string,
+  ): Promise<GoldenCase | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.goldenCaseKey(org, skillBaseName, caseId) }),
+    );
+    return res.Item as GoldenCase | undefined;
+  }
+
+  /** Every golden case guarding one skill family, in one partition read. */
+  async listGoldenCasesForSkill(org: string, skillBaseName: string): Promise<GoldenCase[]> {
+    const { PK, skPrefix } = k.goldenCasePrefixForSkill(org, skillBaseName);
+    return this.queryPrefix<GoldenCase>(PK, skPrefix);
   }
 
   /** Paginated `PK = :pk AND begins_with(SK, :sk)` read (follows LastEvaluatedKey). */

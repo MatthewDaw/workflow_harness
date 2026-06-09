@@ -45,12 +45,31 @@ const fakeVectors = {
     deletedVectors.push({ index, keys });
   },
 } as unknown as import('../src/embeddings/s3vectors.js').S3Vectors;
-const deps = { repo, vectors: fakeVectors };
+
+/**
+ * U18 — the promote path replays golden cases via a Bedrock judge. We inject a
+ * fake judge so promote tests never touch AWS. By default it reports every case
+ * SATISFIED (clean candidate); a test can flip `goldenVerdict` to model a
+ * regression. Each `judge` call is recorded so we can assert the replay ran and
+ * against which candidate body.
+ */
+let goldenVerdict: { satisfied: boolean; reason: string } = { satisfied: true, reason: 'ok' };
+const goldenCalls: Array<{ caseId: string; candidateBody: string }> = [];
+const fakeGolden = {
+  judge: async (c: { caseId: string; lesson: string }, candidateBody: string) => {
+    goldenCalls.push({ caseId: c.caseId, candidateBody });
+    return { caseId: c.caseId, lesson: c.lesson, ...goldenVerdict };
+  },
+} as unknown as import('../src/rerank/golden.js').GoldenJudge;
+
+const deps = { repo, vectors: fakeVectors, golden: fakeGolden };
 
 beforeEach(() => {
   ddbMock.reset();
   installInMemoryTable(ddbMock);
   deletedVectors.length = 0;
+  goldenCalls.length = 0;
+  goldenVerdict = { satisfied: true, reason: 'ok' };
 });
 
 const MATT = 'matt';
@@ -987,5 +1006,166 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
     expect(new Set(after?.sources.map((s) => s.sessionId))).toEqual(
       new Set(['s-1', 's-2', 's-3']),
     );
+  });
+});
+
+/**
+ * U18 — golden-set regression at fold. A fold captures its before→after as a
+ * golden case co-located with the skill; a later promote replays the skill's
+ * golden cases against the candidate revision body via a (mocked) Bedrock judge
+ * and SURFACES any regression. v1 is advisory — the promote still succeeds.
+ */
+describe('U18: golden-set regression (fold records, promote replays)', () => {
+  function goldIdea(over: Partial<Idea> = {}): Idea {
+    return {
+      ideaId: 'i-1',
+      skillBaseName: 'reconcile',
+      org: ORG,
+      text: 'Always reconcile in the ledger currency.',
+      sources: [{ sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: 'ev1' }],
+      status: 'open',
+      corroborationVersion: 0,
+      createdAt: 10,
+      updatedAt: 10,
+      ...over,
+    };
+  }
+
+  async function seedFold(foldBody: string) {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'before-body') }),
+      deps,
+    );
+    await repo.putIdea(goldIdea());
+    return foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile', ideaId: 'i-1' },
+        rawPath: '/skills/reconcile/ideas/i-1/fold',
+        body: { body: foldBody },
+      }),
+      deps,
+    );
+  }
+
+  it('folding writes a golden case (before→after + lesson)', async () => {
+    await seedFold('before-body\n\n## Folded\nUse the ledger currency.');
+    const cases = await repo.listGoldenCasesForSkill(ORG, 'reconcile');
+    expect(cases).toHaveLength(1);
+    const c = cases[0]!;
+    expect(c.caseId).toBe('i-1');
+    expect(c.ideaId).toBe('i-1');
+    expect(c.lesson).toBe('Always reconcile in the ledger currency.');
+    expect(c.before).toBe('before-body');
+    expect(c.after).toContain('Use the ledger currency.');
+    expect(c.foldedIntoRev).toBe(2);
+  });
+
+  it('a clean candidate passes replay (no regressions, promote succeeds)', async () => {
+    await seedFold('before-body\n\n## Folded\nUse the ledger currency.');
+    goldenVerdict = { satisfied: true, reason: 'still present' };
+    const res = await promoteSkill(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile', rev: 2 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const out = bodyOf<{ goldenReplay: unknown[]; goldenRegressions: unknown[] }>(
+      res as { body: string },
+    );
+    expect(out.goldenReplay).toHaveLength(1);
+    expect(out.goldenRegressions).toHaveLength(0);
+    // The replay judged the candidate body (the folded rev 2), not the base.
+    expect(goldenCalls).toHaveLength(1);
+    expect(goldenCalls[0]!.candidateBody).toContain('Use the ledger currency.');
+  });
+
+  it('a candidate that BREAKS a prior golden case is flagged before promote (advisory)', async () => {
+    await seedFold('before-body\n\n## Folded\nUse the ledger currency.');
+    // The judge reports the lesson is gone in the candidate → a regression.
+    goldenVerdict = { satisfied: false, reason: 'the ledger-currency guidance was removed' };
+    const res = await promoteSkill(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile', rev: 2 },
+      }),
+      deps,
+    );
+    // ADVISORY: the regression is surfaced but the promote still succeeds.
+    expect(res).toMatchObject({ statusCode: 200 });
+    const out = bodyOf<{
+      true: { rev: number };
+      goldenRegressions: Array<{ caseId: string; reason: string }>;
+    }>(res as { body: string });
+    expect(out.true.rev).toBe(2);
+    expect(out.goldenRegressions).toHaveLength(1);
+    expect(out.goldenRegressions[0]!.caseId).toBe('i-1');
+    expect(out.goldenRegressions[0]!.reason).toMatch(/removed/);
+  });
+
+  it('a promote with NO golden cases skips replay entirely', async () => {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'v1') }),
+      deps,
+    );
+    const res = await promoteSkill(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile', rev: 1 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const out = bodyOf<{ goldenReplay: unknown[] }>(res as { body: string });
+    expect(out.goldenReplay).toHaveLength(0);
+    expect(goldenCalls).toHaveLength(0);
+  });
+
+  it('replay is org-scoped: org B never replays org A golden cases', async () => {
+    // Org A folds an idea → a golden case under org A.
+    await seedFold('before-body\n\n## Folded\nUse the ledger currency.');
+    // Org B has its OWN reconcile skill, no golden cases. A promote in org B
+    // must not see org A's case (the cases are partitioned by `SCOPE#org#`).
+    const ORG_B = 'globex';
+    await createSkill(
+      httpEvent({
+        org: ORG_B,
+        admin: true,
+        method: 'POST',
+        userId: MATT,
+        body: { ...skill('reconcile', 'b-body'), scope: orgScope(ORG_B) },
+      }),
+      deps,
+    );
+    const res = await promoteSkill(
+      httpEvent({
+        org: ORG_B,
+        admin: true,
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile', rev: 1 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const out = bodyOf<{ goldenReplay: unknown[] }>(res as { body: string });
+    expect(out.goldenReplay).toHaveLength(0);
+    // Org A's lone case still belongs to org A.
+    expect(await repo.listGoldenCasesForSkill(ORG, 'reconcile')).toHaveLength(1);
+    expect(await repo.listGoldenCasesForSkill(ORG_B, 'reconcile')).toHaveLength(0);
   });
 });

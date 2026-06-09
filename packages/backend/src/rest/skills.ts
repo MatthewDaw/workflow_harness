@@ -1,5 +1,12 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { orgScope, skillSchema, type Idea, type Skill } from '@harness/shared';
+import {
+  orgScope,
+  skillSchema,
+  type GoldenCase,
+  type GoldenReplayResult,
+  type Idea,
+  type Skill,
+} from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
@@ -24,6 +31,7 @@ import {
   skillVectorKey,
   type S3Vectors,
 } from '../embeddings/s3vectors.js';
+import { getGoldenJudge, replayGoldenCases, type GoldenJudge } from '../rerank/golden.js';
 
 /**
  * REST: skills + bundles — collapsed to a single ORG catalog.
@@ -58,6 +66,11 @@ export interface SkillsDeps {
    * the runtime handler defaults to the process-wide `getS3Vectors()`.
    */
   vectors?: S3Vectors;
+  /**
+   * Bedrock golden judge for the U18 fold→promote regression replay. Optional +
+   * injectable for tests; the runtime handler defaults to `getGoldenJudge()`.
+   */
+  golden?: GoldenJudge;
 }
 
 /**
@@ -186,6 +199,70 @@ export async function createSkill(
 }
 
 /**
+ * Parse a `variantId` infix back into `{ repoId, userId }`. The base variant's
+ * id is just the `baseName` (→ no repo/user); a fork is `<baseName>#R#<repoId>#U#<userId>`
+ * (mirrors `variantIdFor` / `variantInfix`). Returns `{}` for the base.
+ */
+function parseVariantId(baseName: string, variantId: string): { repoId?: string; userId?: string } {
+  if (variantId === baseName) return {};
+  const m = new RegExp(`^${baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#R#(.*)#U#(.*)$`).exec(
+    variantId,
+  );
+  if (!m) return {};
+  return {
+    repoId: m[1] ? m[1] : undefined,
+    userId: m[2] ? m[2] : undefined,
+  };
+}
+
+/**
+ * U18 — replay the skill's golden cases against the CANDIDATE revision body
+ * being promoted, returning any REGRESSIONS (cases the candidate no longer
+ * satisfies). ADVISORY: this never throws and never blocks the promote — a
+ * replay error or a regression is surfaced to the human, who is the gate. The
+ * candidate body is resolved from the revision row the promote points at (the
+ * given `rev`, else the variant's latest). Returns the full per-case results so
+ * the caller can both report regressions and confirm the clean cases.
+ */
+async function replayGoldenForPromote(
+  deps: SkillsDeps,
+  org: string,
+  baseName: string,
+  variantId: string,
+  rev: number | undefined,
+): Promise<GoldenReplayResult[]> {
+  try {
+    const cases = await deps.repo.listGoldenCasesForSkill(org, baseName);
+    if (cases.length === 0) return [];
+    const scope = orgScope(org);
+    const variant = parseVariantId(baseName, variantId);
+    // Resolve the candidate body: the named rev's snapshot, else the variant's
+    // latest snapshot, and — as a final fallback — the LIVE "current" record (the
+    // latest write, which is what a just-folded candidate is). The fallback keeps
+    // the advisory replay robust even when a revision snapshot row is unavailable.
+    let candidateBody = '';
+    let revisionRow: Record<string, unknown> | undefined;
+    if (rev !== undefined) {
+      revisionRow = await deps.repo.getRevision(scope, 'SKILL', baseName, rev, variant);
+    } else {
+      const variants = await deps.repo.listVariants(scope, 'SKILL', baseName);
+      revisionRow = variants.find((v) => (v.variantId as string) === variantId);
+    }
+    if (typeof revisionRow?.body === 'string') {
+      candidateBody = revisionRow.body as string;
+    } else {
+      const live = await deps.repo.getSkill(scope, baseName);
+      if (typeof live?.body === 'string') candidateBody = live.body;
+    }
+    const judge = deps.golden ?? getGoldenJudge();
+    return await replayGoldenCases(judge, cases, candidateBody);
+  } catch {
+    // Advisory — a replay failure never blocks a promote nor leaks an error.
+    return [];
+  }
+}
+
+/**
  * POST /skills/:name/promote — repoint the org-wide TRUE variant for a baseName.
  * SKILL-EDIT gated (U16): promoting an unreviewed variant to the org default is
  * the same authority as writing the revision itself, so it requires the same
@@ -194,6 +271,14 @@ export async function createSkill(
  * resolved server-side from the PROFILE by the shared resolver. Body:
  * `{ variantId, rev? }`. Promotion ONLY repoints TRUE; it never edits or deletes
  * a variant. Returns the new pointer.
+ *
+ * U18 — GOLDEN-SET REGRESSION (advisory): before repointing TRUE, the skill's
+ * golden cases (one per prior fold) are REPLAYED against the candidate revision
+ * body via a Bedrock judge. Any case the candidate no longer satisfies is a
+ * REGRESSION — the candidate appears to undo an earlier fold. v1 is advisory:
+ * the human is the gate, so regressions are SURFACED on the response
+ * (`goldenRegressions` + the full `goldenReplay`) but the promote still
+ * succeeds. The replay never throws (a Bedrock error just yields no findings).
  */
 export async function promoteSkill(
   event: APIGatewayProxyEventV2,
@@ -220,9 +305,14 @@ export async function promoteSkill(
   const revRaw = (body as { rev?: unknown })?.rev;
   const rev = typeof revRaw === 'number' ? revRaw : undefined;
 
+  // Replay the golden cases against the candidate BEFORE repointing TRUE so the
+  // regression report reflects exactly what is about to become the org default.
+  const goldenReplay = await replayGoldenForPromote(deps, org, name, variantId, rev);
+  const goldenRegressions = goldenReplay.filter((r) => !r.satisfied);
+
   const pointer = { baseName: name, variantId, ...(rev !== undefined ? { rev } : {}) };
   await deps.repo.setTrueVariant(orgScope(org), 'SKILL', pointer);
-  return ok({ true: pointer });
+  return ok({ true: pointer, goldenReplay, goldenRegressions });
 }
 
 /**
@@ -341,6 +431,32 @@ export async function foldIdea(
       `idea "${ideaId}" was corroborated concurrently with the fold — re-read and re-fold ` +
         `(the revision was written; the mark was not, to avoid clobbering the new evidence).`,
     );
+  }
+
+  // U18 — capture this fold as a before→after GOLDEN CASE co-located with the
+  // skill (`IDEAGOLD#<baseName>#<ideaId>`). `before` is the body the fold
+  // started from, `after` is the merged revision body, `lesson` is the
+  // synthesized idea text the fold was meant to encode. A later promote replays
+  // this case against the candidate revision so a fold that would undo this
+  // lesson is flagged (advisory). The `caseId` is the `ideaId`, so re-folding
+  // the same idea refreshes its case rather than duplicating it. The case is
+  // best-effort: a failure here does NOT roll back the (already-marked) fold —
+  // the revision + folded idea stand; the regression guard is advisory anyway.
+  try {
+    const goldenCase: GoldenCase = {
+      caseId: ideaId,
+      skillBaseName: name,
+      org,
+      ideaId,
+      lesson: idea.text,
+      before: existing.body,
+      after: newBody,
+      foldedIntoRev: stamped.version as number,
+      createdAt: Date.now(),
+    };
+    await deps.repo.putGoldenCase(goldenCase);
+  } catch {
+    // Advisory guard — never fail the fold on a golden-case write error.
   }
 
   return ok({ skill: stamped, idea: { ...foldedIdea, corroborationVersion: idea.corroborationVersion + 1 } });
