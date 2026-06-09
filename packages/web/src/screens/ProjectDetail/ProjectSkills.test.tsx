@@ -17,6 +17,7 @@ const PROJECT: Project = {
   enabledSkills: ['gh'],
   enabledBundles: [],
   enabledAgents: [],
+  enabledWorkflows: [],
   enabledAgentBundles: [],
   enabledMcpServers: [],
 };

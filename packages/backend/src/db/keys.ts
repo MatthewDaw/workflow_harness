@@ -131,6 +131,29 @@ export const mcpServerKey = (scope: ScopeRef, name: string): PrimaryKey => ({
   SK: `MCPSERVER#${name}`,
 });
 
+export const workflowKey = (scope: ScopeRef, name: string): PrimaryKey => ({
+  PK: `SCOPE#${scopeId(scope)}`,
+  SK: `WORKFLOW#${name}`,
+});
+
+/**
+ * A workflow RUN's live status record. Unlike the workflow itself (a versioned
+ * catalog item under its scope partition), a run is transient execution state
+ * keyed under the owning PROJECT partition, so a project's runs are one
+ * `begins_with(SK, 'WORKFLOWRUN#')` read. The executor creates one per run and
+ * updates its per-node state as the DAG progresses.
+ */
+export const workflowRunKey = (projectId: string, runId: string): PrimaryKey => ({
+  PK: `PROJ#${projectId}`,
+  SK: `WORKFLOWRUN#${runId}`,
+});
+
+/** Every workflow run in a project, across all workflows (the run-status read). */
+export const workflowRunPrefix = (projectId: string): { PK: string; skPrefix: string } => ({
+  PK: `PROJ#${projectId}`,
+  skPrefix: 'WORKFLOWRUN#',
+});
+
 export const scopePartition = (scope: ScopeRef): string => `SCOPE#${scopeId(scope)}`;
 
 /**
@@ -151,7 +174,7 @@ export const scopePartition = (scope: ScopeRef): string => `SCOPE#${scopeId(scop
  * The TRUE pointer is one row per baseName:  SKILL#<baseName>#TRUE
  * (same pattern for AGENT# / MCPSERVER#).
  */
-export type CatalogKind = 'SKILL' | 'AGENT' | 'MCPSERVER';
+export type CatalogKind = 'SKILL' | 'AGENT' | 'MCPSERVER' | 'WORKFLOW';
 
 /** The variant-id infix shared by the revision SK and the DTO `variantId`. */
 export function variantInfix(baseName: string, repoId?: string, userId?: string): string {

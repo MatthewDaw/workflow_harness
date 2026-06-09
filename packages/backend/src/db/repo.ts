@@ -25,6 +25,9 @@ import type {
   UnassignedEntry,
   UserProfile,
   WeeklyUpdate,
+  Workflow,
+  WorkflowRun,
+  WorkflowRunNodeState,
 } from '@harness/shared';
 import {
   DEFAULT_DEFINITION_OF_DONE,
@@ -554,6 +557,78 @@ export class Repo {
     await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.agentKey(scope, name) }));
   }
 
+  async putWorkflow(w: Workflow): Promise<void> {
+    await this.doc.send(
+      new PutCommand({ TableName: this.table, Item: { ...k.workflowKey(w.scope, w.name), ...w } }),
+    );
+  }
+
+  async getWorkflow(scope: ScopeRef, name: string): Promise<Workflow | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.workflowKey(scope, name) }),
+    );
+    return res.Item as Workflow | undefined;
+  }
+
+  async deleteWorkflow(scope: ScopeRef, name: string): Promise<void> {
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.table, Key: k.workflowKey(scope, name) }),
+    );
+  }
+
+  // --- Workflow runs (live execution status, M5) -------------------------
+
+  /** Create/overwrite a workflow run's status record under its project partition. */
+  async putWorkflowRun(run: WorkflowRun): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...k.workflowRunKey(run.projectId, run.runId), ...run },
+      }),
+    );
+  }
+
+  async getWorkflowRun(projectId: string, runId: string): Promise<WorkflowRun | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: k.workflowRunKey(projectId, runId) }),
+    );
+    return res.Item as WorkflowRun | undefined;
+  }
+
+  /** Every run in a project, across all workflows, in one partition read. */
+  async listWorkflowRuns(projectId: string): Promise<WorkflowRun[]> {
+    const { PK, skPrefix } = k.workflowRunPrefix(projectId);
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
+      }),
+    );
+    return (res.Items ?? []) as WorkflowRun[];
+  }
+
+  /**
+   * Read-modify-write a single node's slice of a run (the executor reports node
+   * transitions one at a time). Merges `partial` onto the node's current entry —
+   * creating it if absent — so a state/runs/outputTail update never clobbers the
+   * fields it does not carry. Returns the updated run, or undefined if the run is
+   * missing.
+   */
+  async updateWorkflowRunNode(
+    projectId: string,
+    runId: string,
+    nodeId: string,
+    partial: Partial<{ state: WorkflowRunNodeState; runs: number; outputTail: string }>,
+  ): Promise<WorkflowRun | undefined> {
+    const run = await this.getWorkflowRun(projectId, runId);
+    if (!run) return undefined;
+    const current = run.nodes[nodeId] ?? { state: 'pending', runs: 0, outputTail: '' };
+    run.nodes[nodeId] = { ...current, ...partial };
+    await this.putWorkflowRun(run);
+    return run;
+  }
+
   async putSkill(s: Skill): Promise<void> {
     await this.doc.send(
       new PutCommand({ TableName: this.table, Item: { ...k.skillKey(s.scope, s.name), ...s } }),
@@ -670,6 +745,8 @@ export class Repo {
         return k.agentKey(scope, name);
       case 'MCPSERVER':
         return k.mcpServerKey(scope, name);
+      case 'WORKFLOW':
+        return k.workflowKey(scope, name);
     }
   }
 
@@ -783,6 +860,20 @@ export class Repo {
     if (userId === undefined) return orgAgents;
     const userAgents = await this.listScoped<Agent>(userScope(userId), 'AGENT#');
     return resolveScoped([...orgAgents, ...userAgents], { org, userId });
+  }
+
+  /**
+   * The catalog of workflows visible to a viewer. With no `userId` this is the
+   * org-only catalog (back-compat with every existing caller/test). With a
+   * `userId` it merges the org scope AND the user scope, so user-scoped workflows
+   * are included and a user-scoped item SHADOWS an org-scoped one of the same
+   * name (resolveScoped: narrowest scope wins).
+   */
+  async listWorkflows(org: string, userId?: string): Promise<Workflow[]> {
+    const orgWorkflows = await this.listScoped<Workflow>(orgScope(org), 'WORKFLOW#');
+    if (userId === undefined) return orgWorkflows;
+    const userWorkflows = await this.listScoped<Workflow>(userScope(userId), 'WORKFLOW#');
+    return resolveScoped([...orgWorkflows, ...userWorkflows], { org, userId });
   }
 
   /**
@@ -1063,6 +1154,73 @@ export class Repo {
     const project = await this.getProject(projectId);
     if (!project) return undefined;
     project.enabledAgents = (project.enabledAgents ?? []).filter((a) => a !== agentName);
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Mutate an IN-MEMORY project to enable a single workflow: union the workflow's
+   * name into `enabledWorkflows`, then for EACH node bring its referenced agent in
+   * via `bringAgentInto` (so every agent the workflow runs — and transitively its
+   * skills + MCP servers — is unioned into the project's enabled sets). Does NOT
+   * persist — the caller calls `putProject` once. Returns false (and leaves the
+   * project untouched) when the workflow is not in the org catalog, mirroring
+   * `bringAgentInto`. A node whose agent has vanished from the catalog is skipped
+   * (bringAgentInto returns false) rather than aborting the whole workflow.
+   */
+  private async bringWorkflowInto(
+    project: Project,
+    workflowName: string,
+    org: string,
+  ): Promise<boolean> {
+    const workflow = await this.getWorkflow(orgScope(org), workflowName);
+    if (!workflow) return false;
+
+    const enabledWorkflows = project.enabledWorkflows ?? [];
+    project.enabledWorkflows = enabledWorkflows.includes(workflowName)
+      ? enabledWorkflows
+      : [...enabledWorkflows, workflowName];
+    // Union every referenced agent (and transitively its skills + MCP servers).
+    for (const node of workflow.nodes) {
+      await this.bringAgentInto(project, node.agent, org);
+    }
+    return true;
+  }
+
+  /**
+   * Enable a workflow on a project AND union every agent its nodes reference (and
+   * transitively those agents' skills + MCP servers) into the project's enabled
+   * sets, reusing the same machinery that enabling an agent uses. The workflow +
+   * its agents are resolved against the org catalog (`org` from the caller's
+   * principal). Returns updated Project, or undefined if project/workflow is
+   * missing.
+   */
+  async addWorkflowToProject(
+    projectId: string,
+    workflowName: string,
+    org: string,
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    const brought = await this.bringWorkflowInto(project, workflowName, org);
+    if (!brought) return undefined;
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Disable a workflow on a project. Only `enabledWorkflows` is pruned —
+   * `enabledAgents`/`enabledSkills`/`enabledMcpServers` are left intact, since an
+   * agent (or its skills/servers) may be enabled directly or brought by another
+   * agent or workflow. Returns the updated Project.
+   */
+  async removeWorkflowFromProject(
+    projectId: string,
+    workflowName: string,
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    project.enabledWorkflows = (project.enabledWorkflows ?? []).filter((w) => w !== workflowName);
     await this.putProject(project);
     return project;
   }

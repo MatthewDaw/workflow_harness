@@ -23,6 +23,7 @@ export function VariantSwitcher({
   selectedVariantId,
   onSelect,
   allowPromote = false,
+  lazy = false,
   className,
 }: {
   /** The shared skill name whose variants this switches over. */
@@ -33,9 +34,21 @@ export function VariantSwitcher({
   onSelect?: (variant: SkillVariant) => void;
   /** Catalog only: expose the "Promote to true" action. */
   allowPromote?: boolean;
+  /**
+   * Defer the per-name variants fetch until the user actually engages the
+   * switcher (hover/focus). The org Skills catalog turns this on so a grid of N
+   * cards does NOT fire N `skills/:name/variants` requests on page load — the
+   * dropdown is rarely opened, so we pay for it on demand. The controlled attach
+   * flow leaves it off so its dropdown is pre-populated with the pinned variant.
+   */
+  lazy?: boolean;
   className?: string;
 }) {
-  const { data, isLoading } = useGetSkillVariantsQuery(name);
+  // Until activated, a lazy switcher skips its fetch and shows a collapsed
+  // placeholder; the first hover/focus flips this and the query fires.
+  const [activated, setActivated] = useState(false);
+  const collapsed = lazy && !activated;
+  const { data, isLoading } = useGetSkillVariantsQuery(name, { skip: collapsed });
   const [promote, { isLoading: promoting }] = usePromoteSkillMutation();
 
   // The switcher keeps its OWN selection so it works uncontrolled (the catalog,
@@ -65,8 +78,11 @@ export function VariantSwitcher({
     variants[0];
 
   // Nothing to switch between (a single base variant) — render nothing so a
-  // never-edited skill shows no clutter.
-  if (!isLoading && variants.length <= 1 && !allowPromote) return null;
+  // never-edited skill shows no clutter. While collapsed we don't yet know the
+  // count (the fetch is deferred), so keep the placeholder so it can activate.
+  if (!collapsed && !isLoading && variants.length <= 1 && !allowPromote) return null;
+
+  const activate = () => setActivated(true);
 
   const label = (v: SkillVariant): string => {
     const who = v.authorName ?? v.authorUserId;
@@ -92,6 +108,8 @@ export function VariantSwitcher({
     <div
       className={`flex flex-wrap items-center gap-1.5 text-[11px] text-mut ${className ?? ''}`}
       data-testid={`variant-switcher-${name}`}
+      onMouseEnter={lazy ? activate : undefined}
+      onFocus={lazy ? activate : undefined}
     >
       <label className="flex items-center gap-1">
         <span className="text-faint">version</span>
@@ -99,10 +117,13 @@ export function VariantSwitcher({
           className="hq-btn"
           data-testid={`variant-select-${name}`}
           value={selected?.variantId ?? ''}
-          disabled={isLoading || variants.length === 0}
+          // Collapsed lazy switchers stay enabled so a hover/focus can wake them;
+          // once fetching they disable until options arrive.
+          disabled={!collapsed && (isLoading || variants.length === 0)}
           onChange={(e) => onChange(e.target.value)}
         >
-          {isLoading && <option value="">loading…</option>}
+          {collapsed && <option value="">version ▾</option>}
+          {!collapsed && isLoading && <option value="">loading…</option>}
           {variants.map((v) => (
             <option key={v.variantId} value={v.variantId}>
               {label(v)}

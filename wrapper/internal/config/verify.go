@@ -14,6 +14,7 @@ package config
 // (the human just has to complete an interactive login) — only a FAILED server is.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -151,6 +152,9 @@ func verifyAgainst(remote []RemoteItem, src RemoteSource, plus string) VerifyRep
 			}
 			reportedSkills[ri.Name] = true
 			report.Items = append(report.Items, VerifyItem{Kind: KindSkill, Name: ri.Name, Status: st, Detail: detail})
+		case KindWorkflow:
+			st, detail := verifyWorkflow(plus, ri.Name)
+			report.Items = append(report.Items, VerifyItem{Kind: KindWorkflow, Name: ri.Name, Status: st, Detail: detail})
 		case KindMcp:
 			mcpNames = append(mcpNames, ri.Name)
 		}
@@ -242,6 +246,25 @@ func verifySkill(plus, name string) (VerifyStatus, string) {
 	}
 	if frontmatterField(string(b), "name") == "" {
 		return VerifyInvalid, "SKILL.md missing name frontmatter"
+	}
+	return VerifyOK, ""
+}
+
+// verifyWorkflow checks that workflows/<name>.json exists and parses as JSON (the
+// minimum for the workflow spec to be usable). A workflow is structured data, so —
+// unlike a skill (name frontmatter) or an agent (frontmatter name) — the gate's
+// validity check is that the materialized body is well-formed JSON.
+func verifyWorkflow(plus, name string) (VerifyStatus, string) {
+	path := filepath.Join(plus, "workflows", name+".json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return VerifyMissing, "missing workflows/" + name + ".json"
+	}
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return VerifyInvalid, "empty workflow file"
+	}
+	if !json.Valid(b) {
+		return VerifyInvalid, "workflow file is not valid JSON"
 	}
 	return VerifyOK, ""
 }

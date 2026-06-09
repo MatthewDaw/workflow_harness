@@ -31,6 +31,7 @@ const handlers = [
   'rest/projects',
   'rest/sessions',
   'rest/agents',
+  'rest/workflows',
   'rest/skills',
   'rest/ideas',
   'rest/mcpServers',

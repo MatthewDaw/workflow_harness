@@ -38,12 +38,15 @@ func PruneToEffective(plus, repoRoot string, remote []RemoteItem) (removed int, 
 
 	keepSkills := map[string]bool{}
 	keepAgents := map[string]bool{}
+	keepWorkflows := map[string]bool{}
 	for _, r := range remote {
 		switch r.Kind {
 		case KindSkill:
 			keepSkills[r.Name] = true
 		case KindAgent:
 			keepAgents[r.Name] = true
+		case KindWorkflow:
+			keepWorkflows[r.Name] = true
 		}
 	}
 	// Union in the connected repo's OWN project skills/agents (read from the repo
@@ -56,6 +59,9 @@ func PruneToEffective(plus, repoRoot string, remote []RemoteItem) (removed int, 
 		}
 		for _, n := range mdBaseNames(filepath.Join(repoClaude, "agents")) {
 			keepAgents[n] = true
+		}
+		for _, n := range jsonBaseNames(filepath.Join(repoClaude, "workflows")) {
+			keepWorkflows[n] = true
 		}
 	}
 
@@ -80,6 +86,19 @@ func PruneToEffective(plus, repoRoot string, remote []RemoteItem) (removed int, 
 		}
 		if err := os.Remove(filepath.Join(agentsDir, name+".md")); err != nil {
 			errs = append(errs, fmt.Errorf("prune agent %q: %w", name, err))
+			continue
+		}
+		removed++
+	}
+
+	// Prune the ROOT's workflow files (*.json) not in the keep set, mirroring agents.
+	workflowsDir := filepath.Join(plus, "workflows")
+	for _, name := range jsonBaseNames(workflowsDir) {
+		if keepWorkflows[name] {
+			continue
+		}
+		if err := os.Remove(filepath.Join(workflowsDir, name+".json")); err != nil {
+			errs = append(errs, fmt.Errorf("prune workflow %q: %w", name, err))
 			continue
 		}
 		removed++
@@ -115,6 +134,22 @@ func mdBaseNames(dir string) []string {
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
 			out = append(out, strings.TrimSuffix(e.Name(), ".md"))
+		}
+	}
+	return out
+}
+
+// jsonBaseNames returns the basenames (without the .json extension) of *.json
+// files in dir (a missing dir yields nothing). The workflow analog of mdBaseNames.
+func jsonBaseNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			out = append(out, strings.TrimSuffix(e.Name(), ".json"))
 		}
 	}
 	return out

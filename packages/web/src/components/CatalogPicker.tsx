@@ -14,7 +14,8 @@ export type CatalogRef =
   | { type: 'bundle'; name: string }
   | { type: 'mcp'; name: string }
   | { type: 'agent'; name: string }
-  | { type: 'agent-bundle'; name: string };
+  | { type: 'agent-bundle'; name: string }
+  | { type: 'workflow'; name: string };
 
 /**
  * The stable identity of a ref as a string key. The picker stages selections in

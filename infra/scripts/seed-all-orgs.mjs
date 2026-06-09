@@ -49,13 +49,27 @@ if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
   );
   process.exit(1);
 }
+if (!existsSync(path.join(backendDist, 'seed', 'workflows.js'))) {
+  console.error(
+    `[seed-all-orgs] missing ${backendDist}/seed/workflows.js — run \`npm run build -w @harness/backend\` first.`,
+  );
+  process.exit(1);
+}
 
 // Reuse the canonical record builder + key scheme from the built backend so this
 // seed produces byte-identical records to what the REST layer reads/writes.
 const { buildSeedSkills } = await import(
   pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href
 );
-const { skillKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
+// Workflows are structured data (no markdown tree), so their source of truth is
+// the compiled STARTER_WORKFLOWS — seeded org-wide here so EVERY org gets the
+// starter DAG (not a single SEED_ORG, per the all-orgs convention).
+const { buildSeedWorkflows, STARTER_WORKFLOWS } = await import(
+  pathToFileURL(path.join(backendDist, 'seed', 'workflows.js')).href
+);
+const { skillKey, workflowKey } = await import(
+  pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
+);
 
 /** Parse `name` + (folded) `description` from a SKILL.md YAML front matter block. */
 function parseFrontmatter(md) {
@@ -189,18 +203,23 @@ async function main() {
   // org-wide default catalog. The user-scoped grant records (the non-bundle
   // built-ins) do not depend on the org, so we write them exactly once below.
   let orgRecordCount = 0;
+  let workflowRecordCount = 0;
   for (const org of orgs) {
     const records = buildSeedSkills(org, files, manifest, GRANT_OWNER).filter(
       (r) => r.scope.tier === 'org',
     );
+    // The starter workflow(s) — org-scoped, one record each — alongside skills.
+    const workflows = buildSeedWorkflows(org, STARTER_WORKFLOWS);
     if (process.env.SEED_DRY_RUN) {
       const skills = records.filter((r) => r.kind === 'skill').map((r) => r.name);
       const bundles = records.filter((r) => r.kind === 'bundle').map((r) => r.name);
       console.log(
         `  [dry-run] org#${org}: ${records.length} records ` +
-          `(${skills.length} skills + ${bundles.length} bundle[s]: ${bundles.join(', ')})`,
+          `(${skills.length} skills + ${bundles.length} bundle[s]: ${bundles.join(', ')}) ` +
+          `+ ${workflows.length} workflow[s]: ${workflows.map((w) => w.name).join(', ')}`,
       );
       orgRecordCount += records.length;
+      workflowRecordCount += workflows.length;
       continue;
     }
     for (const record of records) {
@@ -211,8 +230,19 @@ async function main() {
         }),
       );
     }
+    for (const wf of workflows) {
+      await doc.send(
+        new PutCommand({
+          TableName: TABLE,
+          Item: { ...workflowKey(wf.scope, wf.name), ...wf },
+        }),
+      );
+    }
     orgRecordCount += records.length;
-    console.log(`  seeded org#${org}: ${records.length} records`);
+    workflowRecordCount += workflows.length;
+    console.log(
+      `  seeded org#${org}: ${records.length} skill records + ${workflows.length} workflow records`,
+    );
   }
 
   // The user-granted built-ins (compound-engineering, gstack, playwright-cli) at
@@ -222,9 +252,9 @@ async function main() {
   );
   if (process.env.SEED_DRY_RUN) {
     console.log(
-      `[seed-all-orgs] DRY RUN — would write ${orgRecordCount} org-scoped records across ` +
-        `${orgs.length} org(s) + ${granted.length} user-granted records (user#${GRANT_OWNER}). ` +
-        `Nothing written.`,
+      `[seed-all-orgs] DRY RUN — would write ${orgRecordCount} org-scoped skill records + ` +
+        `${workflowRecordCount} workflow records across ${orgs.length} org(s) + ` +
+        `${granted.length} user-granted records (user#${GRANT_OWNER}). Nothing written.`,
     );
     return;
   }
@@ -238,8 +268,9 @@ async function main() {
   }
 
   console.log(
-    `[seed-all-orgs] done: ${orgRecordCount} org-scoped records across ${orgs.length} org(s) + ` +
-      `${granted.length} user-granted records (user#${GRANT_OWNER}) into ${TABLE}.`,
+    `[seed-all-orgs] done: ${orgRecordCount} org-scoped skill records + ${workflowRecordCount} ` +
+      `workflow records across ${orgs.length} org(s) + ${granted.length} user-granted records ` +
+      `(user#${GRANT_OWNER}) into ${TABLE}.`,
   );
 }
 

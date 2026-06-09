@@ -12,6 +12,7 @@ import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
 import { ProjectMemories } from '../screens/ProjectDetail/ProjectMemories.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
 import { ProjectAgents } from '../screens/ProjectDetail/ProjectAgents.js';
+import { ProjectWorkflows } from '../screens/ProjectDetail/ProjectWorkflows.js';
 import { ProjectSkills } from '../screens/ProjectDetail/ProjectSkills.js';
 import { ProjectMcpServers } from '../screens/ProjectDetail/ProjectMcpServers.js';
 import { Sessions } from '../screens/Sessions/Sessions.js';
@@ -19,6 +20,8 @@ import { LiveWatch } from '../screens/LiveWatch/LiveWatch.js';
 import { Agents } from '../screens/Agents/Agents.js';
 import { AgentEditor } from '../screens/Agents/AgentEditor.js';
 import { AgentBundle } from '../screens/Agents/AgentBundle.js';
+import { Workflows } from '../screens/Workflows/Workflows.js';
+import { WorkflowEditor } from '../screens/Workflows/WorkflowEditor.js';
 import { Skills } from '../screens/Skills/Skills.js';
 import { SkillBundle } from '../screens/Skills/SkillBundle.js';
 import { McpServers } from '../screens/McpServers/McpServers.js';
@@ -53,6 +56,7 @@ export function AppRoutes() {
           <Route path="skills" element={<ProjectSkills />} />
           <Route path="mcp-servers" element={<ProjectMcpServers />} />
           <Route path="agents" element={<ProjectAgents />} />
+          <Route path="workflows" element={<ProjectWorkflows />} />
         </Route>
 
         <Route path="sessions" element={<Sessions />} />
@@ -62,6 +66,9 @@ export function AppRoutes() {
         <Route path="agents/new" element={<AgentEditor />} />
         <Route path="agents/:name/edit" element={<AgentEditor />} />
         <Route path="agents/:name/bundle" element={<AgentBundle />} />
+        <Route path="workflows" element={<Workflows />} />
+        <Route path="workflows/new" element={<WorkflowEditor />} />
+        <Route path="workflows/:name/edit" element={<WorkflowEditor />} />
         <Route path="skills" element={<Skills />} />
         <Route path="skills/:bundleName" element={<SkillBundle />} />
         <Route path="mcp-servers" element={<McpServers />} />

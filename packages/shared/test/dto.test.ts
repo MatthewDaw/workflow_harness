@@ -11,6 +11,7 @@ import {
   projectSchema,
   agentSchema,
   skillSchema,
+  workflowSchema,
   truePointerSchema,
   variantIdFor,
   normalizeEnabledEntry,
@@ -309,6 +310,96 @@ describe('enabled-set entry pins (U-Ver-Pin, back-compat)', () => {
     expect(normalizeEnabledEntry(entry)).toEqual(entry);
     expect(enabledEntryName(entry)).toBe('reconcile');
     expect(enabledEntryVariant(entry)).toBe('reconcile#R#r#U#u');
+  });
+});
+
+/**
+ * A workflow is a DAG of catalog agents: each node references an agent and
+ * carries its own `dependsOn` edges. The `superRefine` enforces unique node ids,
+ * resolvable `dependsOn`/`declaredBy` refs, and acyclicity of the dependsOn graph
+ * (`declaredBy` is a CONTROL edge, excluded from the cycle check). It defaults
+ * `kind` to `'workflow'`, node `label`/`prompt` to '' and `dependsOn` to [].
+ */
+describe('workflowSchema superRefine (DAG validators)', () => {
+  const wfNode = (id: string, agent: string, dependsOn: string[] = []) => ({
+    id,
+    agent,
+    dependsOn,
+  });
+  const wf = (nodes: ReturnType<typeof wfNode>[]) => ({
+    name: 'pipeline',
+    scope: orgScope,
+    nodes,
+  });
+
+  it('ACCEPTS a valid DAG and fills node defaults', () => {
+    const parsed = workflowSchema.parse(
+      wf([wfNode('build', 'builder'), wfNode('test', 'tester', ['build'])]),
+    );
+    expect(parsed.kind).toBe('workflow');
+    expect(parsed.nodes.map((n) => n.id)).toEqual(['build', 'test']);
+    expect(parsed.nodes[0]).toMatchObject({ label: '', prompt: '', dependsOn: [] });
+  });
+
+  it('REJECTS a cyclic dependsOn graph', () => {
+    const res = workflowSchema.safeParse(
+      wf([wfNode('a', 'x', ['b']), wfNode('b', 'y', ['a'])]),
+    );
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => /cycle/.test(i.message))).toBe(true);
+    }
+  });
+
+  it('REJECTS a self-dependency cycle', () => {
+    const res = workflowSchema.safeParse(wf([wfNode('a', 'x', ['a'])]));
+    expect(res.success).toBe(false);
+  });
+
+  it('REJECTS a dangling dependsOn reference', () => {
+    const res = workflowSchema.safeParse(wf([wfNode('build', 'builder', ['ghost'])]));
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => /unknown node id 'ghost'/.test(i.message))).toBe(true);
+    }
+  });
+
+  it('REJECTS a dangling declaredBy reference', () => {
+    const res = workflowSchema.safeParse({
+      name: 'pipeline',
+      scope: orgScope,
+      nodes: [
+        { id: 'gen', agent: 'writer', rerun: { mode: 'declared-by', declaredBy: 'ghost' } },
+      ],
+    });
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some((i) => /declaredBy references unknown node id/.test(i.message)),
+      ).toBe(true);
+    }
+  });
+
+  it('REJECTS duplicate node ids', () => {
+    const res = workflowSchema.safeParse(wf([wfNode('a', 'x'), wfNode('a', 'y')]));
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => /duplicate node id 'a'/.test(i.message))).toBe(true);
+    }
+  });
+
+  it('ACCEPTS a declared-by control edge that would be a cycle as a DAG edge', () => {
+    // gen depends on nothing; its checker `chk` depends on gen — the declaredBy
+    // edge gen<-chk is a control edge, excluded from the acyclicity check.
+    const parsed = workflowSchema.parse({
+      name: 'gen-check',
+      scope: orgScope,
+      nodes: [
+        { id: 'gen', agent: 'writer', rerun: { mode: 'declared-by', declaredBy: 'chk' } },
+        { id: 'chk', agent: 'reviewer', dependsOn: ['gen'] },
+      ],
+    });
+    expect(parsed.nodes.map((n) => n.id)).toEqual(['gen', 'chk']);
   });
 });
 

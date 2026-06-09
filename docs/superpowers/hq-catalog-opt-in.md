@@ -143,7 +143,8 @@ Writes go only to the isolated `~/.claude+` root, never your personal `~/.claude
 ### 4 · Verify the pull — assert it actually landed
 
 - **Assert `pulled ≥ 1`** (or that the new name now exists under
-  `~/.claude+/skills/<name>/SKILL.md`, `~/.claude+/agents/<name>.md`, or in
+  `~/.claude+/skills/<name>/SKILL.md`, `~/.claude+/agents/<name>.md`,
+  `~/.claude+/workflows/<name>.json` for a workflow, or in
   `~/.claude+/.claude.json` `mcpServers` for an MCP server).
 - **`pulled 0` despite a successful enable = stale daemon binding.** The per-repo
   daemon binds its sync source **once at startup** (`rt.cfgSrc` in

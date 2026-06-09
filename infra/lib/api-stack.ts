@@ -137,6 +137,7 @@ export class ApiStack extends cdk.Stack {
     const projectsFn = makeFn('RestProjectsFn', 'rest_projects');
     const sessionsFn = makeFn('RestSessionsFn', 'rest_sessions');
     const agentsFn = makeFn('RestAgentsFn', 'rest_agents');
+    const workflowsFn = makeFn('RestWorkflowsFn', 'rest_workflows');
     const skillsFn = makeFn('RestSkillsFn', 'rest_skills');
     // Skill ideas — the candidate-learnings surfacing read path (skill-idea loop, U11).
     const ideasFn = makeFn('RestIdeasFn', 'rest_ideas');
@@ -157,6 +158,7 @@ export class ApiStack extends cdk.Stack {
     // projection (authoritative terminate, incl. ghost sessions with no daemon).
     grantReadWrite(sessionsFn);
     grantReadWrite(agentsFn);
+    grantReadWrite(workflowsFn);
     grantReadWrite(skillsFn);
     grantReadWrite(ideasFn);
     grantReadWrite(mcpServersFn);
@@ -264,6 +266,7 @@ export class ApiStack extends cdk.Stack {
     // project straight from claude+.
     r('/projects/{projectId}/skills/{skillName}', [M.POST, M.DELETE], projectsFn, 'ProjectSkillOptIn', noAuth);
     r('/projects/{projectId}/agents/{agentName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentOptIn', noAuth);
+    r('/projects/{projectId}/workflows/{workflowName}', [M.POST, M.DELETE], projectsFn, 'ProjectWorkflowOptIn', noAuth);
     r('/projects/{projectId}/mcp-servers/{name}', [M.POST, M.DELETE], projectsFn, 'ProjectMcpOptIn', noAuth);
     r('/projects/{projectId}/bundles/{bundleName}', [M.POST, M.DELETE], projectsFn, 'ProjectBundleOptIn', noAuth);
     r('/projects/{projectId}/agent-bundles/{bundleName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentBundleOptIn', noAuth);
@@ -285,6 +288,35 @@ export class ApiStack extends cdk.Stack {
     r('/agents/{name}/members', [M.POST], agentsFn, 'AgentMembers', noAuth);
     r('/agents/{name}/members/{member}', [M.DELETE], agentsFn, 'AgentMemberDelete', noAuth);
     r('/agents/{name}/dissolve', [M.POST], agentsFn, 'AgentDissolve', noAuth);
+
+    // Workflows mirror the agents catalog routes MINUS the bundle verbs
+    // (members/dissolve) and the scope verb — a workflow is itself the
+    // composition unit (no bundling in v1), so the surface is plain CRUD + the
+    // kind-generic promote verb. PUBLIC at the gateway (HttpNoneAuthorizer) so the
+    // claude+ device token reaches the Lambda; the workflows Lambda authenticates
+    // + admin-gates server-side, exactly like agents above. The project opt-in
+    // route (/projects/{projectId}/workflows/{workflowName}) is NOT served here —
+    // it is dispatched by the projects Lambda and registered with the other
+    // /projects routes above (against projectsFn).
+    r('/workflows', [M.GET], workflowsFn, 'WorkflowsGet', noAuth);
+    r('/workflows', [M.POST], workflowsFn, 'WorkflowsPost', noAuth);
+    r('/workflows/{name}', [M.GET, M.PUT, M.DELETE], workflowsFn, 'WorkflowByName', noAuth);
+    r('/workflows/{name}/promote', [M.POST], workflowsFn, 'WorkflowPromote', noAuth);
+
+    // Workflow RUN status (M5) — the live execution surface the Go executor
+    // reports to and the web Workflows tab polls. The run/node ids are path-tail
+    // segments dispatched inside the workflows Lambda (the agents promote/members
+    // precedent). Same HttpNoneAuthorizer + in-handler auth as the routes above so
+    // the executor's device token reaches the Lambda.
+    r('/workflows/{name}/runs', [M.GET, M.POST], workflowsFn, 'WorkflowRuns', noAuth);
+    r('/workflows/{name}/runs/{runId}', [M.GET], workflowsFn, 'WorkflowRunById', noAuth);
+    r(
+      '/workflows/{name}/runs/{runId}/nodes/{nodeId}',
+      [M.POST],
+      workflowsFn,
+      'WorkflowRunNode',
+      noAuth,
+    );
 
     // ALL skills routes are PUBLIC at the gateway (HttpNoneAuthorizer) so the
     // claude+ wrapper's HS256 device token reaches the Lambda — the gateway JWT

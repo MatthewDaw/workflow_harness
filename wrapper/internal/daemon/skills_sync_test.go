@@ -168,6 +168,8 @@ func TestProjectOptInMaterializesOnlyEnabled(t *testing.T) {
 				{"name": "enabled-mcp", "scope": map[string]string{"tier": "org", "id": "acme"}, "transport": "stdio", "command": "echo", "args": []string{"hi"}},
 				{"name": "other-mcp", "scope": map[string]string{"tier": "org", "id": "acme"}, "transport": "stdio", "command": "nope"},
 			}})
+		case r.URL.Path == "/workflows":
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflows": []any{}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -272,6 +274,11 @@ func TestEmptyOptInMaterializesNothing(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []map[string]any{
 				{"name": "org-mcp", "scope": map[string]string{"tier": "org", "id": "acme"}, "transport": "stdio", "command": "echo"},
 			}})
+		case r.URL.Path == "/workflows":
+			// Populated org workflow catalog; empty opt-in must still pull nothing.
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflows": []map[string]any{
+				{"name": "org-workflow", "scope": map[string]string{"tier": "org", "id": "acme"}, "kind": "workflow", "nodes": []map[string]any{{"id": "n", "agent": "org-agent"}}},
+			}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -316,6 +323,8 @@ func TestReconcileSkillsInjectsCandidateLearnings(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []any{}})
 		case r.URL.Path == "/mcp-servers":
 			_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []any{}})
+		case r.URL.Path == "/workflows":
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflows": []any{}})
 		default:
 			http.NotFound(w, r)
 		}

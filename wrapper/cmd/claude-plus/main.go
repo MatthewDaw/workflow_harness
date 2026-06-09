@@ -73,6 +73,14 @@ func main() {
 				fail(err)
 			}
 			return
+		case "run-workflow":
+			// Standalone headless executor: run a workflow DAG (catalog agents)
+			// wave by wave, reporting live node status to HQ. Reuses the same
+			// repoRoot/creds resolution as `sync`; never touches the PTY mux.
+			if err := cmdRunWorkflow(os.Args[2:]); err != nil {
+				fail(err)
+			}
+			return
 		case "reset":
 			if err := cmdReset(); err != nil {
 				fail(err)
@@ -321,6 +329,13 @@ func runHook() {
 	// internal/judge via CLAUDE_PLUS_JUDGE). Without this the judge's own hooks
 	// re-enter the daemon — a phantom session plus a Stop→judge→Stop recursion.
 	if os.Getenv("CLAUDE_PLUS_JUDGE") != "" {
+		return
+	}
+	// Likewise skip the internal headless workflow-executor node runs (tagged by
+	// internal/workflow via CLAUDE_PLUS_WORKFLOW). Each `run-workflow` node is a
+	// short-lived `claude -p` agent run, not a real session, and must not surface
+	// as a phantom session in the Stream / HQ.
+	if os.Getenv("CLAUDE_PLUS_WORKFLOW") != "" {
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))

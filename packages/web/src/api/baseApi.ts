@@ -4,6 +4,7 @@ import type {
   SessionProjection,
   ObjectiveNode,
   Agent,
+  Workflow,
   Skill,
   McpServer,
   Priority,
@@ -99,6 +100,34 @@ export interface Memory {
   description?: string;
   type?: string;
   content: string;
+  updatedAt: number;
+}
+
+/**
+ * A live workflow-run record as the run-status endpoint serves it (M5). A run is
+ * created by `POST /workflows/:name/runs` and polled via
+ * `GET /workflows/:name/runs/:runId` while `status === 'running'`; the Workflows
+ * tab overlays its per-node state onto the layered DAG view. Declared here (like
+ * ProjectDoc/Memory above) because the run overlay is the only consumer; the
+ * authoritative `workflowRunSchema` lives in the backend.
+ */
+export interface WorkflowRunNode {
+  /** Current node state in the executor's lifecycle. */
+  state: 'pending' | 'running' | 'looping' | 'done' | 'failed';
+  /** How many times the node's agent has run (rerun-until-done count). */
+  runs: number;
+  /** Tail of the node's last stdout, for the overlay tooltip. */
+  outputTail: string;
+}
+export interface WorkflowRun {
+  runId: string;
+  workflowName: string;
+  projectId: string;
+  /** Overall run status; the web polls while this is `running`. */
+  status: 'running' | 'done' | 'failed';
+  /** Per-node state keyed by node id. */
+  nodes: Record<string, WorkflowRunNode>;
+  startedAt: number;
   updatedAt: number;
 }
 
@@ -207,6 +236,8 @@ export const baseApi = createApi({
     'Session',
     'Objective',
     'Agent',
+    'Workflow',
+    'WorkflowRun',
     'Skill',
     'McpServer',
     'Variant',
@@ -441,6 +472,19 @@ export const baseApi = createApi({
       providesTags: ['Skill'],
     }),
 
+    /** Org workflow catalog (collapsed model): no projectId, org scope only. */
+    getWorkflows: build.query<Workflow[], void>({
+      query: () => 'workflows',
+      transformResponse: unwrapArray<Workflow>('workflows'),
+      providesTags: ['Workflow'],
+    }),
+    /** A single workflow by name (the editor's load-on-edit). */
+    getWorkflow: build.query<Workflow, string>({
+      query: (name) => `workflows/${encodeURIComponent(name)}`,
+      transformResponse: unwrapOne<Workflow>('workflow'),
+      providesTags: (_r, _e, name) => [{ type: 'Workflow', id: name }],
+    }),
+
     /**
      * Every variant/revision of one skill name (catalog versioning, KTD6). The
      * catalog's per-name variant switcher reads this to let any org member pick
@@ -557,6 +601,33 @@ export const baseApi = createApi({
       query: (agent) => ({ url: 'agents', method: 'POST', body: agent }),
       transformResponse: unwrapOne<Agent>('agent'),
       invalidatesTags: ['Agent'],
+    }),
+
+    /** Create or update a workflow (the editor's Save & sync; server forces org scope). */
+    saveWorkflow: build.mutation<Workflow, Workflow>({
+      query: (workflow) => ({ url: 'workflows', method: 'POST', body: workflow }),
+      transformResponse: unwrapOne<Workflow>('workflow'),
+      invalidatesTags: ['Workflow'],
+    }),
+
+    /**
+     * Promote a variant to the org-wide TRUE version for its workflow name (KTD6).
+     * Mirrors promoteSkill: any authed org member may promote — it is NOT
+     * admin-gated — and promotion only repoints the TRUE pointer; it never edits
+     * or deletes a variant. Pass an optional `rev` to pin a specific revision
+     * (defaults to the variant's current revision). Invalidates the catalog +
+     * that name's variant list so the new TRUE shows as the default everywhere.
+     */
+    promoteWorkflow: build.mutation<
+      { name: string; variantId: string; rev: number },
+      { name: string; variantId: string; rev?: number }
+    >({
+      query: ({ name, variantId, rev }) => ({
+        url: `workflows/${encodeURIComponent(name)}/promote`,
+        method: 'POST',
+        body: rev !== undefined ? { variantId, rev } : { variantId },
+      }),
+      invalidatesTags: (_r, _e, { name }) => ['Workflow', { type: 'Variant', id: name }],
     }),
 
     /**
@@ -677,6 +748,60 @@ export const baseApi = createApi({
       }),
       transformResponse: unwrapOne<Project>('project'),
       invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /**
+     * Add a workflow to a project's enabledWorkflows; the server also unions every
+     * referenced node's agent (and transitively their skills/MCP servers) into the
+     * project's enabled sets. Mirrors enableProjectAgent.
+     */
+    enableProjectWorkflow: build.mutation<Project, { projectId: string; workflowName: string }>({
+      query: ({ projectId, workflowName }) => ({
+        url: `projects/${projectId}/workflows/${encodeURIComponent(workflowName)}`,
+        method: 'POST',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /** Remove a workflow from enabledWorkflows (does NOT prune enabledAgents/Skills). */
+    disableProjectWorkflow: build.mutation<Project, { projectId: string; workflowName: string }>({
+      query: ({ projectId, workflowName }) => ({
+        url: `projects/${projectId}/workflows/${encodeURIComponent(workflowName)}`,
+        method: 'DELETE',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /**
+     * Kick off a headless run of a workflow against a project (M5). The backend
+     * creates the run record (returning its `runId`) and the executor schedules
+     * the DAG; the live overlay then polls `getWorkflowRun` for per-node status.
+     */
+    startWorkflowRun: build.mutation<WorkflowRun, { name: string; projectId: string }>({
+      query: ({ name, projectId }) => ({
+        url: `workflows/${encodeURIComponent(name)}/runs`,
+        method: 'POST',
+        body: { projectId },
+      }),
+      transformResponse: unwrapOne<WorkflowRun>('run'),
+      invalidatesTags: ['WorkflowRun'],
+    }),
+
+    /**
+     * Read one workflow run's live status (M5). The Workflows tab overlays the
+     * per-node state onto the DAG view and polls this with RTK `pollingInterval`
+     * while the run's `status === 'running'`.
+     */
+    getWorkflowRun: build.query<WorkflowRun, { name: string; runId: string; projectId: string }>({
+      // The run record lives under the PROJECT partition, so the read handler
+      // requires `projectId` as a query param (it 400s without it) — thread it
+      // through alongside the path ids.
+      query: ({ name, runId, projectId }) =>
+        `workflows/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}?projectId=${encodeURIComponent(projectId)}`,
+      transformResponse: unwrapOne<WorkflowRun>('run'),
+      providesTags: ['WorkflowRun'],
     }),
 
     /** Add a member skill (or nested bundle) into a bundle. */
@@ -884,6 +1009,8 @@ export const {
   useGetDodQuery,
   usePutDodMutation,
   useGetAgentsQuery,
+  useGetWorkflowsQuery,
+  useGetWorkflowQuery,
   useGetSkillsQuery,
   useGetSkillVariantsQuery,
   usePromoteSkillMutation,
@@ -897,6 +1024,8 @@ export const {
   useGetProjectLearningsQuery,
   useGetProjectMemoriesQuery,
   useSaveAgentMutation,
+  useSaveWorkflowMutation,
+  usePromoteWorkflowMutation,
   useSaveMcpServerMutation,
   useDeleteMcpServerMutation,
   useEnableProjectSkillMutation,
@@ -907,6 +1036,10 @@ export const {
   useDisableProjectBundleMutation,
   useEnableProjectAgentMutation,
   useDisableProjectAgentMutation,
+  useEnableProjectWorkflowMutation,
+  useDisableProjectWorkflowMutation,
+  useStartWorkflowRunMutation,
+  useGetWorkflowRunQuery,
   useAddBundleMemberMutation,
   useRemoveBundleMemberMutation,
   useDissolveBundleMutation,

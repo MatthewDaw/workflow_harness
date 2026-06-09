@@ -27,6 +27,13 @@ const (
 	// are kind-generic and need no change; the difference is confined to
 	// ReadLocal/ApplyPulled and mcp.go.
 	KindMcp Kind = "mcp"
+	// KindWorkflow is a workflow: a DAG of catalog agents. Unlike a skill
+	// (directory of files) or an agent (markdown), a workflow is structured data,
+	// so it materializes one-file-per-item as workflows/<name>.json — the canonical
+	// JSON spec body. Diff/Reconcile/DriftReport are kind-generic and need no
+	// change; the difference is confined to ReadLocal/ApplyPulled (and the per-type
+	// Fetch/Push/verify/prune cases), mirroring agents.
+	KindWorkflow Kind = "workflow"
 )
 
 // Item is a local ~/.claude definition (an agent or a skill), identified by name
@@ -64,6 +71,10 @@ func ReadLocal(plus string) ([]Item, error) {
 	var items []Item
 	items = append(items, readDir(filepath.Join(userDir, "agents"), KindAgent)...)
 	items = append(items, readDir(filepath.Join(userDir, "skills"), KindSkill)...)
+	// Workflows materialize one-file-per-item as workflows/<name>.json (structured
+	// data, not markdown), so they are read from a dedicated *.json scan mirroring
+	// how agents/*.md are read above.
+	items = append(items, readJSONDir(filepath.Join(userDir, "workflows"), KindWorkflow)...)
 	// MCP servers are not files-per-item: emit one Item per mcpServers entry in
 	// ~/.claude/.claude.json. A malformed file surfaces as a single Err item (never
 	// a panic) and must not blank the other kinds. (NOTE: ~/.claude/.claude.json
@@ -82,6 +93,7 @@ func ReadLocal(plus string) ([]Item, error) {
 		readDir(filepath.Join(plus, "agents"), KindAgent),
 		readDir(filepath.Join(plus, "skills"), KindSkill)...,
 	)
+	plusItems = append(plusItems, readJSONDir(filepath.Join(plus, "workflows"), KindWorkflow)...)
 	plusItems = append(plusItems, readMcpFile(filepath.Join(plus, mcpFileName))...)
 	for _, it := range plusItems {
 		if seen[string(it.Kind)+"/"+it.Name] {
@@ -130,6 +142,43 @@ func readDir(root string, kind Kind) []Item {
 		}
 		if len(strings.TrimSpace(string(b))) == 0 {
 			it.Err = "empty definition"
+		}
+		it.Hash = hashContent(b)
+		out = append(out, it)
+	}
+	return out
+}
+
+// readJSONDir scans a registry directory of one-file-per-item JSON definitions
+// (workflows/*.json). It mirrors readDir's flat-file branch — name is the
+// basename without the .json extension, the hash covers the normalized file
+// contents (so a CRLF/LF difference is not drift), and a malformed/empty file is
+// flagged as an Err item rather than aborting the scan. Workflows have no
+// directory form (a workflow is a single structured JSON spec), so non-.json
+// entries and subdirectories are skipped.
+func readJSONDir(root string, kind Kind) []Item {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil // directory absent -> no items
+	}
+	var out []Item
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		path := filepath.Join(root, e.Name())
+		it := Item{Kind: kind, Name: name, Path: path}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			it.Err = "unreadable: " + err.Error()
+			out = append(out, it)
+			continue
+		}
+		if len(strings.TrimSpace(string(b))) == 0 {
+			it.Err = "empty definition"
+		} else if !json.Valid(b) {
+			it.Err = "malformed JSON"
 		}
 		it.Hash = hashContent(b)
 		out = append(out, it)
@@ -203,6 +252,13 @@ func ApplyPulled(dir string, item RemoteItem, body string) error {
 	switch item.Kind {
 	case KindAgent:
 		path = filepath.Join(dir, "agents", item.Name+".md")
+	case KindWorkflow:
+		// A workflow is structured data, so it materializes as a single
+		// workflows/<name>.json file holding the canonical spec body (built by
+		// remote.Fetch from the HQ record). Like an agent, writing exactly `body`
+		// keeps the local hash equal to the HQ hash, so a freshly pulled workflow
+		// reads back in-sync. Falls through to the shared MkdirAll + WriteFile below.
+		path = filepath.Join(dir, "workflows", item.Name+".json")
 	case KindSkill:
 		// Skills can ship a WHOLE directory (SKILL.md plus sibling scripts/resources)
 		// carried in the body envelope (U-Skill-Dirs). Decode the files map (a legacy

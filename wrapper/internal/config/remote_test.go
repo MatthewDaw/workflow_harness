@@ -39,6 +39,9 @@ func (m *mcpHQ) server(t *testing.T) *httptest.Server {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": m.servers})
 	})
+	mux.HandleFunc("/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"workflows": []any{}})
+	})
 	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"enabledMcpServers": m.enabled})
 	})
@@ -172,6 +175,9 @@ func (a *agentHQ) server(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/mcp-servers", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []any{}})
+	})
+	mux.HandleFunc("/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"workflows": []any{}})
 	})
 	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"enabledAgents": a.enabled})
@@ -378,6 +384,9 @@ func TestFetchExpandsAgentBundle(t *testing.T) {
 	mux.HandleFunc("/mcp-servers", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []any{}})
 	})
+	mux.HandleFunc("/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"workflows": []any{}})
+	})
 	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
 		// Only the bundle is opted in — its member agent must be derived.
 		_ = json.NewEncoder(w).Encode(map[string]any{"enabledAgentBundles": []string{"squad"}})
@@ -413,6 +422,219 @@ func TestFetchExpandsAgentBundle(t *testing.T) {
 	declared := src.DeclaredAgents()
 	if len(declared) != 1 || declared[0] != "rev" {
 		t.Errorf("want DeclaredAgents [rev], got %v", declared)
+	}
+}
+
+// workflowHQ is a minimal in-memory HQ for the workflow REST contract: it serves
+// GET /projects/{id} (enabledWorkflows), GET /workflows (with structured nodes),
+// and empty /agents + /skills + /mcp-servers, and records the last POST /workflows
+// payload. Mirrors agentHQ.
+type workflowHQ struct {
+	enabled    []string
+	workflows  []map[string]any
+	lastPosted map[string]any
+}
+
+func (wf *workflowHQ) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agents", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"agents": []any{}})
+	})
+	mux.HandleFunc("/skills", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"skills": []any{}})
+	})
+	mux.HandleFunc("/mcp-servers", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []any{}})
+	})
+	mux.HandleFunc("/workflows", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			b, _ := io.ReadAll(r.Body)
+			wf.lastPosted = map[string]any{}
+			_ = json.Unmarshal(b, &wf.lastPosted)
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"workflows": wf.workflows})
+	})
+	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"enabledWorkflows": wf.enabled})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestFetchIntersectsEnabledWorkflows proves Fetch returns only catalog workflows
+// the project has opted into, mirroring the MCP/agent intersection.
+func TestFetchIntersectsEnabledWorkflows(t *testing.T) {
+	hq := &workflowHQ{
+		enabled: []string{"ship-it"},
+		workflows: []map[string]any{
+			{
+				"name":        "ship-it",
+				"scope":       map[string]string{"tier": "org", "id": "acme"},
+				"kind":        "workflow",
+				"description": "build then verify",
+				"nodes": []map[string]any{
+					{"id": "build", "agent": "builder", "prompt": "Build it."},
+					{"id": "check", "agent": "checker", "dependsOn": []string{"build"}},
+				},
+			},
+			{
+				"name":  "not-enabled",
+				"scope": map[string]string{"tier": "org", "id": "acme"},
+				"kind":  "workflow",
+				"nodes": []map[string]any{{"id": "n", "agent": "a"}},
+			},
+		},
+	}
+	srv := hq.server(t)
+	src := NewHTTPRemoteSource(srv.URL, "tok", "proj-1")
+
+	items, err := src.Fetch()
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	var wf []RemoteItem
+	for _, it := range items {
+		if it.Kind == KindWorkflow {
+			wf = append(wf, it)
+		}
+	}
+	if len(wf) != 1 || wf[0].Name != "ship-it" {
+		t.Fatalf("want only enabled 'ship-it', got %+v", wf)
+	}
+}
+
+// TestWorkflowPullWritesJSONInSync is the workflow analog of the agent hash-parity
+// test (and the MCP round-trip): an HQ record -> Fetch renders the canonical JSON
+// body and hashes THAT string -> ApplyPulled writes workflows/<name>.json ->
+// ReadLocal -> Diff reports in_sync. It also asserts the materialized file lands at
+// the expected path and parses as JSON (the verify-gate invariant).
+func TestWorkflowPullWritesJSONInSync(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	hq := &workflowHQ{
+		enabled: []string{"ship-it"},
+		workflows: []map[string]any{{
+			"name":        "ship-it",
+			"scope":       map[string]string{"tier": "org", "id": "acme"},
+			"kind":        "workflow",
+			"description": "build then verify",
+			"nodes": []map[string]any{
+				{"id": "build", "agent": "builder", "label": "Build", "prompt": "Build it.", "dependsOn": []string{}},
+				{
+					"id": "check", "agent": "checker", "dependsOn": []string{"build"},
+					"rerun": map[string]any{"mode": "self", "endCriteria": "all green", "maxRuns": 5},
+				},
+			},
+		}},
+	}
+	srv := hq.server(t)
+	src := NewHTTPRemoteSource(srv.URL, "tok", "proj-1")
+
+	items, err := src.Fetch()
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	var wf *RemoteItem
+	for i := range items {
+		if items[i].Kind == KindWorkflow {
+			wf = &items[i]
+		}
+	}
+	if wf == nil || wf.Name != "ship-it" {
+		t.Fatalf("want enabled workflow 'ship-it', got %+v", items)
+	}
+
+	// The cached body must be valid JSON, hashed identically to the RemoteItem.
+	body, err := src.Body(*wf)
+	if err != nil {
+		t.Fatalf("Body: %v", err)
+	}
+	if !json.Valid([]byte(body)) {
+		t.Fatalf("rendered workflow body is not valid JSON:\n%s", body)
+	}
+	if wf.Hash != hashContent([]byte(body)) {
+		t.Fatalf("hash parity broken: item=%s body=%s", wf.Hash, hashContent([]byte(body)))
+	}
+
+	// ApplyPulled writes workflows/<name>.json under the per-project root.
+	plus := testPlus(t)
+	if err := ApplyPulled(plus, *wf, body); err != nil {
+		t.Fatalf("ApplyPulled: %v", err)
+	}
+	path := filepath.Join(plus, "workflows", "ship-it.json")
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("workflow not materialized at %s: %v", path, err)
+	}
+	if string(onDisk) != body {
+		t.Fatalf("materialized body mismatch:\n got=%q\nwant=%q", onDisk, body)
+	}
+
+	// ROUND-TRIP: ReadLocal + Diff against the same RemoteItem must be in-sync.
+	local, err := ReadLocal(plus)
+	if err != nil {
+		t.Fatalf("ReadLocal: %v", err)
+	}
+	if !Diff(local, []RemoteItem{*wf}).InSync() {
+		t.Fatalf("round-trip should be in sync, got %+v", Diff(local, []RemoteItem{*wf}))
+	}
+}
+
+// TestPushWorkflowSerializesStructuredNodes proves Push for a local workflow file
+// parses the canonical JSON body and authors the structured nodes to /workflows at
+// org scope (no double-wrap), mirroring the agent push.
+func TestPushWorkflowSerializesStructuredNodes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	hq := &workflowHQ{
+		workflows: []map[string]any{{"name": "seed", "scope": map[string]string{"tier": "org", "id": "acme"}, "kind": "workflow", "nodes": []map[string]any{{"id": "n", "agent": "a"}}}},
+		enabled:   []string{"seed"},
+	}
+	srv := hq.server(t)
+	src := NewHTTPRemoteSource(srv.URL, "tok", "proj-1")
+	if _, err := src.Fetch(); err != nil { // learn org id
+		t.Fatalf("Fetch (learn org): %v", err)
+	}
+
+	// The local file is exactly what renderWorkflowFile would have written.
+	local, err := renderWorkflowFile(remoteWorkflow{
+		Name: "ship-it", Kind: "workflow", Description: "build then verify",
+		Nodes: []remoteWorkflowNode{
+			{ID: "build", Agent: "builder", Prompt: "Build it."},
+			{ID: "check", Agent: "checker", DependsOn: []string{"build"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("renderWorkflowFile: %v", err)
+	}
+	if err := src.Push(Item{Kind: KindWorkflow, Name: "ship-it"}, local); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if hq.lastPosted["name"] != "ship-it" {
+		t.Fatalf("posted wrong workflow: %+v", hq.lastPosted)
+	}
+	if hq.lastPosted["kind"] != "workflow" {
+		t.Fatalf("posted wrong kind: %+v", hq.lastPosted)
+	}
+	if hq.lastPosted["description"] != "build then verify" {
+		t.Fatalf("description not parsed: %+v", hq.lastPosted)
+	}
+	nodes, _ := hq.lastPosted["nodes"].([]any)
+	if len(nodes) != 2 {
+		t.Fatalf("want 2 nodes pushed, got %+v", hq.lastPosted["nodes"])
+	}
+	sc, ok := hq.lastPosted["scope"].(map[string]any)
+	if !ok || sc["id"] != "acme" {
+		t.Fatalf("push scope should be org#acme, got %+v", hq.lastPosted["scope"])
 	}
 }
 

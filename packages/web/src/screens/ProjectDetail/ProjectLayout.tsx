@@ -16,6 +16,7 @@ const SUBTABS = [
   { to: 'skills', label: 'Skills' },
   { to: 'mcp-servers', label: 'MCP Servers' },
   { to: 'agents', label: 'Agents' },
+  { to: 'workflows', label: 'Workflows' },
 ];
 
 export function ProjectLayout() {

@@ -16,6 +16,7 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: [],
   enabledAgents: ['reviewer'],
+  enabledWorkflows: [],
   enabledAgentBundles: [],
   enabledBundles: [],
   enabledMcpServers: [],

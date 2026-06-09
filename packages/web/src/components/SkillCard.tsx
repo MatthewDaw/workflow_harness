@@ -82,7 +82,7 @@ export function SkillCard({
       </div>
       {showVariants && (
         <div className="mt-2 border-t border-odd pt-2">
-          <VariantSwitcher name={variantOf(skill).baseName} allowPromote />
+          <VariantSwitcher name={variantOf(skill).baseName} allowPromote lazy />
         </div>
       )}
     </div>

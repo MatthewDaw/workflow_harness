@@ -585,6 +585,49 @@ export async function disableProjectAgent(
   return ok({ project: updated });
 }
 
+/**
+ * POST /projects/:projectId/workflows/:workflowName — idempotent enable.
+ *
+ * Records the workflow in `enabledWorkflows` AND, via the repo's `bringWorkflowInto`,
+ * unions every referenced agent (and transitively their skills + MCP servers) into
+ * the project's enabled sets — the same machinery that makes enabling an agent pull
+ * its skills.
+ */
+export async function enableProjectWorkflow(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, org } = resolved;
+  const workflowName = pathParam(event, 'workflowName');
+  if (!workflowName) return badRequest('missing workflow name');
+
+  // The workflow must exist in the org catalog.
+  const workflow = await deps.repo.getWorkflow(orgScope(org), workflowName);
+  if (!workflow) return notFound();
+
+  const updated = await deps.repo.addWorkflowToProject(project.id, workflowName, org);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
+/** DELETE /projects/:projectId/workflows/:workflowName — disable (does NOT prune agents). */
+export async function disableProjectWorkflow(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project } = resolved;
+  const workflowName = pathParam(event, 'workflowName');
+  if (!workflowName) return badRequest('missing workflow name');
+
+  const updated = await deps.repo.removeWorkflowFromProject(project.id, workflowName);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
 /** POST /projects/:projectId/mcp-servers/:name — idempotent enable. */
 export async function enableProjectMcpServer(
   event: APIGatewayProxyEventV2,
@@ -781,6 +824,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (/\/agents\/[^/]+$/.test(rawPath)) {
     if (method === 'POST') return enableProjectAgent(event, deps);
     if (method === 'DELETE') return disableProjectAgent(event, deps);
+  }
+  if (/\/workflows\/[^/]+$/.test(rawPath)) {
+    if (method === 'POST') return enableProjectWorkflow(event, deps);
+    if (method === 'DELETE') return disableProjectWorkflow(event, deps);
   }
   if (/\/mcp-servers\/[^/]+$/.test(rawPath)) {
     if (method === 'POST') return enableProjectMcpServer(event, deps);

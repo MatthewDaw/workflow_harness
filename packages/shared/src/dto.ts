@@ -48,6 +48,13 @@ export const projectSchema = z.object({
    */
   enabledAgents: z.array(z.string()).default([]),
   /**
+   * Workflows this project has opted into (workflow names from the org catalog).
+   * Adding a workflow unions every agent its nodes reference into
+   * `enabledAgents` — and transitively their skills/MCP servers into
+   * `enabledSkills`/`enabledMcpServers`. Defaults to [].
+   */
+  enabledWorkflows: z.array(z.string()).default([]),
+  /**
    * Agent bundles this project added "as a whole" (bundle names from the org
    * catalog). Like `enabledBundles` for skills, this is an INTENT annotation,
    * not a second materialization set: a bundle's member agents are always
@@ -375,6 +382,198 @@ export const agentSchema = z
     }
   });
 export type Agent = z.infer<typeof agentSchema>;
+
+/**
+ * The rerun-until-done rule on a workflow node. A node with a rerun rule loops
+ * after each run until it is satisfied or the `maxRuns` safety cap is hit:
+ *  - `self` — a Haiku judge asks whether `endCriteria` is satisfied (DONE/CONTINUE).
+ *  - `declared-by` — node N reruns until checker node `declaredBy` declares N done
+ *    (the generator↔checker loop). `declaredBy` is a CONTROL edge, not a DAG edge,
+ *    so it is excluded from the acyclicity check below.
+ * `maxRuns` guarantees a workflow can never loop forever.
+ */
+export const workflowRerunSchema = z.object({
+  mode: z.enum(['self', 'declared-by']),
+  /** `self` mode: the end-criteria a Haiku judge evaluates after each run. */
+  endCriteria: z.string().default(''),
+  /** `declared-by` mode: the node id of the checker that gates this node's loop. */
+  declaredBy: z.string().optional(),
+  /** Safety cap on the number of runs, so the loop can never run forever. */
+  maxRuns: z.number().int().positive().default(10),
+});
+export type WorkflowRerun = z.infer<typeof workflowRerunSchema>;
+
+/**
+ * One node in a workflow DAG. It points to a catalog `agent` by name (the same
+ * name pointers agents use for skills), carries per-node `prompt` instructions,
+ * and declares its upstream dependencies as `dependsOn` node ids — those are the
+ * DAG edges. An optional `rerun` rule makes the node loop until done.
+ */
+export const workflowNodeSchema = z.object({
+  id: z.string().min(1),
+  /** Name pointer to a catalog agent the node runs. */
+  agent: z.string().min(1),
+  label: z.string().default(''),
+  /** Per-node task instructions handed to the agent. */
+  prompt: z.string().default(''),
+  /** Upstream node ids → the DAG edges feeding this node. */
+  dependsOn: z.array(z.string()).default([]),
+  rerun: workflowRerunSchema.optional(),
+});
+export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
+
+/**
+ * A workflow record. Unlike agents/skills there is no bundle concept — a
+ * workflow is itself the composition unit — so `kind` is the single literal
+ * `'workflow'` (the field is kept for catalog parity and future bundling).
+ */
+export const WORKFLOW_KINDS = ['workflow'] as const;
+export const workflowKindSchema = z.enum(WORKFLOW_KINDS);
+export type WorkflowKind = z.infer<typeof workflowKindSchema>;
+
+export const workflowSchema = z
+  .object({
+    name: z.string().min(1),
+    /**
+     * Catalog scope. `org` is the default tier (the org-wide catalog), but
+     * user-scoped workflows are also representable so the catalog partitions by
+     * org AND by user. `scopeRefSchema` is a strict superset of the old org-only
+     * shape, so every existing org-scoped record still validates.
+     */
+    scope: scopeRefSchema,
+    /** Single literal `'workflow'`; defaults for back-compat / catalog parity. */
+    kind: workflowKindSchema.default('workflow'),
+    description: z.string().default(''),
+    /** The DAG: nodes carry their own `dependsOn` edges. */
+    nodes: z.array(workflowNodeSchema).default([]),
+    /** Authorship stamp set on create; optional on read for back-compat. */
+    createdBy: createdBySchema.optional(),
+  })
+  .merge(versionFieldsSchema)
+  .superRefine((wf, ctx) => {
+    // (1) Node ids must be unique within the workflow.
+    const seen = new Set<string>();
+    wf.nodes.forEach((node, i) => {
+      if (seen.has(node.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['nodes', i, 'id'],
+          message: `duplicate node id '${node.id}'`,
+        });
+      }
+      seen.add(node.id);
+    });
+    const ids = new Set(wf.nodes.map((n) => n.id));
+
+    wf.nodes.forEach((node, i) => {
+      // (2) Every dependsOn entry must resolve to an existing node id.
+      node.dependsOn.forEach((dep, j) => {
+        if (!ids.has(dep)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['nodes', i, 'dependsOn', j],
+            message: `dependsOn references unknown node id '${dep}'`,
+          });
+        }
+      });
+      // (3) A declared-by rerun's checker must resolve to an existing node id.
+      if (node.rerun?.mode === 'declared-by') {
+        const checker = node.rerun.declaredBy;
+        if (!checker || !ids.has(checker)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['nodes', i, 'rerun', 'declaredBy'],
+            message: `rerun.declaredBy references unknown node id '${checker ?? ''}'`,
+          });
+        }
+      }
+    });
+
+    // (4) The dependsOn graph must be ACYCLIC. `declaredBy` is a control edge and
+    // is EXCLUDED here. Kahn's algorithm: if any node remains after peeling off
+    // zero-indegree nodes, there is a cycle.
+    const indegree = new Map<string, number>();
+    const adj = new Map<string, string[]>();
+    for (const id of ids) {
+      indegree.set(id, 0);
+      adj.set(id, []);
+    }
+    for (const node of wf.nodes) {
+      for (const dep of node.dependsOn) {
+        // edge dep -> node (dep must run before node).
+        if (ids.has(dep)) {
+          adj.get(dep)!.push(node.id);
+          indegree.set(node.id, (indegree.get(node.id) ?? 0) + 1);
+        }
+      }
+    }
+    const queue: string[] = [];
+    for (const [id, deg] of indegree) {
+      if (deg === 0) queue.push(id);
+    }
+    let visited = 0;
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      visited += 1;
+      for (const next of adj.get(id) ?? []) {
+        const deg = (indegree.get(next) ?? 0) - 1;
+        indegree.set(next, deg);
+        if (deg === 0) queue.push(next);
+      }
+    }
+    if (visited < ids.size) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['nodes'],
+        message: 'workflow dependsOn graph has a cycle',
+      });
+    }
+  });
+export type Workflow = z.infer<typeof workflowSchema>;
+
+/**
+ * A workflow RUN is the live execution status the executor reports and the web
+ * tab polls. Unlike a workflow (a versioned catalog item), a run is NOT
+ * versioned — it is a transient per-project record under `WORKFLOWRUN#<runId>`
+ * carrying per-node progress. Kept deliberately minimal: just enough for the
+ * Workflows tab to overlay live status onto the DAG view.
+ *
+ * Per-node `state`:
+ *  - `pending`  — not yet started (its deps are still running / queued).
+ *  - `running`  — the node's agent is executing.
+ *  - `looping`  — the node finished a run and its rerun rule said CONTINUE.
+ *  - `done`     — the node (and its rerun loop) completed successfully.
+ *  - `failed`   — the node's run errored or its rerun cap was hit unsatisfied.
+ */
+export const workflowRunNodeStateSchema = z.enum([
+  'pending',
+  'running',
+  'looping',
+  'done',
+  'failed',
+]);
+export type WorkflowRunNodeState = z.infer<typeof workflowRunNodeStateSchema>;
+
+export const workflowRunSchema = z.object({
+  runId: z.string().min(1),
+  workflowName: z.string().min(1),
+  projectId: z.string().min(1),
+  /** Overall run lifecycle: running until every node settles, then done/failed. */
+  status: z.enum(['running', 'done', 'failed']),
+  /** Per-node progress, keyed by node id. `runs` counts rerun-loop iterations and
+   * `outputTail` is the last slice of the node's captured stdout (for the tooltip). */
+  nodes: z.record(
+    z.object({
+      state: workflowRunNodeStateSchema,
+      runs: z.number().int().default(0),
+      outputTail: z.string().default(''),
+    }),
+  ),
+  /** Epoch-ms the run started / finished; absent until set by the executor. */
+  startedAt: z.number().optional(),
+  endedAt: z.number().optional(),
+});
+export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 
 /**
  * Request to elevate/demote an agent (or skill) to a new scope. The handler

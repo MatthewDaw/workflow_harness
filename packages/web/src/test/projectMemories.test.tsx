@@ -29,6 +29,7 @@ const PROJECTS: Project[] = [
     liveSessionCount: 0,
     enabledSkills: [],
     enabledAgents: [],
+    enabledWorkflows: [],
     enabledAgentBundles: [],
     enabledBundles: [],
     enabledMcpServers: [],

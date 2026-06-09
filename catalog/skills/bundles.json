@@ -5,6 +5,7 @@
       "hq-add-agent",
       "hq-add-mcp",
       "hq-add-skill",
+      "hq-add-workflow",
       "hq-endforge",
       "hq-init",
       "hq-optimize-agent",

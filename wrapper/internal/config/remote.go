@@ -275,6 +275,65 @@ type remoteMcpServer struct {
 	Headers   map[string]string `json:"headers"`
 }
 
+// remoteWorkflowNode is one node of a workflow DAG: a pointer to a catalog agent
+// plus its per-node task, upstream dependency edges (dependsOn), and an optional
+// rerun-until-done rule. Mirrors workflowNodeSchema. Decoded as raw structured
+// JSON (no markdown body, like remoteMcpServer) — the wrapper re-marshals the
+// whole workflow def as the canonical on-disk spec.
+type remoteWorkflowNode struct {
+	ID        string              `json:"id"`
+	Agent     string              `json:"agent"`
+	Label     string              `json:"label"`
+	Prompt    string              `json:"prompt"`
+	DependsOn []string            `json:"dependsOn"`
+	Rerun     *remoteWorkflowRule `json:"rerun,omitempty"`
+}
+
+// remoteWorkflowRule is a node's rerun-until-done rule: `self` loops until a judge
+// declares <endCriteria> met; `declared-by` loops until a checker node declares it
+// done. Mirrors workflowRerunSchema. maxRuns is the safety cap.
+type remoteWorkflowRule struct {
+	Mode        string `json:"mode"`
+	EndCriteria string `json:"endCriteria"`
+	DeclaredBy  string `json:"declaredBy,omitempty"`
+	MaxRuns     int    `json:"maxRuns"`
+}
+
+// remoteWorkflow is HQ's structured workflow catalog record (GET /workflows): a
+// DAG of catalog agents. Mirrors remoteAgent's envelope (name/scope/kind/
+// description) plus the workflow-specific `nodes`. There is NO markdown body — the
+// wrapper renders the canonical on-disk spec by re-marshaling these structured
+// fields (KTD1-style), so a pulled workflow reads back in-sync. `kind` is the
+// single literal "workflow" today (the field is kept for catalog parity), so —
+// unlike agents/skills — there is no bundle to expand.
+type remoteWorkflow struct {
+	Name        string               `json:"name"`
+	Scope       scope                `json:"scope"`
+	Kind        string               `json:"kind"`
+	Description string               `json:"description"`
+	Nodes       []remoteWorkflowNode `json:"nodes"`
+}
+
+// renderWorkflowFile materializes a remoteWorkflow into the canonical on-disk JSON
+// spec the wrapper writes at workflows/<name>.json. This is the SAME string the
+// wrapper hashes in Fetch, so a freshly pulled workflow reads back in-sync (hash
+// parity), mirroring how renderAgentFile produces an agent's body. The struct's
+// json tags fix field order/shape deterministically, so two Fetches of the same
+// record produce byte-identical bodies.
+func renderWorkflowFile(w remoteWorkflow) (string, error) {
+	// Force kind to the single literal so a record that omits it (or carries a
+	// stale value) still materializes a valid workflow spec.
+	if w.Kind == "" {
+		w.Kind = string(KindWorkflow)
+	}
+	b, err := json.MarshalIndent(w, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	// Exactly one trailing newline, mirroring renderAgentFile's trailing newline.
+	return string(b) + "\n", nil
+}
+
 type scope struct {
 	Tier string `json:"tier"`
 	ID   string `json:"id"`
@@ -305,6 +364,11 @@ type remoteProject struct {
 	// agent set (and union those agents' skills into the effective skill set) at
 	// fetch time, mirroring EnabledBundles for skills.
 	EnabledAgentBundles []string `json:"enabledAgentBundles"`
+	// EnabledWorkflows names the workflows the project opted into. The wrapper
+	// materializes ONLY these names (intersected with the org catalog in Fetch),
+	// mirroring EnabledAgents. Workflows have no bundle concept (v1), so there is no
+	// companion bundle field to expand.
+	EnabledWorkflows []string `json:"enabledWorkflows"`
 }
 
 // Fetch reads the org catalog (GET /agents, GET /skills, no ?project, no
@@ -325,6 +389,7 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	enabledMcp := map[string]bool{}
 	enabledBundles := map[string]bool{}
 	enabledAgentBundles := map[string]bool{}
+	enabledWorkflows := map[string]bool{}
 	if h.ProjectID != "" {
 		// The REST handler returns the project NESTED under a "project" key
 		// (`{project, instances, sessions}`); some shapes (and the unit tests) put
@@ -358,6 +423,9 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		}
 		for _, n := range proj.EnabledAgentBundles {
 			enabledAgentBundles[n] = true
+		}
+		for _, n := range proj.EnabledWorkflows {
+			enabledWorkflows[n] = true
 		}
 	}
 
@@ -519,6 +587,40 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		out = append(out, RemoteItem{Kind: KindMcp, Name: m.Name, Scope: m.Scope.String(), Hash: hashContent(canon)})
 	}
 
+	// Workflows: read the org catalog, intersect with the project's opt-in, and
+	// render the canonical spec FROM the structured record (there is no markdown
+	// body to fall back on — like MCP servers). The cached "body" is the canonical
+	// workflow JSON, hashed identically here and on the read side so a pulled
+	// workflow reads back in-sync. A record that fails to render is skipped rather
+	// than failing the whole fetch (mirrors the missing-name skip above). Workflows
+	// have no bundle concept (v1), so there is no membership expansion.
+	var wfResp struct {
+		Workflows []remoteWorkflow `json:"workflows"`
+	}
+	if err := h.getJSON("/workflows", &wfResp); err != nil {
+		return nil, err
+	}
+	for _, wf := range wfResp.Workflows {
+		if wf.Name == "" {
+			continue
+		}
+		if wf.Scope.Tier == "org" && wf.Scope.ID != "" {
+			orgID = wf.Scope.ID
+		}
+		// Effective set: keep only workflows the project has opted into.
+		if !enabledWorkflows[wf.Name] {
+			continue
+		}
+		// Render the canonical JSON spec and hash THAT same string, so the body
+		// ApplyPulled writes reads back in-sync (parity, mirroring agents).
+		body, err := renderWorkflowFile(wf)
+		if err != nil {
+			continue
+		}
+		bodies[string(KindWorkflow)+"/"+wf.Name] = body
+		out = append(out, RemoteItem{Kind: KindWorkflow, Name: wf.Name, Scope: wf.Scope.String(), Hash: hashContent([]byte(body))})
+	}
+
 	// Snapshot the FULL declared enabled skill set (enabledSkills after bundle
 	// expansion) so the verify gate can assert every declared name materialized —
 	// not just the subset that resolved to a catalog record above. A declared name
@@ -633,6 +735,24 @@ func (h *HTTPRemoteSource) Push(item Item, body string) error {
 	case KindSkill:
 		path = "/skills"
 		payload = map[string]any{"name": item.Name, "scope": scope, "kind": "skill", "description": body}
+	case KindWorkflow:
+		// The local workflow file is the canonical JSON spec (renderWorkflowFile's
+		// output). Parse it back into structured fields and author the minimal
+		// payload to /workflows at org scope, mirroring the agent push. We send the
+		// structured nodes (not the whole file verbatim) so the next materialize
+		// re-renders identically and does not double-wrap.
+		var wf remoteWorkflow
+		if err := json.Unmarshal([]byte(body), &wf); err != nil {
+			return fmt.Errorf("decode workflow %q for push: %w", item.Name, err)
+		}
+		path = "/workflows"
+		payload = map[string]any{
+			"name":        item.Name,
+			"scope":       scope,
+			"kind":        "workflow",
+			"description": wf.Description,
+			"nodes":       wf.Nodes,
+		}
 	case KindMcp:
 		// MCP items are NOT one-file-per-item: Reconcile's needs_push branch hands
 		// us the WHOLE .mcp.json (os.ReadFile(it.Path)), not a single entry. Extract
