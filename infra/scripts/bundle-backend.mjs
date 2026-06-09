@@ -32,6 +32,7 @@ const handlers = [
   'rest/sessions',
   'rest/agents',
   'rest/skills',
+  'rest/ideas',
   'rest/mcpServers',
   'rest/objectives',
   'rest/weekly',
