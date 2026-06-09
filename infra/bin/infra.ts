@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib/core';
 import { AuthStack } from '../lib/auth-stack';
 import { ApiStack } from '../lib/api-stack';
 import { SiteStack } from '../lib/site-stack';
+import { VectorsStack } from '../lib/vectors-stack';
 
 const app = new cdk.App();
 
@@ -23,7 +24,16 @@ const authStack = new AuthStack(app, 'AuthStack', { env });
 // public-from-anywhere and it would otherwise deploy under `cdk deploy --all`.
 // The default Forge backend is the brute-force cosine fallback over DynamoDB;
 // `infra/lib/search-stack.ts` is kept on disk, unreferenced, for if a real
-// vector index is ever justified (U20).
+// vector index is ever justified (U20). The skill-idea loop instead uses the
+// GA Amazon S3 Vectors `VectorsStack` below (no idle floor, no public policy).
+
+// U1 (skill-idea loop) — Amazon S3 Vectors: one vector bucket + a fixed `skills`
+// and `ideas` index (float32, 1024-dim, cosine), org-isolated via an `org`
+// metadata filter, plus a least-privilege put/query managed policy the backend
+// Lambdas attach to. Independent of ApiStack at synth time (the role attachment
+// is wired from ApiStack in U3/U8). This is the GA replacement for the excluded
+// Classic SearchStack above.
+new VectorsStack(app, 'VectorsStack', { env });
 
 // U5 — backend API: DynamoDB single-table + HTTP API + WebSocket API. The HTTP
 // API's JWT authorizer trusts the AuthStack user pool, so ApiStack references it.

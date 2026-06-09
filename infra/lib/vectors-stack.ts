@@ -1,0 +1,170 @@
+import * as cdk from 'aws-cdk-lib/core';
+import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import { Construct } from 'constructs';
+
+/**
+ * U1 — S3 Vectors stack (skill-idea loop, Phase A).
+ *
+ * Provisions the Amazon S3 Vectors substrate the ideas loop searches over:
+ * one vector bucket with two fixed indexes (skills + ideas), Titan-v2-shaped
+ * (float32, 1024-dim, cosine), plus a least-privilege managed policy that the
+ * stream-consumer / ideas Lambdas attach to for put+query.
+ *
+ * S3 Vectors is GA (Dec 2025), pay-per-use with no idle floor, AWS-native (stays
+ * in-account, IAM, no new vendor/secret). This is the GA replacement for the
+ * Classic-generation `SearchStack` (OpenSearch Serverless), which carries an
+ * idle-cost floor + a public network policy and stays un-instantiated in
+ * `infra/bin/infra.ts` — this stack mirrors that exclusion (we add VectorsStack,
+ * we do NOT add SearchStack).
+ *
+ * ---------------------------------------------------------------------------
+ * INDEX-STRATEGY DECISION: one fixed index per data-type, `org` as a FILTERABLE
+ * metadata key — NOT per-org indexes.
+ * ---------------------------------------------------------------------------
+ * The plan offered two shapes (per-org indexes `<org>-skills`/`<org>-ideas`, or
+ * a single index keyed by an `org` filterable metadata key). We pick the single
+ * index per type because:
+ *
+ *  1. Orgs are created at RUNTIME, not at deploy time. `infra/scripts/
+ *     seed-all-orgs.mjs` discovers orgs by scanning `ORG#` META records, and the
+ *     orgs REST handler clones the starter catalog into a brand-new org the
+ *     moment a user creates one. Per-org CDK-provisioned indexes would force a
+ *     `cdk deploy VectorsStack` on every org signup — infeasible. A single fixed
+ *     index lets the backend isolate orgs with a query-time `org` metadata
+ *     filter (every put stamps `org`; every query filters on it — see U8/U22),
+ *     with no infra change per org.
+ *
+ *  2. S3 Vectors allows up to 10 FILTERABLE metadata keys per index, and ALL
+ *     metadata keys are filterable BY DEFAULT (you opt keys OUT via
+ *     `nonFilterableMetadataKeys`). `org` is one key — comfortably inside the
+ *     limit even with room for `skillBaseName`, `embeddingVersion`, `repoId`,
+ *     etc. So nothing is declared non-filterable here; the org filter is free.
+ *
+ *  3. Scale is a non-issue: S3 Vectors supports up to 2B vectors per index, and
+ *     the catalog (skills × orgs, ideas × orgs) is orders of magnitude under
+ *     that, so collapsing every org into one index per type costs nothing.
+ *
+ * Two indexes (not one) because skills and ideas are distinct corpora with
+ * different lifecycles and are never compared to each other (U7 queries the
+ * idea index scoped to a skill; U8 queries the skill index for a topic).
+ */
+
+/** Titan Text Embeddings v2 default output dimension. */
+const EMBEDDING_DIMENSION = 1024;
+/** S3 Vectors currently supports only float32. */
+const VECTOR_DATA_TYPE = 'float32';
+/** Cosine similarity matches the embedding-based retrieval the loop performs. */
+const DISTANCE_METRIC = 'cosine';
+
+export class VectorsStack extends cdk.Stack {
+  readonly vectorBucket: s3vectors.CfnVectorBucket;
+  readonly skillsIndex: s3vectors.CfnIndex;
+  readonly ideasIndex: s3vectors.CfnIndex;
+  /**
+   * Least-privilege put+query policy scoped to this bucket's indexes. ApiStack
+   * attaches it to the stream-consumer + ideas Lambda roles (see grant note
+   * below) so those roles — and only those roles — can read/write vectors.
+   */
+  readonly accessPolicy: iam.ManagedPolicy;
+
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
+
+    // The bucket name must be globally-account+region unique, lowercase, 3–63
+    // chars, no underscores. SSE-S3 (AES256) is the default encryption — no KMS
+    // key, no extra cost — so we leave `encryptionConfiguration` unset.
+    this.vectorBucket = new s3vectors.CfnVectorBucket(this, 'SkillIdeaVectorBucket', {
+      vectorBucketName: 'command-hq-skill-idea-vectors',
+    });
+    // Retain on stack delete: a vector bucket can only be deleted when empty,
+    // and the embeddings are derived state we never want a stack churn to drop.
+    this.vectorBucket.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
+    // One fixed skill index. `org` is carried as a (filterable, by default)
+    // metadata key on every vector — see the index-strategy note above. We
+    // declare NO non-filterable keys so the org filter stays available.
+    this.skillsIndex = new s3vectors.CfnIndex(this, 'SkillsIndex', {
+      indexName: 'skills',
+      vectorBucketName: this.vectorBucket.vectorBucketName!,
+      dataType: VECTOR_DATA_TYPE,
+      dimension: EMBEDDING_DIMENSION,
+      distanceMetric: DISTANCE_METRIC,
+    });
+    // An index references the bucket by name, so it must outlive the bucket
+    // resource creation; make the ordering explicit.
+    this.skillsIndex.addDependency(this.vectorBucket);
+
+    // One fixed idea index — same shape, distinct corpus (within-skill dedup /
+    // corroboration in U7 queries this, scoped by an `org` + `skillBaseName`
+    // metadata filter).
+    this.ideasIndex = new s3vectors.CfnIndex(this, 'IdeasIndex', {
+      indexName: 'ideas',
+      vectorBucketName: this.vectorBucket.vectorBucketName!,
+      dataType: VECTOR_DATA_TYPE,
+      dimension: EMBEDDING_DIMENSION,
+      distanceMetric: DISTANCE_METRIC,
+    });
+    this.ideasIndex.addDependency(this.vectorBucket);
+
+    // ---- Least-privilege put/query policy -----------------------------------
+    // Scoped to this bucket + its indexes only. The actions are exactly what the
+    // loop needs: write vectors (PutVectors), read them back / similarity-search
+    // (QueryVectors, GetVectors, ListVectors), and resolve the index/bucket
+    // (GetIndex, GetVectorBucket). NO CreateIndex/DeleteVectorBucket — the
+    // backend never mutates infra. The index ARN pattern is
+    // `arn:aws:s3vectors:<region>:<acct>:bucket/<bucket>/index/<index>`.
+    const bucketArn = this.vectorBucket.attrVectorBucketArn;
+    this.accessPolicy = new iam.ManagedPolicy(this, 'VectorPutQueryPolicy', {
+      managedPolicyName: 'command-hq-skill-idea-vectors-put-query',
+      description:
+        'Put/query access to the skill-idea S3 Vectors bucket + indexes. ' +
+        'Attach to the stream-consumer and ideas Lambda roles only (U1/U3/U8).',
+      statements: [
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            's3vectors:PutVectors',
+            's3vectors:QueryVectors',
+            's3vectors:GetVectors',
+            's3vectors:ListVectors',
+            's3vectors:DeleteVectors',
+            's3vectors:GetIndex',
+            's3vectors:GetVectorBucket',
+          ],
+          // Bucket itself + every index under it (skills, ideas).
+          resources: [bucketArn, `${bucketArn}/index/*`],
+        }),
+      ],
+    });
+
+    // ---- Grant wiring (CROSS-STACK — intentional stub) ----------------------
+    // U1 requires put/query be granted ONLY to the stream-consumer Lambda role
+    // and a future ideas Lambda role. Both of those roles live in `ApiStack`
+    // (the stream consumer exists today as `StreamConsumerFn`; the ideas Lambda
+    // does NOT exist yet — it is introduced in U8/U11). Rather than reach across
+    // stacks from here (which couples ApiStack ordering to VectorsStack and is
+    // the wrong direction — ApiStack already depends on shared resources), this
+    // stack EXPORTS `accessPolicy` and the index ARNs, and the attachment is
+    // done in ApiStack when it wires the consumer + ideas Lambdas:
+    //
+    //   // in api-stack.ts, once VectorsStack is passed in via props (U3/U8):
+    //   vectors.accessPolicy.attachToRole(streamConsumerFn.role!);
+    //   vectors.accessPolicy.attachToRole(ideasFn.role!);   // <-- future (U8)
+    //
+    // Until U3/U8 wire it, NO role is attached, so the policy grants nothing to
+    // anyone — least-privilege by construction (an unattached managed policy is
+    // inert). This is the deliberate "grant stub" the unit calls for.
+
+    // ---- Outputs ------------------------------------------------------------
+    new cdk.CfnOutput(this, 'VectorBucketName', {
+      value: this.vectorBucket.vectorBucketName!,
+    });
+    new cdk.CfnOutput(this, 'VectorBucketArn', { value: bucketArn });
+    new cdk.CfnOutput(this, 'SkillsIndexArn', { value: this.skillsIndex.attrIndexArn });
+    new cdk.CfnOutput(this, 'IdeasIndexArn', { value: this.ideasIndex.attrIndexArn });
+    new cdk.CfnOutput(this, 'VectorPutQueryPolicyArn', {
+      value: this.accessPolicy.managedPolicyArn,
+    });
+  }
+}
