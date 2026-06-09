@@ -5,6 +5,7 @@ import {
   S3VectorsClient,
 } from '@aws-sdk/client-s3vectors';
 import type { DocumentType } from '@smithy/types';
+import { activeEmbeddingVersion } from './bedrock.js';
 
 /**
  * U2 — Amazon S3 Vectors read/write client.
@@ -82,6 +83,37 @@ export interface QueryOptions {
   orgFilter?: string;
   /** Drop hits whose similarity is below this floor (the pre-judge floor, U8). */
   floor?: number;
+  /**
+   * The embedding version the query vector was produced with — the ONLY version
+   * its hits may be compared against (U5). A hit stamped with a different
+   * `embeddingVersion` lives in an incomparable vector space; comparing the two
+   * yields meaningless similarity, so `queryTopK` REFUSES rather than returning
+   * mismatched-space results. Defaults to the env-configured active version
+   * (`activeEmbeddingVersion()`); injectable so a reindex/test can pin it.
+   */
+  expectVersion?: string;
+}
+
+/**
+ * Raised when `queryTopK` finds an index hit whose `embeddingVersion` does not
+ * match the query's version. Cross-version comparison is impossible — it would
+ * silently return garbage similarities — so this surfaces loudly and signals
+ * that a reindex (`infra/scripts/reindex-embeddings.mjs`) is needed.
+ */
+export class EmbeddingVersionMismatchError extends Error {
+  constructor(
+    readonly indexName: string,
+    readonly expected: string,
+    readonly found: string,
+    readonly key: string,
+  ) {
+    super(
+      `embedding version mismatch in index '${indexName}': query is '${expected}' but ` +
+        `vector '${key}' is '${found}' — cross-version comparison is refused; reindex ` +
+        `(infra/scripts/reindex-embeddings.mjs) before querying.`,
+    );
+    this.name = 'EmbeddingVersionMismatchError';
+  }
 }
 
 /** Split `items` into chunks no larger than `size`. */
@@ -181,6 +213,19 @@ export class S3Vectors {
       score: 1 - (v.distance ?? 0),
       metadata: (v.metadata as Record<string, unknown> | undefined) ?? {},
     }));
+    // Version guard (U5): the query vector and the index vectors must share an
+    // `embeddingVersion` or the cosine score is meaningless. A hit stamped with a
+    // different version means the index is mid-migration / un-reindexed — refuse
+    // rather than silently returning mismatched-space results.
+    const expectVersion = opts.expectVersion ?? activeEmbeddingVersion();
+    for (const h of hits) {
+      const found = h.metadata.embeddingVersion;
+      // Untagged legacy vectors (no stamp) are treated as same-space and pass;
+      // a present-but-different stamp is the migration-skew signal we refuse.
+      if (typeof found === 'string' && found !== expectVersion) {
+        throw new EmbeddingVersionMismatchError(indexName, expectVersion, found, h.key);
+      }
+    }
     const floor = opts.floor;
     return hits
       .filter((h) => (floor === undefined ? true : h.score >= floor))
