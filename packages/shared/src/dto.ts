@@ -495,6 +495,19 @@ export const skillSchema = z
     /** Who created the catalog record (the seed stamps `system`; REST stamps the
      * authenticated principal). Optional for legacy records written before it. */
     createdBy: createdBySchema.optional(),
+    /**
+     * EMBEDDING IDEMPOTENCY STAMPS (skill-idea loop, U3). The stream consumer
+     * re-embeds a skill on every mutation, but it is keyed off a content hash so
+     * the bulk seed write of every skill × every org does not storm the embedding
+     * API. `descHash` is a hash of `description + body` at the time the skill's
+     * vector was last (re)generated; a MODIFY whose recomputed hash equals the
+     * stored `descHash` is a no-op (the desc/body did not change). `embeddingVersion`
+     * is the Bedrock embedding-version stamp the current vector was produced with
+     * (mirrors the vector's metadata), so a model change can be detected and
+     * trigger a reindex (U5). Both are absent on legacy / never-embedded records.
+     */
+    descHash: z.string().optional(),
+    embeddingVersion: z.string().optional(),
   })
   .merge(versionFieldsSchema);
 export type Skill = z.infer<typeof skillSchema>;

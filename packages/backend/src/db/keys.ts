@@ -217,6 +217,25 @@ export function isVersionSideRecord(sk: string | undefined): boolean {
 }
 
 /**
+ * The org-scope partition prefix (`SCOPE#org#`). The org catalog (skills/agents/
+ * mcp) and the skill-idea records all partition under `SCOPE#org#<org>`; this is
+ * the prefix the stream consumer (U3) gates a SKILL# record on before re-embedding.
+ */
+export const ORG_SCOPE_PREFIX = 'SCOPE#org#';
+
+/**
+ * Extract the `<org>` from an org-scope partition PK (`SCOPE#org#<org>`), or
+ * `undefined` if `pk` is not an org-scope partition. The stream consumer uses
+ * this to resolve which org's skill-vector index a SKILL# write targets. (Skill
+ * records carry `scope.id` too, but the PK is the authoritative partition key.)
+ */
+export function orgFromScopePartition(pk: string | undefined): string | undefined {
+  if (!pk || !pk.startsWith(ORG_SCOPE_PREFIX)) return undefined;
+  const org = pk.slice(ORG_SCOPE_PREFIX.length);
+  return org.length > 0 ? org : undefined;
+}
+
+/**
  * SKILL IDEAS (skill-idea loop, U6). An idea is CO-LOCATED with skills in the
  * org scope partition (`SCOPE#org#<org>`) but under an `IDEA#` SK prefix:
  *
