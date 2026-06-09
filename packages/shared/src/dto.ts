@@ -947,6 +947,19 @@ export const ideaSchema = z.object({
   status: ideaStatusSchema.default('open'),
   /** Set when folded: the skill revision the lesson was folded into. */
   foldedIntoRev: z.number().int().positive().optional(),
+  /**
+   * Post-fold evidence (U20). Once an idea is FOLDED, its lesson lives in the
+   * skill body and it has dropped from the live candidate-learnings block. A new
+   * session that corroborates the SAME (already-folded) lesson must NOT resurrect
+   * it into the live block, reopen it, or spawn a fresh duplicate idea that would
+   * re-surface a lesson already in the body. Instead the session attaches HERE —
+   * post-fold evidence, visible only in the Command HQ history view (U13). These
+   * sessions are NOT counted toward `corroborationCount` (which is the live
+   * `sources` set); they are a separate, monotonic record that the lesson kept
+   * recurring after it was folded. Distinct on `sessionId`, and never overlapping
+   * the live `sources`.
+   */
+  postFoldSources: z.array(ideaSourceSchema).default([]),
   /** The embedding model version the idea's vector was generated with. */
   ideaEmbeddingVersion: z.string().optional(),
   /** Optimistic-concurrency token for conditional corroboration updates. */
