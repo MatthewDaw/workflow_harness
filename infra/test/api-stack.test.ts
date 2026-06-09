@@ -66,6 +66,21 @@ describe('ApiStack', () => {
     });
   });
 
+  test('routes the skill-edit verbs: promote + idea fold (U16)', () => {
+    // Promote (repoint TRUE) and fold (snapshot a revision from an idea) are both
+    // the skills Lambda and both skill-edit gated; they are `noAuth` at the gateway
+    // so the claude+ device token reaches the handler (admin decided server-side).
+    for (const RouteKey of [
+      'POST /skills/{name}/promote',
+      'POST /skills/{name}/ideas/{ideaId}/fold',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey,
+        AuthorizationType: 'NONE',
+      });
+    }
+  });
+
   test('opens catalog WRITE + opt-in routes to the device token (AuthorizationType NONE)', () => {
     // The claude+ device token is HS256; the gateway JWT authorizer would reject
     // it, so every catalog write (and the project opt-in) is PUBLIC at the gateway

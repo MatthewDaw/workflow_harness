@@ -11,12 +11,14 @@ import {
   deleteSkill,
   dissolveBundle,
   flattenBundle,
+  foldIdea,
   getSkill,
   getUsage,
   promoteSkill,
   removeMember,
   resolveSkills,
 } from '../src/rest/skills.js';
+import type { Idea } from '@harness/shared';
 import { handler as skillsHandler } from '../src/rest/skills.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
@@ -436,13 +438,34 @@ describe('versioning: update snapshots the next revision (no clobber)', () => {
   });
 });
 
-describe('POST /skills/:name/promote (any authed member)', () => {
-  it('repoints TRUE to the given variant (not admin-gated)', async () => {
+describe('POST /skills/:name/promote (skill-edit gated, U16)', () => {
+  it('repoints TRUE to the given variant for an admin', async () => {
     await createSkill(
       adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'base') }),
       deps,
     );
-    // A non-admin member promotes a (hypothetical) fork variant.
+    // Promote now requires the same skill-edit (admin) authority as the revision
+    // write it points at — an admin repoints TRUE to a (hypothetical) fork variant.
+    const res = await promoteSkill(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile#R#r#U#matt', rev: 1 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const truth = await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile');
+    expect(truth).toEqual({ baseName: 'reconcile', variantId: 'reconcile#R#r#U#matt', rev: 1 });
+  });
+
+  it('forbids a non-admin promote (reconciled with the revision-write gate)', async () => {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'base') }),
+      deps,
+    );
     const res = await promoteSkill(
       httpEvent({
         method: 'POST',
@@ -454,17 +477,14 @@ describe('POST /skills/:name/promote (any authed member)', () => {
       }),
       deps,
     );
-    expect(res).toMatchObject({ statusCode: 200 });
-    const truth = await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile');
-    expect(truth).toEqual({ baseName: 'reconcile', variantId: 'reconcile#R#r#U#bob', rev: 1 });
+    expect(res).toMatchObject({ statusCode: 403 });
   });
 
   it('400s when variantId is missing', async () => {
     const res = await promoteSkill(
-      httpEvent({
+      adminEvent({
         method: 'POST',
-        userId: 'bob',
-        org: ORG,
+        userId: MATT,
         path: { name: 'reconcile' },
         rawPath: '/skills/reconcile/promote',
         body: {},
@@ -729,5 +749,243 @@ describe('bundle-overwrite guard (skill push must not clobber a bundle)', () => 
       deps,
     );
     expect(res).toMatchObject({ statusCode: 201 });
+  });
+});
+
+/**
+ * U16 — fold an idea into a NEW skill revision. Fold reuses `putNewVersion`, so a
+ * fold into a built-in FORKS a variant (never an in-place overwrite of the
+ * git-seeded base) and leaves the org-wide TRUE pointer where it was until a human
+ * promotes. After the revision write the idea is marked `folded` with
+ * `foldedIntoRev` via the optimistic-concurrency conditional, so a fold racing an
+ * incoming corroboration is safe. Fold is admin-gated (skill-edit permission).
+ */
+describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
+  const builtinSkill = (name: string, body = ''): Skill => ({
+    ...skill(name, body),
+    source: 'built-in',
+  });
+
+  function idea(over: Partial<Idea> = {}): Idea {
+    return {
+      ideaId: 'i-1',
+      skillBaseName: 'reconcile',
+      org: ORG,
+      text: 'Always reconcile in the ledger currency.',
+      sources: [
+        { sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: 'ev1' },
+        { sessionId: 's-2', segmentId: 'seg-1', seq: 2, snippet: 'ev2' },
+      ],
+      status: 'open',
+      corroborationVersion: 0,
+      createdAt: 10,
+      updatedAt: 10,
+      ...over,
+    };
+  }
+
+  it('folds into a NON-built-in in place: new revision, idea flips to folded, TRUE unchanged', async () => {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'v1') }),
+      deps,
+    );
+    await repo.putIdea(idea());
+    const truthBefore = await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile');
+
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile', ideaId: 'i-1' },
+        rawPath: '/skills/reconcile/ideas/i-1/fold',
+        body: { body: 'v1\n\n## Folded\nUse the ledger currency.' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    // A new revision was snapshotted (rev 2 of the base variant), body merged.
+    expect(stamped.version).toBe(2);
+    expect(stamped.body).toContain('Folded');
+
+    // TRUE is unchanged — a human promotes separately.
+    expect(await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile')).toEqual(truthBefore);
+
+    // The idea flipped to folded, stamped with the rev it folded into.
+    const folded = await repo.getIdea(ORG, 'reconcile', 'i-1');
+    expect(folded?.status).toBe('folded');
+    expect(folded?.foldedIntoRev).toBe(2);
+  });
+
+  it('folds into a BUILT-IN by forking a variant (no 409)', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
+    await repo.putIdea(idea({ skillBaseName: 'hq-add-skill' }));
+
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'hq-add-skill', ideaId: 'i-1' },
+        rawPath: '/skills/hq-add-skill/ideas/i-1/fold',
+        body: { body: 'canonical + fold', repoId: 'repo1', authorUserId: MATT },
+      }),
+      deps,
+    );
+    // Forking is allowed: the built-in guard only rejects an in-place fold.
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    expect(stamped.repoId).toBe('repo1');
+    expect(stamped.variantId).toBe('hq-add-skill#R#repo1#U#matt');
+    expect((await repo.getIdea(ORG, 'hq-add-skill', 'i-1'))?.status).toBe('folded');
+  });
+
+  it('rejects an in-place fold of a BUILT-IN (409), leaving the idea open', async () => {
+    await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
+    await repo.putIdea(idea({ skillBaseName: 'hq-add-skill' }));
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'hq-add-skill', ideaId: 'i-1' },
+        rawPath: '/skills/hq-add-skill/ideas/i-1/fold',
+        body: { body: 'edited base' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+    // Base untouched, idea still open.
+    expect((await repo.getSkill(SCOPE, 'hq-add-skill'))?.body).toBe('canonical');
+    expect((await repo.getIdea(ORG, 'hq-add-skill', 'i-1'))?.status).toBe('open');
+  });
+
+  it('a promote AFTER a fold repoints TRUE to the folded revision', async () => {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'v1') }),
+      deps,
+    );
+    await repo.putIdea(idea());
+    await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile', ideaId: 'i-1' },
+        rawPath: '/skills/reconcile/ideas/i-1/fold',
+        body: { body: 'v2 with fold' },
+      }),
+      deps,
+    );
+    // The fold left TRUE at rev 1; a human promotes the new rev 2.
+    const res = await promoteSkill(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        rawPath: '/skills/reconcile/promote',
+        body: { variantId: 'reconcile', rev: 2 },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile')).toEqual({
+      baseName: 'reconcile',
+      variantId: 'reconcile',
+      rev: 2,
+    });
+  });
+
+  it('forbids a non-admin device token folding', async () => {
+    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
+    const SECRET = new TextEncoder().encode('test-device-secret');
+    await repo.putUser({ userId: 'bob', org: ORG, orgs: [ORG], adminOrgs: [], admin: false });
+    await repo.putSkill(skill('reconcile', 'v1'));
+    await repo.putIdea(idea());
+    const token = await signDeviceToken({ userId: 'bob', org: ORG }, { secret: SECRET });
+    const res = await foldIdea(
+      httpEvent({
+        method: 'POST',
+        userId: null,
+        headers: { authorization: `Bearer ${token}` },
+        path: { name: 'reconcile', ideaId: 'i-1' },
+        rawPath: '/skills/reconcile/ideas/i-1/fold',
+        body: { body: 'v2' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 403 });
+    // Idea untouched.
+    expect((await repo.getIdea(ORG, 'reconcile', 'i-1'))?.status).toBe('open');
+  });
+
+  it('404s when the idea does not exist', async () => {
+    await repo.putSkill(skill('reconcile', 'v1'));
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile', ideaId: 'ghost' },
+        rawPath: '/skills/reconcile/ideas/ghost/fold',
+        body: { body: 'v2' },
+      }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('the conditional mark prevents a fold↔corroboration race (C3)', async () => {
+    await createSkill(
+      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'v1') }),
+      deps,
+    );
+    await repo.putIdea(idea({ corroborationVersion: 0 }));
+
+    // Simulate the race precisely: a concurrent corroboration lands BETWEEN the
+    // fold handler's `getIdea` (which observes v0) and its conditional mark. We
+    // wrap the repo so the first `getIdea` returns the v0 snapshot the fold reads,
+    // then immediately writes a corroboration that bumps v0 -> v1 underneath it.
+    let raced = false;
+    const racingRepo = new Proxy(repo, {
+      get(target, prop, receiver) {
+        if (prop === 'getIdea') {
+          return async (...args: Parameters<typeof target.getIdea>) => {
+            const snapshot = await target.getIdea(...args);
+            if (!raced && snapshot) {
+              raced = true;
+              await target.corroborateIdeaConditional(
+                {
+                  ...snapshot,
+                  sources: [
+                    ...snapshot.sources,
+                    { sessionId: 's-3', segmentId: 'seg-1', seq: 3, snippet: 'ev3' },
+                  ],
+                },
+                snapshot.corroborationVersion,
+              );
+            }
+            return snapshot; // the fold still holds the STALE v0 view
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const res = await foldIdea(
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'reconcile', ideaId: 'i-1' },
+        rawPath: '/skills/reconcile/ideas/i-1/fold',
+        body: { body: 'v2' },
+      }),
+      { repo: racingRepo, vectors: fakeVectors },
+    );
+    // The mark is guarded on the stale v0; the racing corroboration advanced it,
+    // so the conditional fails → 409 (the revision was written, the mark was not).
+    expect(res).toMatchObject({ statusCode: 409 });
+    // The race-winning corroboration is intact: still OPEN, third session kept.
+    const after = await repo.getIdea(ORG, 'reconcile', 'i-1');
+    expect(after?.status).toBe('open');
+    expect(new Set(after?.sources.map((s) => s.sessionId))).toEqual(
+      new Set(['s-1', 's-2', 's-3']),
+    );
   });
 });

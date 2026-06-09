@@ -249,11 +249,18 @@ const ROUTES: Route[] = [
   { re: /^\/agents\/(?<name>[^/]+)$/, handler: agentsHandler },
   { re: /^\/agents$/, handler: agentsHandler },
 
+  // Fold an idea into a new revision (U16) — most specific first so the
+  // two-segment `ideas/{ideaId}/fold` path is matched before `/{name}`.
+  {
+    re: /^\/skills\/(?<name>[^/]+)\/ideas\/(?<ideaId>[^/]+)\/fold$/,
+    handler: skillsHandler,
+  },
   { re: /^\/skills\/(?<name>[^/]+)\/members\/(?<member>[^/]+)$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/members$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/dissolve$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/usage$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/scope$/, handler: skillsHandler },
+  { re: /^\/skills\/(?<name>[^/]+)\/promote$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)$/, handler: skillsHandler },
   { re: /^\/skills$/, handler: skillsHandler },
 

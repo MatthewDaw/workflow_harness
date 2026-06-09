@@ -301,6 +301,12 @@ export class ApiStack extends cdk.Stack {
     r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve', noAuth);
     r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage', noAuth);
     r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope', noAuth);
+    // Promote (repoint the org-wide TRUE pointer) + fold an idea into a new
+    // revision (skill-idea loop, U16). BOTH are the skills Lambda (the fold reuses
+    // `putNewVersion`/the built-in guard there) and BOTH are skill-edit gated
+    // server-side; `noAuth` so the claude+ device token reaches the handler.
+    r('/skills/{name}/promote', [M.POST], skillsFn, 'SkillPromote', noAuth);
+    r('/skills/{name}/ideas/{ideaId}/fold', [M.POST], skillsFn, 'SkillIdeaFold', noAuth);
     // Candidate learnings (skill-idea loop, U11): corroborated-only ideas a working
     // session may surface when the skill loads. `noAuth` so the claude+ device token
     // reaches the handler, which gates server-side (the gate is a security boundary).

@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { orgScope, skillSchema, type Skill } from '@harness/shared';
+import { orgScope, skillSchema, type Idea, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
@@ -38,9 +38,17 @@ import {
  *   POST   /skills/:name/dissolve         — flatten a bundle: members standalone, bundle removed
  *   GET    /skills/:name/usage            — count of agents depending on the skill
  *   POST   /skills/:name/scope            — RETIRED (410 Gone): no tiers in the org catalog
+ *   POST   /skills/:name/promote          — repoint the org-wide TRUE pointer (skill-edit)
+ *   POST   /skills/:name/ideas/:ideaId/fold — fold an idea into a new revision (U16)
  *
  * Bundles hold member *refs* (names). A member may itself be a bundle (nesting);
  * resolution is transitive. Ejecting a member only edits the bundle.
+ *
+ * SKILL-EDIT PERMISSION (U16): writing a skill revision and repointing TRUE are
+ * the SAME authority — both are admin-gated server-side (the catalog write gate).
+ * The pre-U16 split (revision write admin-gated, promote open to any member) let a
+ * non-admin repoint TRUE to an unreviewed variant, so it was reconciled: `fold`
+ * (which writes a revision) and `promote` (which repoints TRUE) both require admin.
  */
 
 export interface SkillsDeps {
@@ -179,7 +187,11 @@ export async function createSkill(
 
 /**
  * POST /skills/:name/promote — repoint the org-wide TRUE variant for a baseName.
- * NOT admin-gated: ANY authed org member may promote (the decided model). Body:
+ * SKILL-EDIT gated (U16): promoting an unreviewed variant to the org default is
+ * the same authority as writing the revision itself, so it requires the same
+ * server-side admin as `fold`/`createSkill` (reconciling the pre-U16 split that
+ * left promote open to any member). The device-token caller's admin status is
+ * resolved server-side from the PROFILE by the shared resolver. Body:
  * `{ variantId, rev? }`. Promotion ONLY repoints TRUE; it never edits or deletes
  * a variant. Returns the new pointer.
  */
@@ -187,10 +199,11 @@ export async function promoteSkill(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  // Promote is NOT admin-gated (any authed org member may repoint TRUE), but it
-  // still accepts the device token via the shared resolver.
+  // Promote is now admin-gated (skill-edit permission), accepting the device
+  // token via the shared resolver; admin is decided server-side from the profile.
   const auth = await resolveOrgCatalogAuth(event, deps.repo);
   if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
   if (!auth.org) return unauthorized();
@@ -210,6 +223,127 @@ export async function promoteSkill(
   const pointer = { baseName: name, variantId, ...(rev !== undefined ? { rev } : {}) };
   await deps.repo.setTrueVariant(orgScope(org), 'SKILL', pointer);
   return ok({ true: pointer });
+}
+
+/**
+ * POST /skills/:name/ideas/:ideaId/fold — fold an idea into a NEW skill revision
+ * (U16). `:name` is the skill base name; `:ideaId` is the idea on that family.
+ *
+ * Folding does NOT overwrite the skill. It SNAPSHOTS a new revision via the
+ * existing `putNewVersion` machinery and leaves the org-wide `#TRUE` pointer
+ * exactly where it was — a human promotes it separately (prior research: curated
+ * folds beat blind overwrites). For a canonical `built-in`, an in-place revision
+ * is rejected for the same reason `createSkill` rejects it: the base is git-seed
+ * owned. The caller must FORK (supply `repoId` + `authorUserId`) so the fold lands
+ * on a variant line; `putNewVersion` then mints rev 1 of that fork.
+ *
+ * SKILL-EDIT gated: same server-side admin as `createSkill`/`promoteSkill`. The
+ * body carries the merged revision the human/agent drafted plus the fork identity:
+ *   `{ body, description?, repoId?, authorUserId? }`.
+ *
+ * The idea is marked `folded` with `foldedIntoRev` AFTER the revision write, via
+ * the optimistic-concurrency conditional update (`corroborateIdeaConditional`),
+ * so a fold racing an incoming corroboration is safe: if a concurrent writer
+ * advanced the idea's `corroborationVersion` between our read and our mark, the
+ * conditional fails and we 409 rather than clobbering the new evidence — the fold
+ * is retried against the fresh idea.
+ */
+export async function foldIdea(
+  event: APIGatewayProxyEventV2,
+  deps: SkillsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  // Same skill-edit authority as createSkill/promoteSkill: a verified caller who
+  // is admin of the org (decided server-side from the profile, so the device
+  // token works). Non-admin → 403; no principal → 401.
+  const auth = await resolveOrgCatalogAuth(event, deps.repo);
+  if (!auth) return unauthorized();
+  if (!auth.admin) return forbidden();
+  if (!auth.org) return unauthorized();
+  const { principal, org } = auth;
+
+  const name = pathParam(event, 'name');
+  const ideaId = pathParam(event, 'ideaId');
+  if (!name || !ideaId) return badRequest('missing name or ideaId');
+
+  let body: unknown;
+  try {
+    body = parseBody(event);
+  } catch {
+    return badRequest('invalid JSON body');
+  }
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  // The idea must exist on this skill family before we touch the skill revision —
+  // we read it FIRST so the conditional mark below can guard on the version we saw.
+  const idea = await deps.repo.getIdea(org, name, ideaId);
+  if (!idea) return notFound();
+  // Folding an already-folded idea is a no-op conflict (it is out of the live
+  // block and its lesson is in the body); the caller decides what to do.
+  if (idea.status === 'folded') {
+    return conflict(`idea "${ideaId}" is already folded into rev ${idea.foldedIntoRev ?? '?'}`);
+  }
+
+  // Resolve the fold target. The base variant has empty repo/author; a fork sets
+  // both (the variant model). For a canonical built-in the base is git-seed owned,
+  // so an in-place fold is rejected exactly like createSkill — the caller must fork.
+  const repoId = typeof b.repoId === 'string' ? b.repoId : undefined;
+  const authorUserId =
+    typeof b.authorUserId === 'string' ? b.authorUserId : repoId ? principal.userId : undefined;
+
+  const existing = await deps.repo.getSkill(orgScope(org), name);
+  if (!existing) return notFound();
+  if (isBuiltin(existing) && !repoId && !authorUserId) {
+    return conflict(
+      `"${name}" is a canonical built-in skill — fold into a fork (set repoId + authorUserId); ` +
+        `an in-place fold is rejected so the git-seeded base is never overwritten.`,
+    );
+  }
+
+  // The merged revision the human/agent drafted. Default to the existing skill's
+  // body when the caller omits it (a fold that only records provenance), so the
+  // new revision is never accidentally blanked.
+  const newBody = typeof b.body === 'string' ? b.body : existing.body;
+  const description =
+    typeof b.description === 'string' ? b.description : existing.description;
+
+  // Carry the existing skill forward, overlay the merged content + variant
+  // identity, and SNAPSHOT a new revision. `putNewVersion` writes the immutable
+  // revision row + the live "current" record and leaves TRUE untouched (a human
+  // promotes), forking the variant when repoId/authorUserId are set.
+  const candidate: Skill = {
+    ...existing,
+    scope: orgScope(org),
+    baseName: existing.baseName ?? name,
+    body: newBody,
+    description,
+    ...(repoId !== undefined ? { repoId } : {}),
+    ...(authorUserId !== undefined ? { authorUserId } : {}),
+  };
+  const stamped = await deps.repo.putNewVersion('SKILL', candidate, { repoId, authorUserId });
+
+  // AFTER the revision write: mark the idea folded with the rev it was folded
+  // into, via the optimistic-concurrency conditional. If a concurrent
+  // corroboration advanced the version since our read, this fails → 409 (the
+  // fold↔corroboration race is safe; the revision still exists, the human re-folds
+  // against the freshly-corroborated idea).
+  const foldedIdea: Idea = {
+    ...idea,
+    status: 'folded',
+    foldedIntoRev: stamped.version as number,
+    updatedAt: Date.now(),
+  };
+  const { written } = await deps.repo.corroborateIdeaConditional(
+    foldedIdea,
+    idea.corroborationVersion,
+  );
+  if (!written) {
+    return conflict(
+      `idea "${ideaId}" was corroborated concurrently with the fold — re-read and re-fold ` +
+        `(the revision was written; the mark was not, to avoid clobbering the new evidence).`,
+    );
+  }
+
+  return ok({ skill: stamped, idea: { ...foldedIdea, corroborationVersion: idea.corroborationVersion + 1 } });
 }
 
 export async function getSkill(
@@ -390,6 +524,9 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
   // The scope-change endpoint is retired in the org-only catalog.
   if (method === 'POST' && path.endsWith('/scope')) return gone('scope changes are retired');
+  // Fold an idea into a new revision (U16). Checked before /promote etc. since it
+  // is the most specific POST suffix on the skills resource.
+  if (method === 'POST' && path.endsWith('/fold')) return foldIdea(event, deps);
   if (method === 'POST' && path.endsWith('/promote')) return promoteSkill(event, deps);
   if (method === 'POST' && path.endsWith('/members')) return addMember(event, deps);
   if (method === 'DELETE' && pathParam(event, 'member')) return removeMember(event, deps);
