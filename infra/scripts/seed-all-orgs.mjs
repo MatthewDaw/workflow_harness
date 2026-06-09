@@ -34,6 +34,22 @@ const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const TABLE = process.env.HARNESS_TABLE ?? 'harness';
 const REGION = process.env.AWS_REGION ?? 'us-east-1';
+// U4 — SEED RE-EMBED WITHOUT A STORM. Every PutCommand below re-enters the
+// DynamoDB stream, and the stream consumer re-embeds any SKILL# whose desc+body
+// hash changed (U3). A full re-seed is therefore a BURST of writes, but the storm
+// is bounded at two layers, so this script does not need to throttle its own
+// writes:
+//   1. U3 hash-skip — an unchanged skill recomputes the SAME `descHash`, so the
+//      consumer no-ops it (no embed, no vector write). A re-seed of an unchanged
+//      catalog fires ZERO embeds; only genuinely-changed skills re-embed.
+//   2. U4 bounded consumer concurrency — the stream consumer drains each batch
+//      with a fixed worker pool (`STREAM_EMBED_CONCURRENCY`, default 4), so even a
+//      burst where every skill changed fans out at most that many simultaneous
+//      Bedrock embeds, never one-per-write unbounded.
+// Pace the seed's OWN writes only enough to stay under the table's write capacity
+// (on-demand `harness` absorbs this fine); the embed-rate ceiling is the consumer's
+// job, not the seeder's.
+const WRITE_PACING_MS = Number(process.env.SEED_WRITE_PACING_MS ?? '0');
 // The template org new-org creation clones the starter bundle from. We always
 // (re)seed it so the clone-on-create path has a canonical source even if no real
 // org named this exists yet. Keep in sync with starter.ts's STARTER_TEMPLATE_ORG.
@@ -70,6 +86,9 @@ const { buildSeedWorkflows, STARTER_WORKFLOWS } = await import(
 const { skillKey, workflowKey } = await import(
   pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
 );
+
+/** Optional inter-write pacing (U4) — no-op when WRITE_PACING_MS is 0. */
+const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
 /** Parse `name` + (folded) `description` from a SKILL.md YAML front matter block. */
 function parseFrontmatter(md) {
@@ -189,6 +208,18 @@ async function main() {
 
   const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
 
+  // U4 — confirm the seed targets the LIVE table. The default is `harness`
+  // (us-east-1, acct 066756666605); a typo'd HARNESS_TABLE would silently seed
+  // the wrong (or a non-existent) table. Surface the resolved target up front so
+  // a re-seed is never misdirected, and warn if it is not the canonical live name.
+  console.log(`[seed-all-orgs] target table='${TABLE}' region='${REGION}'`);
+  if (TABLE !== 'harness') {
+    console.warn(
+      `[seed-all-orgs] WARNING: HARNESS_TABLE='${TABLE}' is not the live 'harness' table — ` +
+        `seeding a non-canonical table. Set HARNESS_TABLE=harness (or unset it) to target live.`,
+    );
+  }
+
   const discovered = await listOrgNames(doc);
   // Union the discovered orgs with the template org so the clone-on-create source
   // is always seeded, even if no real org named TEMPLATE_ORG exists yet.
@@ -244,6 +275,7 @@ async function main() {
           Item: { ...key, ...record },
         }),
       );
+      await sleep(WRITE_PACING_MS);
     }
     for (const wf of workflows) {
       await doc.send(
