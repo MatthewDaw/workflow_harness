@@ -137,7 +137,44 @@ export function buildSeedSkills(
     }),
   );
 
-  return [...skills, ...bundles];
+  const all = [...skills, ...bundles];
+  // U19 — SEED-SAFE PROMOTION. The seed is the canonical source for the BASE
+  // variant ONLY. A built record must never carry a fork identity (`repoId`/
+  // `authorUserId`) and its `variantId` must equal its `baseName` (which equals
+  // its `name`). This is the structural half of "re-seed never clobbers a promoted
+  // #TRUE": the seed only ever writes the base variant's live record (via
+  // `putSkill`/`skillKey`) and NEVER the per-baseName `#TRUE` pointer, so a fork
+  // promoted to `#TRUE` survives a re-seed untouched. Assert it here so a future
+  // edit that smuggles a fork into the seed (which COULD repoint a promoted base)
+  // fails loudly rather than silently overwriting a curated promotion.
+  assertBaseVariantOnly(all);
+  return all;
+}
+
+/**
+ * Guard the U19 seed contract: every seed record is the BASE variant. Throws if
+ * any record carries a fork identity (`repoId`/`authorUserId`) or a `variantId`
+ * that diverges from its `baseName`/`name`. Exported so the all-orgs seed script
+ * can re-assert the same invariant on the records it is about to write.
+ */
+export function assertBaseVariantOnly(records: Skill[]): void {
+  for (const r of records) {
+    if (r.repoId || r.authorUserId) {
+      throw new Error(
+        `[seed] refusing to seed a FORK variant "${r.name}" (repoId=${r.repoId ?? ''} ` +
+          `authorUserId=${r.authorUserId ?? ''}). The seed owns the BASE variant only; a ` +
+          `fork write here could clobber a promoted #TRUE. Seed the base; fork via REST.`,
+      );
+    }
+    const base = r.baseName ?? r.name;
+    if (base !== r.name || (r.variantId !== undefined && r.variantId !== base)) {
+      throw new Error(
+        `[seed] refusing to seed a non-base variant "${r.name}" ` +
+          `(baseName=${r.baseName ?? ''} variantId=${r.variantId ?? ''}). The seed writes the ` +
+          `base variant only (variantId === baseName === name).`,
+      );
+    }
+  }
 }
 
 /**

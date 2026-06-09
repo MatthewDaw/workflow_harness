@@ -6,11 +6,13 @@ import type { Skill } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
 import { resolveSkills } from '../src/rest/skills.js';
 import {
+  assertBaseVariantOnly,
   buildSeedSkills,
   seedSkills,
   STARTER_BUNDLE_NAME,
   type SeedSkillFile,
 } from '../src/seed/skills.js';
+import { orgScope } from '@harness/shared';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
@@ -176,5 +178,85 @@ describe('seedSkills', () => {
     expect(bundle).toBeDefined();
     expect(bundle?.kind).toBe('bundle');
     expect(bundle?.resolvedMembers?.sort()).toEqual(HQ_FILES.map((f) => f.name).sort());
+  });
+});
+
+/**
+ * U19 — SEED-SAFE PROMOTION. The seed owns the BASE variant only. The builder
+ * asserts every record is a base variant (no fork identity, variantId ===
+ * baseName === name), and a re-seed updates the base record via `putSkill` while
+ * NEVER touching the per-baseName `#TRUE` pointer — so a fork promoted to the org
+ * default survives a re-seed untouched, yet the base content still refreshes.
+ */
+describe('U19: seed-safe promotion (base-variant-only writes + #TRUE guard)', () => {
+  it('assertBaseVariantOnly throws on a fork record', () => {
+    const [base] = buildSeedSkills(ORG, HQ_FILES.slice(0, 1), {
+      [STARTER_BUNDLE_NAME]: { description: 'b', members: [HQ_FILES[0]!.name] },
+    });
+    expect(() => assertBaseVariantOnly([base!])).not.toThrow();
+    // A fork (repoId/authorUserId set) is rejected — the seed must never write it.
+    expect(() =>
+      assertBaseVariantOnly([{ ...base!, repoId: 'r1', authorUserId: 'matt' }]),
+    ).toThrow(/fork/i);
+    // A non-base variantId is rejected too.
+    expect(() => assertBaseVariantOnly([{ ...base!, variantId: 'other' }])).toThrow(/base/i);
+  });
+
+  it('buildSeedSkills only ever produces base variants', () => {
+    for (const r of buildSeedSkills(ORG, FILES, MANIFEST)) {
+      expect(r.repoId).toBeUndefined();
+      expect(r.authorUserId).toBeUndefined();
+      expect(r.variantId).toBe(r.baseName);
+      expect(r.baseName).toBe(r.name);
+    }
+  });
+
+  it('a re-seed after a promote leaves the promoted #TRUE intact, but refreshes base content', async () => {
+    const SCOPE = orgScope(ORG);
+    const NAME = HQ_FILES[0]!.name; // an org-scoped bundle member
+    const oneManifest = {
+      [STARTER_BUNDLE_NAME]: { description: 'b', members: [NAME] },
+    };
+
+    // 1) Initial seed writes the base variant's live record (via `putSkill`). The
+    //    seed never sets a `#TRUE` pointer — promotion is explicit — so there is no
+    //    TRUE yet.
+    await seedSkills(repo, ORG, [HQ_FILES[0]!], oneManifest);
+    expect(await repo.getTrueVariant(SCOPE, 'SKILL', NAME)).toBeUndefined();
+
+    // 2) A user FORKS the built-in (a repo-scoped fold) and a human PROMOTES the
+    //    fork to the org default — exactly the U16/U19 fold→promote outcome.
+    const base = await repo.getSkill(SCOPE, NAME);
+    await repo.putNewVersion(
+      'SKILL',
+      { ...base!, body: 'forked + folded', repoId: 'repoX', authorUserId: 'matt' },
+      { repoId: 'repoX', authorUserId: 'matt' },
+    );
+    const forkVariantId = `${NAME}#R#repoX#U#matt`;
+    await repo.setTrueVariant(SCOPE, 'SKILL', {
+      baseName: NAME,
+      variantId: forkVariantId,
+      rev: 1,
+    });
+
+    // 3) Re-seed with CHANGED base content (a catalog/skills edit + re-seed).
+    const changed: SeedSkillFile = {
+      name: NAME,
+      description: 'updated description',
+      body: 'updated base body',
+    };
+    await seedSkills(repo, ORG, [changed], oneManifest);
+
+    // The promoted #TRUE STILL points at the fork — the re-seed never clobbered it.
+    const afterTrue = await repo.getTrueVariant(SCOPE, 'SKILL', NAME);
+    expect(afterTrue).toEqual({ baseName: NAME, variantId: forkVariantId, rev: 1 });
+
+    // ...yet the BASE variant's live record DID refresh to the new content.
+    const liveBase = await repo.getSkill(SCOPE, NAME);
+    expect(liveBase?.body).toBe('updated base body');
+    expect(liveBase?.description).toBe('updated description');
+    // The live base record is still the base variant (no fork identity).
+    expect(liveBase?.variantId).toBe(NAME);
+    expect(liveBase?.repoId).toBeUndefined();
   });
 });

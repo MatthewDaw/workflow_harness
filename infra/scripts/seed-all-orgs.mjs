@@ -58,7 +58,7 @@ if (!existsSync(path.join(backendDist, 'seed', 'workflows.js'))) {
 
 // Reuse the canonical record builder + key scheme from the built backend so this
 // seed produces byte-identical records to what the REST layer reads/writes.
-const { buildSeedSkills } = await import(
+const { buildSeedSkills, assertBaseVariantOnly } = await import(
   pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href
 );
 // Workflows are structured data (no markdown tree), so their source of truth is
@@ -208,6 +208,13 @@ async function main() {
     const records = buildSeedSkills(org, files, manifest, GRANT_OWNER).filter(
       (r) => r.scope.tier === 'org',
     );
+    // U19 — SEED-SAFE PROMOTION. Re-assert the base-variant-only contract on the
+    // exact records this loop is about to write (buildSeedSkills already asserts,
+    // but the filter could in principle drop the failing record; re-assert post-
+    // filter so the script can NEVER write a fork). Combined with the fact that we
+    // only ever PutCommand `skillKey(...)` (the BASE variant's live record) and
+    // NEVER a `#TRUE` pointer row below, a fork promoted to #TRUE survives re-seed.
+    assertBaseVariantOnly(records);
     // The starter workflow(s) — org-scoped, one record each — alongside skills.
     const workflows = buildSeedWorkflows(org, STARTER_WORKFLOWS);
     if (process.env.SEED_DRY_RUN) {
@@ -223,10 +230,18 @@ async function main() {
       continue;
     }
     for (const record of records) {
+      const key = skillKey(record.scope, record.name);
+      // Defense in depth: the seed writes the live BASE-variant record only and
+      // must never touch a per-baseName `#TRUE` pointer or a `#r<N>` revision row.
+      // skillKey() produces `SKILL#<name>`, never those side-record SKs — assert it
+      // so a key-scheme change can't silently let the seed clobber a promotion.
+      if (key.SK.endsWith('#TRUE') || /#r\d+$/.test(key.SK)) {
+        throw new Error(`[seed-all-orgs] refusing to write a version side-record SK: ${key.SK}`);
+      }
       await doc.send(
         new PutCommand({
           TableName: TABLE,
-          Item: { ...skillKey(record.scope, record.name), ...record },
+          Item: { ...key, ...record },
         }),
       );
     }
