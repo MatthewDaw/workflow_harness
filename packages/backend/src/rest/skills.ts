@@ -67,7 +67,7 @@ export interface SkillsDeps {
    */
   vectors?: S3Vectors;
   /**
-   * Bedrock golden judge for the U18 fold→promote regression replay. Optional +
+   * OpenRouter golden judge for the U18 fold→promote regression replay. Optional +
    * injectable for tests; the runtime handler defaults to `getGoldenJudge()`.
    */
   golden?: GoldenJudge;
@@ -316,11 +316,11 @@ async function replayGoldenForPromote(
  *
  * U18 — GOLDEN-SET REGRESSION (advisory): before repointing TRUE, the skill's
  * golden cases (one per prior fold) are REPLAYED against the candidate revision
- * body via a Bedrock judge. Any case the candidate no longer satisfies is a
+ * body via an OpenRouter judge. Any case the candidate no longer satisfies is a
  * REGRESSION — the candidate appears to undo an earlier fold. v1 is advisory:
  * the human is the gate, so regressions are SURFACED on the response
  * (`goldenRegressions` + the full `goldenReplay`) but the promote still
- * succeeds. The replay never throws (a Bedrock error just yields no findings).
+ * succeeds. The replay never throws (an OpenRouter error just yields no findings).
  */
 export async function promoteSkill(
   event: APIGatewayProxyEventV2,

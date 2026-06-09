@@ -5,7 +5,7 @@ import {
   type IdeaSource,
 } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import { type BedrockEmbedder, getEmbedder } from '../embeddings/bedrock.js';
+import { type OpenRouterEmbedder, getEmbedder } from '../embeddings/embed.js';
 import {
   IDEA_VECTOR_INDEX,
   getS3Vectors,
@@ -120,7 +120,7 @@ export interface CorroborateResult {
 /** Injectable collaborators (tests pass mocks; the runtime uses the defaults). */
 export interface CorroborateDeps {
   repo: Repo;
-  embedder?: BedrockEmbedder;
+  embedder?: OpenRouterEmbedder;
   vectors?: S3Vectors;
   writer?: IdeaWriter;
 }

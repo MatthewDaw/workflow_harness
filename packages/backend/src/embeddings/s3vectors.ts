@@ -6,14 +6,14 @@ import {
   S3VectorsClient,
 } from '@aws-sdk/client-s3vectors';
 import type { DocumentType } from '@smithy/types';
-import { activeEmbeddingVersion } from './bedrock.js';
+import { activeEmbeddingVersion } from './embed.js';
 
 /**
  * U2 — Amazon S3 Vectors read/write client.
  *
  * The store/search substrate the skill-idea loop runs over. U1's `VectorsStack`
  * provisions ONE vector bucket (`command-hq-skill-idea-vectors`) with two fixed
- * indexes — `skills` and `ideas` — float32, 1024-dim, cosine. Orgs are isolated
+ * indexes — `skills` and `ideas` — float32, 1536-dim, cosine. Orgs are isolated
  * at QUERY TIME via an `org` filterable metadata key (not per-org indexes), so
  * every put stamps `org` into metadata and every query filters on it (U8/U22).
  *
@@ -61,7 +61,7 @@ export function vectorBucketName(): string {
 export interface VectorItem {
   /** Unique key within the index (e.g. `<org>#<skillBaseName>`). */
   key: string;
-  /** The float embedding (1024-dim for Titan v2). */
+  /** The float embedding (EMBEDDING_DIMENSION-dim, 1536 for text-embedding-3-small). */
   vector: number[];
   /**
    * Filterable metadata. MUST include `org` for query-time isolation; may carry
@@ -246,7 +246,7 @@ export class S3Vectors {
     const hits: QueryHit[] = (res.vectors ?? []).map((v) => ({
       key: v.key ?? '',
       // Cosine distance ∈ [0,2]; similarity = 1 - distance ∈ [-1,1] (≈[0,1] for
-      // the normalized Titan vectors we store).
+      // the embedding vectors we store).
       score: 1 - (v.distance ?? 0),
       metadata: (v.metadata as Record<string, unknown> | undefined) ?? {},
     }));

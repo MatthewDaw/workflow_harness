@@ -13,7 +13,7 @@ import { applyEvent } from './projection.js';
 import { recomputeOrgRollup } from '../projections/rollupRepo.js';
 import { defaultRepo } from './runtime.js';
 import { orgFromScopePartition, isVersionSideRecord } from '../db/keys.js';
-import { embed as defaultEmbed, type Embedding } from '../embeddings/bedrock.js';
+import { embed as defaultEmbed, type Embedding } from '../embeddings/embed.js';
 import {
   getS3Vectors,
   SKILL_VECTOR_INDEX,
@@ -63,7 +63,7 @@ export interface StreamConsumerDeps {
    * Skill-embedding dependencies (U3). A SKILL# write re-embeds the skill's
    * desc+body via `embed` and upserts the vector to the org's skill index via
    * `vectors`. Both are injectable so tests mock them without the network and
-   * default to the Bedrock / S3 Vectors runtime clients.
+   * default to the OpenRouter / S3 Vectors runtime clients.
    */
   embed?: (text: string) => Promise<Embedding>;
   vectors?: S3Vectors;
@@ -89,9 +89,9 @@ export interface StreamConsumerDeps {
   /**
    * Upper bound on how many records in a single batch are processed concurrently
    * (U4). A seed of every skill × every org writes a BURST of SKILL# records into
-   * one shard; each non-hash-skipped record fires a Bedrock embed. Fully serial
+   * one shard; each non-hash-skipped record fires an embed. Fully serial
    * (one at a time) is safe but slow; an unbounded `Promise.all` over the batch
-   * fans out N simultaneous embed calls and storms the Bedrock rate limit. This
+   * fans out N simultaneous embed calls and storms the embedding rate limit. This
    * caps the in-flight fan-out so a burst is drained quickly WITHOUT exceeding the
    * embed concurrency the API tolerates. Defaults to `STREAM_EMBED_CONCURRENCY`
    * (env) or {@link DEFAULT_MAX_CONCURRENCY}. The hash-skip (U3) already no-ops

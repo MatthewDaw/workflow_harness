@@ -1,10 +1,7 @@
-import {
-  BedrockRuntimeClient,
-  InvokeModelCommand,
-} from '@aws-sdk/client-bedrock-runtime';
+import { type FetchLike, openRouterChat } from '../llm/openrouter.js';
 
 /**
- * U9 — the Bedrock Claude-Haiku topic→skill RERANK judge.
+ * U9 — the OpenRouter Claude-Haiku topic→skill RERANK judge.
  *
  * U8 retrieval hands the judge the topic plus the top-k candidate skills that
  * cleared the pre-judge similarity FLOOR. The embedding pre-filter is the part
@@ -19,20 +16,17 @@ import {
  * A `none` verdict, OR a `best` whose confidence is below the bar, routes the
  * topic to the unassigned bin (R6). The bin entry carries topic provenance (R7).
  *
- * This is the fourth Bedrock call type in the loop, alongside Titan embeddings
- * (`embeddings/`), the idea-writer (`ideas/synth.ts`), and the golden judge
- * (`rerank/golden.ts`). It mirrors their contract EXACTLY: Anthropic Messages on
- * Bedrock, a strict structured verdict, Haiku is enough. Auth is IAM/Bedrock
- * runtime — there is NO API key. A Bedrock error is NOT swallowed; it propagates
- * so the stream consumer marks the record a batch-item-failure and the stream
- * redelivers/DLQs it rather than silently dropping a topic. A garbled/empty
- * verdict is treated as `none` (route to the bin) rather than a wrong pick.
+ * This is one of three chat call types in the loop, alongside the idea-writer
+ * (`ideas/synth.ts`) and the golden judge (`rerank/golden.ts`); the embeddings
+ * (`embeddings/`) are the fourth model capability. It mirrors their contract
+ * EXACTLY: an OpenRouter chat completion, a strict structured verdict, Haiku is
+ * enough. Auth is the shared `OPENROUTER_API_KEY` (read at call time, never
+ * hardcoded). A request error is NOT swallowed; it propagates so the stream
+ * consumer marks the record a batch-item-failure and the stream redelivers/DLQs
+ * it rather than silently dropping a topic. A garbled/empty verdict is treated as
+ * `none` (route to the bin) rather than a wrong pick.
  */
 
-/** The Claude Haiku model id. Overridable via env so a model bump needs no code change. */
-const DEFAULT_MODEL_ID = 'us.anthropic.claude-3-5-haiku-20241022-v1:0';
-/** The Anthropic-on-Bedrock invoke contract version. */
-const ANTHROPIC_VERSION = 'bedrock-2023-05-31';
 /** A verdict is a small JSON object — cap the response tightly. */
 const MAX_TOKENS = 256;
 
@@ -49,9 +43,9 @@ export function judgeConfidenceBar(): number {
   return Number(process.env.JUDGE_CONFIDENCE_BAR ?? JUDGE_CONFIDENCE_BAR);
 }
 
-/** Resolve the configured rerank-judge model id (env overrideable; defaults to Haiku). */
-function modelId(): string {
-  return process.env.BEDROCK_RERANK_JUDGE_MODEL_ID ?? DEFAULT_MODEL_ID;
+/** Resolve the configured rerank-judge model id (env overrideable; defaults to the chat model). */
+function modelId(): string | undefined {
+  return process.env.OPENROUTER_RERANK_JUDGE_MODEL;
 }
 
 /** The topic the judge is reranking candidates against (label + rich summary). */
@@ -107,11 +101,6 @@ function renderPrompt(topic: JudgeTopic, candidates: JudgeCandidate[]): string {
   );
 }
 
-/** The Anthropic-on-Bedrock invoke-response body shape (the fields we read). */
-interface AnthropicResponse {
-  content?: Array<{ type?: string; text?: string }>;
-}
-
 /** The strict verdict the model is asked to emit. */
 interface RawVerdict {
   skillBaseName?: string | null;
@@ -119,16 +108,15 @@ interface RawVerdict {
 }
 
 /**
- * A Bedrock Claude-Haiku rerank judge. The Bedrock Runtime client is created
- * lazily and memoised across warm Lambda invocations (mirrors `ideas/synth.ts`
- * and `rerank/golden.ts`), and is injectable so tests mock it without touching
- * the network. Region / credentials come from the environment / IAM role.
+ * An OpenRouter Claude-Haiku rerank judge. The `fetch` impl is injectable so
+ * tests drive it without touching the network (it defaults to the Node 20
+ * global). Auth/base/model come from the environment at call time.
  */
 export class RerankJudge {
-  private client: BedrockRuntimeClient;
+  private fetchImpl?: FetchLike;
 
-  constructor(client?: BedrockRuntimeClient) {
-    this.client = client ?? new BedrockRuntimeClient({});
+  constructor(fetchImpl?: FetchLike) {
+    this.fetchImpl = fetchImpl;
   }
 
   /**
@@ -149,29 +137,15 @@ export class RerankJudge {
     return { outcome: 'best', skillBaseName: name, confidence };
   }
 
-  /** Send one Messages-API invoke and parse the strict JSON verdict. */
+  /** Send one chat completion and parse the strict JSON verdict. */
   private async invoke(userPrompt: string): Promise<RawVerdict> {
-    const body = {
-      anthropic_version: ANTHROPIC_VERSION,
-      max_tokens: MAX_TOKENS,
+    const text = await openRouterChat({
       system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userPrompt }],
-    };
-    const res = await this.client.send(
-      new InvokeModelCommand({
-        modelId: modelId(),
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify(body),
-      }),
-    );
-    const decoded = new TextDecoder().decode(res.body);
-    const parsed = JSON.parse(decoded) as AnthropicResponse;
-    const text = (parsed.content ?? [])
-      .filter((b) => b.type === 'text' || b.text !== undefined)
-      .map((b) => b.text ?? '')
-      .join('')
-      .trim();
+      user: userPrompt,
+      maxTokens: MAX_TOKENS,
+      ...(modelId() ? { model: modelId() } : {}),
+      ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+    });
     // The model is told to emit bare JSON; tolerate an accidental ```json fence.
     const json = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     try {

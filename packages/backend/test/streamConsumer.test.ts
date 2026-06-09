@@ -12,7 +12,7 @@ import type {
 } from '../src/ideas/associate.js';
 import type { RerankJudge } from '../src/rerank/judge.js';
 import type { IdeaWriter } from '../src/ideas/synth.js';
-import type { BedrockEmbedder } from '../src/embeddings/bedrock.js';
+import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
 import { Repo } from '../src/db/repo.js';
 import {
   consume,
@@ -20,7 +20,7 @@ import {
   DEFAULT_MAX_CONCURRENCY,
   type StreamConsumerDeps,
 } from '../src/ws/streamConsumer.js';
-import { EMBEDDING_DIMENSION, type Embedding } from '../src/embeddings/bedrock.js';
+import { EMBEDDING_DIMENSION, type Embedding } from '../src/embeddings/embed.js';
 import {
   SKILL_VECTOR_INDEX,
   skillVectorKey,
@@ -244,7 +244,7 @@ describe('stream consumer — objective roll-up driver', () => {
  * MODIFY whose desc/body is unchanged (same hash) skips; a changed description
  * re-embeds; `#TRUE`/`#r<N>` version side-records are ignored; and an embed
  * failure routes to the batch-item-failure list (retry/DLQ), not a silent drop.
- * The Bedrock embedder + S3 Vectors client are injected fakes — no network.
+ * The OpenRouter embedder + S3 Vectors client are injected fakes — no network.
  */
 describe('stream consumer — skill embedding on write (U3)', () => {
   const ORG = 'acme';
@@ -257,8 +257,8 @@ describe('stream consumer — skill embedding on write (U3)', () => {
       calls.push(text);
       return {
         vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
-        embeddingModel: 'amazon.titan-embed-text-v2:0',
-        embeddingVersion: 'titan-embed-text-v2',
+        embeddingModel: 'openai/text-embedding-3-small',
+        embeddingVersion: 'openai/text-embedding-3-small',
       };
     });
     return { fn, calls };
@@ -329,7 +329,7 @@ describe('stream consumer — skill embedding on write (U3)', () => {
     expect(item.metadata).toMatchObject({
       org: ORG,
       skillBaseName: 'reconcile',
-      embeddingVersion: 'titan-embed-text-v2',
+      embeddingVersion: 'openai/text-embedding-3-small',
       descHash: skillContentHash(s.description, s.body),
     });
   });
@@ -396,7 +396,7 @@ describe('stream consumer — skill embedding on write (U3)', () => {
 
     const stored = await repo.getSkill(ORG_SCOPE, 'reconcile');
     expect(stored?.descHash).toBe(skillContentHash(s.description, s.body));
-    expect(stored?.embeddingVersion).toBe('titan-embed-text-v2');
+    expect(stored?.embeddingVersion).toBe('openai/text-embedding-3-small');
   });
 
   it('ignores #TRUE pointer and #r<N> revision side-records (no embed)', async () => {
@@ -454,7 +454,7 @@ describe('stream consumer — skill embedding on write (U3)', () => {
  * spy to assert the consumer wiring (the topic branch fires with the event's
  * finding, the reprojection is undisturbed, a throw routes to a batch-item
  * failure); the `end-to-end` describe below drives the REAL pipeline through the
- * in-memory table with injected Bedrock collaborators.
+ * in-memory table with injected OpenRouter collaborators.
  */
 describe('stream consumer — topic association branch (U8→U10)', () => {
   function topicEnvelope(seq: number): Envelope {
@@ -526,7 +526,7 @@ describe('stream consumer — topic association branch (U8→U10)', () => {
 
 /**
  * U8→U10 end-to-end through the REAL pipeline (no `associateAndFinalize` spy):
- * a `session.topic` event, fed through the in-memory table with injected Bedrock
+ * a `session.topic` event, fed through the in-memory table with injected OpenRouter
  * collaborators (embedder / vectors / judge / writer), must PRODUCE a real idea
  * on the judge-chosen skill — or write a real unassigned-bin entry when nothing
  * routes. This is the consolidation the wiring exists for: a topic event now
@@ -562,14 +562,14 @@ describe('stream consumer — topic pipeline end-to-end (U8→U10)', () => {
   }
 
   /** A deterministic embedder — every text maps to the same unit vector. */
-  function fakeEmbedder(): BedrockEmbedder {
+  function fakeEmbedder(): OpenRouterEmbedder {
     return {
       embed: vi.fn(async () => ({
         vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
-        embeddingModel: 'amazon.titan-embed-text-v2:0',
-        embeddingVersion: 'titan-embed-text-v2',
+        embeddingModel: 'openai/text-embedding-3-small',
+        embeddingVersion: 'openai/text-embedding-3-small',
       })),
-    } as unknown as BedrockEmbedder;
+    } as unknown as OpenRouterEmbedder;
   }
 
   /**
@@ -707,7 +707,7 @@ describe('stream consumer — topic pipeline end-to-end (U8→U10)', () => {
       embed: vi.fn(async () => {
         throw new Error('ThrottlingException');
       }),
-    } as unknown as BedrockEmbedder;
+    } as unknown as OpenRouterEmbedder;
 
     const { store: vectors } = fakeVectors('money-handling');
     const res = await consume(streamEvent(topicRecord(1, 'Use decimal for currency.')), {
@@ -779,8 +779,8 @@ describe('stream consumer — observability metrics (U23)', () => {
   const okEmbed = vi.fn(
     async (): Promise<Embedding> => ({
       vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
-      embeddingModel: 'amazon.titan-embed-text-v2:0',
-      embeddingVersion: 'titan-embed-text-v2',
+      embeddingModel: 'openai/text-embedding-3-small',
+      embeddingVersion: 'openai/text-embedding-3-small',
     }),
   );
   const okVectors = { putVectors: vi.fn(async () => {}) } as unknown as S3Vectors;
@@ -856,8 +856,8 @@ describe('stream consumer — seed re-embed without a storm (U4)', () => {
       calls.push(text);
       return {
         vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
-        embeddingModel: 'amazon.titan-embed-text-v2:0',
-        embeddingVersion: 'titan-embed-text-v2',
+        embeddingModel: 'openai/text-embedding-3-small',
+        embeddingVersion: 'openai/text-embedding-3-small',
       };
     });
     return { fn, calls };
@@ -977,8 +977,8 @@ describe('stream consumer — seed re-embed without a storm (U4)', () => {
       inFlight--;
       return {
         vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
-        embeddingModel: 'amazon.titan-embed-text-v2:0',
-        embeddingVersion: 'titan-embed-text-v2',
+        embeddingModel: 'openai/text-embedding-3-small',
+        embeddingVersion: 'openai/text-embedding-3-small',
       };
     });
     const tick = () => new Promise<void>((r) => setTimeout(r, 0));

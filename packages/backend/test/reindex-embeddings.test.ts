@@ -17,7 +17,7 @@ const skillVectorKey = (org: string, baseName: string) => `${org}#${baseName}`;
 
 /** A mock embedder that stamps the given version on every embedding. */
 function embedderFor(version: string) {
-  return vi.fn(async (_text: string) => ({ vector: Array(1024).fill(0.1), embeddingVersion: version }));
+  return vi.fn(async (_text: string) => ({ vector: Array(1536).fill(0.1), embeddingVersion: version }));
 }
 
 const TWO_ORGS = {
@@ -75,7 +75,7 @@ describe('reindexAll (U5)', () => {
     const d = deps('v2', {
       embed: vi.fn(async () => {
         calls.push('embed');
-        return { vector: Array(1024).fill(0.1), embeddingVersion: 'v2' };
+        return { vector: Array(1536).fill(0.1), embeddingVersion: 'v2' };
       }),
       swapActiveVersion: vi.fn(async (v: string) => {
         calls.push(`swap:${v}`);

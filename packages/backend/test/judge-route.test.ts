@@ -11,7 +11,7 @@ import {
   type AssociateDeps,
   type TopicFinding,
 } from '../src/ideas/associate.js';
-import type { BedrockEmbedder } from '../src/embeddings/bedrock.js';
+import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
 import type { QueryHit, QueryOptions, S3Vectors } from '../src/embeddings/s3vectors.js';
 import type { JudgeCandidate, JudgeTopic, JudgeVerdict, RerankJudge } from '../src/rerank/judge.js';
 
@@ -73,7 +73,7 @@ const fakeEmbedder = {
   async embed() {
     return { vector: [1, 0, 0, 0], embeddingModel: 'fake', embeddingVersion: 'fake-v1' };
   },
-} as unknown as BedrockEmbedder;
+} as unknown as OpenRouterEmbedder;
 
 /** A scripted judge: records its inputs, returns the verdict it was constructed with. */
 class FakeJudge {

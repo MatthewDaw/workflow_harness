@@ -14,7 +14,7 @@ import {
   type RouteResult,
   type TopicFinding,
 } from '../src/ideas/associate.js';
-import type { BedrockEmbedder } from '../src/embeddings/bedrock.js';
+import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
 import type { S3Vectors, VectorItem, QueryHit, QueryOptions } from '../src/embeddings/s3vectors.js';
 import type { IdeaFinding } from '../src/ideas/synth.js';
 import type { JudgeCandidate, JudgeTopic, JudgeVerdict, RerankJudge } from '../src/rerank/judge.js';
@@ -133,7 +133,7 @@ let vectors: FakeVectors;
 function deps(judge?: FakeJudge): AssociateDeps {
   return {
     repo,
-    embedder: embedder as unknown as BedrockEmbedder,
+    embedder: embedder as unknown as OpenRouterEmbedder,
     vectors: vectors as unknown as S3Vectors,
     writer: writer as unknown as never,
     ...(judge ? { judge: judge as unknown as RerankJudge } : {}),

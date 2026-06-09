@@ -7,8 +7,8 @@ import { Construct } from 'constructs';
  * U1 — S3 Vectors stack (skill-idea loop, Phase A).
  *
  * Provisions the Amazon S3 Vectors substrate the ideas loop searches over:
- * one vector bucket with two fixed indexes (skills + ideas), Titan-v2-shaped
- * (float32, 1024-dim, cosine), plus a least-privilege managed policy that the
+ * one vector bucket with two fixed indexes (skills + ideas),
+ * (float32, 1536-dim, cosine), plus a least-privilege managed policy that the
  * stream-consumer / ideas Lambdas attach to for put+query.
  *
  * S3 Vectors is GA (Dec 2025), pay-per-use with no idle floor, AWS-native (stays
@@ -50,8 +50,8 @@ import { Construct } from 'constructs';
  * idea index scoped to a skill; U8 queries the skill index for a topic).
  */
 
-/** Titan Text Embeddings v2 default output dimension. */
-const EMBEDDING_DIMENSION = 1024;
+/** OpenRouter `openai/text-embedding-3-small` output dimension. */
+const EMBEDDING_DIMENSION = 1536;
 /** S3 Vectors currently supports only float32. */
 const VECTOR_DATA_TYPE = 'float32';
 /** Cosine similarity matches the embedding-based retrieval the loop performs. */

@@ -32,7 +32,7 @@ import {
 } from '../src/ideas/associate.js';
 import { corroborateFinding, type Finding } from '../src/ideas/corroborate.js';
 import { S3Vectors } from '../src/embeddings/s3vectors.js';
-import type { BedrockEmbedder } from '../src/embeddings/bedrock.js';
+import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
 import {
   IDEA_VECTOR_INDEX,
   SKILL_VECTOR_INDEX,
@@ -186,7 +186,7 @@ const fakeEmbedder = {
   async embed() {
     return { vector: [1, 0, 0, 0], embeddingModel: 'fake', embeddingVersion: 'fake-v1' };
   },
-} as unknown as BedrockEmbedder;
+} as unknown as OpenRouterEmbedder;
 
 function assocDeps(vectors: FakeVectors, over: Partial<AssociateDeps> = {}): AssociateDeps {
   return { repo, embedder: fakeEmbedder, vectors: vectors as unknown as S3VectorsType, ...over };

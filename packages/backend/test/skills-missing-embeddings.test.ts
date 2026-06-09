@@ -17,7 +17,7 @@ import { probeMissingEmbeddings } from '../../../infra/scripts/skills-missing-em
 
 const contentHash = (description: string, body: string) => `h(${description}|${body})`;
 const skillVectorKey = (org: string, baseName: string) => `${org}#${baseName}`;
-const ACTIVE = 'titan-embed-text-v2';
+const ACTIVE = 'openai/text-embedding-3-small';
 
 function deps(over: Record<string, unknown> = {}) {
   return {

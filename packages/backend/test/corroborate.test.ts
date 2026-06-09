@@ -10,7 +10,7 @@ import {
   corroborateFinding,
   type Finding,
 } from '../src/ideas/corroborate.js';
-import type { BedrockEmbedder } from '../src/embeddings/bedrock.js';
+import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
 import type { S3Vectors, VectorItem, QueryHit, QueryOptions } from '../src/embeddings/s3vectors.js';
 import type { IdeaWriter, IdeaFinding } from '../src/ideas/synth.js';
 
@@ -138,7 +138,7 @@ beforeEach(() => {
 function deps() {
   return {
     repo,
-    embedder: embedder as unknown as BedrockEmbedder,
+    embedder: embedder as unknown as OpenRouterEmbedder,
     vectors: vectors as unknown as S3Vectors,
     writer: writer as unknown as IdeaWriter,
   };

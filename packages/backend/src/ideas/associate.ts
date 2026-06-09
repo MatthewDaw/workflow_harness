@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { orgScope, type Idea, type IdeaSource, type UnassignedEntry } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import { type BedrockEmbedder, getEmbedder } from '../embeddings/bedrock.js';
+import { type OpenRouterEmbedder, getEmbedder } from '../embeddings/embed.js';
 import {
   SKILL_VECTOR_INDEX,
   getS3Vectors,
@@ -136,11 +136,11 @@ export interface AssociationResult {
 /** Injectable collaborators (tests pass mocks; the runtime uses the defaults). */
 export interface AssociateDeps {
   repo: Repo;
-  embedder?: BedrockEmbedder;
+  embedder?: OpenRouterEmbedder;
   vectors?: S3Vectors;
-  /** The Bedrock Claude-Haiku rerank judge (U9). Defaults to the process judge. */
+  /** The OpenRouter Claude-Haiku rerank judge (U9). Defaults to the process judge. */
   judge?: RerankJudge;
-  /** The Bedrock idea-writer (U7/U10). Defaults to the process writer. */
+  /** The OpenRouter idea-writer (U7/U10). Defaults to the process writer. */
   writer?: IdeaWriter;
 }
 
@@ -237,7 +237,7 @@ export async function associateTopic(
  * U9 — judge rerank → the chosen skill, or the unassigned bin.
  *
  * The DECISION half of association. It runs U8 retrieval, then for a `candidates`
- * result asks the Bedrock Claude-Haiku judge to pick the SINGLE best skill (or
+ * result asks the OpenRouter Claude-Haiku judge to pick the SINGLE best skill (or
  * reject all). The pipeline has TWO thresholds: U8's similarity FLOOR (does
  * anything reach the judge) and the judge CONFIDENCE BAR (does the judge's pick
  * clear the bar). The outcomes:

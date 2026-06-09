@@ -1627,7 +1627,7 @@ export class Repo {
   // Golden cases are co-located with skills under an `IDEAGOLD#` SK prefix, so
   // (like ideas) they are invisible to `listSkills`. Each fold records one case
   // (the before→after expectation); a later promote replays the family's cases
-  // against the candidate body via the Bedrock golden judge. The `caseId` is the
+  // against the candidate body via the OpenRouter golden judge. The `caseId` is the
   // folded `ideaId`, so re-folding the same idea overwrites its case in place.
 
   /**

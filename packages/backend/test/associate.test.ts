@@ -12,7 +12,7 @@ import {
   type AssociateDeps,
   type TopicFinding,
 } from '../src/ideas/associate.js';
-import type { BedrockEmbedder } from '../src/embeddings/bedrock.js';
+import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
 import { SKILL_VECTOR_INDEX, type QueryHit, type QueryOptions, type S3Vectors } from '../src/embeddings/s3vectors.js';
 
 /**
@@ -82,7 +82,7 @@ const fakeEmbedder = {
   async embed() {
     return { vector: [1, 0, 0, 0], embeddingModel: 'fake', embeddingVersion: 'fake-v1' };
   },
-} as unknown as BedrockEmbedder;
+} as unknown as OpenRouterEmbedder;
 
 function deps(vectors: FakeVectors): AssociateDeps {
   return { repo, embedder: fakeEmbedder, vectors: vectors as unknown as S3Vectors };

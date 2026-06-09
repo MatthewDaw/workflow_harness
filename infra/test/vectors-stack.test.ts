@@ -6,7 +6,7 @@ import { VectorsStack } from '../lib/vectors-stack';
  * U1 assertions (CDK assertion tests only — no runtime behavior):
  *
  *  - the synthesized stack provisions one S3 Vectors bucket and the two fixed
- *    indexes (skills + ideas), shaped for Titan v2 (float32, 1024-dim, cosine);
+ *    indexes (skills + ideas), shaped for the embeddings (float32, 1536-dim, cosine);
  *  - it ships a least-privilege put/query managed policy scoped to that bucket's
  *    indexes — and grants those actions to NO role by itself (the attachment is
  *    deferred to ApiStack in U3/U8, so synth shows an unattached/ inert policy);
@@ -36,14 +36,14 @@ describe('VectorsStack', () => {
     });
   });
 
-  test('provisions the skills and ideas indexes, Titan-v2-shaped (float32, 1024, cosine)', () => {
+  test('provisions the skills and ideas indexes (float32, 1536, cosine)', () => {
     template.resourceCountIs('AWS::S3Vectors::Index', 2);
 
     for (const indexName of ['skills', 'ideas']) {
       template.hasResourceProperties('AWS::S3Vectors::Index', {
         IndexName: indexName,
         DataType: 'float32',
-        Dimension: 1024,
+        Dimension: 1536,
         DistanceMetric: 'cosine',
       });
     }
