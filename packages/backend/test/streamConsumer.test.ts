@@ -1,12 +1,23 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import type { DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
-import type { Envelope, Event, ObjectiveNode, Project } from '@harness/shared';
+import type { Envelope, Event, ObjectiveNode, Project, Skill } from '@harness/shared';
 import { Repo } from '../src/db/repo.js';
-import { consume, type StreamConsumerDeps } from '../src/ws/streamConsumer.js';
+import {
+  consume,
+  skillContentHash,
+  type StreamConsumerDeps,
+} from '../src/ws/streamConsumer.js';
+import { EMBEDDING_DIMENSION, type Embedding } from '../src/embeddings/bedrock.js';
+import {
+  SKILL_VECTOR_INDEX,
+  skillVectorKey,
+  type S3Vectors,
+  type VectorItem,
+} from '../src/embeddings/s3vectors.js';
 import * as k from '../src/db/keys.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 
@@ -141,7 +152,9 @@ describe('stream consumer — session projection backstop', () => {
       dynamodb: { Keys: marshall(k.eventKey(SESSION, 9)) },
     } as unknown as DynamoDBRecord;
 
-    await expect(consume(streamEvent(noise, remove), deps())).resolves.toBeUndefined();
+    await expect(consume(streamEvent(noise, remove), deps())).resolves.toMatchObject({
+      batchItemFailures: [],
+    });
     // Nothing projected from noise.
     expect(await repo.getSessionById(SESSION)).toBeUndefined();
   });
@@ -211,7 +224,215 @@ describe('stream consumer — objective roll-up driver', () => {
     };
     await expect(
       consume(streamEvent(projectRecord({ ...noOrg, progressPct: 0 }, noOrg)), deps()),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ batchItemFailures: [] });
     expect((await repo.getObjective(ORG, 'rally'))?.pct).toBeUndefined();
+  });
+});
+
+/**
+ * U3 — re-embed a skill on every mutation, async off the stream, idempotent on a
+ * `description + body` content hash. A SKILL# INSERT embeds + writes a vector; a
+ * MODIFY whose desc/body is unchanged (same hash) skips; a changed description
+ * re-embeds; `#TRUE`/`#r<N>` version side-records are ignored; and an embed
+ * failure routes to the batch-item-failure list (retry/DLQ), not a silent drop.
+ * The Bedrock embedder + S3 Vectors client are injected fakes — no network.
+ */
+describe('stream consumer — skill embedding on write (U3)', () => {
+  const ORG = 'acme';
+  const ORG_SCOPE = { tier: 'org' as const, id: ORG };
+
+  /** A tracked fake embedder: records inputs, returns a deterministic vector. */
+  function fakeEmbed() {
+    const calls: string[] = [];
+    const fn = vi.fn(async (text: string): Promise<Embedding> => {
+      calls.push(text);
+      return {
+        vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
+        embeddingModel: 'amazon.titan-embed-text-v2:0',
+        embeddingVersion: 'titan-embed-text-v2',
+      };
+    });
+    return { fn, calls };
+  }
+
+  /** A tracked fake S3 Vectors store capturing every put (no network). */
+  function fakeVectors() {
+    const puts: { index: string; items: VectorItem[] }[] = [];
+    const store = {
+      putVectors: vi.fn(async (index: string, items: VectorItem[]) => {
+        puts.push({ index, items });
+      }),
+    } as unknown as S3Vectors;
+    return { store, puts };
+  }
+
+  function skill(over: Partial<Skill> = {}): Skill {
+    return {
+      name: 'reconcile',
+      scope: ORG_SCOPE,
+      kind: 'skill',
+      description: 'Reconcile weekly variance against the budget.',
+      source: 'local',
+      members: [],
+      body: '# Reconcile\nSteps to reconcile.',
+      ...over,
+    } as Skill;
+  }
+
+  /** Build a stream record for a SKILL# item (live record, a revision, or TRUE). */
+  function skillRecord(
+    s: Skill,
+    opts: { sk?: string; eventName?: 'INSERT' | 'MODIFY'; old?: Skill } = {},
+  ): DynamoDBRecord {
+    const key = opts.sk
+      ? { PK: `SCOPE#org#${ORG}`, SK: opts.sk }
+      : k.skillKey(s.scope, s.name);
+    return {
+      eventName: opts.eventName ?? 'INSERT',
+      eventID: `skill-${s.name}-${opts.sk ?? 'live'}`,
+      dynamodb: {
+        Keys: marshall(key),
+        ...(opts.old
+          ? { OldImage: marshall({ ...key, ...opts.old }, { removeUndefinedValues: true }) }
+          : {}),
+        NewImage: marshall({ ...key, ...s }, { removeUndefinedValues: true }),
+      },
+    } as unknown as DynamoDBRecord;
+  }
+
+  it('embeds a SKILL# INSERT and writes a stamped vector to the org skill index', async () => {
+    const { fn: embed, calls } = fakeEmbed();
+    const { store: vectors, puts } = fakeVectors();
+    const s = skill();
+
+    const res = await consume(streamEvent(skillRecord(s)), { repo, embed, vectors });
+
+    expect(res.batchItemFailures).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain(s.description);
+    expect(calls[0]).toContain(s.body);
+
+    expect(puts).toHaveLength(1);
+    expect(puts[0]!.index).toBe(SKILL_VECTOR_INDEX);
+    const item = puts[0]!.items[0]!;
+    expect(item.key).toBe(skillVectorKey(ORG, 'reconcile'));
+    expect(item.vector).toHaveLength(EMBEDDING_DIMENSION);
+    expect(item.metadata).toMatchObject({
+      org: ORG,
+      skillBaseName: 'reconcile',
+      embeddingVersion: 'titan-embed-text-v2',
+      descHash: skillContentHash(s.description, s.body),
+    });
+  });
+
+  it('keys the vector on baseName for a forked variant record', async () => {
+    const { fn: embed } = fakeEmbed();
+    const { store: vectors, puts } = fakeVectors();
+    // A fork's live record carries the variant name but stamps baseName.
+    const s = skill({ name: 'reconcile#R#repo1#U#matt', baseName: 'reconcile' });
+
+    await consume(streamEvent(skillRecord(s)), { repo, embed, vectors });
+
+    expect(puts[0]!.items[0]!.key).toBe(skillVectorKey(ORG, 'reconcile'));
+    expect(puts[0]!.items[0]!.metadata).toMatchObject({ skillBaseName: 'reconcile' });
+  });
+
+  it('skips a MODIFY whose desc+body hash is unchanged (no embed, no put)', async () => {
+    const { fn: embed, calls } = fakeEmbed();
+    const { store: vectors, puts } = fakeVectors();
+    const base = skill();
+    // The record already carries the matching descHash (as the stamp write left it).
+    const stamped = skill({ descHash: skillContentHash(base.description, base.body) });
+
+    const res = await consume(
+      streamEvent(skillRecord(stamped, { eventName: 'MODIFY', old: base })),
+      { repo, embed, vectors },
+    );
+
+    expect(res.batchItemFailures).toEqual([]);
+    expect(calls).toHaveLength(0);
+    expect(puts).toHaveLength(0);
+  });
+
+  it('re-embeds a MODIFY whose description changed (hash differs)', async () => {
+    const { fn: embed, calls } = fakeEmbed();
+    const { store: vectors, puts } = fakeVectors();
+    const before = skill();
+    // Same stored descHash as the OLD content, but the NEW description differs.
+    const changed = skill({
+      description: 'Reconcile variance AND flag anomalies over 5%.',
+      descHash: skillContentHash(before.description, before.body),
+    });
+
+    await consume(streamEvent(skillRecord(changed, { eventName: 'MODIFY', old: before })), {
+      repo,
+      embed,
+      vectors,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('flag anomalies');
+    expect(puts).toHaveLength(1);
+    expect(puts[0]!.items[0]!.metadata).toMatchObject({
+      descHash: skillContentHash(changed.description, changed.body),
+    });
+  });
+
+  it('stamps descHash + embeddingVersion back onto the skill record', async () => {
+    const { fn: embed } = fakeEmbed();
+    const { store: vectors } = fakeVectors();
+    const s = skill();
+
+    await consume(streamEvent(skillRecord(s)), { repo, embed, vectors });
+
+    const stored = await repo.getSkill(ORG_SCOPE, 'reconcile');
+    expect(stored?.descHash).toBe(skillContentHash(s.description, s.body));
+    expect(stored?.embeddingVersion).toBe('titan-embed-text-v2');
+  });
+
+  it('ignores #TRUE pointer and #r<N> revision side-records (no embed)', async () => {
+    const { fn: embed, calls } = fakeEmbed();
+    const { store: vectors, puts } = fakeVectors();
+    const s = skill();
+
+    await consume(
+      streamEvent(
+        skillRecord(s, { sk: 'SKILL#reconcile#TRUE' }),
+        skillRecord(s, { sk: 'SKILL#reconcile#r000000000001' }),
+      ),
+      { repo, embed, vectors },
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(puts).toHaveLength(0);
+  });
+
+  it('routes an embed failure to batchItemFailures (retry/DLQ, not silent drop)', async () => {
+    const embed = vi.fn(async (): Promise<Embedding> => {
+      throw new Error('ThrottlingException');
+    });
+    const { store: vectors, puts } = fakeVectors();
+    const s = skill();
+
+    const res = await consume(streamEvent(skillRecord(s)), { repo, embed, vectors });
+
+    expect(res.batchItemFailures).toEqual([{ itemIdentifier: `skill-reconcile-live` }]);
+    expect(puts).toHaveLength(0); // never reached the vector write
+    // The record was NOT stamped, so a redelivery re-attempts the embed.
+    expect((await repo.getSkill(ORG_SCOPE, 'reconcile'))?.descHash).toBeUndefined();
+  });
+
+  it('routes a vector-write failure to batchItemFailures', async () => {
+    const { fn: embed } = fakeEmbed();
+    const vectors = {
+      putVectors: vi.fn(async () => {
+        throw new Error('ServiceUnavailableException');
+      }),
+    } as unknown as S3Vectors;
+    const s = skill();
+
+    const res = await consume(streamEvent(skillRecord(s)), { repo, embed, vectors });
+
+    expect(res.batchItemFailures).toEqual([{ itemIdentifier: `skill-reconcile-live` }]);
   });
 });
