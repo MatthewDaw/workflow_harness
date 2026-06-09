@@ -1,5 +1,6 @@
 import {
   DeleteVectorsCommand,
+  GetVectorsCommand,
   PutVectorsCommand,
   QueryVectorsCommand,
   S3VectorsClient,
@@ -179,6 +180,42 @@ export class S3Vectors {
         }),
       );
     }
+  }
+
+  /**
+   * Fetch stored vectors BY KEY (not by similarity), returning each found key's
+   * metadata. Used by the `skills-missing-embeddings` probe (U23): a skill's
+   * expected vector key (`<org>#<skillBaseName>`) is looked up directly so the
+   * probe can compare the STORED `descHash`/`embeddingVersion` metadata against
+   * the skill's CURRENT content hash + active version — a direct fetch is exact,
+   * whereas a similarity query could miss a stale vector. Keys are chunked at the
+   * same per-request limit; a key with no stored vector is simply absent from the
+   * result map (the probe treats absent as "missing embedding"). Vector floats are
+   * NOT requested (the probe only needs metadata). Errors are NOT swallowed.
+   */
+  async getVectors(
+    indexName: string,
+    keys: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const found = new Map<string, Record<string, unknown>>();
+    if (keys.length === 0) return found;
+    for (const batch of chunk(keys, PUT_BATCH_LIMIT)) {
+      const res = await this.client.send(
+        new GetVectorsCommand({
+          vectorBucketName: this.bucket,
+          indexName,
+          keys: batch,
+          returnMetadata: true,
+          returnData: false,
+        }),
+      );
+      for (const v of res.vectors ?? []) {
+        if (typeof v.key === 'string') {
+          found.set(v.key, (v.metadata as Record<string, unknown> | undefined) ?? {});
+        }
+      }
+    }
+    return found;
   }
 
   /**

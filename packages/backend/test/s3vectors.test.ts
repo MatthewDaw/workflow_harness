@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import {
   DeleteVectorsCommand,
+  GetVectorsCommand,
   PutVectorsCommand,
   QueryVectorsCommand,
   S3VectorsClient,
@@ -205,6 +206,52 @@ describe('S3Vectors.queryTopK — embedding version guard (U5)', () => {
       if (prev === undefined) delete process.env.BEDROCK_EMBEDDING_VERSION;
       else process.env.BEDROCK_EMBEDDING_VERSION = prev;
     }
+  });
+});
+
+describe('S3Vectors.getVectors (U23 probe)', () => {
+  it('fetches by key and returns a key→metadata map (metadata only, no floats)', async () => {
+    s3vMock.on(GetVectorsCommand).resolves({
+      vectors: [
+        { key: 'acme#reconcile', metadata: { org: 'acme', descHash: 'h1', embeddingVersion: 'v2' } },
+      ],
+    });
+
+    const found = await store.getVectors('skills', ['acme#reconcile', 'acme#missing']);
+
+    const call = s3vMock.commandCalls(GetVectorsCommand)[0]!.args[0].input;
+    expect(call.vectorBucketName).toBe('test-bucket');
+    expect(call.indexName).toBe('skills');
+    expect(call.keys).toEqual(['acme#reconcile', 'acme#missing']);
+    expect(call.returnMetadata).toBe(true);
+    expect(call.returnData).toBe(false);
+    // The present key carries its metadata; the absent key is simply not in the map.
+    expect(found.get('acme#reconcile')).toEqual({ org: 'acme', descHash: 'h1', embeddingVersion: 'v2' });
+    expect(found.has('acme#missing')).toBe(false);
+  });
+
+  it('chunks a large fetch at the put batch limit', async () => {
+    s3vMock.on(GetVectorsCommand).resolves({ vectors: [] });
+    const keys = Array.from({ length: 1100 }, (_, i) => `k-${i}`);
+
+    await store.getVectors('skills', keys);
+
+    const calls = s3vMock.commandCalls(GetVectorsCommand);
+    expect(calls).toHaveLength(3); // 500 + 500 + 100
+    expect(calls[0]!.args[0].input.keys).toHaveLength(PUT_BATCH_LIMIT);
+    expect(calls[2]!.args[0].input.keys).toHaveLength(100);
+  });
+
+  it('no-ops on an empty key list (no fetch call)', async () => {
+    s3vMock.on(GetVectorsCommand).resolves({ vectors: [] });
+    const found = await store.getVectors('skills', []);
+    expect(s3vMock.commandCalls(GetVectorsCommand)).toHaveLength(0);
+    expect(found.size).toBe(0);
+  });
+
+  it('propagates a fetch error (does not swallow)', async () => {
+    s3vMock.on(GetVectorsCommand).rejects(new Error('AccessDeniedException'));
+    await expect(store.getVectors('skills', ['k'])).rejects.toThrow('AccessDeniedException');
   });
 });
 

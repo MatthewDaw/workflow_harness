@@ -321,4 +321,23 @@ describe('ApiStack', () => {
     const mappings = template.findResources('AWS::Lambda::EventSourceMapping');
     expect(Object.keys(mappings).length).toBeGreaterThan(0);
   });
+
+  test('alarms on stream-consumer DLQ depth (U23 observability)', () => {
+    // The DLQ exists (records that exhaust retries land here).
+    template.hasResourceProperties('AWS::SQS::Queue', {
+      QueueName: 'command-hq-stream-consumer-dlq',
+    });
+    // A CloudWatch alarm watches its depth: ANY visible message breaches, so a
+    // skill/topic embed that gave up after retries is VISIBLE instead of failing
+    // to empty-state. Missing data is the healthy (empty-queue) case, not a breach.
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'command-hq-stream-consumer-dlq-depth',
+      MetricName: 'ApproximateNumberOfMessagesVisible',
+      Namespace: 'AWS/SQS',
+      ComparisonOperator: 'GreaterThanThreshold',
+      Threshold: 0,
+      EvaluationPeriods: 1,
+      TreatMissingData: 'notBreaching',
+    });
+  });
 });

@@ -6,6 +6,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { StartingPosition, FilterCriteria, FilterRule } from 'aws-cdk-lib/aws-lambda';
 import { HttpNoneAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2';
@@ -510,6 +511,33 @@ export class ApiStack extends cdk.Stack {
         ],
       }),
     );
+
+    // Alarm on DLQ DEPTH (U23 observability). A record that exhausts retries
+    // lands here — most commonly a skill / topic embed that keeps failing
+    // (Bedrock throttle, S3 Vectors outage) or an un-decodable record. Without
+    // this, the loop fails to EMPTY-STATE: the skill is silently un-embedded, the
+    // topic is silently un-associated, and nothing surfaces an error. The alarm
+    // makes a non-empty DLQ visible: ANY message present for one minute (a single
+    // poison record is already a problem worth a human look) breaches. The per-
+    // record `EmbedOutcome=failure` metric (metrics.ts) is the faster leading
+    // indicator; this is the durable backstop for records that fully gave up.
+    new cloudwatch.Alarm(this, 'StreamConsumerDlqDepthAlarm', {
+      alarmName: 'command-hq-stream-consumer-dlq-depth',
+      alarmDescription:
+        'Stream-consumer DLQ is non-empty — a skill/topic embed or association ' +
+        'record exhausted retries (skill-idea loop fails to empty-state). Inspect ' +
+        'the DLQ; correlate with the EmbedOutcome=failure metric.',
+      metric: streamDlq.metricApproximateNumberOfMessagesVisible({
+        period: cdk.Duration.minutes(1),
+        statistic: 'Maximum',
+      }),
+      threshold: 0,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      evaluationPeriods: 1,
+      // A queue with no messages reports no datapoints; do NOT alarm on missing
+      // data (that is the healthy empty state), only on an actual depth > 0.
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
 
     // ---- Outputs --------------------------------------------------------------
     new cdk.CfnOutput(this, 'TableName', { value: this.table.tableName });
