@@ -512,3 +512,115 @@ describe('stream consumer — topic association branch (U8)', () => {
     expect(res.batchItemFailures).toEqual([{ itemIdentifier: 'evt-1' }]);
   });
 });
+
+/**
+ * U23 — observability. Embed + association both fail to EMPTY-STATE, not to a
+ * user-visible error, so the consumer emits a CloudWatch EMF metric per outcome.
+ * We inject the metric sink and parse the EMF JSON to assert: an embed success
+ * emits `EmbedOutcome=success`; a repeated embed FAILURE emits
+ * `EmbedOutcome=failure` (the DLQ alarm's leading indicator); and each
+ * association emits its `AssociationOutcome` (so the to-bin rate is observable).
+ */
+describe('stream consumer — observability metrics (U23)', () => {
+  const ORG = 'acme';
+  const ORG_SCOPE = { tier: 'org' as const, id: ORG };
+
+  function metricCapture() {
+    const lines: string[] = [];
+    return { sink: (l: string) => lines.push(l), lines };
+  }
+
+  /** Parse captured EMF lines into `{ metric, outcome }` pairs. */
+  function outcomes(lines: string[]): { metric: string; outcome: string }[] {
+    return lines.map((l) => {
+      const obj = JSON.parse(l);
+      const metric = obj._aws.CloudWatchMetrics[0].Metrics[0].Name;
+      return { metric, outcome: obj.Outcome };
+    });
+  }
+
+  function skill(over: Partial<Skill> = {}): Skill {
+    return {
+      name: 'reconcile',
+      scope: ORG_SCOPE,
+      kind: 'skill',
+      description: 'Reconcile weekly variance.',
+      source: 'local',
+      members: [],
+      body: '# Reconcile',
+      ...over,
+    } as Skill;
+  }
+
+  function skillRecord(s: Skill): DynamoDBRecord {
+    const key = k.skillKey(s.scope, s.name);
+    return {
+      eventName: 'INSERT',
+      eventID: `skill-${s.name}`,
+      dynamodb: {
+        Keys: marshall(key),
+        NewImage: marshall({ ...key, ...s }, { removeUndefinedValues: true }),
+      },
+    } as unknown as DynamoDBRecord;
+  }
+
+  const okEmbed = vi.fn(
+    async (): Promise<Embedding> => ({
+      vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
+      embeddingModel: 'amazon.titan-embed-text-v2:0',
+      embeddingVersion: 'titan-embed-text-v2',
+    }),
+  );
+  const okVectors = { putVectors: vi.fn(async () => {}) } as unknown as S3Vectors;
+
+  it('emits EmbedOutcome=success on a successful skill embed', async () => {
+    const { sink, lines } = metricCapture();
+    await consume(streamEvent(skillRecord(skill())), {
+      repo,
+      embed: okEmbed,
+      vectors: okVectors,
+      metrics: sink,
+    });
+    expect(outcomes(lines)).toContainEqual({ metric: 'EmbedOutcome', outcome: 'success' });
+  });
+
+  it('emits EmbedOutcome=failure on each failed embed (DLQ-alarm leading indicator)', async () => {
+    const { sink, lines } = metricCapture();
+    const embed = vi.fn(async (): Promise<Embedding> => {
+      throw new Error('ThrottlingException');
+    });
+    // Two distinct skills both fail → two failure metrics (repeated failures are
+    // observable, not collapsed into one).
+    const res = await consume(
+      streamEvent(skillRecord(skill()), skillRecord(skill({ name: 'audit' }))),
+      { repo, embed, vectors: okVectors, metrics: sink },
+    );
+    expect(res.batchItemFailures).toHaveLength(2);
+    const failures = outcomes(lines).filter((o) => o.outcome === 'failure');
+    expect(failures).toHaveLength(2);
+    expect(failures.every((f) => f.metric === 'EmbedOutcome')).toBe(true);
+  });
+
+  it('emits the AssociationOutcome for a topic association (to-bin rate observable)', async () => {
+    await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
+    const { sink, lines } = metricCapture();
+    const associateTopic = vi.fn(
+      async (finding: TopicFinding): Promise<AssociationResult> => ({
+        outcome: 'unassigned',
+        org: ORG,
+        finding,
+        candidates: [],
+      }),
+    );
+    const topicEnv = env(1, {
+      kind: 'session.topic',
+      sessionId: SESSION,
+      segmentId: 'seg-1',
+      topicLabel: 'decimal money',
+      description: 'Use decimal for currency.',
+    });
+    await consume(streamEvent(eventRecord(topicEnv)), { repo, associateTopic, metrics: sink });
+
+    expect(outcomes(lines)).toContainEqual({ metric: 'AssociationOutcome', outcome: 'unassigned' });
+  });
+});
