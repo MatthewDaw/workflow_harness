@@ -308,6 +308,35 @@ export const unassignedBinPrefix = (org: string): { PK: string; skPrefix: string
   skPrefix: 'IDEABIN#',
 });
 
+/**
+ * GOLDEN-SET REGRESSION CASES (skill-idea loop, U18). When an idea is folded,
+ * the fold's before→after expectation is captured as a golden case CO-LOCATED
+ * with the skill in the org scope partition (`SCOPE#org#<org>`) under an
+ * `IDEAGOLD#` SK prefix:
+ *
+ *   IDEAGOLD#<skillBaseName>#<caseId>
+ *
+ * This mirrors the `IDEA#` family exactly (same partition, sibling prefix) so a
+ * skill's whole golden set is one `begins_with` read, and — like ideas — the
+ * `IDEAGOLD#` prefix never collides with the `SKILL#` catalog scan, so cases are
+ * invisible to `listSkills`. `caseId` is typically the folded `ideaId`, so
+ * re-folding the same idea overwrites its case in place rather than duplicating.
+ */
+export const goldenCaseKey = (org: string, skillBaseName: string, caseId: string): PrimaryKey => ({
+  PK: `SCOPE#org#${org}`,
+  SK: `IDEAGOLD#${skillBaseName}#${caseId}`,
+});
+
+/** Every golden case guarding ONE skill family in an org. */
+export const goldenCasePrefixForSkill = (
+  org: string,
+  skillBaseName: string,
+): { PK: string; skPrefix: string } => ({
+  PK: `SCOPE#org#${org}`,
+  // The trailing `#` after the baseName makes this an exact-family prefix.
+  skPrefix: `IDEAGOLD#${skillBaseName}#`,
+});
+
 export const objectiveKey = (org: string, path: string): PrimaryKey => ({
   PK: `ORG#${org}`,
   SK: `RCDO#${path}`,

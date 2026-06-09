@@ -979,6 +979,53 @@ export const unassignedEntrySchema = z.object({
 });
 export type UnassignedEntry = z.infer<typeof unassignedEntrySchema>;
 
+// --- Golden-set regression at fold (skill-idea loop, U18) ------------------
+//
+// Every fold captures the lesson it folded as a before→after EXPECTATION: the
+// skill body BEFORE the fold, the AFTER body the fold produced, and the
+// synthesized lesson the fold was meant to encode. The cases are co-located
+// with the skill (`SCOPE#org#<org>` / `IDEAGOLD#<skillBaseName>#<id>`), mirroring
+// the idea side-record shape. Before a later promote, a Bedrock judge REPLAYS
+// each prior golden case against the candidate revision body and reports whether
+// the candidate still satisfies the prior expectation. v1 is ADVISORY — the
+// human is the gate; a regression is surfaced, never hard-blocked.
+
+export const goldenCaseSchema = z.object({
+  /** Stable id within `(org, skillBaseName)` — typically the folded `ideaId`. */
+  caseId: z.string().min(1),
+  /** The skill family this case guards. */
+  skillBaseName: z.string().min(1),
+  /** Owning org — every case row is org-partitioned for isolation. */
+  org: z.string().min(1),
+  /** The idea that produced this fold (provenance / dedupe). */
+  ideaId: z.string().min(1),
+  /** The synthesized lesson the fold was meant to encode (the expectation). */
+  lesson: z.string().default(''),
+  /** The skill body BEFORE the fold. */
+  before: z.string().default(''),
+  /** The skill body AFTER the fold (the revision the lesson was folded into). */
+  after: z.string().default(''),
+  /** The revision the fold produced (the `after` body's rev). */
+  foldedIntoRev: z.number().int().positive().optional(),
+  createdAt: z.number().int().nonnegative(),
+});
+export type GoldenCase = z.infer<typeof goldenCaseSchema>;
+
+/**
+ * The verdict of replaying ONE golden case against a candidate revision body:
+ * does the candidate still satisfy the prior expectation (`lesson`)? `satisfied`
+ * false means a REGRESSION — the candidate appears to undo an earlier fold.
+ */
+export const goldenReplayResultSchema = z.object({
+  caseId: z.string().min(1),
+  lesson: z.string().default(''),
+  /** True when the candidate still honors the prior lesson; false = regression. */
+  satisfied: z.boolean(),
+  /** The judge's one-line rationale (advisory surface for the human). */
+  reason: z.string().default(''),
+});
+export type GoldenReplayResult = z.infer<typeof goldenReplayResultSchema>;
+
 /**
  * A project memory synced up from a developer's machine. Claude Code persists
  * per-project "memories" as small markdown files (one fact per file, with
