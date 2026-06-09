@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
@@ -19,6 +19,7 @@ import { handler as projectsHandler } from '../rest/projects.js';
 import { handler as sessionsHandler } from '../rest/sessions.js';
 import { handler as agentsHandler } from '../rest/agents.js';
 import { handler as skillsHandler } from '../rest/skills.js';
+import { handler as ideasHandler } from '../rest/ideas.js';
 import { handler as mcpServersHandler } from '../rest/mcpServers.js';
 import { handler as objectivesHandler } from '../rest/objectives.js';
 import { handler as dodHandler } from '../rest/dod.js';
@@ -198,8 +199,9 @@ interface Route {
 
 // Ordered most-specific-first; weekly is matched before the generic /projects
 // routes because it shares the `/projects/:id/...` prefix. Named groups become
-// the `pathParameters` each module handler reads.
-const ROUTES: Route[] = [
+// the `pathParameters` each module handler reads. Exported so a routing test can
+// assert each path resolves to the right handler without binding a port.
+export const ROUTES: Route[] = [
   { re: /^\/device\/(?:start|poll|approve)$/, handler: deviceHandler },
 
   // Membership / org onboarding. /me + /me/org (switch) + /orgs(/join) reach the
@@ -261,8 +263,25 @@ const ROUTES: Route[] = [
   { re: /^\/skills\/(?<name>[^/]+)\/usage$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/scope$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/promote$/, handler: skillsHandler },
+  // Skill-idea reads (skill-idea loop): candidate-learnings (U11) + all-ideas
+  // (U13) are served by the ideas Lambda, NOT the skills Lambda — mirroring how
+  // api-stack registers them against `ideasFn`. Both share the `/skills/{name}`
+  // prefix, so they MUST precede the generic `/skills/{name}` matcher below
+  // (which would otherwise swallow them), exactly as the fold route does above.
+  { re: /^\/skills\/(?<name>[^/]+)\/candidate-learnings$/, handler: ideasHandler },
+  { re: /^\/skills\/(?<name>[^/]+)\/ideas$/, handler: ideasHandler },
   { re: /^\/skills\/(?<name>[^/]+)$/, handler: skillsHandler },
   { re: /^\/skills$/, handler: skillsHandler },
+
+  // Unassigned bin (skill-idea loop, U15): the org's new-skill backlog read +
+  // the admin-gated promote-to-skill action, both served by the ideas Lambda.
+  // Most-specific first so the two-segment promote path is matched before the
+  // bare `/ideas/unassigned` read route.
+  {
+    re: /^\/ideas\/unassigned\/(?<entryId>[^/]+)\/promote-to-skill$/,
+    handler: ideasHandler,
+  },
+  { re: /^\/ideas\/unassigned$/, handler: ideasHandler },
 
   // MCP servers mirror the skills catalog routes minus the bundle verbs
   // (members/dissolve) and the retired scope verb. Most-specific first so
@@ -529,4 +548,11 @@ async function start(): Promise<void> {
   });
 }
 
-void start();
+// Only bind the port when this module is the process entry point (i.e. the `dev`
+// script ran `node devServer.js`). When imported — e.g. by the routing test —
+// `start()` is skipped so the test can assert the ROUTES table without standing
+// up a server.
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedDirectly) void start();
