@@ -5,7 +5,15 @@ import { Pill } from './primitives.js';
 import { MarkdownView } from './MarkdownView.js';
 import { stripFrontmatter } from '../lib/frontmatter.js';
 import { VariantSwitcher } from './VariantSwitcher.js';
-import { variantOf } from '../api/baseApi.js';
+import { variantOf, useGetSkillIdeasQuery, type SkillIdea } from '../api/baseApi.js';
+
+/**
+ * Distinct-session count at which an idea is "corroborated" (skill-idea loop,
+ * default K=2). The server is the authority on surfacing (it enforces this on
+ * the corroborated-only candidate-learnings path); the HQ dropdown only uses K
+ * to LABEL each idea, so a local copy of the default is fine here.
+ */
+const CORROBORATION_K = 2;
 
 /** The author/creator of a skill — its createdBy name, falling back to source. */
 export function authorOf(s: Skill): string {
@@ -165,9 +173,120 @@ function SkillBodyModal({
           </button>
         </div>
         <div className="mt-2 min-h-0 flex-1 overflow-auto">
+          <SkillIdeasDropdown name={variantOf(skill).baseName} />
           <MarkdownView markdown={body} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Whether an idea has reached the corroboration bar (distinct-session count ≥ K). */
+function isCorroborated(idea: SkillIdea): boolean {
+  return idea.corroborationCount >= CORROBORATION_K;
+}
+
+/**
+ * The per-skill ideas dropdown for the full-screen Command HQ skill view
+ * (skill-idea loop, U14/R18). Lists EVERY idea proposed for the skill: open
+ * ideas (split into corroborated vs not-yet-corroborated by their distinct-
+ * session count) up top, then folded ideas grouped as read-only history. Each
+ * row shows its corroboration count + a status badge. Collapsed by default so it
+ * never crowds the body; renders an empty state when the skill has no ideas.
+ *
+ * Reads from `getSkillIdeas` (tagged per-skill), so a fold/mark-folded of one of
+ * this skill's ideas invalidates the `{ type: 'Idea', id: name }` tag and the
+ * list refetches — the freshly-folded idea moves into the history group.
+ */
+function SkillIdeasDropdown({ name }: { name: string }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useGetSkillIdeasQuery(name);
+
+  const ideas = data ?? [];
+  const openIdeas = ideas.filter((i) => i.status !== 'folded');
+  const folded = ideas.filter((i) => i.status === 'folded');
+  const corroborated = openIdeas.filter(isCorroborated);
+  const uncorroborated = openIdeas.filter((i) => !isCorroborated(i));
+
+  return (
+    <div className="mb-3 border border-odd bg-paper" data-testid={`skill-ideas-${name}`}>
+      <button
+        type="button"
+        className="hq-btn flex w-full items-center justify-between"
+        aria-expanded={open}
+        data-testid={`skill-ideas-toggle-${name}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span>💡 Ideas {ideas.length > 0 && <Pill>{ideas.length}</Pill>}</span>
+        <span className="text-faint">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-odd p-2" data-testid={`skill-ideas-body-${name}`}>
+          {isLoading ? (
+            <div className="text-[11px] text-faint">loading…</div>
+          ) : ideas.length === 0 ? (
+            <div className="text-[11px] text-faint" data-testid={`skill-ideas-empty-${name}`}>
+              No ideas proposed for this skill yet.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {corroborated.length > 0 && (
+                <IdeaGroup title="Corroborated" ideas={corroborated} badge="good" />
+              )}
+              {uncorroborated.length > 0 && (
+                <IdeaGroup title="Not yet corroborated" ideas={uncorroborated} badge="idle" />
+              )}
+              {folded.length > 0 && (
+                <IdeaGroup title="Folded (history)" ideas={folded} badge="skill" folded />
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One labelled group of ideas in the dropdown (corroborated / uncorroborated / folded). */
+function IdeaGroup({
+  title,
+  ideas,
+  badge,
+  folded = false,
+}: {
+  title: string;
+  ideas: SkillIdea[];
+  badge: 'good' | 'idle' | 'skill';
+  folded?: boolean;
+}) {
+  return (
+    <div data-testid={`idea-group-${title.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '')}`}>
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-faint">{title}</div>
+      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+        {ideas.map((idea) => (
+          <li
+            key={idea.ideaId}
+            className="border-l-2 border-l-odd pl-2 text-xs text-mut"
+            data-testid={`idea-${idea.ideaId}`}
+          >
+            <div className="mb-0.5 flex items-center gap-1.5" data-testid={`idea-badge-${idea.ideaId}`}>
+              <Pill variant={badge}>
+                {folded
+                  ? idea.foldedIntoRev
+                    ? `folded · rev ${idea.foldedIntoRev}`
+                    : 'folded'
+                  : isCorroborated(idea)
+                    ? 'corroborated'
+                    : 'open'}
+              </Pill>
+              <span className="text-[11px] text-faint">
+                {idea.corroborationCount} session{idea.corroborationCount === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div className="line-clamp-3">{idea.text}</div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
