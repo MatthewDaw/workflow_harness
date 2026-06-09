@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import {
+  DeleteVectorsCommand,
   PutVectorsCommand,
   QueryVectorsCommand,
   S3VectorsClient,
 } from '@aws-sdk/client-s3vectors';
-import { PUT_BATCH_LIMIT, S3Vectors, type VectorItem } from '../src/embeddings/s3vectors.js';
+import {
+  PUT_BATCH_LIMIT,
+  S3Vectors,
+  skillVectorKey,
+  type VectorItem,
+} from '../src/embeddings/s3vectors.js';
 
 /**
  * U2 — S3 Vectors put/query client. The S3 Vectors client is mocked. We assert:
@@ -120,6 +126,43 @@ describe('S3Vectors.queryTopK', () => {
     s3vMock.on(QueryVectorsCommand).rejects(new Error('AccessDeniedException'));
     await expect(store.queryTopK('skills', Array(1024).fill(0.1), 3)).rejects.toThrow(
       'AccessDeniedException',
+    );
+  });
+});
+
+describe('S3Vectors.deleteVectors (U21)', () => {
+  it('deletes keys from the named index with the configured bucket', async () => {
+    s3vMock.on(DeleteVectorsCommand).resolves({});
+    await store.deleteVectors('skills', [skillVectorKey('acme', 'reconcile')]);
+
+    const call = s3vMock.commandCalls(DeleteVectorsCommand)[0]!.args[0].input;
+    expect(call.vectorBucketName).toBe('test-bucket');
+    expect(call.indexName).toBe('skills');
+    expect(call.keys).toEqual(['acme#reconcile']);
+  });
+
+  it('chunks a large delete at the put batch limit', async () => {
+    s3vMock.on(DeleteVectorsCommand).resolves({});
+    const keys = Array.from({ length: 1100 }, (_, i) => `k-${i}`);
+
+    await store.deleteVectors('skills', keys);
+
+    const calls = s3vMock.commandCalls(DeleteVectorsCommand);
+    expect(calls).toHaveLength(3); // 500 + 500 + 100
+    expect(calls[0]!.args[0].input.keys).toHaveLength(PUT_BATCH_LIMIT);
+    expect(calls[2]!.args[0].input.keys).toHaveLength(100);
+  });
+
+  it('no-ops on an empty key list (no delete call)', async () => {
+    s3vMock.on(DeleteVectorsCommand).resolves({});
+    await store.deleteVectors('skills', []);
+    expect(s3vMock.commandCalls(DeleteVectorsCommand)).toHaveLength(0);
+  });
+
+  it('propagates a delete error (does not swallow)', async () => {
+    s3vMock.on(DeleteVectorsCommand).rejects(new Error('ServiceUnavailableException'));
+    await expect(store.deleteVectors('skills', ['k'])).rejects.toThrow(
+      'ServiceUnavailableException',
     );
   });
 });

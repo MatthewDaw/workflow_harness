@@ -215,3 +215,65 @@ describe('putUnassigned / listUnassignedForOrg', () => {
     expect(await repo.listIdeasForOrg(ORG)).toHaveLength(0);
   });
 });
+
+/**
+ * U21 — skill delete/rename → idea orphan policy. On skill delete the repo
+ * cascades the skill's ideas to the unassigned bin (preserving corroboration +
+ * provenance) and deletes the idea rows, so no idea is orphaned.
+ */
+describe('cascadeSkillIdeasToBin', () => {
+  it('moves a skill\'s ideas to the bin (corroboration + provenance preserved) and deletes the rows', async () => {
+    await repo.putIdea(
+      idea({
+        ideaId: 'i-1',
+        sources: [
+          { sessionId: 's-1', segmentId: 'seg-1', seq: 1, snippet: 'ev1' },
+          // Same session, second segment — corroboration counts ONE.
+          { sessionId: 's-1', segmentId: 'seg-2', seq: 2, snippet: 'ev1b' },
+          { sessionId: 's-2', segmentId: 'seg-1', seq: 3, snippet: 'ev2' },
+        ],
+      }),
+    );
+    await repo.putIdea(idea({ ideaId: 'i-2', text: 'second lesson' }));
+
+    const { cascaded } = await repo.cascadeSkillIdeasToBin(ORG, SKILL, { now: 999 });
+    expect(cascaded).toBe(2);
+
+    // Idea rows gone; the skill family is empty.
+    expect(await repo.listIdeasForSkill(ORG, SKILL)).toEqual([]);
+
+    // Both ideas in the bin; corroboration signal (distinct sessions) preserved.
+    const bin = await repo.listUnassignedForOrg(ORG);
+    expect(bin).toHaveLength(2);
+    const moved = bin.find((e) => e.entryId === `${SKILL}#i-1`)!;
+    expect(moved.text).toContain('decimal money');
+    expect(new Set(moved.sources.map((s) => s.sessionId))).toEqual(new Set(['s-1', 's-2']));
+    expect(moved.updatedAt).toBe(999);
+  });
+
+  it('is idempotent — re-running does not duplicate bin entries', async () => {
+    await repo.putIdea(idea({ ideaId: 'i-1' }));
+    await repo.cascadeSkillIdeasToBin(ORG, SKILL);
+    // Second run finds no ideas, so the bin keeps a single entry.
+    const { cascaded } = await repo.cascadeSkillIdeasToBin(ORG, SKILL);
+    expect(cascaded).toBe(0);
+    expect(await repo.listUnassignedForOrg(ORG)).toHaveLength(1);
+  });
+
+  it('leaves other skills\' ideas untouched', async () => {
+    await repo.putIdea(idea({ ideaId: 'i-1' }));
+    await repo.putIdea(idea({ ideaId: 'i-9', skillBaseName: 'other-skill' }));
+
+    await repo.cascadeSkillIdeasToBin(ORG, SKILL);
+
+    expect(await repo.listIdeasForSkill(ORG, SKILL)).toEqual([]);
+    expect(await repo.listIdeasForSkill(ORG, 'other-skill')).toHaveLength(1);
+    expect(await repo.listUnassignedForOrg(ORG)).toHaveLength(1);
+  });
+
+  it('no-ops on a skill with no ideas', async () => {
+    const { cascaded } = await repo.cascadeSkillIdeasToBin(ORG, 'empty-skill');
+    expect(cascaded).toBe(0);
+    expect(await repo.listUnassignedForOrg(ORG)).toEqual([]);
+  });
+});

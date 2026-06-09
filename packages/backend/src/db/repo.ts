@@ -1282,6 +1282,51 @@ export class Repo {
   }
 
   /**
+   * U21 — skill delete/rename → idea orphan policy. When a skill family
+   * (`baseName`) is removed from an org, its ideas must NOT be left as rows
+   * pointing at a now-nonexistent skill. Instead each open idea CASCADES to the
+   * org's unassigned bin (the new-skill backlog), preserving its corroboration
+   * SIGNAL (the distinct-session `sources`) and provenance (`text` + snippets),
+   * and the idea row is then deleted.
+   *
+   * Rename is delete+create today (there is no rename op), so the same cascade
+   * covers it: the old name's ideas land in the bin, and the topic→skill loop
+   * re-associates them onto the new name on its next topic event. HQ therefore
+   * never shows ideas under a dead/renamed skill name.
+   *
+   * The bin `entryId` is derived deterministically from the idea
+   * (`<skillBaseName>#<ideaId>`) so re-running the cascade is idempotent rather
+   * than duplicating bin entries. `now` is injectable for deterministic tests.
+   * Returns the number of ideas cascaded.
+   */
+  async cascadeSkillIdeasToBin(
+    org: string,
+    skillBaseName: string,
+    opts: { now?: number } = {},
+  ): Promise<{ cascaded: number }> {
+    const now = opts.now ?? Date.now();
+    const ideas = await this.listIdeasForSkill(org, skillBaseName);
+    for (const idea of ideas) {
+      const entry: UnassignedEntry = {
+        entryId: `${skillBaseName}#${idea.ideaId}`,
+        org,
+        // The synthesized concept is preserved verbatim; an empty idea text
+        // falls back to nothing rather than fabricating prose.
+        text: idea.text,
+        // Carry the full distinct-session provenance so corroboration is
+        // preserved as a signal in the bin (a corroborated idea that lost its
+        // home is a strong new-skill candidate).
+        sources: idea.sources,
+        createdAt: idea.createdAt,
+        updatedAt: now,
+      };
+      await this.putUnassigned(entry);
+      await this.deleteIdea(org, skillBaseName, idea.ideaId);
+    }
+    return { cascaded: ideas.length };
+  }
+
+  /**
    * Optimistic-concurrency idea write, mirroring `putSessionProjectionConditional`.
    * `expectedVersion` is the `corroborationVersion` the caller read before
    * mutating (adding a source, flipping status, recording a fold):
