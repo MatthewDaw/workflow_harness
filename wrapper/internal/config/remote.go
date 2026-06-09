@@ -681,6 +681,51 @@ func (h *HTTPRemoteSource) mcpPushPayload(name, fileBody string, scope map[strin
 	return "/mcp-servers", payload, nil
 }
 
+// CandidateLearnings fetches a skill's CORROBORATED candidate learnings from HQ
+// (GET /skills/{name}/candidate-learnings, U11) — the corroborated-only,
+// ranked+capped set the daemon injects into the materialized SKILL.md (U12). The
+// gate is enforced server-side; the wrapper renders whatever the endpoint returns,
+// in order. A 404 (endpoint not yet deployed) or any non-200 yields an empty set
+// so injection is a no-op rather than an error — surfacing must never block a
+// session or the sync.
+func (h *HTTPRemoteSource) CandidateLearnings(name string) ([]candidateLearning, error) {
+	var resp struct {
+		Learnings []candidateLearning `json:"learnings"`
+	}
+	path := "/skills/" + url.PathEscape(name) + "/candidate-learnings"
+	if err := h.getJSON(path, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Learnings, nil
+}
+
+// InjectCandidateLearnings materializes the candidate-learnings block into the
+// on-disk SKILL.md of each named skill under `plus` (U12). For every skill it
+// fetches the corroborated learnings and rewrites the block in place; an empty set
+// removes any prior block (injects nothing). The block is excluded from the drift
+// hash (skillFilesCanonical strips it), so this never registers as drift / forces a
+// re-pull. Inject is called for EVERY materialized skill regardless of how it was
+// enabled (direct/bundle/agent-dep) — the caller passes the full materialized set.
+//
+// Best-effort: a per-skill fetch or write error is collected and returned but never
+// aborts the loop, so one unreachable endpoint or one missing file can't block the
+// rest of the session sync. A skill with no on-disk SKILL.md is skipped (it was not
+// materialized).
+func (h *HTTPRemoteSource) InjectCandidateLearnings(plus string, names []string) []error {
+	var errs []error
+	for _, name := range names {
+		learnings, err := h.CandidateLearnings(name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("candidate-learnings fetch %q: %w", name, err))
+			continue
+		}
+		if err := injectCandidateBlock(plus, name, learnings); err != nil {
+			errs = append(errs, fmt.Errorf("candidate-learnings inject %q: %w", name, err))
+		}
+	}
+	return errs
+}
+
 // getJSON issues an authenticated GET against the org catalog. It no longer
 // appends a ?project query param: the catalog is org-wide and server-side scope
 // resolution is retired; the project's opt-in is read separately via

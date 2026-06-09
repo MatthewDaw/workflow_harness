@@ -666,8 +666,38 @@ func (rt *Runtime) reconcileSkills() {
 	if pulled > 0 || pushed > 0 {
 		diag.Logf("skills auto-sync: pulled %d, pushed %d", pulled, pushed)
 	}
+	// Inject each materialized skill's corroborated candidate-learnings block into
+	// its on-disk SKILL.md (U12). Done AFTER reconcile so the canonical files are in
+	// place; the block is excluded from the drift hash, so this never re-triggers a
+	// pull. Best-effort: surfacing must never block the session.
+	injectCandidateLearnings(src, plus, remote)
 	// Refresh the drift meter to reflect the post-reconcile state.
 	_ = rt.d.SyncConfigOnce(src)
+}
+
+// injectCandidateLearnings writes the corroborated candidate-learnings block into
+// every materialized skill's SKILL.md (U12). It runs only for the real HTTP source
+// (in-memory fakes have no endpoint); the materialized set is the skill items in
+// HQ's effective `remote` list, so direct/bundle/agent-dep skills are all covered.
+// Errors are logged and swallowed — the block is read-only surfacing and must never
+// block a session.
+func injectCandidateLearnings(src config.RemoteSource, plus string, remote []config.RemoteItem) {
+	h, ok := src.(*config.HTTPRemoteSource)
+	if !ok {
+		return
+	}
+	var names []string
+	for _, it := range remote {
+		if it.Kind == config.KindSkill {
+			names = append(names, it.Name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	for _, e := range h.InjectCandidateLearnings(plus, names) {
+		diag.Logf("skills auto-sync: %v", e)
+	}
 }
 
 // SyncSkillsNow performs a one-shot skills/agents reconcile against HQ for the
@@ -728,6 +758,10 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 			diag.Logf("sync-skills prune: %v", e)
 		}
 	}
+	// Inject each materialized skill's corroborated candidate-learnings block (U12)
+	// before the gate. The block is excluded from the drift hash, so it neither
+	// trips the verify gate nor forces a re-pull next session.
+	injectCandidateLearnings(src, plus, remote)
 	// U-Verify-Gate: after reconcile, verify the EFFECTIVE enabled set actually
 	// landed on disk (skill dirs + frontmatter; agent files + deps; MCP not failed).
 	// A partial install fails loudly (non-zero) rather than reporting a misleading
