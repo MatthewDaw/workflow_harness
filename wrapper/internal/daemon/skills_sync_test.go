@@ -42,6 +42,8 @@ func (f *fakeSource) AgentSkills(string) []string { return nil }
 
 func (f *fakeSource) DeclaredSkills() []string { return nil }
 
+func (f *fakeSource) DeclaredAgents() []string { return nil }
+
 // hashLike reproduces config.hashContent for a body so the remote hash differs
 // from "absent locally" (forcing a needs_pull). We don't need the exact hash —
 // any stable non-empty value works because the local skill is missing.
@@ -284,6 +286,70 @@ func TestEmptyOptInMaterializesNothing(t *testing.T) {
 	}
 	if report.NeedsPull != 0 {
 		t.Fatalf("empty opt-in must pull nothing, got NeedsPull=%d", report.NeedsPull)
+	}
+}
+
+// TestReconcileSkillsInjectsCandidateLearnings proves the daemon's per-session
+// reconcile injects each MATERIALIZED skill's corroborated candidate-learnings
+// block (U12) into its on-disk SKILL.md, and that the injected block does NOT make
+// the skill drift (no re-pull churn). Drives the real HTTP source through
+// reconcileSkills so the direct-enable materialize path is covered end-to-end.
+func TestReconcileSkillsInjectsCandidateLearnings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		switch {
+		case r.URL.Path == "/skills/deploy/candidate-learnings":
+			_ = json.NewEncoder(w).Encode(map[string]any{"learnings": []map[string]string{
+				{"text": "Pin the image tag before deploy."},
+			}})
+		case strings.HasPrefix(r.URL.Path, "/projects/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"enabledSkills": []string{"deploy"}})
+		case r.URL.Path == "/skills":
+			_ = json.NewEncoder(w).Encode(map[string]any{"skills": []map[string]any{
+				{"name": "deploy", "scope": map[string]string{"tier": "org", "id": "acme"}, "body": "# Deploy\nRun the steps.\n"},
+			}})
+		case r.URL.Path == "/agents":
+			_ = json.NewEncoder(w).Encode(map[string]any{"agents": []any{}})
+		case r.URL.Path == "/mcp-servers":
+			_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	src := config.NewHTTPRemoteSource(srv.URL, "tok", "myproj")
+	rt := newTestRuntime(t, src)
+
+	rt.reconcileSkills()
+
+	plus, err := config.ProjectConfigDir(rt.d.repoRoot)
+	if err != nil {
+		t.Fatalf("ProjectConfigDir: %v", err)
+	}
+	skillPath := filepath.Join(plus, "skills", "deploy", "SKILL.md")
+	b, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("expected materialized skill: %v", err)
+	}
+	if !strings.Contains(string(b), "Pin the image tag before deploy.") {
+		t.Fatalf("candidate-learnings block not injected:\n%s", b)
+	}
+
+	// The injected block must not cause drift: a fresh ComputeDrift over the on-disk
+	// tree vs HQ must report in-sync (otherwise the block would force a re-pull).
+	report, err := config.ComputeDrift(src, plus)
+	if err != nil {
+		t.Fatalf("ComputeDrift: %v", err)
+	}
+	for _, row := range report.Rows {
+		if row.Kind == config.KindSkill && row.Name == "deploy" && row.Drift != config.DriftInSync {
+			t.Fatalf("injected block made the skill drift (%s) — would re-pull", row.Drift)
+		}
 	}
 }
 

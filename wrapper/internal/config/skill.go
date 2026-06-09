@@ -77,11 +77,18 @@ const skillMainFile = "SKILL.md"
 // matching the legacy raw-body hash. Multi-file skills serialize every file with a
 // path header so a sibling edit shows as drift. Paths are slash-normalized and
 // sorted so the result is independent of map iteration order and host separator.
+//
+// The injected candidate-learnings block (U12) is STRIPPED from SKILL.md before
+// hashing on BOTH sides — HQ never stores it, and the daemon writes it into the
+// on-disk SKILL.md at materialize. Stripping it here is exactly what keeps it OUT
+// of the drift hash: a corroboration change rewrites the block but the canonical
+// (block-free) bytes are unchanged, so it never registers as drift / forces a
+// re-pull (Risk: "surfacing churn via the drift hash").
 func skillFilesCanonical(files map[string]string) []byte {
 	// Legacy single-file fast path: byte-identical to the old raw-body hashing.
 	if len(files) == 1 {
 		if body, ok := files[skillMainFile]; ok {
-			return []byte(normalizeText(body))
+			return []byte(normalizeText(stripCandidateLearnings(body)))
 		}
 	}
 	paths := make([]string, 0, len(files))
@@ -96,12 +103,18 @@ func skillFilesCanonical(files map[string]string) []byte {
 	}
 	var b strings.Builder
 	for _, p := range paths {
+		content := bySlash[p]
+		// The candidate-learnings block only ever lands in SKILL.md; strip it there so
+		// the hash basis is the canonical file (see the single-file path above).
+		if p == skillMainFile {
+			content = stripCandidateLearnings(content)
+		}
 		// A NUL-delimited path header cannot appear in a real relative path or in
 		// text content we normalize, so it unambiguously frames each file.
 		b.WriteString("\x00file:")
 		b.WriteString(p)
 		b.WriteString("\x00\n")
-		b.WriteString(normalizeText(bySlash[p]))
+		b.WriteString(normalizeText(content))
 		b.WriteString("\n")
 	}
 	return []byte(b.String())
