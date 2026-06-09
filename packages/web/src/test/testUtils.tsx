@@ -70,6 +70,12 @@ export interface SeedData {
    * rows in tests. Each entry is an `Idea` decorated with `corroborationCount`.
    */
   skillIdeas?: Record<string, unknown[]>;
+  /**
+   * The org's unassigned bin (skill-idea loop, U15). Served by
+   * `GET /ideas/unassigned` so the bin backlog screen resolves real rows in
+   * tests. Each entry is an `UnassignedEntry` decorated with `frequency`.
+   */
+  bin?: unknown[];
   mcpServers?: McpServer[];
   weekly?: Record<string, WeeklyUpdate[]>;
   /** Detailed-requirements doc tree, keyed by projectId (U11). */
@@ -177,6 +183,8 @@ export function installFetchStub(seed: SeedData) {
     if (skillIdeas) return json({ ideas: seed.skillIdeas?.[skillIdeas[1]!] ?? [] });
     const skillPromote = /^skills\/([^/]+)\/promote$/.exec(path);
     if (skillPromote) return json({ name: skillPromote[1], variantId: '', rev: 1 });
+    // The org's unassigned bin (skill-idea loop, U15): the new-skill backlog.
+    if (path === 'ideas/unassigned') return json({ entries: seed.bin ?? [] });
     if (path === 'sessions') return json(seed.sessions ?? []);
 
     // Project skill/agent opt-in: return the (seeded) project so the mutation

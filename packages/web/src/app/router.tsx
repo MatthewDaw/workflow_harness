@@ -16,6 +16,7 @@ import { ProjectWorkflows } from '../screens/ProjectDetail/ProjectWorkflows.js';
 import { ProjectSkills } from '../screens/ProjectDetail/ProjectSkills.js';
 import { ProjectMcpServers } from '../screens/ProjectDetail/ProjectMcpServers.js';
 import { Sessions } from '../screens/Sessions/Sessions.js';
+import { Bin } from '../screens/Bin/Bin.js';
 import { LiveWatch } from '../screens/LiveWatch/LiveWatch.js';
 import { Agents } from '../screens/Agents/Agents.js';
 import { AgentEditor } from '../screens/Agents/AgentEditor.js';
@@ -74,6 +75,8 @@ export function AppRoutes() {
         <Route path="mcp-servers" element={<McpServers />} />
         <Route path="mcp-servers/new" element={<McpServerEditor />} />
         <Route path="mcp-servers/:name/edit" element={<McpServerEditor />} />
+        {/* Unassigned bin — the org's new-skill backlog (skill-idea loop, U15). */}
+        <Route path="bin" element={<Bin />} />
         <Route path="weekly" element={<Weekly />} />
         <Route path="organizations" element={<Organizations />} />
         <Route path="link-device" element={<LinkDevice />} />
