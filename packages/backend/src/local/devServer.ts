@@ -513,6 +513,45 @@ async function seedDevSkills(): Promise<void> {
   console.log(`[dev-api] seeded ${skills} skills + ${bundles} bundle(s) at org#${org}.`);
 }
 
+/**
+ * Seed one demo idea (skill-idea loop) so the HQ skill view's ideas dropdown has
+ * something to show on a fresh OFFLINE `npm run dev` — attached to `hq-add-skill`
+ * and corroborated across two distinct sessions so it renders as a corroborated
+ * candidate. Offline-only; never runs against the real table.
+ */
+async function seedDevIdea(): Promise<void> {
+  const org = process.env.HQ_DEV_ORG ?? 'dev-org';
+  const now = Date.now();
+  await defaultRepo().putIdea({
+    ideaId: 'demo-idea-1',
+    skillBaseName: 'hq-add-skill',
+    org,
+    text:
+      'When adding a skill, probe the owner/repo slug rather than the bare repo ' +
+      'name — the bare name mismatches forks and can install the wrong skill.',
+    sources: [
+      {
+        sessionId: 'demo-session-a',
+        segmentId: 'seg-1',
+        seq: 1,
+        snippet: 'used the bare repo name and resolved the wrong owner; owner/repo fixed it',
+      },
+      {
+        sessionId: 'demo-session-b',
+        segmentId: 'seg-1',
+        seq: 4,
+        snippet: 'same slug mismatch in another repo; confirmed owner/repo is needed',
+      },
+    ],
+    status: 'open',
+    postFoldSources: [],
+    corroborationVersion: 0,
+    createdAt: now,
+    updatedAt: now,
+  });
+  console.log(`[dev-api] seeded 1 demo idea on hq-add-skill at org#${org}.`);
+}
+
 async function start(): Promise<void> {
   // Expose the repo's skills dir so the orgs handler's starter-seed (POST /orgs)
   // can fall back to reading SKILL.md from disk in local dev — including REAL mode,
@@ -528,6 +567,7 @@ async function start(): Promise<void> {
     installInMemoryTable();
     process.env.HARNESS_TABLE ??= 'harness-local';
     await seedDevSkills();
+    await seedDevIdea();
   }
 
   createServer((req, res) => {
