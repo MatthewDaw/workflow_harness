@@ -10,6 +10,7 @@ import { Repo } from '../src/db/repo.js';
 import {
   consume,
   skillContentHash,
+  DEFAULT_MAX_CONCURRENCY,
   type StreamConsumerDeps,
 } from '../src/ws/streamConsumer.js';
 import { EMBEDDING_DIMENSION, type Embedding } from '../src/embeddings/bedrock.js';
@@ -622,5 +623,211 @@ describe('stream consumer — observability metrics (U23)', () => {
     await consume(streamEvent(eventRecord(topicEnv)), { repo, associateTopic, metrics: sink });
 
     expect(outcomes(lines)).toContainEqual({ metric: 'AssociationOutcome', outcome: 'unassigned' });
+  });
+});
+
+/**
+ * U4 — seed re-embed WITHOUT a storm. A full re-seed pushes a BURST of SKILL#
+ * writes through one shard. Two properties keep that from storming the embed API:
+ *
+ *  - Re-seeding an UNCHANGED catalog produces zero new embeddings — every skill
+ *    already carries the matching `descHash`, so the U3 hash-skip no-ops it (no
+ *    embed, no vector write), even across a burst spanning every org.
+ *  - A burst is drained with BOUNDED concurrency — at most `maxConcurrency` embed
+ *    calls are ever in flight at once, never one-per-record unbounded.
+ *
+ * And seeding a CHANGED skill across all orgs re-embeds only that one (per org),
+ * not the whole catalog — the hash-skip still gates every other skill.
+ */
+describe('stream consumer — seed re-embed without a storm (U4)', () => {
+  const ORGS = ['acme', 'abc', 'test-org'];
+
+  function fakeEmbed() {
+    const calls: string[] = [];
+    const fn = vi.fn(async (text: string): Promise<Embedding> => {
+      calls.push(text);
+      return {
+        vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
+        embeddingModel: 'amazon.titan-embed-text-v2:0',
+        embeddingVersion: 'titan-embed-text-v2',
+      };
+    });
+    return { fn, calls };
+  }
+
+  function fakeVectors() {
+    const puts: { index: string; items: VectorItem[] }[] = [];
+    const store = {
+      putVectors: vi.fn(async (index: string, items: VectorItem[]) => {
+        puts.push({ index, items });
+      }),
+    } as unknown as S3Vectors;
+    return { store, puts };
+  }
+
+  function skill(org: string, name: string, over: Partial<Skill> = {}): Skill {
+    const description = `Skill ${name} for ${org}.`;
+    const body = `# ${name}\nBody for ${name}.`;
+    return {
+      name,
+      scope: { tier: 'org', id: org },
+      kind: 'skill',
+      description,
+      source: 'local',
+      members: [],
+      body,
+      ...over,
+    } as Skill;
+  }
+
+  /** A MODIFY record for a skill that ALREADY carries its matching descHash. */
+  function unchangedSkillRecord(org: string, name: string): DynamoDBRecord {
+    const s = skill(org, name, {
+      descHash: skillContentHash(`Skill ${name} for ${org}.`, `# ${name}\nBody for ${name}.`),
+    });
+    const key = k.skillKey(s.scope, s.name);
+    return {
+      eventName: 'MODIFY',
+      eventID: `skill-${org}-${name}`,
+      dynamodb: {
+        Keys: marshall(key),
+        OldImage: marshall({ ...key, ...s }, { removeUndefinedValues: true }),
+        NewImage: marshall({ ...key, ...s }, { removeUndefinedValues: true }),
+      },
+    } as unknown as DynamoDBRecord;
+  }
+
+  /** An INSERT record for a freshly-seeded (never-embedded) skill. */
+  function freshSkillRecord(org: string, name: string): DynamoDBRecord {
+    const s = skill(org, name);
+    const key = k.skillKey(s.scope, s.name);
+    return {
+      eventName: 'INSERT',
+      eventID: `skill-${org}-${name}`,
+      dynamodb: {
+        Keys: marshall(key),
+        NewImage: marshall({ ...key, ...s }, { removeUndefinedValues: true }),
+      },
+    } as unknown as DynamoDBRecord;
+  }
+
+  it('re-seeding an unchanged catalog (burst, all orgs) produces zero new embeddings', async () => {
+    const { fn: embed, calls } = fakeEmbed();
+    const { store: vectors, puts } = fakeVectors();
+    // 3 orgs × 4 skills = a 12-record burst, every one already-stamped.
+    const names = ['reconcile', 'audit', 'forecast', 'close'];
+    const records = ORGS.flatMap((org) => names.map((n) => unchangedSkillRecord(org, n)));
+
+    const res = await consume(streamEvent(...records), { repo, embed, vectors });
+
+    expect(res.batchItemFailures).toEqual([]);
+    expect(calls).toHaveLength(0); // hash-skip: nothing re-embedded
+    expect(puts).toHaveLength(0); // no vector writes
+  });
+
+  it('re-seeding a changed skill re-embeds only that one across all orgs', async () => {
+    const { fn: embed, calls } = fakeEmbed();
+    const { store: vectors, puts } = fakeVectors();
+    const names = ['reconcile', 'audit', 'forecast', 'close'];
+    // Every skill is unchanged EXCEPT `audit`, whose stored hash is stale (its
+    // body changed) — so only `audit` re-embeds, once per org.
+    const records = ORGS.flatMap((org) =>
+      names.map((n) =>
+        n === 'audit'
+          ? freshSkillRecord(org, n) // no descHash → re-embeds
+          : unchangedSkillRecord(org, n),
+      ),
+    );
+
+    await consume(streamEvent(...records), { repo, embed, vectors });
+
+    expect(calls).toHaveLength(ORGS.length); // exactly one per org, only `audit`
+    expect(puts).toHaveLength(ORGS.length);
+    // Every vector written is the `audit` skill, one per distinct org.
+    const writtenOrgs = puts.map((p) => p.items[0]!.metadata!.org).sort();
+    expect(writtenOrgs).toEqual([...ORGS].sort());
+    expect(puts.every((p) => p.items[0]!.metadata!.skillBaseName === 'audit')).toBe(true);
+  });
+
+  /**
+   * A gated embedder: it parks each call on a deferred and counts how many are
+   * concurrently parked, so the test can observe the TRUE peak in-flight count
+   * under the bounded pool. `drain` repeatedly lets a short real timer fire (so
+   * the pool tops up to its cap) and then releases the parked calls, until every
+   * one of the N expected calls has been made and resolved.
+   */
+  function gatedEmbed() {
+    let inFlight = 0;
+    let peak = 0;
+    let made = 0;
+    const release: (() => void)[] = [];
+    const fn = vi.fn(async (): Promise<Embedding> => {
+      made++;
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise<void>((resolve) => release.push(resolve));
+      inFlight--;
+      return {
+        vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
+        embeddingModel: 'amazon.titan-embed-text-v2:0',
+        embeddingVersion: 'titan-embed-text-v2',
+      };
+    });
+    const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+    /** Drive the pool to completion, asserting the cap holds at every settle. */
+    async function drain(expectedCalls: number, cap: number): Promise<void> {
+      // Bounded loop (no infinite spin if the pool stalls): each pass lets the
+      // pool top up, checks the cap, then releases everyone currently parked.
+      for (let guard = 0; guard < expectedCalls * 3 && made < expectedCalls; guard++) {
+        await tick();
+        expect(inFlight).toBeLessThanOrEqual(cap);
+        while (release.length > 0) release.shift()!();
+      }
+      // Flush any final stragglers parked after the last release.
+      for (let guard = 0; guard < expectedCalls && (release.length > 0 || inFlight > 0); guard++) {
+        await tick();
+        while (release.length > 0) release.shift()!();
+      }
+    }
+    return { fn, drain, peak: () => peak };
+  }
+
+  it('drains a burst with bounded concurrency (never one embed per record at once)', async () => {
+    const { store: vectors, puts } = fakeVectors();
+    const g = gatedEmbed();
+
+    const N = DEFAULT_MAX_CONCURRENCY * 4; // a burst well above the cap
+    const records = Array.from({ length: N }, (_, i) => freshSkillRecord('acme', `skill-${i}`));
+    const done = consume(streamEvent(...records), { repo, embed: g.fn, vectors });
+
+    await g.drain(N, DEFAULT_MAX_CONCURRENCY);
+
+    const res = await done;
+    expect(res.batchItemFailures).toEqual([]);
+    expect(g.fn).toHaveBeenCalledTimes(N);
+    expect(puts).toHaveLength(N);
+    expect(g.peak()).toBeLessThanOrEqual(DEFAULT_MAX_CONCURRENCY);
+    expect(g.peak()).toBeGreaterThan(1); // proves it is NOT serial
+  });
+
+  it('honors an injected maxConcurrency cap', async () => {
+    const { store: vectors } = fakeVectors();
+    const g = gatedEmbed();
+
+    const cap = 2;
+    const N = 8;
+    const records = Array.from({ length: N }, (_, i) => freshSkillRecord('acme', `s-${i}`));
+    const done = consume(streamEvent(...records), {
+      repo,
+      embed: g.fn,
+      vectors,
+      maxConcurrency: cap,
+    });
+
+    await g.drain(N, cap);
+
+    await done;
+    expect(g.peak()).toBeLessThanOrEqual(cap);
+    expect(g.fn).toHaveBeenCalledTimes(N);
   });
 });
