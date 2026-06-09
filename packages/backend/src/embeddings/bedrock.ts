@@ -45,8 +45,13 @@ function modelId(): string {
   return process.env.BEDROCK_EMBEDDING_MODEL_ID ?? DEFAULT_MODEL_ID;
 }
 
-/** Resolve the configured embedding version stamp (env overrideable). */
-function embeddingVersion(): string {
+/**
+ * Resolve the ACTIVE embedding version stamp — the version every NEW embedding is
+ * stamped with and the only version `queryTopK` will compare a query against (U5).
+ * Env-overrideable (`BEDROCK_EMBEDDING_VERSION`) so a reindex (U5) can flip the
+ * active version pointer by setting it; defaults to Titan v2.
+ */
+export function activeEmbeddingVersion(): string {
   return process.env.BEDROCK_EMBEDDING_VERSION ?? DEFAULT_EMBEDDING_VERSION;
 }
 
@@ -107,7 +112,7 @@ export class BedrockEmbedder {
         } dimensions; expected ${EMBEDDING_DIMENSION}`,
       );
     }
-    return { vector, embeddingModel: model, embeddingVersion: embeddingVersion() };
+    return { vector, embeddingModel: model, embeddingVersion: activeEmbeddingVersion() };
   }
 }
 
