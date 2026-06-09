@@ -232,6 +232,7 @@ const ROUTES: Route[] = [
     re: /^\/projects\/(?<projectId>[^/]+)\/bundles\/(?<bundleName>[^/]+)$/,
     handler: projectsHandler,
   },
+  { re: /^\/projects\/(?<id>[^/]+)\/learnings$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/requirements$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/wireframe$/, handler: projectsHandler },
   { re: /^\/projects\/(?<id>[^/]+)\/refresh$/, handler: projectsHandler },
