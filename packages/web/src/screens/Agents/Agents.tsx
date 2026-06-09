@@ -11,19 +11,48 @@ function authorOf(a: { createdBy?: { name: string } }): string {
   return a.createdBy?.name ?? 'Unknown';
 }
 
-/** Agents registry (collapsed model): a single flat org catalog. */
+/** Names that are members of any resolved agent bundle (transitive leaves preferred). */
+function bundleMemberNames(agents: Agent[]): Set<string> {
+  const names = new Set<string>();
+  for (const a of agents) {
+    if (a.kind !== 'bundle') continue;
+    const members = a.resolvedMembers ?? a.members;
+    for (const m of members) names.add(m);
+  }
+  return names;
+}
+
+/** Agents registry (collapsed model): a single flat org catalog, bundles included. */
 export function Agents() {
   const { data, isLoading } = useGetAgentsQuery();
   const agents = data ?? [];
 
   const [author, setAuthor] = useState<string>(ANY_AUTHOR);
+  const [showInBundles, setShowInBundles] = useState(false);
   const authors = useMemo(() => {
     const set = new Set<string>();
     for (const a of agents) set.add(authorOf(a));
     return [...set].sort();
   }, [agents]);
+  const memberNames = useMemo(() => bundleMemberNames(agents), [agents]);
 
-  const catalog = author === ANY_AUTHOR ? agents : agents.filter((a) => authorOf(a) === author);
+  const visible = (a: Agent): boolean => {
+    if (author !== ANY_AUTHOR && authorOf(a) !== author) return false;
+    if (a.kind === 'bundle') return true;
+    if (showInBundles) return true;
+    return !memberNames.has(a.name);
+  };
+
+  // Bundles lead the grid (entry points that drill into member agents), then plain
+  // agents — order is otherwise stable so the catalog stays steady (mirrors SkillCatalog).
+  const catalog = agents
+    .filter(visible)
+    .map((a, i) => [a, i] as const)
+    .sort(([a, ai], [b, bi]) => {
+      const rank = (x: Agent) => (x.kind === 'bundle' ? 0 : 1);
+      return rank(a) - rank(b) || ai - bi;
+    })
+    .map(([a]) => a);
 
   return (
     <div className="hq-pad" data-testid="agents-screen">
@@ -36,8 +65,17 @@ export function Agents() {
           + New agent
         </Link>
       </div>
-      <div className="mb-3 flex items-center gap-3">
-        <label className="flex items-center gap-1.5 text-xs text-mut">
+      <div className="mb-3 flex flex-wrap items-center gap-4 text-xs text-mut">
+        <label className="flex items-center gap-1.5" data-testid="show-in-bundles-toggle">
+          <input
+            type="checkbox"
+            checked={showInBundles}
+            onChange={(e) => setShowInBundles(e.target.checked)}
+            data-testid="show-in-bundles-checkbox"
+          />
+          Show agents that are in bundles
+        </label>
+        <label className="flex items-center gap-1.5">
           Author
           <select
             className="hq-btn normal-case"
@@ -64,7 +102,38 @@ export function Agents() {
   );
 }
 
-function AgentCard({ agent }: { agent: Agent }) {
+export function AgentCard({ agent }: { agent: Agent }) {
+  // A bundle is an entry point that drills into its member agents — link to the
+  // bundle detail and show its member count instead of a model/prompt (mirrors a
+  // skill bundle card).
+  if (agent.kind === 'bundle') {
+    const count = (agent.resolvedMembers ?? agent.members).length;
+    return (
+      <div
+        className="hq-box bg-paper border-l-[3px] border-l-[#6f8fb5]"
+        data-testid={`agent-card-${agent.name}`}
+      >
+        <div className="flex justify-between">
+          <Link
+            to={`/agents/${encodeURIComponent(agent.name)}/bundle`}
+            className="text-ink no-underline"
+          >
+            <b>▤ {agent.name}</b>
+          </Link>
+          <Pill>bundle</Pill>
+        </div>
+        {agent.description && (
+          <div className="my-1.5 text-xs text-ink" data-testid={`agent-description-${agent.name}`}>
+            {agent.description}
+          </div>
+        )}
+        <div className="mt-1.5 text-[11px] text-faint">
+          {count} member agent{count === 1 ? '' : 's'} · by {authorOf(agent)}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="hq-box bg-paper" data-testid={`agent-card-${agent.name}`}>
       <div className="flex justify-between">

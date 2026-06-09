@@ -18,6 +18,7 @@ import { Sessions } from '../screens/Sessions/Sessions.js';
 import { LiveWatch } from '../screens/LiveWatch/LiveWatch.js';
 import { Agents } from '../screens/Agents/Agents.js';
 import { AgentEditor } from '../screens/Agents/AgentEditor.js';
+import { AgentBundle } from '../screens/Agents/AgentBundle.js';
 import { Skills } from '../screens/Skills/Skills.js';
 import { SkillBundle } from '../screens/Skills/SkillBundle.js';
 import { McpServers } from '../screens/McpServers/McpServers.js';
@@ -60,6 +61,7 @@ export function AppRoutes() {
         <Route path="agents" element={<Agents />} />
         <Route path="agents/new" element={<AgentEditor />} />
         <Route path="agents/:name/edit" element={<AgentEditor />} />
+        <Route path="agents/:name/bundle" element={<AgentBundle />} />
         <Route path="skills" element={<Skills />} />
         <Route path="skills/:bundleName" element={<SkillBundle />} />
         <Route path="mcp-servers" element={<McpServers />} />

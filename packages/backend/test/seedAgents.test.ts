@@ -109,6 +109,26 @@ describe('buildSeedAgents', () => {
     ]);
     expect(r.description).toBe(desc);
   });
+
+  it('emits one kind:bundle record per manifest entry, members intersected with known agents', () => {
+    const manifest = {
+      'research-subagents': {
+        description: 'The research subagents.',
+        // `ghost` is not a known agent file — it must be dropped, not stored dangling.
+        members: ['codebase-locator', 'web-search-researcher', 'ghost'],
+      },
+    };
+    const records = buildSeedAgents(ORG, FILES, manifest);
+    // One record per file PLUS one bundle record.
+    expect(records).toHaveLength(FILES.length + 1);
+    const bundleRec = records.find((r) => r.name === 'research-subagents');
+    expect(bundleRec?.kind).toBe('bundle');
+    expect(bundleRec?.model).toBe('');
+    expect(bundleRec?.scope).toEqual({ tier: 'org', id: ORG });
+    expect(bundleRec?.members).toEqual(['codebase-locator', 'web-search-researcher']);
+    // Plain agent records remain kind:'agent'.
+    expect(records.find((r) => r.name === 'codebase-locator')?.kind).toBe('agent');
+  });
 });
 
 describe('seedAgents', () => {

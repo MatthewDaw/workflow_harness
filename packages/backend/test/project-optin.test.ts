@@ -6,9 +6,11 @@ import { orgScope, type Agent, type McpServer, type Project, type Skill } from '
 import { Repo } from '../src/db/repo.js';
 import {
   disableProjectAgent,
+  disableProjectAgentBundle,
   disableProjectMcpServer,
   disableProjectSkill,
   enableProjectAgent,
+  enableProjectAgentBundle,
   enableProjectMcpServer,
   enableProjectSkill,
   type ProjectsDeps,
@@ -75,6 +77,9 @@ function bundle(name: string, members: string[]): Skill {
 }
 function agent(name: string, skills: string[]): Agent {
   return { name, scope: SCOPE, model: 'opus', prompt: '', skills, tools: [] };
+}
+function agentBundle(name: string, members: string[]): Agent {
+  return { name, scope: SCOPE, kind: 'bundle', model: '', prompt: '', skills: [], tools: [], members };
 }
 function mcpServer(name: string): McpServer {
   return { name, scope: SCOPE, transport: 'stdio', command: 'node', args: [], env: {} };
@@ -283,5 +288,61 @@ describe('DELETE /projects/:projectId/agents/:agentName (does NOT prune skills)'
     expect(updated.enabledAgents).toEqual([]);
     // Skills brought by the agent are NOT pruned.
     expect(updated.enabledSkills.sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('POST /projects/:projectId/agent-bundles/:bundleName (enable a whole agent bundle)', () => {
+  it('records the bundle intent + unions its member agents (and their skills) into the project', async () => {
+    await repo.putProject(project(PROJ, MATT));
+    await repo.putSkill(skill('gh'));
+    await repo.putSkill(skill('kit'));
+    await repo.putAgent(agent('reviewer', ['gh']));
+    await repo.putAgent(agent('builder', ['kit']));
+    await repo.putAgent(agentBundle('squad', ['reviewer', 'builder']));
+
+    const res = await enableProjectAgentBundle(
+      ownerEvent({ method: 'POST', path: { projectId: PROJ, bundleName: 'squad' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const updated = bodyOf<{ project: Project }>(res as { body: string }).project;
+    expect(updated.enabledAgentBundles).toEqual(['squad']);
+    expect(updated.enabledAgents.sort()).toEqual(['builder', 'reviewer']);
+    expect(updated.enabledSkills.sort()).toEqual(['gh', 'kit']);
+  });
+
+  it('404s a name that is not a bundle (a plain agent)', async () => {
+    await repo.putProject(project(PROJ, MATT));
+    await repo.putAgent(agent('reviewer', []));
+    const res = await enableProjectAgentBundle(
+      ownerEvent({ method: 'POST', path: { projectId: PROJ, bundleName: 'reviewer' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('DELETE /projects/:projectId/agent-bundles/:bundleName (disable a whole agent bundle)', () => {
+  it('drops the intent + member agents, but keeps a member shared with another enabled bundle', async () => {
+    await repo.putAgent(agent('reviewer', []));
+    await repo.putAgent(agent('builder', []));
+    await repo.putAgent(agentBundle('squad', ['reviewer', 'builder']));
+    await repo.putAgent(agentBundle('crew', ['builder']));
+    // Both bundles enabled; builder is shared, reviewer only via squad.
+    await repo.putProject({
+      ...project(PROJ, MATT),
+      enabledAgentBundles: ['squad', 'crew'],
+      enabledAgents: ['reviewer', 'builder'],
+    });
+
+    const res = await disableProjectAgentBundle(
+      ownerEvent({ method: 'DELETE', path: { projectId: PROJ, bundleName: 'squad' } }),
+      deps,
+    );
+    expect(res).toMatchObject({ statusCode: 200 });
+    const updated = bodyOf<{ project: Project }>(res as { body: string }).project;
+    expect(updated.enabledAgentBundles).toEqual(['crew']);
+    // reviewer removed (only squad had it); builder kept (still in crew).
+    expect(updated.enabledAgents).toEqual(['builder']);
   });
 });

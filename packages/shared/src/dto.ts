@@ -48,6 +48,18 @@ export const projectSchema = z.object({
    */
   enabledAgents: z.array(z.string()).default([]),
   /**
+   * Agent bundles this project added "as a whole" (bundle names from the org
+   * catalog). Like `enabledBundles` for skills, this is an INTENT annotation,
+   * not a second materialization set: a bundle's member agents are always
+   * unioned into `enabledAgents` (and their skills/MCP servers into
+   * `enabledSkills`/`enabledMcpServers`), so the daemon ignores this field for
+   * materialization. It exists so the UI can tell "the user added the whole
+   * bundle" apart from "the user picked some members individually", and so
+   * removing a bundle can strip the members it contributed. Defaults to [] for
+   * legacy/back-compat records.
+   */
+  enabledAgentBundles: z.array(z.string()).default([]),
+  /**
    * MCP servers this project has opted into (server names from the org catalog).
    * A connected repo materializes exactly these (plus the servers brought by
    * enabledAgents via union-on-add) into the daemon's ~/.claude+/.mcp.json.
@@ -147,7 +159,9 @@ export interface NormalizedEnabledEntry {
 
 /** Collapse a bare-string OR `{name, variantId}` enabled-set entry to the object form. */
 export function normalizeEnabledEntry(entry: EnabledEntry): NormalizedEnabledEntry {
-  return typeof entry === 'string' ? { name: entry } : { name: entry.name, variantId: entry.variantId };
+  return typeof entry === 'string'
+    ? { name: entry }
+    : { name: entry.name, variantId: entry.variantId };
 }
 
 /** The bare name of an enabled-set entry, regardless of form. */
@@ -289,36 +303,77 @@ export const PRIORITIES = ['high', 'medium', 'low'] as const;
 export const prioritySchema = z.enum(PRIORITIES);
 export type Priority = z.infer<typeof prioritySchema>;
 
-export const agentSchema = z.object({
-  name: z.string().min(1),
-  /**
-   * Catalog scope. `org` is the default tier (the org-wide catalog), but
-   * user-scoped agents are also representable so the catalog partitions by org
-   * AND by user. `scopeRefSchema` is a strict superset of the old org-only
-   * shape, so every existing org-scoped record still validates.
-   */
-  scope: scopeRefSchema,
-  model: z.string().min(1),
-  prompt: z.string().default(''),
-  /**
-   * Delegation trigger — the human-readable cue the orchestrator uses to decide
-   * WHEN to spawn this agent. Renders to the materialized subagent file's
-   * `description:` frontmatter. Defaults to '' for back-compat with agent
-   * records (and tests) written before this field existed.
-   */
-  description: z.string().default(''),
-  skills: z.array(z.string()).default([]),
-  tools: z.array(z.string()).default([]),
-  /**
-   * MCP servers this agent declares (server names from the org catalog). Adding
-   * the agent to a project unions these (plain names — no bundles) into the
-   * project's `enabledMcpServers`. Defaults to [] for back-compat with agent
-   * records written before MCP servers existed.
-   */
-  mcpServers: z.array(z.string()).default([]),
-  /** Authorship stamp set on create; optional on read for back-compat. */
-  createdBy: createdBySchema.optional(),
-}).merge(versionFieldsSchema);
+/**
+ * An agent record is either a runnable `agent` or a `bundle` — a grouping of
+ * other agents (mirrors `SKILL_KINDS`). A bundle has `members` (member agent
+ * names, possibly nested bundles) and no model/prompt of its own; it is never
+ * materialized as a subagent file, only expanded into its members.
+ */
+export const AGENT_KINDS = ['agent', 'bundle'] as const;
+export const agentKindSchema = z.enum(AGENT_KINDS);
+export type AgentKind = z.infer<typeof agentKindSchema>;
+
+export const agentSchema = z
+  .object({
+    name: z.string().min(1),
+    /**
+     * Catalog scope. `org` is the default tier (the org-wide catalog), but
+     * user-scoped agents are also representable so the catalog partitions by org
+     * AND by user. `scopeRefSchema` is a strict superset of the old org-only
+     * shape, so every existing org-scoped record still validates.
+     */
+    scope: scopeRefSchema,
+    /** `agent` (runnable) or `bundle` (a grouping of member agents). Defaults to
+     * `agent` for back-compat with records/tests written before bundles existed. */
+    kind: agentKindSchema.default('agent'),
+    /**
+     * The model a runnable agent uses. Required for `kind:'agent'` (enforced by
+     * the superRefine below), but may be empty for a `kind:'bundle'` record —
+     * a bundle is a grouping with nothing to run, the analog of a skill bundle's
+     * empty `body`. Relaxed from `.min(1)` to a defaulted string so a bundle
+     * record validates without a model.
+     */
+    model: z.string().default(''),
+    prompt: z.string().default(''),
+    /**
+     * Delegation trigger — the human-readable cue the orchestrator uses to decide
+     * WHEN to spawn this agent. Renders to the materialized subagent file's
+     * `description:` frontmatter. Defaults to '' for back-compat with agent
+     * records (and tests) written before this field existed.
+     */
+    description: z.string().default(''),
+    skills: z.array(z.string()).default([]),
+    tools: z.array(z.string()).default([]),
+    /**
+     * MCP servers this agent declares (server names from the org catalog). Adding
+     * the agent to a project unions these (plain names — no bundles) into the
+     * project's `enabledMcpServers`. Defaults to [] for back-compat with agent
+     * records written before MCP servers existed.
+     */
+    mcpServers: z.array(z.string()).default([]),
+    /** For bundles: names of member agents (which may themselves be bundles). */
+    members: z.array(z.string()).default([]),
+    /**
+     * Read-only annotation populated by the resolve endpoint for bundles: the
+     * transitively-flattened leaf-agent member names (nested bundles expanded).
+     * Never written by clients; present only on GET /agents responses.
+     */
+    resolvedMembers: z.array(z.string()).optional(),
+    /** Authorship stamp set on create; optional on read for back-compat. */
+    createdBy: createdBySchema.optional(),
+  })
+  .merge(versionFieldsSchema)
+  .superRefine((a, ctx) => {
+    // A runnable agent must declare a model; a bundle (a grouping record with
+    // nothing to run) may omit it — mirrors a skill bundle's empty body.
+    if (a.kind !== 'bundle' && a.model.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'model is required for an agent',
+      });
+    }
+  });
 export type Agent = z.infer<typeof agentSchema>;
 
 /**
@@ -401,45 +456,47 @@ export const SKILL_KINDS = ['skill', 'bundle'] as const;
 export const skillKindSchema = z.enum(SKILL_KINDS);
 export type SkillKind = z.infer<typeof skillKindSchema>;
 
-export const skillSchema = z.object({
-  name: z.string().min(1),
-  /**
-   * Catalog scope. `org` is the default tier (the org-wide catalog), but
-   * user-scoped skills are also representable so the catalog partitions by org
-   * AND by user. `scopeRefSchema` is a strict superset of the old org-only
-   * shape, so every existing org-scoped record still validates.
-   */
-  scope: scopeRefSchema,
-  kind: skillKindSchema,
-  description: z.string().default(''),
-  source: z.enum(['built-in', 'local', 'custom']).default('local'),
-  /** For bundles: names of member skills (which may themselves be bundles). */
-  members: z.array(z.string()).default([]),
-  /**
-   * Full SKILL.md content. HQ stores the body so a daemon can materialize the
-   * skill locally on session-start sync (not just show metadata). Empty for
-   * bundles / metadata-only records.
-   */
-  body: z.string().default(''),
-  /**
-   * WHOLE-DIRECTORY skill storage (U-Skill-Dirs). A skill is a directory:
-   * `SKILL.md` PLUS sibling scripts/resources. This maps each file's relative
-   * path WITHIN the skill dir (e.g. `SKILL.md`, `scripts/run.sh`) to its
-   * contents, so the daemon can materialize the entire `.claude/skills/<name>/`
-   * tree — not just the body. Optional for back-compat: legacy body-only records
-   * (no `files`) still materialize just `SKILL.md` from `body`.
-   */
-  files: z.record(z.string()).optional(),
-  /**
-   * Read-only annotation populated by the resolve endpoint for bundles: the
-   * transitively-flattened leaf-skill member names (nested bundles expanded).
-   * Never written by clients; present only on GET /skills responses.
-   */
-  resolvedMembers: z.array(z.string()).optional(),
-  /** Who created the catalog record (the seed stamps `system`; REST stamps the
-   * authenticated principal). Optional for legacy records written before it. */
-  createdBy: createdBySchema.optional(),
-}).merge(versionFieldsSchema);
+export const skillSchema = z
+  .object({
+    name: z.string().min(1),
+    /**
+     * Catalog scope. `org` is the default tier (the org-wide catalog), but
+     * user-scoped skills are also representable so the catalog partitions by org
+     * AND by user. `scopeRefSchema` is a strict superset of the old org-only
+     * shape, so every existing org-scoped record still validates.
+     */
+    scope: scopeRefSchema,
+    kind: skillKindSchema,
+    description: z.string().default(''),
+    source: z.enum(['built-in', 'local', 'custom']).default('local'),
+    /** For bundles: names of member skills (which may themselves be bundles). */
+    members: z.array(z.string()).default([]),
+    /**
+     * Full SKILL.md content. HQ stores the body so a daemon can materialize the
+     * skill locally on session-start sync (not just show metadata). Empty for
+     * bundles / metadata-only records.
+     */
+    body: z.string().default(''),
+    /**
+     * WHOLE-DIRECTORY skill storage (U-Skill-Dirs). A skill is a directory:
+     * `SKILL.md` PLUS sibling scripts/resources. This maps each file's relative
+     * path WITHIN the skill dir (e.g. `SKILL.md`, `scripts/run.sh`) to its
+     * contents, so the daemon can materialize the entire `.claude/skills/<name>/`
+     * tree — not just the body. Optional for back-compat: legacy body-only records
+     * (no `files`) still materialize just `SKILL.md` from `body`.
+     */
+    files: z.record(z.string()).optional(),
+    /**
+     * Read-only annotation populated by the resolve endpoint for bundles: the
+     * transitively-flattened leaf-skill member names (nested bundles expanded).
+     * Never written by clients; present only on GET /skills responses.
+     */
+    resolvedMembers: z.array(z.string()).optional(),
+    /** Who created the catalog record (the seed stamps `system`; REST stamps the
+     * authenticated principal). Optional for legacy records written before it. */
+    createdBy: createdBySchema.optional(),
+  })
+  .merge(versionFieldsSchema);
 export type Skill = z.infer<typeof skillSchema>;
 
 export const OBJECTIVE_LEVELS = [

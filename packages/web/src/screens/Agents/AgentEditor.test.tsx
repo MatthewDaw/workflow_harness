@@ -34,6 +34,8 @@ const AGENTS: Agent[] = [
     scope: ORG,
     description: 'Use when building features',
     model: 'claude-sonnet-4',
+    kind: 'agent',
+    members: [],
     prompt: 'Builds',
     skills: ['gh'],
     tools: [],

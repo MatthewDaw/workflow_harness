@@ -40,12 +40,14 @@ export function AgentEditor() {
     existing ?? {
       name: name ?? '',
       scope: orgScope(org),
+      kind: 'agent',
       description: '',
       model: 'claude-sonnet-4',
       prompt: '',
       skills: [],
       tools: [],
       mcpServers: [],
+      members: [],
     };
 
   const set = (patch: Partial<Agent>) => setDraft({ ...agent, ...patch });

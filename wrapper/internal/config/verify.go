@@ -184,12 +184,33 @@ func verifyAgainst(remote []RemoteItem, src RemoteSource, plus string) VerifyRep
 	}
 
 	// Agents need the skill-present index complete, so verify them in a second pass.
+	reportedAgents := map[string]bool{}
 	for _, ri := range remote {
 		if ri.Kind != KindAgent {
 			continue
 		}
+		reportedAgents[ri.Name] = true
 		st, detail := verifyAgent(plus, ri.Name, src.AgentSkills(ri.Name), skillPresent)
 		report.Items = append(report.Items, VerifyItem{Kind: KindAgent, Name: ri.Name, Status: st, Detail: detail})
+	}
+
+	// Declared-agent coverage — the agent analog of the declared-skill pass above.
+	// `remote` only carries the EFFECTIVE agent set (records that resolved AND are
+	// enabled); an agent the project DECLARES enabled but that has no resolvable
+	// record — a bundle name wrongly in enabledAgents, a dangling member, or a
+	// record absent for this org — never appears, so without this pass it would
+	// silently never land yet the gate would pass. Assert every declared agent
+	// materialized; flag any that did not so the sync fails loudly and names it.
+	for _, name := range src.DeclaredAgents() {
+		if reportedAgents[name] {
+			continue
+		}
+		reportedAgents[name] = true
+		st, detail := verifyAgent(plus, name, src.AgentSkills(name), skillPresent)
+		if st != VerifyOK {
+			detail = "enabled on this project but did not materialize — it has no agent record in this project's org catalog, or it names a bundle (enable the bundle via /agent-bundles, or enable its member agents directly)"
+		}
+		report.Items = append(report.Items, VerifyItem{Kind: KindAgent, Name: name, Status: st, Detail: detail})
 	}
 
 	// MCP servers: classify all enabled names against the on-disk .claude.json +

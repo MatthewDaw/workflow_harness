@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { Agent, Skill } from '@harness/shared';
 import {
@@ -7,6 +7,8 @@ import {
   useGetSkillsQuery,
   useEnableProjectAgentMutation,
   useDisableProjectAgentMutation,
+  useEnableProjectAgentBundleMutation,
+  useDisableProjectAgentBundleMutation,
 } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
 import {
@@ -34,14 +36,14 @@ function bringsSkills(agent: Agent, byName: Map<string, Skill>): string[] {
 }
 
 /**
- * Project Agents sub-tab (collapsed model): the page now shows ONLY the agents
- * already enabled on this project (as cards, keeping the "brings these skills"
- * pills + notes), and the full org catalog moves behind a single "+ Add to
- * project" button that opens the shared `CatalogPicker` modal. The modal stages
- * a selection of agent refs and hands back a {enable, disable} diff on Apply;
- * we fan that diff out to the per-agent mutations. Enabling an agent also unions
- * its skills into the project's enabledSkills (server-side), so there is nothing
- * extra to do client-side beyond the agent toggle itself.
+ * Project Agents sub-tab (collapsed model): the page shows the agents already
+ * enabled on this project (as cards, keeping the "brings these skills" pills +
+ * notes), and the full org catalog — individual agents AND agent bundles — moves
+ * behind a single "+ Add to project" button that opens the shared `CatalogPicker`.
+ * The modal stages a selection and hands back a {enable, disable} diff on Apply;
+ * we fan that diff out to the per-agent and per-bundle mutations. Enabling an
+ * agent (or a bundle of agents) also unions their skills into the project's
+ * enabledSkills server-side, so there is nothing extra to do client-side.
  *
  * CRITICAL: each opt-in mutation does a full read-modify-write of the single
  * project META record, so we apply the diff SEQUENTIALLY (await each before the
@@ -55,6 +57,8 @@ export function ProjectAgents() {
 
   const [enableAgent] = useEnableProjectAgentMutation();
   const [disableAgent] = useDisableProjectAgentMutation();
+  const [enableBundle] = useEnableProjectAgentBundleMutation();
+  const [disableBundle] = useDisableProjectAgentBundleMutation();
 
   // Modal open + in-flight apply state. `applying` drives the picker's busy UI
   // (Apply button disabled / "Applying…") while we walk the diff sequentially.
@@ -66,43 +70,107 @@ export function ProjectAgents() {
   const byName = new Map<string, Skill>((skillData ?? []).map((s) => [s.name, s]));
   const enabledNames = project?.enabledAgents ?? [];
   const enabledSet = new Set(enabledNames);
+  const enabledBundles = project?.enabledAgentBundles ?? [];
 
   // The agents currently enabled on this project — the only thing the page body
-  // renders now (the full catalog lives in the picker).
-  const enabledAgents = agents.filter((a) => enabledSet.has(a.name));
+  // renders now (the full catalog lives in the picker). Bundles never appear here
+  // (they aren't in enabledAgents); their member agents do.
+  const enabledAgents = agents.filter((a) => a.kind !== 'bundle' && enabledSet.has(a.name));
 
-  // One picker row per catalog agent. No bundles in the agent catalog, so every
-  // row is a plain `{ type: 'agent' }` ref; hint = model, and the description
-  // folds in the agent's own description plus the skills it brings so the user
-  // can see the side effect of enabling it.
-  const rows: CatalogPickerRow[] = agents.map((a) => {
-    const brings = bringsSkills(a, byName);
-    const desc = [a.description, brings.length > 0 ? `Brings: ${brings.join(', ')}` : '']
-      .filter(Boolean)
-      .join(' — ');
-    return {
-      ref: { type: 'agent', name: a.name } as CatalogRef,
-      label: a.name,
-      hint: a.model,
-      description: desc || undefined,
+  // Leaf member names of every catalog agent bundle — a plain agent that belongs
+  // to some bundle is only reachable via that bundle in the picker.
+  const bundleMemberNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const a of agents) {
+      if (a.kind !== 'bundle') continue;
+      for (const m of a.resolvedMembers ?? a.members) names.add(m);
+    }
+    return names;
+  }, [agents]);
+
+  // The picker rows: one bundle row per catalog agent bundle (members mapped to
+  // agent refs), plus one agent row per standalone agent that is NOT a member of
+  // any bundle. hint = model; description folds in the agent's own description
+  // plus the skills it brings so the side effect of enabling is visible.
+  const rows: CatalogPickerRow[] = useMemo(() => {
+    const agentRow = (a: Agent): CatalogPickerRow => {
+      const brings = bringsSkills(a, byName);
+      const desc = [a.description, brings.length > 0 ? `Brings: ${brings.join(', ')}` : '']
+        .filter(Boolean)
+        .join(' — ');
+      return {
+        ref: { type: 'agent', name: a.name },
+        label: a.name,
+        hint: a.model,
+        description: desc || undefined,
+      };
     };
-  });
+    const out: CatalogPickerRow[] = [];
+    for (const a of agents) {
+      if (a.kind !== 'bundle') continue;
+      const members = a.resolvedMembers ?? a.members;
+      out.push({
+        ref: { type: 'agent-bundle', name: a.name },
+        label: a.name,
+        description: a.description || undefined,
+        hint: 'bundle',
+        members: members.map((m) => {
+          const member = agents.find((x) => x.name === m);
+          return member ? agentRow(member) : { ref: { type: 'agent', name: m }, label: m };
+        }),
+      });
+    }
+    for (const a of agents) {
+      if (a.kind === 'bundle') continue;
+      if (bundleMemberNames.has(a.name)) continue;
+      out.push(agentRow(a));
+    }
+    return out;
+  }, [agents, byName, bundleMemberNames]);
 
-  const initialSelected: CatalogRef[] = enabledNames.map((name) => ({ type: 'agent', name }));
+  // The refs ON when the modal opens: each enabled bundle as an agent-bundle ref,
+  // plus each enabled agent NOT already covered by an enabled bundle as an agent ref.
+  const initialSelected: CatalogRef[] = useMemo(() => {
+    const covered = new Set<string>();
+    const refs: CatalogRef[] = [];
+    for (const name of enabledBundles) {
+      refs.push({ type: 'agent-bundle', name });
+      const bundle = agents.find((a) => a.kind === 'bundle' && a.name === name);
+      if (bundle) for (const m of bundle.resolvedMembers ?? bundle.members) covered.add(m);
+    }
+    for (const name of enabledNames) {
+      if (covered.has(name)) continue;
+      refs.push({ type: 'agent', name });
+    }
+    return refs;
+    // enabled arrays are fresh each render; key off contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabledNames.join('|'), enabledBundles.join('|'), agents]);
 
-  // Apply the staged diff. Enabling/disabling each agent is a separate project
-  // read-modify-write, so we MUST await each mutation before firing the next —
-  // never fire them concurrently or they clobber the project META record.
+  // Apply the staged diff SEQUENTIALLY (await each) — every mutation read-modify-
+  // writes the whole project META record. On ENABLE process bundles before agents;
+  // on DISABLE process agents before bundles (mirrors ProjectSkills).
   const onApply = async (diff: { enable: CatalogRef[]; disable: CatalogRef[] }) => {
     if (!projectId) return;
     setApplying(true);
     setAddError(null);
     try {
-      for (const ref of diff.enable) {
+      const enableBundles = diff.enable.filter((r) => r.type === 'agent-bundle');
+      const enableAgents = diff.enable.filter((r) => r.type === 'agent');
+      const disableAgents = diff.disable.filter((r) => r.type === 'agent');
+      const disableBundles = diff.disable.filter((r) => r.type === 'agent-bundle');
+
+      for (const ref of enableBundles) {
+        await enableBundle({ projectId, bundleName: ref.name }).unwrap();
+      }
+      for (const ref of enableAgents) {
         await enableAgent({ projectId, agentName: ref.name }).unwrap();
       }
-      for (const ref of diff.disable) {
+      for (const ref of disableAgents) {
         await disableAgent({ projectId, agentName: ref.name }).unwrap();
+      }
+      for (const ref of disableBundles) {
+        await disableBundle({ projectId, bundleName: ref.name }).unwrap();
       }
     } catch {
       // A failed toggle (e.g. the agent isn't in the org catalog) surfaces here

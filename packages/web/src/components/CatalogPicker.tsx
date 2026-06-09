@@ -13,7 +13,8 @@ export type CatalogRef =
   | { type: 'skill'; name: string }
   | { type: 'bundle'; name: string }
   | { type: 'mcp'; name: string }
-  | { type: 'agent'; name: string };
+  | { type: 'agent'; name: string }
+  | { type: 'agent-bundle'; name: string };
 
 /**
  * The stable identity of a ref as a string key. The picker stages selections in
@@ -182,7 +183,7 @@ export function CatalogPicker({
           ) : (
             <div className="flex flex-col gap-1.5">
               {rows.map((row) =>
-                row.ref.type === 'bundle' ? (
+                row.ref.type === 'bundle' || row.ref.type === 'agent-bundle' ? (
                   <BundleRow
                     key={refKey(row.ref)}
                     row={row}
@@ -306,6 +307,8 @@ function BundleRow({
   const [expanded, setExpanded] = useState(false);
   const { name } = row.ref;
   const members = row.members ?? [];
+  // Members are agents for an agent-bundle, skills for a skill bundle.
+  const memberNoun = row.ref.type === 'agent-bundle' ? 'agents' : 'skills';
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -332,7 +335,7 @@ function BundleRow({
                 aria-expanded={expanded}
                 onClick={() => setExpanded((v) => !v)}
               >
-                {expanded ? '▾' : '›'} {members.length} skills
+                {expanded ? '▾' : '›'} {members.length} {memberNoun}
               </button>
             )}
           </span>

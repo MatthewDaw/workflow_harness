@@ -20,6 +20,7 @@ import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const agentsDir = path.join(repoRoot, '.claude', 'agents');
+const bundlesManifestPath = path.join(repoRoot, 'catalog', 'agents', 'bundles.json');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
@@ -113,8 +114,21 @@ for (const file of mdFiles) {
   });
 }
 
-// buildSeedAgents: one org-scoped record per file (skills:[], system authorship).
-const records = buildSeedAgents(ORG, files);
+// Load the agent-bundle manifest (single source of truth for how seeded agents
+// are grouped, mirroring catalog/skills/bundles.json). Absent/invalid -> no bundles.
+let manifest = {};
+if (existsSync(bundlesManifestPath)) {
+  try {
+    manifest = JSON.parse(readFileSync(bundlesManifestPath, 'utf8'));
+  } catch (err) {
+    console.error(`[seed-hl-agents] failed to parse ${bundlesManifestPath}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+// buildSeedAgents: one org-scoped record per file (skills:[], system authorship),
+// plus one kind:'bundle' record per manifest entry.
+const records = buildSeedAgents(ORG, files, manifest);
 
 if (process.env.SEED_DRY_RUN) {
   for (const r of records) {

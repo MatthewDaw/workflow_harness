@@ -20,7 +20,7 @@ func testPlus(t *testing.T) string {
 
 func TestDiffClassifies(t *testing.T) {
 	local := []Item{
-		{Kind: KindAgent, Name: "builder", Hash: "h1"},   // matches HQ -> in sync
+		{Kind: KindAgent, Name: "builder", Hash: "h1"},    // matches HQ -> in sync
 		{Kind: KindAgent, Name: "local-only", Hash: "h2"}, // needs push
 		{Kind: KindSkill, Name: "drifty", Hash: "hX"},     // differs
 		{Kind: KindSkill, Name: "broken", Err: "empty definition"},
@@ -90,11 +90,12 @@ func TestHashIgnoresLineEndings(t *testing.T) {
 // Body returns recorded content; bodyErr names one item whose Body() should fail
 // (the malformed-but-non-fatal edge).
 type fakeRemote struct {
-	items    []RemoteItem
-	bodies   map[string]string
-	bodyErr  string              // "kind/name" whose Body() returns an error
-	depsByAg map[string][]string // agent name -> skill deps (U-Agent-Deps)
-	declared []string            // project's declared enabled skills (gate coverage)
+	items      []RemoteItem
+	bodies     map[string]string
+	bodyErr    string              // "kind/name" whose Body() returns an error
+	depsByAg   map[string][]string // agent name -> skill deps (U-Agent-Deps)
+	declared   []string            // project's declared enabled skills (gate coverage)
+	declaredAg []string            // project's declared enabled agents (gate coverage)
 }
 
 func newFakeRemote() *fakeRemote {
@@ -136,6 +137,13 @@ func (f *fakeRemote) AgentSkills(agentName string) []string {
 // test sets `declared` to exercise the enabled-but-unresolvable coverage path.
 func (f *fakeRemote) DeclaredSkills() []string {
 	return f.declared
+}
+
+// DeclaredAgents returns the project's declared enabled agent set the gate asserts
+// is materialized. Defaults to nil unless a test sets `declaredAg` to exercise the
+// enabled-but-unresolvable agent coverage path.
+func (f *fakeRemote) DeclaredAgents() []string {
+	return f.declaredAg
 }
 
 // seedLocalAgent writes a local agent file under a temp ~/.claude and returns its

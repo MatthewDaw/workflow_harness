@@ -18,6 +18,7 @@ const PROJECT: Project = {
   enabledSkills: [],
   enabledBundles: [],
   enabledAgents: [],
+  enabledAgentBundles: [],
   enabledMcpServers: ['fs'],
 };
 

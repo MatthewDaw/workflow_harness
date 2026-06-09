@@ -38,11 +38,11 @@ type DriftRow struct {
 // DriftReport is the full comparison plus convenience counts for the status line
 // (e.g. "⚠ 2 skills differ").
 type DriftReport struct {
-	Rows         []DriftRow `json:"rows"`
-	NeedsPush    int        `json:"needsPush"`
-	NeedsPull    int        `json:"needsPull"`
-	Differs      int        `json:"differs"`
-	Errors       int        `json:"errors"`
+	Rows      []DriftRow `json:"rows"`
+	NeedsPush int        `json:"needsPush"`
+	NeedsPull int        `json:"needsPull"`
+	Differs   int        `json:"differs"`
+	Errors    int        `json:"errors"`
 }
 
 // Diff compares local items against HQ's effective set and produces a drift
@@ -132,6 +132,12 @@ type RemoteSource interface {
 	// asserts every declared name landed, so such a skill fails loudly instead of
 	// silently never appearing in the session. An unfetched source yields nil.
 	DeclaredSkills() []string
+	// DeclaredAgents returns the project's FULL declared enabled agent set captured
+	// during the most recent Fetch: every project.enabledAgents name plus the
+	// flattened member agents of every enabled agent bundle. The agent analog of
+	// DeclaredSkills — the verify gate asserts every declared agent materialized,
+	// so an enabled-but-unresolvable agent fails loudly. An unfetched source yields nil.
+	DeclaredAgents() []string
 }
 
 // ComputeDrift reads the given per-project registry (`plus`), fetches HQ's

@@ -1,0 +1,13 @@
+{
+  "research-subagents": {
+    "description": "The HumanLayer-derived research subagents (codebase + thoughts locators/analyzers and web research) — enable them as a unit.",
+    "members": [
+      "codebase-analyzer",
+      "codebase-locator",
+      "codebase-pattern-finder",
+      "thoughts-analyzer",
+      "thoughts-locator",
+      "web-search-researcher"
+    ]
+  }
+}

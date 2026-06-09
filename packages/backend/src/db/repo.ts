@@ -620,7 +620,10 @@ export class Repo {
     const variantId = variantIdFor(baseName, repoId, authorUserId);
     const now = opts.now ?? Date.now();
 
-    const existing = await this.listRevisions(scope, kind, baseName, { repoId, userId: authorUserId });
+    const existing = await this.listRevisions(scope, kind, baseName, {
+      repoId,
+      userId: authorUserId,
+    });
     const nextRev = existing.reduce((m, r) => Math.max(m, (r.version as number) ?? 1), 0) + 1;
 
     const stamped = {
@@ -735,7 +738,9 @@ export class Repo {
         latestByVariant.set(vid, r);
       }
     }
-    return [...latestByVariant.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, r]) => r);
+    return [...latestByVariant.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, r]) => r);
   }
 
   /** The per-baseName ORG-WIDE TRUE pointer, or undefined if none set yet. */
@@ -757,11 +762,7 @@ export class Repo {
    * the ONLY write `promote` makes — it never edits or deletes a variant, so any
    * authed org member may call it. Idempotent (overwrites the single pointer row).
    */
-  async setTrueVariant(
-    scope: ScopeRef,
-    kind: k.CatalogKind,
-    pointer: TruePointer,
-  ): Promise<void> {
+  async setTrueVariant(scope: ScopeRef, kind: k.CatalogKind, pointer: TruePointer): Promise<void> {
     await this.doc.send(
       new PutCommand({
         TableName: this.table,
@@ -962,14 +963,30 @@ export class Repo {
   ): Promise<Project | undefined> {
     const project = await this.getProject(projectId);
     if (!project) return undefined;
+    const brought = await this.bringAgentInto(project, agentName, org);
+    if (!brought) return undefined;
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Mutate an IN-MEMORY project to enable a single agent: union the agent's name
+   * into `enabledAgents`, its declared skills (skill-bundles flattened to leaves)
+   * into `enabledSkills`, and its declared MCP servers (plain names — no bundles)
+   * into `enabledMcpServers`. Does NOT persist — the caller calls `putProject`
+   * once after enabling one agent or a whole bundle of them. Returns false (and
+   * leaves the project untouched) when the agent is not in the org catalog, so a
+   * dangling bundle member is skipped rather than aborting the whole bundle.
+   */
+  private async bringAgentInto(project: Project, agentName: string, org: string): Promise<boolean> {
     const agent = await this.getAgent(orgScope(org), agentName);
-    if (!agent) return undefined;
+    if (!agent) return false;
     const brought = await this.expandAgentSkills(org, agent);
 
     const enabledAgents = project.enabledAgents ?? [];
-    if (!enabledAgents.includes(agentName)) {
-      project.enabledAgents = [...enabledAgents, agentName];
-    }
+    project.enabledAgents = enabledAgents.includes(agentName)
+      ? enabledAgents
+      : [...enabledAgents, agentName];
     const enabledSkills = new Set(project.enabledSkills ?? []);
     for (const s of brought) enabledSkills.add(s);
     project.enabledSkills = [...enabledSkills];
@@ -977,6 +994,62 @@ export class Repo {
     const enabledMcpServers = new Set(project.enabledMcpServers ?? []);
     for (const s of agent.mcpServers ?? []) enabledMcpServers.add(s);
     project.enabledMcpServers = [...enabledMcpServers];
+    return true;
+  }
+
+  /**
+   * Idempotently enable a whole AGENT BUNDLE on a project. `enabledAgentBundles`
+   * records the INTENT (the user added the bundle as a unit, so the UI can tell a
+   * whole-bundle from an individually-picked member, and a later removal can strip
+   * just the members this bundle contributed). `memberAgents` is the bundle's
+   * transitively-flattened leaf agents; each is brought in exactly as if enabled
+   * individually (its skills + MCP servers union into `enabledSkills` /
+   * `enabledMcpServers`). The REST layer flattens the bundle against the org
+   * catalog and passes the members in, so this repo stays catalog-agnostic.
+   * Returns the updated Project, or undefined if the project is missing.
+   */
+  async addAgentBundleToProject(
+    projectId: string,
+    bundleName: string,
+    memberAgents: string[],
+    org: string,
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    const enabledAgentBundles = project.enabledAgentBundles ?? [];
+    if (!enabledAgentBundles.includes(bundleName)) {
+      project.enabledAgentBundles = [...enabledAgentBundles, bundleName];
+    }
+    for (const member of memberAgents) {
+      // A member that has vanished from the catalog is skipped, but the bundle
+      // intent is still recorded so the project never holds a dead reference.
+      await this.bringAgentInto(project, member, org);
+    }
+    await this.putProject(project);
+    return project;
+  }
+
+  /**
+   * Remove an AGENT BUNDLE intent from a project AND drop the member agents it
+   * contributed from `enabledAgents`. `memberAgentsToRemove` is computed by the
+   * REST layer as the bundle's members MINUS any member still covered by another
+   * still-enabled agent bundle, so a member shared between two enabled bundles
+   * survives. Mirrors `removeAgentFromProject`: `enabledSkills`/`enabledMcpServers`
+   * are left intact, since a skill/server may be enabled directly or brought by
+   * another agent. Returns the updated Project, or undefined if missing.
+   */
+  async removeAgentBundleFromProject(
+    projectId: string,
+    bundleName: string,
+    memberAgentsToRemove: string[],
+  ): Promise<Project | undefined> {
+    const project = await this.getProject(projectId);
+    if (!project) return undefined;
+    project.enabledAgentBundles = (project.enabledAgentBundles ?? []).filter(
+      (b) => b !== bundleName,
+    );
+    const drop = new Set(memberAgentsToRemove);
+    project.enabledAgents = (project.enabledAgents ?? []).filter((a) => !drop.has(a));
     await this.putProject(project);
     return project;
   }
@@ -1252,11 +1325,7 @@ export class Repo {
     );
   }
 
-  async getIdea(
-    org: string,
-    skillBaseName: string,
-    ideaId: string,
-  ): Promise<Idea | undefined> {
+  async getIdea(org: string, skillBaseName: string, ideaId: string): Promise<Idea | undefined> {
     const res = await this.doc.send(
       new GetCommand({ TableName: this.table, Key: k.ideaKey(org, skillBaseName, ideaId) }),
     );

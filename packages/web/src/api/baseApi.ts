@@ -709,6 +709,65 @@ export const baseApi = createApi({
       invalidatesTags: ['Skill'],
     }),
 
+    /**
+     * Add a whole AGENT bundle to a project. The server records the bundle in
+     * enabledAgentBundles (the INTENT annotation) AND unions its member agents
+     * into enabledAgents (plus those agents' skills/MCP servers). Mirrors
+     * enableProjectBundle for skills.
+     */
+    enableProjectAgentBundle: build.mutation<Project, { projectId: string; bundleName: string }>({
+      query: ({ projectId, bundleName }) => ({
+        url: `projects/${projectId}/agent-bundles/${encodeURIComponent(bundleName)}`,
+        method: 'POST',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /**
+     * Remove a whole AGENT bundle from a project. The server drops it from
+     * enabledAgentBundles and strips the member agents it contributed from
+     * enabledAgents (members shared with another enabled bundle survive).
+     */
+    disableProjectAgentBundle: build.mutation<Project, { projectId: string; bundleName: string }>({
+      query: ({ projectId, bundleName }) => ({
+        url: `projects/${projectId}/agent-bundles/${encodeURIComponent(bundleName)}`,
+        method: 'DELETE',
+      }),
+      transformResponse: unwrapOne<Project>('project'),
+      invalidatesTags: (_r, _e, { projectId }) => ['Project', { type: 'Project', id: projectId }],
+    }),
+
+    /** Add a member agent (or nested bundle) into an agent bundle. */
+    addAgentBundleMember: build.mutation<Agent, { name: string; member: string }>({
+      query: ({ name, member }) => ({
+        url: `agents/${encodeURIComponent(name)}/members`,
+        method: 'POST',
+        body: { member },
+      }),
+      transformResponse: unwrapOne<Agent>('agent'),
+      invalidatesTags: ['Agent'],
+    }),
+
+    /** Remove/eject a member from an agent bundle (the member stays standalone). */
+    removeAgentBundleMember: build.mutation<Agent, { name: string; member: string }>({
+      query: ({ name, member }) => ({
+        url: `agents/${encodeURIComponent(name)}/members/${encodeURIComponent(member)}`,
+        method: 'DELETE',
+      }),
+      transformResponse: unwrapOne<Agent>('agent'),
+      invalidatesTags: ['Agent'],
+    }),
+
+    /** Dissolve an agent bundle: every member becomes standalone, the bundle is removed. */
+    dissolveAgentBundle: build.mutation<{ dissolved: boolean }, { name: string }>({
+      query: ({ name }) => ({
+        url: `agents/${encodeURIComponent(name)}/dissolve`,
+        method: 'POST',
+      }),
+      invalidatesTags: ['Agent'],
+    }),
+
     /** Store a weekly-update draft (free-form done/plan prose) for an iso week. */
     putWeekly: build.mutation<
       WeeklyUpdate,
@@ -851,6 +910,11 @@ export const {
   useAddBundleMemberMutation,
   useRemoveBundleMemberMutation,
   useDissolveBundleMutation,
+  useEnableProjectAgentBundleMutation,
+  useDisableProjectAgentBundleMutation,
+  useAddAgentBundleMemberMutation,
+  useRemoveAgentBundleMemberMutation,
+  useDissolveAgentBundleMutation,
   usePutWeeklyMutation,
   usePublishWeeklyMutation,
   useSendControlMutation,

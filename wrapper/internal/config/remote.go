@@ -65,6 +65,15 @@ type HTTPRemoteSource struct {
 	// name landed, so such a skill fails the sync loudly instead of silently never
 	// appearing. Guarded by bodiesMu alongside bodies since Fetch publishes it.
 	declaredSkills []string
+
+	// declaredAgents is the agent analog of declaredSkills: the project's FULL
+	// declared enabled agent set captured during Fetch — every name in
+	// project.enabledAgents UNION the live-flattened member agents of every enabled
+	// agent bundle. The verify gate asserts each landed, so an enabled-but-
+	// unresolvable agent (a bundle name wrongly in enabledAgents, a dangling member,
+	// or a record absent for this org — none of which materialize a subagent file)
+	// fails the sync loudly. Guarded by bodiesMu alongside bodies.
+	declaredAgents []string
 }
 
 // NewHTTPRemoteSource builds a source with a bounded HTTP client.
@@ -78,8 +87,16 @@ func NewHTTPRemoteSource(baseURL, token, projectID string) *HTTPRemoteSource {
 }
 
 type remoteAgent struct {
-	Name string `json:"name"`
-	Scope scope `json:"scope"`
+	Name  string `json:"name"`
+	Scope scope  `json:"scope"`
+	// Kind is "agent" or "bundle". A bundle is not materialized itself; its
+	// `resolvedMembers` (transitively flattened leaf agent names, annotated by the
+	// backend on GET /agents) are expanded into the effective agent set when the
+	// project has opted into the bundle. `members` is the un-flattened fallback.
+	// Mirrors remoteSkill's Kind/ResolvedMembers/Members.
+	Kind            string   `json:"kind"`
+	ResolvedMembers []string `json:"resolvedMembers"`
+	Members         []string `json:"members"`
 	// Description, Tools, and Model are the structured fields HQ stores for an
 	// agent. They were previously decoded-but-discarded (only Prompt was
 	// materialized); renderAgentFile now folds them into YAML frontmatter so a
@@ -283,6 +300,11 @@ type remoteProject struct {
 	// fetch time, so a project never goes stale when a bundle's membership changes
 	// after opt-in (the snapshot enabledSkills carries can lag; this self-heals it).
 	EnabledBundles []string `json:"enabledBundles"`
+	// EnabledAgentBundles names the AGENT bundles the project opted into. Same
+	// self-heal: we expand each bundle's current member agents into the effective
+	// agent set (and union those agents' skills into the effective skill set) at
+	// fetch time, mirroring EnabledBundles for skills.
+	EnabledAgentBundles []string `json:"enabledAgentBundles"`
 }
 
 // Fetch reads the org catalog (GET /agents, GET /skills, no ?project, no
@@ -302,6 +324,7 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	enabledAgents := map[string]bool{}
 	enabledMcp := map[string]bool{}
 	enabledBundles := map[string]bool{}
+	enabledAgentBundles := map[string]bool{}
 	if h.ProjectID != "" {
 		// The REST handler returns the project NESTED under a "project" key
 		// (`{project, instances, sessions}`); some shapes (and the unit tests) put
@@ -333,6 +356,9 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 		for _, n := range proj.EnabledBundles {
 			enabledBundles[n] = true
 		}
+		for _, n := range proj.EnabledAgentBundles {
+			enabledAgentBundles[n] = true
+		}
 	}
 
 	// Build the body cache locally, then publish it under the lock in one shot so a
@@ -348,8 +374,43 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	if err := h.getJSON("/agents", &agentsResp); err != nil {
 		return nil, err
 	}
+	// Expand each ENABLED agent bundle's CURRENT members into the effective agent
+	// set, and union each member agent's skills into the effective skill set. Like
+	// the skill-bundle expansion below, this self-heals a stale `enabledAgents`
+	// snapshot when a bundle's membership changes after opt-in. A bundle agent is
+	// never materialized itself (skipped in the loop below); only its members are.
+	if len(enabledAgentBundles) > 0 {
+		byName := make(map[string]remoteAgent, len(agentsResp.Agents))
+		for _, a := range agentsResp.Agents {
+			byName[a.Name] = a
+		}
+		for _, a := range agentsResp.Agents {
+			if a.Kind != "bundle" || !enabledAgentBundles[a.Name] {
+				continue
+			}
+			members := a.ResolvedMembers
+			if len(members) == 0 {
+				members = a.Members
+			}
+			for _, m := range members {
+				enabledAgents[m] = true
+				// Bring the member agent's own skill dependencies into the effective
+				// skill set so they materialize (mirrors the backend union-on-enable).
+				if member, ok := byName[m]; ok {
+					for _, s := range member.Skills {
+						enabledSkills[s] = true
+					}
+				}
+			}
+		}
+	}
 	for _, a := range agentsResp.Agents {
 		if a.Name == "" {
+			continue
+		}
+		// A bundle is a grouping record (no subagent file to materialize); its
+		// members are expanded above. Never write a bundle to disk as an agent.
+		if a.Kind == "bundle" {
 			continue
 		}
 		if a.Scope.Tier == "org" && a.Scope.ID != "" {
@@ -468,11 +529,20 @@ func (h *HTTPRemoteSource) Fetch() ([]RemoteItem, error) {
 	}
 	sort.Strings(declared)
 
+	// Snapshot the FULL declared enabled agent set (enabledAgents after agent-bundle
+	// expansion) — the agent analog of `declared` above, for the verify gate.
+	declaredAgents := make([]string, 0, len(enabledAgents))
+	for n := range enabledAgents {
+		declaredAgents = append(declaredAgents, n)
+	}
+	sort.Strings(declaredAgents)
+
 	h.bodiesMu.Lock()
 	h.bodies = bodies
 	h.orgID = orgID
 	h.agentSkills = agentSkills
 	h.declaredSkills = declared
+	h.declaredAgents = declaredAgents
 	h.bodiesMu.Unlock()
 	return out, nil
 }
@@ -488,6 +558,19 @@ func (h *HTTPRemoteSource) DeclaredSkills() []string {
 	h.bodiesMu.RLock()
 	defer h.bodiesMu.RUnlock()
 	return append([]string(nil), h.declaredSkills...)
+}
+
+// DeclaredAgents returns the project's FULL declared enabled agent set captured
+// during the most recent Fetch: every project.enabledAgents name plus the
+// live-flattened member agents of every enabled agent bundle. The verify gate
+// asserts each is materialized on disk, so an enabled-but-unresolvable agent (a
+// bundle name mistakenly in enabledAgents, a dangling member, or a catalog record
+// absent for this project's org) fails the gate loudly instead of silently never
+// landing. A source not yet fetched yields nil.
+func (h *HTTPRemoteSource) DeclaredAgents() []string {
+	h.bodiesMu.RLock()
+	defer h.bodiesMu.RUnlock()
+	return append([]string(nil), h.declaredAgents...)
 }
 
 // AgentSkills returns the skill names the named agent depends on, captured during

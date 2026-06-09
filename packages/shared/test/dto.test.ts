@@ -187,6 +187,29 @@ describe('MCP server attachment back-compat', () => {
     });
     expect(agent.mcpServers).toEqual([]);
   });
+
+  it("defaults kind to 'agent' and members to [] for a legacy agent", () => {
+    const agent = agentSchema.parse({ name: 'planner', scope: orgScope, model: 'opus' });
+    expect(agent.kind).toBe('agent');
+    expect(agent.members).toEqual([]);
+  });
+
+  it('accepts an agent bundle (kind:bundle) without a model', () => {
+    const bundle = agentSchema.parse({
+      name: 'research-subagents',
+      scope: orgScope,
+      kind: 'bundle',
+      members: ['codebase-locator', 'web-search-researcher'],
+    });
+    expect(bundle.kind).toBe('bundle');
+    expect(bundle.model).toBe('');
+    expect(bundle.members).toEqual(['codebase-locator', 'web-search-researcher']);
+  });
+
+  it('rejects a runnable agent (kind:agent) with an empty model', () => {
+    const res = agentSchema.safeParse({ name: 'planner', scope: orgScope, model: '' });
+    expect(res.success).toBe(false);
+  });
 });
 
 /**

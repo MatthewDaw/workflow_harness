@@ -347,6 +347,75 @@ func TestFetchThreadsAgentSkillDeps(t *testing.T) {
 	}
 }
 
+// TestFetchExpandsAgentBundle proves an enabled AGENT BUNDLE expands into its
+// member agents (which materialize) while the bundle record itself is never
+// materialized, and each member agent's skills are brought into the effective
+// skill set — the agent analog of skill-bundle expansion.
+func TestFetchExpandsAgentBundle(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agents", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"agents": []map[string]any{
+			{
+				"name":            "squad",
+				"scope":           map[string]string{"tier": "org", "id": "acme"},
+				"kind":            "bundle",
+				"members":         []string{"rev"},
+				"resolvedMembers": []string{"rev"},
+			},
+			{
+				"name":   "rev",
+				"scope":  map[string]string{"tier": "org", "id": "acme"},
+				"prompt": "Review.",
+				"skills": []string{"lint"},
+			},
+		}})
+	})
+	mux.HandleFunc("/skills", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"skills": []map[string]any{
+			{"name": "lint", "scope": map[string]string{"tier": "org", "id": "acme"}, "kind": "skill", "body": "# Lint"},
+		}})
+	})
+	mux.HandleFunc("/mcp-servers", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"mcpServers": []any{}})
+	})
+	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
+		// Only the bundle is opted in — its member agent must be derived.
+		_ = json.NewEncoder(w).Encode(map[string]any{"enabledAgentBundles": []string{"squad"}})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	src := NewHTTPRemoteSource(srv.URL, "tok", "proj-1")
+	items, err := src.Fetch()
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	var sawAgent, sawSkill bool
+	for _, it := range items {
+		if it.Kind == KindAgent && it.Name == "squad" {
+			t.Fatalf("a bundle agent must NOT be materialized, got %+v", it)
+		}
+		if it.Kind == KindAgent && it.Name == "rev" {
+			sawAgent = true
+		}
+		if it.Kind == KindSkill && it.Name == "lint" {
+			sawSkill = true
+		}
+	}
+	if !sawAgent {
+		t.Errorf("member agent 'rev' should materialize from the enabled bundle, got %+v", items)
+	}
+	if !sawSkill {
+		t.Errorf("member agent's skill 'lint' should be brought into the effective set, got %+v", items)
+	}
+	// The declared-agent set self-heals from the bundle's members.
+	declared := src.DeclaredAgents()
+	if len(declared) != 1 || declared[0] != "rev" {
+		t.Errorf("want DeclaredAgents [rev], got %v", declared)
+	}
+}
+
 func toJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)

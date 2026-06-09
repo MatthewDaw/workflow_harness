@@ -1,5 +1,6 @@
 import { orgScope, agentSchema, type Agent } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
+import type { BundleManifest } from './skills.js';
 
 /**
  * Org-scope seed for the agents that ship bundled with Command HQ + claude+
@@ -33,23 +34,33 @@ export interface SeedAgentFile {
 }
 
 /**
- * Build the seed `Agent[]`: one org-scoped record per file. Each record carries
- * the parsed `{name, description, tools, model, prompt}`, an empty `skills: []`,
- * and a `system` authorship stamp. Parsing each through `agentSchema` applies
- * defaults (e.g. `tools`/`skills`/`mcpServers` -> []) and guards the shape, so a
- * record here is byte-compatible with what the agents REST layer reads/writes.
+ * Build the seed `Agent[]`: one `kind:'agent'` org-scoped record per file, PLUS
+ * one `kind:'bundle'` record per manifest entry (mirrors `buildSeedSkills`). Each
+ * agent record carries the parsed `{name, description, tools, model, prompt}`, an
+ * empty `skills: []`, and a `system` authorship stamp. A bundle's `members` are
+ * the manifest's declared members intersected with the agents that actually exist
+ * (so a stale manifest reference is dropped, not stored as a dangling member);
+ * bundle records carry no model/prompt. Parsing each through `agentSchema` applies
+ * defaults and guards the shape, so a record here is byte-compatible with what the
+ * agents REST layer reads/writes.
  */
-export function buildSeedAgents(org: string, files: SeedAgentFile[]): Agent[] {
+export function buildSeedAgents(
+  org: string,
+  files: SeedAgentFile[],
+  manifest: BundleManifest = {},
+): Agent[] {
   const scope = orgScope(org);
   const createdBy = { userId: 'system', name: 'system' } as const;
+  const known = new Set(files.map((f) => f.name));
 
   // Seeded records are the BASE variant of their name (rev 1, empty repo/user):
   // variantId === baseName === name, version 1 — so a later edit forks/advances
   // cleanly and a re-seed never resets the catalog.
-  return files.map((f) =>
+  const agents = files.map((f) =>
     agentSchema.parse({
       name: f.name,
       scope,
+      kind: 'agent',
       model: f.model,
       prompt: f.prompt,
       description: f.description,
@@ -61,10 +72,28 @@ export function buildSeedAgents(org: string, files: SeedAgentFile[]): Agent[] {
       version: 1,
     }),
   );
+
+  const bundles = Object.entries(manifest).map(([name, spec]) =>
+    agentSchema.parse({
+      name,
+      scope,
+      kind: 'bundle',
+      // A bundle is a grouping record — no model/prompt to run.
+      model: '',
+      members: spec.members.filter((m) => known.has(m)),
+      description: spec.description,
+      createdBy,
+      baseName: name,
+      variantId: name,
+      version: 1,
+    }),
+  );
+
+  return [...agents, ...bundles];
 }
 
 /**
- * Upsert the seeded agents into HQ at org scope. Idempotent: `putAgent`
+ * Upsert the seeded agents + bundles into HQ at org scope. Idempotent: `putAgent`
  * overwrites by key, so a second run converges to the same set. Returns the
  * records written.
  */
@@ -72,8 +101,9 @@ export async function seedAgents(
   repo: Repo,
   org: string,
   files: SeedAgentFile[],
+  manifest: BundleManifest = {},
 ): Promise<Agent[]> {
-  const records = buildSeedAgents(org, files);
+  const records = buildSeedAgents(org, files, manifest);
   for (const record of records) {
     await repo.putAgent(record);
   }

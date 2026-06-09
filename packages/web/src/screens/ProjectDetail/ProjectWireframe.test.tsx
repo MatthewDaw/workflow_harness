@@ -13,6 +13,7 @@ const PROJECT: Project = {
   liveSessionCount: 0,
   enabledSkills: [],
   enabledAgents: [],
+  enabledAgentBundles: [],
   enabledBundles: [],
   enabledMcpServers: [],
 };

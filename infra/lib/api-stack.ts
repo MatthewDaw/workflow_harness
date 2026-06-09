@@ -266,6 +266,7 @@ export class ApiStack extends cdk.Stack {
     r('/projects/{projectId}/agents/{agentName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentOptIn', noAuth);
     r('/projects/{projectId}/mcp-servers/{name}', [M.POST, M.DELETE], projectsFn, 'ProjectMcpOptIn', noAuth);
     r('/projects/{projectId}/bundles/{bundleName}', [M.POST, M.DELETE], projectsFn, 'ProjectBundleOptIn', noAuth);
+    r('/projects/{projectId}/agent-bundles/{bundleName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentBundleOptIn', noAuth);
 
     r('/sessions', [M.GET], sessionsFn, 'Sessions');
     r('/sessions/{id}', [M.GET], sessionsFn, 'SessionById');
@@ -280,6 +281,10 @@ export class ApiStack extends cdk.Stack {
     r('/agents', [M.POST], agentsFn, 'AgentsPost', noAuth);
     r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName', noAuth);
     r('/agents/{name}/scope', [M.POST], agentsFn, 'AgentScope', noAuth);
+    // Agent-bundle catalog verbs mirror the skills bundle verbs below.
+    r('/agents/{name}/members', [M.POST], agentsFn, 'AgentMembers', noAuth);
+    r('/agents/{name}/members/{member}', [M.DELETE], agentsFn, 'AgentMemberDelete', noAuth);
+    r('/agents/{name}/dissolve', [M.POST], agentsFn, 'AgentDissolve', noAuth);
 
     // ALL skills routes are PUBLIC at the gateway (HttpNoneAuthorizer) so the
     // claude+ wrapper's HS256 device token reaches the Lambda — the gateway JWT

@@ -25,6 +25,7 @@ import {
 import { isAdmin, isOrgAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { flattenBundle } from './skills.js';
+import { flattenAgentBundle } from './agents.js';
 import { STARTER_BUNDLE_NAME } from '../seed/skills.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -695,6 +696,76 @@ export async function disableProjectBundle(
   return ok({ project: updated });
 }
 
+/**
+ * POST /projects/:projectId/agent-bundles/:bundleName — enable a whole agent
+ * bundle as a unit. Mirrors `enableProjectBundle` but against the AGENTS catalog:
+ * the name must resolve to an agent of kind `bundle`. Flattening to member agents
+ * happens here (where the catalog is loaded) so the repo stays catalog-agnostic;
+ * each member agent is then brought in with its skills + MCP servers.
+ */
+export async function enableProjectAgentBundle(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, org } = resolved;
+  const bundleName = pathParam(event, 'bundleName');
+  if (!bundleName) return badRequest('missing bundle name');
+
+  // Resolve against the org AGENT catalog; it must exist AND be a bundle.
+  const catalog = await deps.repo.listAgents(org);
+  const byName = new Map(catalog.map((a) => [a.name, a]));
+  const bundle = byName.get(bundleName);
+  if (!bundle || bundle.kind !== 'bundle') return notFound();
+
+  const members = flattenAgentBundle(bundle, byName);
+  const updated = await deps.repo.addAgentBundleToProject(project.id, bundleName, members, org);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
+/**
+ * DELETE /projects/:projectId/agent-bundles/:bundleName — disable a whole agent
+ * bundle. Mirrors `disableProjectBundle`: clears the bundle intent AND drops the
+ * member agents it contributed, EXCEPT any member still covered by another
+ * still-enabled agent bundle. A bundle that has since vanished from the catalog
+ * still removes its intent (with no members to strip) so the project can never be
+ * stuck holding a dead reference.
+ */
+export async function disableProjectAgentBundle(
+  event: APIGatewayProxyEventV2,
+  deps: ProjectsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const resolved = await projectForOptIn(event, deps);
+  if ('error' in resolved) return resolved.error;
+  const { project, org } = resolved;
+  const bundleName = pathParam(event, 'bundleName');
+  if (!bundleName) return badRequest('missing bundle name');
+
+  const catalog = await deps.repo.listAgents(org);
+  const byName = new Map(catalog.map((a) => [a.name, a]));
+
+  // The members this bundle would contribute (empty if it vanished from the catalog).
+  const bundle = byName.get(bundleName);
+  const members = bundle && bundle.kind === 'bundle' ? flattenAgentBundle(bundle, byName) : [];
+
+  // Members still covered by some OTHER enabled agent bundle must be kept.
+  const keep = new Set<string>();
+  for (const otherName of project.enabledAgentBundles ?? []) {
+    if (otherName === bundleName) continue;
+    const other = byName.get(otherName);
+    if (other && other.kind === 'bundle') {
+      for (const member of flattenAgentBundle(other, byName)) keep.add(member);
+    }
+  }
+  const removable = members.filter((m) => !keep.has(m));
+
+  const updated = await deps.repo.removeAgentBundleFromProject(project.id, bundleName, removable);
+  if (!updated) return notFound();
+  return ok({ project: updated });
+}
+
 /** Routes the verbs/sub-paths by method/path for a single Lambda integration. */
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: ProjectsDeps = { repo: defaultRepo() };
@@ -714,6 +785,13 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (/\/mcp-servers\/[^/]+$/.test(rawPath)) {
     if (method === 'POST') return enableProjectMcpServer(event, deps);
     if (method === 'DELETE') return disableProjectMcpServer(event, deps);
+  }
+  // Agent bundles MUST be matched before /bundles/ (and /agents/) — the path
+  // `/agent-bundles/<name>` is distinct (no literal `/bundles/` or `/agents/`
+  // boundary), but order it first for clarity.
+  if (/\/agent-bundles\/[^/]+$/.test(rawPath)) {
+    if (method === 'POST') return enableProjectAgentBundle(event, deps);
+    if (method === 'DELETE') return disableProjectAgentBundle(event, deps);
   }
   if (/\/bundles\/[^/]+$/.test(rawPath)) {
     if (method === 'POST') return enableProjectBundle(event, deps);
