@@ -39,7 +39,7 @@ holds, and the full offline suite is green.
 - [x] 003/U6 — Episode orchestration
 - [x] 003/U7 — Grader settlement and report
 - [x] 003/U8 — Mutation-seeded verifier audits
-- [ ] 003/U9 — Trace-query CLI, idea provenance, and episode e2e
+- [x] 003/U9 — Trace-query CLI, idea provenance, and episode e2e
 
 ### Plan 004 — Phase 3a: Close the Learning Loop (docs/plans/2026-06-10-004-feat-agent-families-phase3a-learning-loop-plan.md)
 - [ ] 004/U1 — Schema spine migration
