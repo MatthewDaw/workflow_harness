@@ -1,0 +1,46 @@
+# kanboard target stack (plan-004 U4, R22 — the held-out micro-benchmark target).
+#
+# Kanboard is the SECOND target, onboarded here so the micro-benchmark (R14) is
+# a different application than the training target (linkding): non-regression on
+# the *same* target measures memorization, not generalization. Kanboard is a
+# PHP/SQLite project-management app from the official image.
+#
+# Image pinned BY DIGEST (R9, inherited from the Phase 2 harness contract: the
+# FEAT registry and every cached apparatus artifact are keyed to this digest; a
+# tag alone can drift silently). benchmark.py carries the same pin and refuses
+# setup if this file and the code ever disagree.
+#
+# NOTE — the digest below is a PLACEHOLDER pending live resolution from Docker
+# Hub (this unit's host had no network/docker; R22's live boot/seed and the
+# benchmark-instrument-sigma measurement are the documented pending-docker
+# deliverables). This is SAFE: KanboardTarget.up() verifies the running image's
+# RepoDigests contain the pin and refuses a mismatch (DigestMismatchError), so a
+# stale placeholder can never silently run the benchmark against the wrong
+# image — it fails loud until re-pinned. Re-pinning is a deliberate apparatus
+# migration, not an edit.
+#
+# - named volume, NEVER a Windows bind mount (SQLite WAL corruption risk, R5)
+# - Kanboard auto-provisions its SQLite DB and the admin/admin superuser on
+#   first boot; seeding drives the JSON-RPC API headlessly (benchmark.py)
+# - host port comes from KANBOARD_PORT in benchmark.py (8081), disjoint from the
+#   linkding port table (linkding=9090, clone=4173) by construction
+# - readiness is benchmark.py polling GET / for the "Kanboard" login marker,
+#   not a compose healthcheck
+name: agent-families-kanboard
+
+services:
+  kanboard:
+    image: kanboard/kanboard:v1.2.46@sha256:a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90
+    ports:
+      - "8081:80"
+    volumes:
+      - kanboard_data:/var/www/app/data
+      - kanboard_plugins:/var/www/app/plugins
+    environment:
+      # Deterministic, headless: no outbound mail, no plugin auto-update.
+      KANBOARD_MAIL_TRANSPORT: log
+    restart: unless-stopped
+
+volumes:
+  kanboard_data:
+  kanboard_plugins:

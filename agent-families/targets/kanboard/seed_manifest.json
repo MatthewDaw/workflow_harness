@@ -1,0 +1,27 @@
+{
+  "_comment": "Seed manifest for the kanboard micro-benchmark target (plan-004 U4, R22). Seeding is API-driven: benchmark.py drives Kanboard's JSON-RPC API (/jsonrpc.php, HTTP basic admin/admin) — createProject per project, createTask per task (default column). The frozen micro-benchmark slice's hand-verified verdicts are defined against THIS post-seed state, so changing it is a deliberate, recorded apparatus migration, not an edit. Scoped to the benchmark slice's feature areas (projects, tasks, board columns, search); the full registry is allowed to grow later (R22).",
+  "projects": [
+    {
+      "name": "Engineering",
+      "tasks": [
+        { "title": "Pin the target image by digest", "description": "Resolve the manifest-list digest and commit it." },
+        { "title": "Wire the JSON-RPC seeding path", "description": "createProject + createTask, headless." },
+        { "title": "Freeze the micro-benchmark slice", "description": "12-20 must-tier scenarios, fixed seed." }
+      ]
+    },
+    {
+      "name": "Design",
+      "tasks": [
+        { "title": "Board column layout review", "description": "Backlog / Ready / Work in progress / Done." },
+        { "title": "Search affordance audit", "description": "Global task search across projects." }
+      ]
+    },
+    {
+      "name": "Operations",
+      "tasks": [
+        { "title": "Reset-to-seed runbook", "description": "Volume drop, re-boot, re-seed." },
+        { "title": "Instrument-sigma replicate plan", "description": "Replicate benchmark episodes at one snapshot." }
+      ]
+    }
+  ]
+}
