@@ -25,7 +25,7 @@ holds, and the full offline suite is green.
 - [x] 002/U2 — Output-stack template repo and workspace lifecycle
 - [x] 002/U3 — run_session seam and scripted-agent fake
 - [x] 002/U4 — Orchestrator core: run/ticket state machine, checkpoint/resume
-- [ ] 002/U5 — Planning stage
+- [x] 002/U5 — Planning stage
 - [ ] 002/U6 — Ticket loop: worker, harness gate, verifier
 - [ ] 002/U7 — Trace capture, shadow tripwires, accounting
 - [ ] 002/U8 — Toy-spec corpus and end-to-end acceptance
