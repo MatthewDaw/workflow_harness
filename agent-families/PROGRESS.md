@@ -1,5 +1,5 @@
 # Status: active
-# Current plan: 001   Current unit: U1
+# Current plan: 001   Current unit: U2
 
 This manifest is PRE-GENERATED from the five plans and is AUTHORITATIVE.
 Loop agents: flip checkboxes and statuses only. NEVER add, remove, merge,
@@ -10,7 +10,7 @@ holds, and the full offline suite is green.
 ## Units
 
 ### Plan 001 — Phase 0: Library Core (docs/plans/2026-06-10-001-feat-agent-families-phase0-library-core-plan.md)
-- [ ] 001/U1 — Scaffold, config, and repo isolation
+- [x] 001/U1 — Scaffold, config, and repo isolation
 - [ ] 001/U2 — SQLite schema, store layer, snapshots, promotion queue
 - [ ] 001/U3 — Embedding service and vector index
 - [ ] 001/U4 — Judge runner with record/replay seam
@@ -68,6 +68,26 @@ holds, and the full offline suite is green.
 
 ## Deviations
 
+- **001/U1 commit scope** — U1's Files/Verification explicitly require repo-root
+  `.gitignore` (Python section) and `.prettierignore` (+`agent-families/`) edits. This
+  is in tension with the loop's "commit ONLY agent-families/ + docs/plans/" rule.
+  Resolved in favor of the plan (authoritative for WHAT); the two ignore files are
+  committed with U1. The forbidden product dirs (packages/, infra/, wrapper/,
+  catalog/, scripts/) were not touched. Subsequent units should not need root changes.
+- **001/U1 scaffold method** — Used hand-written `pyproject.toml` + `uv sync` rather
+  than literal `uv init --package` to avoid clobbering the pre-existing PROGRESS.md /
+  ralph.* files in the dir. Outcome is equivalent: src layout, py3.12 pin, `af`
+  console script, committed `uv.lock`. `readme` key omitted from pyproject so README.md
+  stays owned by U9.
+
 ## Probe findings
+
+- **Environment bootstrap (001/U1)** — Neither `uv` nor Python 3.12 was present on
+  this machine (only Python 3.14 + an active outer `.venv`). Installed `uv 0.11.19`
+  via the official standalone installer to `%USERPROFILE%\.local\bin`, then
+  `uv python install 3.12` → CPython 3.12.13. The plan mandates uv + py3.12; this is
+  a one-time host setup, no repo files involved. NOTE for future iterations: prepend
+  `$env:USERPROFILE\.local\bin` to PATH and clear `VIRTUAL_ENV` (an outer `.venv` is
+  active and uv warns/ignores it) before `uv run`.
 
 ## Blockers

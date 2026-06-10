@@ -1,0 +1,69 @@
+# thresholds.toml — agent-families tunables, one file, provenance-commented.
+#
+# Discipline (DESIGN §17): every threshold lives here, never hardcoded in source.
+# Each entry records (a) its default's PROVENANCE — the paper or decision it comes
+# from — and (b) its TUNING METRIC — what you measure to move it. Decisions made by
+# the system are logged with the threshold value that produced them, so changing a
+# value reveals what would have flipped.
+#
+# This file is the template written verbatim by `af init`. The loader is fail-fast:
+# unknown sections/keys and out-of-range values are hard errors (no silent defaults).
+
+[embedding]
+# Local embedder, pinned. Cosine thresholds are NOT portable across models — a model
+# swap is a deliberate migration that re-embeds and recalibrates every cosine
+# threshold against the hand-labeled pair set (DESIGN §13, §17).
+# PROVENANCE: §13 stack decision — nomic-embed-text-v1.5 via sentence-transformers.
+model = "nomic-ai/nomic-embed-text-v1.5"
+# PROVENANCE: §13 — 768-dim, pinned once; Matryoshka truncation deliberately unused
+# in Phase 0. TUNING METRIC: re-pin only on a full re-embed migration.
+dim = 768
+# PROVENANCE: KTD — CPUExecutionProvider pinned so ONNX float output is reproducible
+# enough for record/replay fixture stability across machines.
+device = "cpu"
+
+[merge]
+# Cosine prefilter for the merge-review judge call: candidates at or above this
+# similarity are JUDGED (never silently auto-merged).
+# PROVENANCE: SkillRouter (arXiv 2603.22455) — "cosine>0.92 merge".
+# TUNING METRIC: duplicate-pair precision/recall on ~50 hand-labeled pairs (§13/§17).
+cosine_threshold = 0.92
+
+[retrieval]
+# Approximate-nearest-neighbor breadth handed to the placement judge.
+# PROVENANCE: R5 — "ANN top-10 across all statuses".
+# TUNING METRIC: placement-accuracy vs prompt size.
+ann_top_k = 10
+# Minimum cosine similarity for an ANN candidate to count as a real neighbor. Below
+# the floor for all candidates, the judge gets the cold-start taxonomy listing instead
+# of a neighbor list (KTD cold-start).
+# PROVENANCE: Phase-0 provisional default (no paper) — calibrate with the labeled pair
+# set. TUNING METRIC: fraction of registrations correctly routed taxonomy-vs-neighbor.
+relevance_floor = 0.5
+
+[judge]
+# Headless `claude -p` model pin for routing/merge/taxonomy/compile calls.
+# PROVENANCE: §15 model tiers — volume routing on Sonnet.
+model = "sonnet"
+# Schema-violation retries: a malformed or out-of-subset judge response is fed back
+# this many times before a hard fail with NO writes (R6).
+# PROVENANCE: default. TUNING METRIC: schema-violation recovery rate vs wasted quota.
+max_retries = 3
+# `--bare` skips OAuth and would silently require an API key, breaking the
+# subscription-only constraint. OFF until empirically verified against subscription
+# auth (KTD / Risks). Treated as a tested toggle, never a default.
+bare = false
+
+[lifecycle]
+# Active-set cap per skill. Phase 0 promotion is unconditional (the cap-tournament
+# admission is a marked Phase-3 seam); the value is carried now so the seam reads it.
+# PROVENANCE: §17 "active cap ~50"; Skill Shadowing (2605.24050) — selection collapses
+# as libraries grow (21% drop at 202 skills).
+# TUNING METRIC: routing selection accuracy vs active library size.
+active_cap = 50
+
+[store]
+# SQLite busy-timeout backstop for the single-writer promotion queue (R4): concurrent
+# BEGIN IMMEDIATE writers block up to this long rather than failing immediately.
+# PROVENANCE: default backstop. TUNING METRIC: lifecycle-op contention under load.
+busy_timeout_ms = 5000

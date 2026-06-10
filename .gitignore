@@ -30,6 +30,21 @@ wrapper/dist/
 
 # python scaffolding (vestigial)
 .venv/
+
+# agent-families (Python / uv, self-contained — uv.lock IS committed)
+agent-families/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+agent-families/build/
+agent-families/dist/
+# local library DB + model cache (re-derivable; never committed)
+agent-families/*.db
+agent-families/*.sqlite
+agent-families/*.sqlite3
+agent-families/.hf_cache/
+
 infra/cdk.bundles/
 infra/cdk-outputs.json
 npm/claude-plus/bin/claude-plus
