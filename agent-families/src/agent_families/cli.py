@@ -20,11 +20,22 @@ The library lives in a directory (``--dir``, default ``.``) holding
 ``render`` writes rendering BYTES to stdout (notes go to stderr) so byte-stability
 (R15) survives the console. The judge record/replay mode and fixtures directory
 come from the ``AF_JUDGE_MODE`` / ``AF_JUDGE_FIXTURES`` env vars (R23).
+
+Phase 2 (plan-003 U9) adds the human reflector's toolset: ``add-idea`` gains
+``--episode/--scenario/--ticket`` provenance (003 R27, validated before any judge
+call); ``trace`` is the navigation surface the settlement report embeds —
+``trace chain <SCEN>`` carries the SCEN -> FEAT -> requests -> tickets -> spans
+attribution join (003 R26), plus ``spans``/``iterations``/``evidence``/
+``transcript``; and ``episode report``/``episode status`` inspect a settled
+episode. Driving a live episode (the explorer + grader stack against linkding)
+is the documented procedure in ``README.md``; the offline pipeline exercises the
+same episode loop with scripted fakes (``tests/test_e2e_episode.py``).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -76,6 +87,8 @@ SUBCOMMANDS: dict[str, str] = {
     "render": "Render a skill (concatenation, or --compile for delta-patch).",
     "export": "Export skills as Claude Code SKILL.md files.",
     "status": "Report library counts, batches, flags, snapshot, and config.",
+    "trace": "Trace-query an episode: chain/spans/iterations/evidence/transcript (003 R26).",
+    "episode": "Inspect an episode: report/status (003 R23/R26).",
 }
 
 COMPILED_DIRNAME = "compiled"
@@ -288,6 +301,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
 def _cmd_add_idea(args: argparse.Namespace) -> int:
     config, store = _open_library(args)
     with store:
+        # Idea provenance (003 R27): validate every evidence ref BEFORE spending a
+        # judge call or an embedding — an unknown --episode is a fast, actionable
+        # failure, and the FK targets are confirmed to exist before any write.
+        _validate_idea_provenance(store, args)
         vec = VecIndex(store, config.embedding.dim)
         embedder = _embedding_service(config)
         batch_label = args.batch
@@ -308,7 +325,49 @@ def _cmd_add_idea(args: argparse.Namespace) -> int:
             override_retired=args.override_retired,
         )
         print(result.message)
+        # Provenance columns are stamped only on a freshly REGISTERED insight; a
+        # duplicate/merge resolves to a pre-existing row whose provenance stays as
+        # first written. The Phase 3 reflector populates these mechanically; here
+        # the human supplies them by hand (003 R27).
+        if result.code == "registered" and (
+            args.episode is not None
+            or args.scenario is not None
+            or args.ticket is not None
+        ):
+            with store.transaction():
+                store.conn.execute(
+                    "UPDATE insights SET episode_id = ?, evidence_scenario_id = ?,"
+                    " evidence_ticket_id = ? WHERE id = ?",
+                    (args.episode, args.scenario, args.ticket, result.insight_id),
+                )
+            print(
+                f"  provenance: episode={args.episode} scenario={args.scenario}"
+                f" ticket={args.ticket}"
+            )
     return 0
+
+
+def _validate_idea_provenance(store: Store, args: argparse.Namespace) -> None:
+    """Fail fast and actionably if any --episode/--scenario/--ticket ref is unknown
+    (003 R27). Done before the pipeline runs so no quota is spent on a bad ref."""
+    if args.episode is not None and store.get_episode(args.episode) is None:
+        raise PipelineError(
+            f"unknown episode {args.episode}: `add-idea --episode` needs an episode"
+            " that exists (see `af episode status`)."
+        )
+    if args.scenario is not None and store.conn.execute(
+        "SELECT 1 FROM trace_scen WHERE id = ?", (args.scenario,)
+    ).fetchone() is None:
+        raise PipelineError(
+            f"unknown scenario {args.scenario!r} (--scenario evidence ref);"
+            " settle an episode first or check `af episode report`."
+        )
+    if args.ticket is not None and store.conn.execute(
+        "SELECT 1 FROM trace_tkt WHERE id = ?", (args.ticket,)
+    ).fetchone() is None:
+        raise PipelineError(
+            f"unknown ticket {args.ticket!r} (--ticket evidence ref)."
+        )
 
 
 # --- lifecycle (R12) ---------------------------------------------------------------
@@ -515,6 +574,292 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- trace queries (003 R26) ---------------------------------------------------------
+#
+# The trace CLI is the human reflector's navigation surface and the commands the
+# settlement report embeds. `af trace chain <SCEN>` carries the attribution join
+# (SCEN -> FEAT -> requests -> requirements -> tickets -> spans); it lives HERE,
+# once, where Plan 4's Stage A will reuse it (003 R23) — never in the report
+# renderer, which only embeds the command string.
+
+
+def _placeholders(count: int) -> str:
+    return ",".join("?" * count)
+
+
+def _require_scen(store: Store, scen_id: str):
+    row = store.conn.execute(
+        "SELECT * FROM trace_scen WHERE id = ?", (scen_id,)
+    ).fetchone()
+    if row is None:
+        raise StoreError(
+            f"no scenario {scen_id!r}. Settled scenarios are listed in"
+            " `af episode report <episode>`."
+        )
+    return row
+
+
+def _cmd_trace_chain(args: argparse.Namespace) -> int:
+    _config, store = _open_library(args)
+    with store:
+        scen = _require_scen(store, args.scen)
+        lines = [f"chain for {scen['id']}:"]
+        lines.append(
+            f"  verdict: {scen['result']} (tier {scen['tier']},"
+            f" judge {scen['judge_mode']})"
+        )
+        if scen["evidence"]:
+            lines.append(f"  failure: {scen['evidence']}")
+        lines.append(
+            f"  episode: {scen['episode_id']}  snapshot: {scen['snapshot_id']}"
+        )
+        feat = store.conn.execute(
+            "SELECT * FROM trace_feat WHERE id = ?", (scen["feat_id"],)
+        ).fetchone()
+        if feat is None:
+            lines.append(f"  feature: {scen['feat_id']} (no registry row)")
+        else:
+            lines.append(
+                f"  feature: {feat['id']} (target {feat['target']},"
+                f" digest {feat['digest']}, status {feat['status']})"
+            )
+
+        msg_ids = [
+            r["msg_id"]
+            for r in store.conn.execute(
+                "SELECT msg_id FROM trace_msg_mentions WHERE feat_id = ?"
+                " ORDER BY msg_id",
+                (scen["feat_id"],),
+            ).fetchall()
+        ]
+        lines.append(
+            "  requests (MSG mentions): " + (", ".join(msg_ids) or "none")
+        )
+        req_rows = (
+            store.conn.execute(
+                "SELECT id, source_msg_id FROM trace_req WHERE source_msg_id IN"
+                f" ({_placeholders(len(msg_ids))}) ORDER BY id",
+                msg_ids,
+            ).fetchall()
+            if msg_ids
+            else []
+        )
+        lines.append(
+            "  requirements: "
+            + (
+                ", ".join(
+                    f"{r['id']} (from {r['source_msg_id']})" for r in req_rows
+                )
+                or "none"
+            )
+        )
+        req_ids = [r["id"] for r in req_rows]
+        tkt_rows = (
+            store.conn.execute(
+                "SELECT DISTINCT t.id AS id, t.status AS status"
+                " FROM trace_tkt_covers c JOIN trace_tkt t ON t.id = c.tkt_id"
+                f" WHERE c.req_id IN ({_placeholders(len(req_ids))})"
+                " ORDER BY t.id",
+                req_ids,
+            ).fetchall()
+            if req_ids
+            else []
+        )
+        lines.append(
+            "  tickets: "
+            + (
+                ", ".join(f"{r['id']} ({r['status']})" for r in tkt_rows)
+                or "none"
+            )
+        )
+        tkt_ids = [r["id"] for r in tkt_rows]
+        span_rows = (
+            store.conn.execute(
+                "SELECT s.id AS id, s.family AS family, s.agent AS agent,"
+                " s.status AS status, s.run_id AS run_id,"
+                " r.episode_id AS episode_id, r.increment_index AS increment_index"
+                " FROM trace_span s LEFT JOIN runs r ON r.id = s.run_id"
+                f" WHERE s.ticket_id IN ({_placeholders(len(tkt_ids))})"
+                " ORDER BY s.id",
+                tkt_ids,
+            ).fetchall()
+            if tkt_ids
+            else []
+        )
+        lines.append(
+            "  spans: "
+            + (
+                ", ".join(
+                    f"{r['id']} ({r['family']}/{r['agent']}, run {r['run_id']},"
+                    f" increment {r['increment_index']}, {r['status']})"
+                    for r in span_rows
+                )
+                or "none"
+            )
+        )
+        print("\n".join(lines))
+    return 0
+
+
+def _cmd_trace_spans(args: argparse.Namespace) -> int:
+    if args.increment is not None and args.episode is None:
+        raise StoreError("--increment requires --episode")
+    _config, store = _open_library(args)
+    with store:
+        if args.ticket is not None:
+            header = f"spans for ticket {args.ticket}:"
+            rows = store.conn.execute(
+                "SELECT s.*, r.episode_id AS r_episode, r.increment_index AS r_inc"
+                " FROM trace_span s LEFT JOIN runs r ON r.id = s.run_id"
+                " WHERE s.ticket_id = ? ORDER BY s.id",
+                (args.ticket,),
+            ).fetchall()
+        elif args.increment is not None:
+            header = f"spans for episode {args.episode} increment {args.increment}:"
+            rows = store.conn.execute(
+                "SELECT s.*, r.episode_id AS r_episode, r.increment_index AS r_inc"
+                " FROM trace_span s JOIN runs r ON r.id = s.run_id"
+                " WHERE r.episode_id = ? AND r.increment_index = ? ORDER BY s.id",
+                (args.episode, args.increment),
+            ).fetchall()
+        else:
+            header = f"spans for episode {args.episode}:"
+            rows = store.conn.execute(
+                "SELECT s.*, r.episode_id AS r_episode, r.increment_index AS r_inc"
+                " FROM trace_span s JOIN runs r ON r.id = s.run_id"
+                " WHERE r.episode_id = ? ORDER BY s.id",
+                (args.episode,),
+            ).fetchall()
+        lines = [header]
+        if not rows:
+            lines.append("  (none)")
+        for s in rows:
+            lines.append(
+                f"  {s['id']}: {s['family']}/{s['agent']} ticket {s['ticket_id']}"
+                f" run {s['run_id']} increment {s['r_inc']}"
+                f" iter {s['ralph_iteration']} {s['status']} cost {s['cost_usd']}"
+            )
+        print("\n".join(lines))
+    return 0
+
+
+def _cmd_trace_iterations(args: argparse.Namespace) -> int:
+    _config, store = _open_library(args)
+    with store:
+        rows = store.conn.execute(
+            "SELECT * FROM trace_span WHERE ticket_id = ?"
+            " ORDER BY ralph_iteration, id",
+            (args.ticket,),
+        ).fetchall()
+        lines = [f"iterations for ticket {args.ticket}:"]
+        if not rows:
+            lines.append("  (no spans)")
+        for s in rows:
+            files = ", ".join(json.loads(s["files_json"] or "[]")) or "(none)"
+            lines.append(
+                f"  iter {s['ralph_iteration']} {s['id']} [{s['status']}]: {files}"
+            )
+        print("\n".join(lines))
+    return 0
+
+
+def _cmd_trace_evidence(args: argparse.Namespace) -> int:
+    _config, store = _open_library(args)
+    with store:
+        scen = _require_scen(store, args.scen)
+        lines = [
+            f"evidence for {scen['id']}:",
+            f"  verdict: {scen['result']}  failure: {scen['evidence'] or '(none)'}",
+            f"  judge_metadata: {scen['judge_metadata_json']}",
+            f"  judge_input: {scen['judge_input_json']}",
+        ]
+        print("\n".join(lines))
+    return 0
+
+
+def _cmd_trace_transcript(args: argparse.Namespace) -> int:
+    _config, store = _open_library(args)
+    with store:
+        span = store.conn.execute(
+            "SELECT * FROM trace_span WHERE id = ?", (args.span,)
+        ).fetchone()
+        if span is None:
+            raise StoreError(f"no span {args.span!r}.")
+        refs = json.loads(span["artifact_refs_json"] or "[]")
+        files = json.loads(span["files_json"] or "[]")
+        lines = [
+            f"transcript artifacts for {span['id']} (run {span['run_id']},"
+            f" status {span['status']}):",
+            "  artifact_refs: " + (", ".join(refs) or "none"),
+            "  files: " + (", ".join(files) or "none"),
+        ]
+        print("\n".join(lines))
+    return 0
+
+
+# --- episode inspection (003 R23/R26) ------------------------------------------------
+
+
+def _cmd_episode_report(args: argparse.Namespace) -> int:
+    _config, store = _open_library(args)
+    with store:
+        row = store.conn.execute(
+            "SELECT report_json FROM settlement_reports WHERE episode_id = ?",
+            (args.episode,),
+        ).fetchone()
+        if row is None:
+            raise StoreError(
+                f"episode {args.episode} has no settlement report yet"
+                f" (see `af episode status {args.episode}`)."
+            )
+        # The stored report is the byte-stable canonical render (R23); emit it
+        # verbatim so it round-trips through the console unchanged.
+        _write_stdout_bytes(row["report_json"].encode("utf-8"))
+    return 0
+
+
+def _cmd_episode_status(args: argparse.Namespace) -> int:
+    _config, store = _open_library(args)
+    with store:
+        ep = store.get_episode(args.episode)
+        if ep is None:
+            raise StoreError(f"episode {args.episode} does not exist.")
+        lines = [
+            f"episode {ep['id']}: target {ep['target']} digest {ep['digest']}",
+            f"  status: {ep['status']}",
+            f"  snapshot: {ep['snapshot_id']}",
+            f"  budget: max_increments={ep['max_increments']}"
+            f" cost_ceiling_usd={ep['cost_ceiling_usd']}",
+            f"  created_at: {ep['created_at']}"
+            f"  settled_at: {ep['settled_at'] or '(not settled)'}",
+        ]
+        runs = store.conn.execute(
+            "SELECT id, increment_index, status, acceptance, total_cost_usd"
+            " FROM runs WHERE episode_id = ? ORDER BY increment_index, id",
+            (args.episode,),
+        ).fetchall()
+        lines.append(f"  increments: {len(runs)}")
+        for r in runs:
+            lines.append(
+                f"    increment {r['increment_index']}: run {r['id']}"
+                f" {r['status']} acceptance={r['acceptance'] or '-'}"
+                f" cost={r['total_cost_usd']}"
+            )
+        rep = store.conn.execute(
+            "SELECT score FROM settlement_reports WHERE episode_id = ?",
+            (args.episode,),
+        ).fetchone()
+        if rep is not None:
+            lines.append(
+                f"  settlement score: {rep['score']}"
+                f" (run `af episode report {args.episode}`)"
+            )
+        else:
+            lines.append("  settlement: none")
+        print("\n".join(lines))
+    return 0
+
+
 # --- parser and entry point ---------------------------------------------------------
 
 
@@ -558,6 +903,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="admit the idea fresh although its near-duplicate is retired (R14)",
     )
+    p.add_argument(
+        "--episode",
+        type=int,
+        help="provenance: the episode this idea reflects on (003 R27)",
+    )
+    p.add_argument(
+        "--scenario", help="provenance: evidence SCEN id (optional, 003 R27)"
+    )
+    p.add_argument(
+        "--ticket", help="provenance: evidence TKT id (optional, 003 R27)"
+    )
 
     p = sub("promote", _cmd_promote)
     p.add_argument("--batch", required=True, help="batch label to promote")
@@ -596,6 +952,94 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub("status", _cmd_status)
+
+    def _dir_arg(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument(
+            "--dir", default=".", help="library directory (default: current directory)"
+        )
+        return p
+
+    # --- trace queries (003 R26) -------------------------------------------------
+    trace = subparsers.add_parser(
+        "trace", help=SUBCOMMANDS["trace"], description=SUBCOMMANDS["trace"]
+    )
+    trace_sub = trace.add_subparsers(
+        dest="trace_command", metavar="<trace-command>"
+    )
+    trace_sub.required = True
+
+    tc = _dir_arg(
+        trace_sub.add_parser(
+            "chain",
+            help="attribution chain for a settled scenario"
+            " (SCEN -> FEAT -> requests -> tickets -> spans)",
+        )
+    )
+    tc.add_argument("scen", metavar="SCEN", help="scenario id (SCEN-...)")
+    tc.set_defaults(_handler=_cmd_trace_chain, command="trace")
+
+    tspans = _dir_arg(
+        trace_sub.add_parser(
+            "spans", help="list spans by ticket, episode, or increment"
+        )
+    )
+    tspans_target = tspans.add_mutually_exclusive_group(required=True)
+    tspans_target.add_argument("--ticket", help="ticket id (TKT-...)")
+    tspans_target.add_argument("--episode", type=int, help="episode id")
+    tspans.add_argument(
+        "--increment", type=int, help="increment index (with --episode)"
+    )
+    tspans.set_defaults(_handler=_cmd_trace_spans, command="trace")
+
+    titer = _dir_arg(
+        trace_sub.add_parser(
+            "iterations", help="per-iteration span diffs (files touched) for a ticket"
+        )
+    )
+    titer.add_argument("ticket", metavar="TKT", help="ticket id (TKT-...)")
+    titer.set_defaults(_handler=_cmd_trace_iterations, command="trace")
+
+    tev = _dir_arg(
+        trace_sub.add_parser(
+            "evidence", help="judge inputs/metadata for a settled scenario"
+        )
+    )
+    tev.add_argument("scen", metavar="SCEN", help="scenario id (SCEN-...)")
+    tev.set_defaults(_handler=_cmd_trace_evidence, command="trace")
+
+    ttr = _dir_arg(
+        trace_sub.add_parser(
+            "transcript", help="artifact/transcript refs for a span"
+        )
+    )
+    ttr.add_argument("span", metavar="SPAN", help="span id (SPAN-...)")
+    ttr.set_defaults(_handler=_cmd_trace_transcript, command="trace")
+
+    # --- episode inspection (003 R23/R26) ----------------------------------------
+    episode = subparsers.add_parser(
+        "episode", help=SUBCOMMANDS["episode"], description=SUBCOMMANDS["episode"]
+    )
+    episode_sub = episode.add_subparsers(
+        dest="episode_command", metavar="<episode-command>"
+    )
+    episode_sub.required = True
+
+    erep = _dir_arg(
+        episode_sub.add_parser(
+            "report", help="print an episode's stored settlement report"
+        )
+    )
+    erep.add_argument("episode", type=int, help="episode id")
+    erep.set_defaults(_handler=_cmd_episode_report, command="episode")
+
+    est = _dir_arg(
+        episode_sub.add_parser(
+            "status", help="episode status, increments, and settlement state"
+        )
+    )
+    est.add_argument("episode", type=int, help="episode id")
+    est.set_defaults(_handler=_cmd_episode_status, command="episode")
+
     return parser
 
 

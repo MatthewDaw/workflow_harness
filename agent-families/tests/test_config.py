@@ -197,7 +197,14 @@ def test_missing_file_directs_to_af_init(tmp_path):
 
 def test_help_lists_all_nine_subcommands():
     parser = build_parser()
-    assert len(SUBCOMMANDS) == 9
+    # Phase 0 shipped nine commands; 003 U9 adds the `trace` and `episode`
+    # command groups (the human reflector's tools) — 11 in total.
+    assert len(SUBCOMMANDS) == 11
+    phase0 = {
+        "init", "add-idea", "promote", "revert", "retire",
+        "revive", "render", "export", "status",
+    }
+    assert phase0 <= set(SUBCOMMANDS)
     buf = io.StringIO()
     with redirect_stdout(buf):
         parser.print_help()

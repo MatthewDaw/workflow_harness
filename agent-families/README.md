@@ -212,6 +212,96 @@ sonnet profiles: very roughly $0.5–2; record the observed `total_cost_usd` und
    way the post-iteration containment assert (R8, `workspace.assert_containment`)
    is the enforced guard; record findings under `## Probe findings`.
 
+## Phase 2: episodes, the grader, and human reflection (plan 003)
+
+Phase 2 runs **graded episodes** against a real legacy target (linkding) with a human
+as the reflector. An episode delivers a clone increment-by-increment (each increment is
+one Phase 1 run), an explorer simulates a customer (UI-only prompts, verified-oracle
+Q&A, UAT), and a grader settles the clone against the running target into a **settlement
+report** — the human's entry point for turning observations into hand-written ideas.
+
+`src/agent_families/grading/` holds the grader side: `target_env.py` (the pinned linkding
+compose lifecycle, seeding, reset-to-seed), `registry.py` + `frontier.py` (the
+runtime-confirmed FEAT registry and the exploration frontier), `scenarios.py` (the
+resolve→cache→replay→heal scenario harness), `settle.py` (the dual-app rubric + report),
+and `calibrate.py` (mutation-seeded verifier audits, frozen-replay persistence).
+`src/agent_families/pipeline/` gains `episode.py` (the delivery loop), `explorer.py`, and
+`oracle_check.py`.
+
+### The human-reflection workflow
+
+After an episode settles, the loop is **read the report → trace what failed → write ideas
+with provenance**:
+
+```powershell
+cd agent-families
+uv run af episode status 1            # status, increments, acceptance, settlement score
+uv run af episode report 1            # the settlement report (canonical JSON, byte-stable)
+```
+
+The report names an overall score and tier breakdown, an **unreached-frontier bucket**
+(FEATs no increment requested — budget-vs-capability made visible), a UAT-accepted-but-
+scenario-failed section, instrument health, and — for each row — a **ready-to-paste trace
+command**. Follow a failed scenario back along its attribution chain:
+
+```powershell
+uv run af trace chain SCEN-e1-FEAT-search-query   # SCEN -> FEAT -> requests -> tickets -> spans
+uv run af trace evidence SCEN-e1-FEAT-search-query # judge inputs/metadata for that scenario
+uv run af trace spans --ticket TKT-r1-001          # spans by ticket (or --episode / --increment)
+uv run af trace iterations TKT-r1-001              # per-iteration files-touched diff
+uv run af trace transcript SPAN-r1-001             # artifact/transcript refs for a span
+```
+
+`af trace chain` is the one join that matters: it walks `SCEN → FEAT → MSG mentions → REQ
+→ TKT → SPAN`, so a failing clone behavior leads straight to the requests that asked for
+it, the tickets that tried to build it, and the spans that did the work. It lives in the
+CLI once because Plan 4's automated reflector (Stage A) reuses exactly this join.
+
+Then record a hand-written idea **with provenance** (003 R27) — `--episode` is required
+for a Phase 2 idea; `--scenario` and `--ticket` are optional evidence refs. They are
+validated before any judge call, so an unknown ref fails fast:
+
+```powershell
+uv run af add-idea --episode 1 `
+  --scenario SCEN-e1-FEAT-search-query --ticket TKT-r1-001 --batch reflect-1 `
+  --precondition "A search returns results the user did not ask to filter" `
+  --action "Compare the result set to the query terms before declaring a match" `
+  --expected-outcome "Only bookmarks matching the query are listed"
+```
+
+The provenance columns (`episode_id`, `evidence_scenario_id`, `evidence_ticket_id`) are
+the ones the Phase 3 reflector will populate mechanically; in Phase 2 the human supplies
+them by hand.
+
+### Seed the frozen replay set before Phase 3 (a Phase 2 exit criterion)
+
+Plan 4's statistical control charts need a non-empty **frozen replay set** when they
+arrive — the first N (≥ 20, `thresholds`) hand-verified linkding verdict pairs, persisted
+*with their judge-input payloads* (`settle.py` stores the a11y-diff inputs on every SCEN
+row for exactly this reason). The hand-verification step is part of finishing target #1:
+before Phase 3 begins, **read the first N settled SCEN verdicts** (`af episode report` for
+each settled episode, then `af trace evidence <SCEN>` to inspect each verdict's judge
+input), confirm each by hand, and persist the confirmed pairs as the frozen set via the
+`calibrate.py` persistence utility. The set must be non-empty when Plan 4's control charts
+land — an empty frozen set blocks the SPC bootstrap.
+
+### Offline e2e and the live episode
+
+`tests/test_e2e_episode.py` drives a **full fake-driven episode** — scripted explorer,
+planner, worker, verifier, and a fixture resolver — through settlement and report, then
+runs **every CLI command the report embeds** (`af episode report`, `af trace chain`) to
+prove they execute, checks that a reflected idea carries full provenance, and that an
+unknown `--episode` is rejected. It runs offline with zero quota, no Docker, no `claude`.
+
+Driving a **live** episode (the real explorer + grader stack against a seeded linkding) is
+the documented procedure, not an offline test: it needs Docker Desktop (the pinned
+linkding stack — see `targets/linkding/` and `tests/test_target_env.py`'s docker-required
+suite), Playwright (the dual-app drivers — `tests/test_settle.py`'s live mini-settlement),
+and the claude CLI logged in on the subscription. The docker-required tests
+(`uv run pytest -m docker`) bring the stack up, settle a mini-rubric, and tear it down;
+the live full episode chains those pieces with the explorer sessions. Record the observed
+score, cost, and the clone's start command under `## Probe findings` in PROGRESS.md.
+
 ## Layout
 
 ```text
