@@ -2,7 +2,16 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda
 import { reconcileMemoriesRequestSchema, type Memory } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import type { Principal } from '../auth/verify.js';
-import { badRequest, defaultRepo, notFound, ok, parseBodySafe, INVALID_JSON, pathParam, unauthorized } from './runtime.js';
+import {
+  badRequest,
+  defaultRepo,
+  notFound,
+  ok,
+  parseBodySafe,
+  INVALID_JSON,
+  pathParam,
+  unauthorized,
+} from './runtime.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
 /**

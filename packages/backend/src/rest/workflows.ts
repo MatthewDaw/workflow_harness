@@ -287,7 +287,11 @@ export async function updateWorkflowRunNode(
   if (typeof projectId !== 'string' || !projectId) return badRequest('missing projectId');
 
   // Only forward the fields the body actually carries, validating `state`.
-  const partial: Partial<{ state: WorkflowRun['nodes'][string]['state']; runs: number; outputTail: string }> = {};
+  const partial: Partial<{
+    state: WorkflowRun['nodes'][string]['state'];
+    runs: number;
+    outputTail: string;
+  }> = {};
   if (b.state !== undefined) {
     const parsed = workflowRunNodeStateSchema.safeParse(b.state);
     if (!parsed.success) return badRequest('invalid state');

@@ -211,7 +211,7 @@ describe('DELETE /skills/:name', () => {
   });
 
   // U21 — skill delete/rename → idea orphan policy.
-  it('cascades the skill\'s ideas to the bin and removes its vector', async () => {
+  it("cascades the skill's ideas to the bin and removes its vector", async () => {
     await repo.putSkill(skill('reconcile'));
     // Two ideas attached to the skill family; one is corroborated by two
     // distinct sessions (corroboration must survive the cascade as signal).
@@ -646,12 +646,20 @@ describe('device-token catalog writes (claude+ wrapper, server-side admin)', () 
  * bundle-membership edits are rejected (manage via .claude/skills + re-seed).
  */
 describe('built-ins are fork-only via REST (git-seed owned)', () => {
-  const builtinSkill = (name: string, body = ''): Skill => ({ ...skill(name, body), source: 'built-in' });
+  const builtinSkill = (name: string, body = ''): Skill => ({
+    ...skill(name, body),
+    source: 'built-in',
+  });
 
   it('rejects an in-place PUT to a built-in base (409), leaving it untouched', async () => {
     await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
     const res = await createSkill(
-      adminEvent({ method: 'PUT', userId: MATT, path: { name: 'hq-add-skill' }, body: skill('hq-add-skill', 'edited') }),
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'hq-add-skill' },
+        body: skill('hq-add-skill', 'edited'),
+      }),
       deps,
     );
     expect(res).toMatchObject({ statusCode: 409 });
@@ -697,7 +705,12 @@ describe('built-ins are fork-only via REST (git-seed owned)', () => {
     await repo.putSkill(skill('extra'));
     await repo.putSkill({ ...bundle('command-hq-starter', ['a']), source: 'built-in' });
     const res = await addMember(
-      adminEvent({ method: 'POST', userId: MATT, path: { name: 'command-hq-starter' }, body: { member: 'extra' } }),
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'command-hq-starter' },
+        body: { member: 'extra' },
+      }),
       deps,
     );
     expect(res).toMatchObject({ statusCode: 409 });
@@ -706,7 +719,12 @@ describe('built-ins are fork-only via REST (git-seed owned)', () => {
   it('still allows editing a non-built-in skill in place', async () => {
     await repo.putSkill(skill('reconcile', 'v1'));
     const res = await createSkill(
-      adminEvent({ method: 'PUT', userId: MATT, path: { name: 'reconcile' }, body: skill('reconcile', 'v2') }),
+      adminEvent({
+        method: 'PUT',
+        userId: MATT,
+        path: { name: 'reconcile' },
+        body: skill('reconcile', 'v2'),
+      }),
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
@@ -1004,9 +1022,7 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
     // The race-winning corroboration is intact: still OPEN, third session kept.
     const after = await repo.getIdea(ORG, 'reconcile', 'i-1');
     expect(after?.status).toBe('open');
-    expect(new Set(after?.sources.map((s) => s.sessionId))).toEqual(
-      new Set(['s-1', 's-2', 's-3']),
-    );
+    expect(new Set(after?.sources.map((s) => s.sessionId))).toEqual(new Set(['s-1', 's-2', 's-3']));
   });
 
   // U19 — VARIANT-SCOPED FOLDING. The fold targets the variant implied by the

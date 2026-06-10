@@ -260,7 +260,12 @@ function IdeaGroup({
   folded?: boolean;
 }) {
   return (
-    <div data-testid={`idea-group-${title.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '')}`}>
+    <div
+      data-testid={`idea-group-${title
+        .toLowerCase()
+        .replace(/[^a-z]+/g, '-')
+        .replace(/^-|-$/g, '')}`}
+    >
       <div className="mb-1 text-[10px] uppercase tracking-wide text-faint">{title}</div>
       <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
         {ideas.map((idea) => (
@@ -269,7 +274,10 @@ function IdeaGroup({
             className="border-l-2 border-l-odd pl-2 text-xs text-mut"
             data-testid={`idea-${idea.ideaId}`}
           >
-            <div className="mb-0.5 flex items-center gap-1.5" data-testid={`idea-badge-${idea.ideaId}`}>
+            <div
+              className="mb-0.5 flex items-center gap-1.5"
+              data-testid={`idea-badge-${idea.ideaId}`}
+            >
               <Pill variant={badge}>
                 {folded
                   ? idea.foldedIntoRev

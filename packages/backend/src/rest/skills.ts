@@ -217,7 +217,9 @@ export function foldTargetVariant(
   let repoId = body.repoId;
   if (repoId === undefined) {
     const repoIds = new Set(
-      idea.sources.map((s) => s.repoId).filter((r): r is string => typeof r === 'string' && r !== ''),
+      idea.sources
+        .map((s) => s.repoId)
+        .filter((r): r is string => typeof r === 'string' && r !== ''),
     );
     if (repoIds.size === 1 && idea.sources.every((s) => typeof s.repoId === 'string' && s.repoId)) {
       repoId = [...repoIds][0];
@@ -411,8 +413,7 @@ export async function foldIdea(
   // body when the caller omits it (a fold that only records provenance), so the
   // new revision is never accidentally blanked.
   const newBody = typeof b.body === 'string' ? b.body : existing.body;
-  const description =
-    typeof b.description === 'string' ? b.description : existing.description;
+  const description = typeof b.description === 'string' ? b.description : existing.description;
 
   // Carry the existing skill forward, overlay the merged content + variant
   // identity, and SNAPSHOT a new revision. `putNewVersion` writes the immutable
@@ -477,7 +478,10 @@ export async function foldIdea(
     // Advisory guard — never fail the fold on a golden-case write error.
   }
 
-  return ok({ skill: stamped, idea: { ...foldedIdea, corroborationVersion: idea.corroborationVersion + 1 } });
+  return ok({
+    skill: stamped,
+    idea: { ...foldedIdea, corroborationVersion: idea.corroborationVersion + 1 },
+  });
 }
 
 export async function getSkill(

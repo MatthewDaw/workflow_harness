@@ -6,7 +6,14 @@ import { lastMatching, renderWithProviders } from '../test/testUtils.js';
 
 const VARIANTS = {
   gh: [
-    { variantId: 'gh#base', baseName: 'gh', name: 'gh', version: 1, isTrue: true, authorName: 'system' },
+    {
+      variantId: 'gh#base',
+      baseName: 'gh',
+      name: 'gh',
+      version: 1,
+      isTrue: true,
+      authorName: 'system',
+    },
     {
       variantId: 'gh#R#weekly#U#matt',
       baseName: 'gh',
@@ -68,11 +75,15 @@ describe('VariantSwitcher (catalog versioning)', () => {
     renderWithProviders(<VariantSwitcher name="solo" />, {
       seed: {
         skillVariants: {
-          solo: [{ variantId: 'solo#base', baseName: 'solo', name: 'solo', version: 1, isTrue: true }],
+          solo: [
+            { variantId: 'solo#base', baseName: 'solo', name: 'solo', version: 1, isTrue: true },
+          ],
         },
       },
     });
     // No variants to switch between and no promote affordance → nothing rendered.
-    await waitFor(() => expect(screen.queryByTestId('variant-switcher-solo')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId('variant-switcher-solo')).not.toBeInTheDocument(),
+    );
   });
 });

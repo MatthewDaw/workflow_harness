@@ -43,7 +43,16 @@ function agent(name: string, skills: string[] = []): Agent {
   return { name, scope: SCOPE, model: 'opus', prompt: '', skills, tools: [] };
 }
 function bundle(name: string, members: string[]): Agent {
-  return { name, scope: SCOPE, kind: 'bundle', model: '', prompt: '', skills: [], tools: [], members };
+  return {
+    name,
+    scope: SCOPE,
+    kind: 'bundle',
+    model: '',
+    prompt: '',
+    skills: [],
+    tools: [],
+    members,
+  };
 }
 
 function adminEvent(opts: Parameters<typeof httpEvent>[0]) {
@@ -219,7 +228,12 @@ describe('agent bundle membership (admin)', () => {
   it('400s adding a member to a non-bundle agent', async () => {
     await repo.putAgent(agent('builder'));
     const res = await addMember(
-      adminEvent({ method: 'POST', userId: MATT, path: { name: 'builder' }, body: { member: 'x' } }),
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        path: { name: 'builder' },
+        body: { member: 'x' },
+      }),
       deps,
     );
     expect(res).toMatchObject({ statusCode: 400 });
@@ -232,11 +246,19 @@ describe('dissolve agent bundle', () => {
     await repo.putAgent(agent('b'));
     await repo.putAgent(bundle('pack', ['a', 'b']));
     const res = await dissolveAgentBundle(
-      adminEvent({ method: 'POST', userId: MATT, rawPath: '/agents/pack/dissolve', path: { name: 'pack' } }),
+      adminEvent({
+        method: 'POST',
+        userId: MATT,
+        rawPath: '/agents/pack/dissolve',
+        path: { name: 'pack' },
+      }),
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ members: string[] }>(res as { body: string }).members.sort()).toEqual(['a', 'b']);
+    expect(bodyOf<{ members: string[] }>(res as { body: string }).members.sort()).toEqual([
+      'a',
+      'b',
+    ]);
     expect(await repo.getAgent(SCOPE, 'pack')).toBeUndefined();
     expect(await repo.getAgent(SCOPE, 'a')).toBeDefined();
   });
