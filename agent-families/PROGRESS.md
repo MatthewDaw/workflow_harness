@@ -21,7 +21,7 @@ holds, and the full offline suite is green.
 - [x] 001/U9 — CLI assembly, init, and end-to-end acceptance
 
 ### Plan 002 — Phase 1: Pipeline Skeleton (docs/plans/2026-06-10-002-feat-agent-families-phase1-pipeline-skeleton-plan.md)
-- [ ] 002/U1 — Phase 1 schema migration
+- [x] 002/U1 — Phase 1 schema migration
 - [ ] 002/U2 — Output-stack template repo and workspace lifecycle
 - [ ] 002/U3 — run_session seam and scripted-agent fake
 - [ ] 002/U4 — Orchestrator core: run/ticket state machine, checkpoint/resume
