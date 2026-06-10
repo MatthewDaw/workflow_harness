@@ -1,0 +1,9 @@
+{
+  "description": "Drops the server-side title validation on POST /api/items: a missing, empty, or non-string title is silently coerced and inserted instead of being rejected with 400. A verifier that only exercises the happy path passes this build (R21's server_side_validation baseline property is exactly what this mutant violates).",
+  "witness": {
+    "command": "npm test -- server/index.test.ts",
+    "cwd": ".",
+    "timeout": 600,
+    "expected_exit": 1
+  }
+}

@@ -1,0 +1,20 @@
+diff --git a/server/index.ts b/server/index.ts
+index 01ef9a6..eec6a14 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -12,10 +12,11 @@ export function createApp(db: Db) {
+
+   app.post('/api/items', async (c) => {
+     const body = await c.req.json<{ title?: unknown }>()
+-    if (typeof body.title !== 'string' || body.title.length === 0) {
+-      return c.json({ error: 'title must be a non-empty string' }, 400)
+-    }
+-    const row = db.insert(items).values({ title: body.title }).returning().get()
++    const row = db
++      .insert(items)
++      .values({ title: String(body.title ?? '') })
++      .returning()
++      .get()
+     return c.json(row, 201)
+   })
+

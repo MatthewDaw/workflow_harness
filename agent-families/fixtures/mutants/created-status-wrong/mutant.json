@@ -1,0 +1,9 @@
+{
+  "description": "POST /api/items answers 200 instead of 201 Created. The committed round-trip contract test fails on the mutated build; a verifier that passes this build is not actually checking response status codes against the acceptance criteria.",
+  "witness": {
+    "command": "npm test -- server/index.test.ts",
+    "cwd": ".",
+    "timeout": 600,
+    "expected_exit": 1
+  }
+}
