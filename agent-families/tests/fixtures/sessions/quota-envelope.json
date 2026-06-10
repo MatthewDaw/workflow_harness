@@ -1,0 +1,15 @@
+{
+  "provenance": "PROBE PENDING (plan-002 KTD Q8 / R4): synthesized from the documented claude -p error-envelope shape (June 2026 library verification) as the plan's fallback. Replace this envelope with the one captured by the live quota probe documented in pipeline/sessions.py once a real exhaustion is observed — the June 15, 2026 billing change may alter the subtype/result wording — and record the finding under '## Probe findings' in PROGRESS.md.",
+  "envelope": {
+    "type": "result",
+    "subtype": "error_during_execution",
+    "is_error": true,
+    "duration_ms": 812,
+    "num_turns": 1,
+    "result": "You've reached your usage limit. Your limit will reset at 3pm (America/Denver).",
+    "usage": {
+      "input_tokens": 12,
+      "output_tokens": 0
+    }
+  }
+}
