@@ -1,0 +1,33 @@
+# linkding target stack (plan-003 U2, R5).
+#
+# Image pinned BY DIGEST (R9: the FEAT registry and every cached apparatus
+# artifact are keyed to this digest; a tag alone can drift silently). The
+# digest is the multi-arch manifest-list digest for sissbruecker/linkding
+# v1.45.0, resolved from Docker Hub on 2026-06-10. target_env.py carries the
+# same pin and refuses setup if this file and the code ever disagree.
+#
+# - named volume, NEVER a Windows bind mount (SQLite WAL corruption risk, R5)
+# - LD_SUPERUSER_* mints the superuser headlessly on first boot (R5)
+# - LD_DISABLE_BACKGROUND_TASKS=True for determinism — no favicon/snapshot
+#   workers mutating state behind the grader's back (R5)
+# - host port comes from the static port-allocation table in target_env.py
+#   (R7): linkding=9090, clone dev server=4173 — disjoint by construction
+# - readiness is target_env.py polling GET /health for status "healthy" (R5),
+#   not a compose healthcheck
+name: agent-families-linkding
+
+services:
+  linkding:
+    image: sissbruecker/linkding:1.45.0@sha256:61b2eb9eed8e5772a473fb7f1f8923e046cb8cbbeb50e88150afd5ff287d4060
+    ports:
+      - "9090:9090"
+    volumes:
+      - linkding_data:/etc/linkding/data
+    environment:
+      LD_SUPERUSER_NAME: admin
+      LD_SUPERUSER_PASSWORD: agent-families-admin
+      LD_DISABLE_BACKGROUND_TASKS: "True"
+    restart: unless-stopped
+
+volumes:
+  linkding_data:
