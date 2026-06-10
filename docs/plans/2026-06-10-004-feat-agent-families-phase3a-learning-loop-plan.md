@@ -169,6 +169,10 @@ flowchart TB
 - **Files:** `agent-families/src/agent_families/reflector/stage_a.py`, `agent-families/tests/test_stage_a.py`
 - **Approach:** Procedure steps 1–8 as queries over the chain join; step 7 re-executes CHK repro envelopes (workspace retained per Phase 1 R18) and runs the coverage-instrumented scenario for breaking-ticket location — this unit delivers the coverage substrate (template instrumented mode: vite-plugin-istanbul/V8 + c8, merge to per-scenario file lists) and owns its environment bring-up (clone server restart, target reset) per the KTD; probe-taxonomy table seeded from the Phase 2 registry clusters; explorer/grader sinks to instrument-health; case-file assembly.
 - **Test scenarios:** one fixture per branch outcome (communicated-no → elicitable vs not; extracted-no; covered-no; specified-no; implemented-no; verified-no; discriminate both arms — repro-still-passes → AC-quality, repro-now-fails → breaking ticket located by planted coverage trace; answer-contradiction lookup); contributing[] populated on multi-cause fixture; instrument-health record written instead of an explorer idea.
+- **Required acceptance tests** (named MUST-tests, do not weaken; add a `## Conformance` mapping):
+  - `test_stage_a_is_deterministic_without_llm` — with the judge seam mocked to **raise on call**, attribution steps 1–6 (communicated/extracted/covered/specified/implemented/verified) still return the correct `{primary, contributing}` on every branch fixture. The LLM may be invoked ONLY for the two micro-judgments (elicitability, answer-contradiction) — never as the attributor.
+  - `test_stage_a_repro_reexecution` — step 7 actually re-executes the stored CHK repro envelope (repro-still-passes → AC-quality; repro-now-fails → breaking ticket located by the coverage trace), not an LLM guess.
+  - `test_stage_a_attribution_stable` — the same trajectory fixture yields byte-identical attribution across repeated runs.
 - **Verification:** every §12.2 step has a 1:1 fixture test; the worked example from DESIGN §12.4 reproduces.
 
 ### U6. Reflector Stage B and batch formation
@@ -189,6 +193,10 @@ flowchart TB
 - **Files:** `agent-families/src/agent_families/reflector/validate.py`, `agent-families/tests/test_validate.py`
 - **Approach:** Trial replay per R15(a) (worktree from the minted increment-base ref, batch-active retrieval, environment bring-up per the KTD — trial build served, target reset — SCEN re-execution as pass criterion, cost ceiling, skippable); benchmark gate per R15(b); decision rule (benchmark wins; `replay_miss` telemetry); bootstrap rule + human co-sign prompt; post-bootstrap SPC (individuals chart, σ from frozen replay); promote/revert through queue; frozen-replay re-judging harness (cadence, tolerance, `instrument_suspect` propagation).
 - **Test scenarios:** replay-pass + benchmark-regress reverts; replay-fail + benchmark-pass promotes with flag; bootstrap threshold math (2σ vs 5pp max); co-sign required during bootstrap and not after; SPC limits computed from ≥10 points flag only special-cause; reverted batch leaves no active insights and its validation record explains why; `instrument_suspect` propagates to scores since last clean replay.
+- **Required acceptance tests** (named MUST-tests, do not weaken; add a `## Conformance` mapping):
+  - `test_unvalidated_batch_stays_quarantined` — a registered batch that has not passed the benchmark gate remains `quarantined` and is absent from the active set.
+  - `test_benchmark_regression_auto_reverts` — a batch whose benchmark score regresses past the gate auto-reverts (default-deny); keeping it out requires no human action.
+  - `test_promotion_requires_benchmark_pass` — promotion to active happens ONLY on benchmark non-regression (plus bootstrap co-sign while in bootstrap); benchmark wins all conflicts (replay-pass + benchmark-regress → revert).
 - **Verification:** the full decision table (replay × benchmark × bootstrap) has a 1:1 test.
 
 ### U8. Ratchet and skill split
@@ -199,6 +207,10 @@ flowchart TB
 - **Files:** `agent-families/src/agent_families/reflector/maintenance.py`, `agent-families/tests/test_maintenance.py`
 - **Approach:** Settlement fitness writes per R19; maintenance pass (post-promotion, queue-serialized, skipped mid-validation): retirement of persistent losers, cap tournament on admissions, skill-split trigger → k-means k=2 + silhouette accept → LLM thematic fallback → names/descriptions regenerated → caches invalidated; quarantined members to nearest child centroid; agent-split left as a gated stub on `min_routing_decisions`.
 - **Test scenarios:** rendered-but-failed insight gets no loss without causal blame; win requires done + unimplicated; tournament displaces weakest, ties favor incumbents, displaced go dormant; retirement respects the event-log reconstruction; split on a 30-insight fixture skill produces two children with provenance-correct membership incl. quarantined follow-the-centroid; split deferred while a batch is mid-validation; benchmark/trial fitness channels never feed the ratchet.
+- **Required acceptance tests** (named MUST-tests, do not weaken; add a `## Conformance` mapping):
+  - `test_loss_requires_causal_blame` — an insight rendered into a FAILED run's context but absent from the reflector's `implicated_existing_insights` receives **zero** loss (no co-occurrence punishment of bystanders).
+  - `test_win_requires_done_and_unimplicated` — a win is recorded only when the session's ticket reaches `done` AND is unimplicated in any failed SCEN at settlement.
+  - `test_trial_benchmark_fitness_excluded` — fitness events from `trial`/`benchmark` modes never feed the ratchet (separate channel).
 - **Verification:** property test — any maintenance sequence preserves: insights never deleted, vec rows untouched, every membership change snapshot-keyed.
 
 ### U9. Learning-cycle e2e
