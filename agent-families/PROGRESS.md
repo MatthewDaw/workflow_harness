@@ -1,5 +1,5 @@
 # Status: active
-# Current plan: 001   Current unit: U3
+# Current plan: 001   Current unit: U4
 
 This manifest is PRE-GENERATED from the five plans and is AUTHORITATIVE.
 Loop agents: flip checkboxes and statuses only. NEVER add, remove, merge,
@@ -12,7 +12,7 @@ holds, and the full offline suite is green.
 ### Plan 001 — Phase 0: Library Core (docs/plans/2026-06-10-001-feat-agent-families-phase0-library-core-plan.md)
 - [x] 001/U1 — Scaffold, config, and repo isolation
 - [x] 001/U2 — SQLite schema, store layer, snapshots, promotion queue
-- [ ] 001/U3 — Embedding service and vector index
+- [x] 001/U3 — Embedding service and vector index
 - [ ] 001/U4 — Judge runner with record/replay seam
 - [ ] 001/U5 — add_idea pipeline
 - [ ] 001/U6 — Lifecycle operations
@@ -91,3 +91,5 @@ holds, and the full offline suite is green.
   active and uv warns/ignores it) before `uv run`.
 
 ## Blockers
+
+- DRIVER: iteration 1 reverted (red suite)

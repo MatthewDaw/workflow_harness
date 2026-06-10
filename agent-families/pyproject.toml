@@ -3,7 +3,10 @@ name = "agent-families"
 version = "0.0.0"
 description = "Agent-families: a self-improving skill library for agent training (Phase 0 — library core)."
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "sentence-transformers[onnx]>=5.0",
+    "sqlite-vec==0.1.9",
+]
 
 [project.scripts]
 af = "agent_families.cli:main"
