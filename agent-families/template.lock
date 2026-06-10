@@ -1,0 +1,7 @@
+# Pinned content hash of agent-families/template/ (plan-002 R18).
+# sha256 over the template's source files (sorted posix relpaths,
+# newline-normalized; node_modules/build outputs excluded). Regenerate
+# ONLY after intentional template maintenance, via
+# agent_families.pipeline.workspace.write_template_lock(), then re-verify
+# template boot: npm ci && npm run typecheck && npm run lint && npm test.
+sha256:e4b2e19e71ae4a0875ef4823a616ba7ef2523f9e92204e58b55102d7d8b8d0bc

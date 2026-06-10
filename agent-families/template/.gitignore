@@ -1,0 +1,22 @@
+# Dependencies are never committed: workspace instantiation copies the
+# once-installed template (node_modules included), and the orchestrator's
+# `git clean -fd` (no -x) relies on this file to spare them (plan-002 R3/R18).
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+.vite/
+
+# Runtime data (SQLite database files live outside version control)
+data/
+
+# Test artifacts
+test-results/
+playwright-report/
+coverage/
+
+# Env and logs
+.env
+.env.*
+*.log
