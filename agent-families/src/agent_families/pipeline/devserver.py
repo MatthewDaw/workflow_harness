@@ -24,6 +24,14 @@ concerns parallel-episode isolation); Phase 1 is a single configurable port
 with bounded linear retry. All behavior tunables (port, attempts, readiness
 timeout) are caller-supplied per the U3 precedent — nothing here hardcodes one.
 
+Hold-open semantics (plan-003 U7, R7): dual-app settlement needs the clone dev
+server to survive across explorer UAT and the settlement rubric, while nested
+users (UAT session contexts, ``with`` blocks) keep calling ``stop()`` on their
+way out. ``hold_open()`` marks the server held: every ``stop()`` while held is
+DEFERRED (recorded, not executed) so only the orchestrator — the lifecycle
+owner — actually tears it down via ``release()``, which executes a deferred
+stop if one arrived during the hold. Ownership stays exactly where R7 puts it.
+
 :class:`DevServerError` subclasses ``WorkspaceError`` deliberately: a server
 that cannot start is infrastructure failing under the run, and that routes to
 the orchestrator's checkpoint-and-``aborted_error`` arm (U4) instead of
@@ -116,6 +124,13 @@ class DevServer:
         self._proc: subprocess.Popen | None = None
         self._log_handle = None
         self.port: int | None = None
+        self._held = False
+        self._deferred_stop = False
+
+    @property
+    def held(self) -> bool:
+        """True while the orchestrator holds this server open (003 R7)."""
+        return self._held
 
     @property
     def url(self) -> str:
@@ -192,8 +207,44 @@ class DevServer:
             + "\n  ".join(attempts)
         )
 
+    def hold_open(self) -> None:
+        """Mark this server held across UAT and settlement (003 R7).
+
+        While held, ``stop()`` calls are deferred instead of executed — the
+        orchestrator alone ends the hold with :meth:`release`. Idempotent;
+        requires a running server (holding nothing open is a caller bug).
+        """
+        if self._proc is None:
+            raise DevServerError(
+                "cannot hold open a dev server that is not running (003 R7):"
+                " start() it first"
+            )
+        self._held = True
+
+    def release(self) -> None:
+        """End the hold (003 R7); a stop() deferred during the hold runs now.
+
+        Idempotent — safe in ``finally`` blocks whether or not a hold exists.
+        """
+        self._held = False
+        if self._deferred_stop:
+            self._deferred_stop = False
+            self.stop()
+
     def stop(self) -> None:
-        """Teardown (R15): kill the child and reap it. Safe to call twice."""
+        """Teardown (R15): kill the child and reap it. Safe to call twice.
+
+        While held open (003 R7) the stop is deferred: recorded and executed
+        by :meth:`release`, never here — the orchestrator owns the lifecycle
+        across UAT and settlement.
+        """
+        if self._held:
+            self._deferred_stop = True
+            logger.info(
+                "dev server stop() deferred: held open across UAT/settlement"
+                " (003 R7); release() will execute it"
+            )
+            return
         proc, self._proc = self._proc, None
         self.port = None
         if proc is not None and proc.poll() is None:
