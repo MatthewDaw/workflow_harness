@@ -23,7 +23,7 @@ holds, and the full offline suite is green.
 ### Plan 002 — Phase 1: Pipeline Skeleton (docs/plans/2026-06-10-002-feat-agent-families-phase1-pipeline-skeleton-plan.md)
 - [x] 002/U1 — Phase 1 schema migration
 - [x] 002/U2 — Output-stack template repo and workspace lifecycle
-- [ ] 002/U3 — run_session seam and scripted-agent fake
+- [x] 002/U3 — run_session seam and scripted-agent fake
 - [ ] 002/U4 — Orchestrator core: run/ticket state machine, checkpoint/resume
 - [ ] 002/U5 — Planning stage
 - [ ] 002/U6 — Ticket loop: worker, harness gate, verifier
