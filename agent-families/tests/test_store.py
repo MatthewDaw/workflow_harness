@@ -2,6 +2,23 @@
 
 Plan 002 U1: Phase 1 schema migration — runs, ticket lifecycle + audit, span
 lifecycle/cost columns, failure records, tripwire events, ledger entries.
+
+Plan 003 U1: Phase 2 schema migration — episodes/increments, FEAT identity
+discipline, frontier, scenario manifests, Q&A log, review queue, settlement
+reports, SCEN keys, idea provenance.
+
+## Conformance (plan 003 U1 test scenarios → tests)
+
+- migration idempotent over a Phase 1 database →
+  ``test_phase2_migration_applies_on_phase1_db_without_data_loss``
+- FEAT append-only constraint (update of ID rejected, status flip allowed) →
+  ``test_feat_append_only_id_immutable_status_flippable``
+- mentions FK rejects unconfirmed FEAT →
+  ``test_mentions_fk_rejects_unconfirmed_feat``
+- run acceptance enum → ``test_run_acceptance_enum``
+- episode suspension round-trip → ``test_episode_suspension_roundtrip``
+- SCEN row requires episode + snapshot keys →
+  ``test_scen_row_requires_episode_and_snapshot_keys``
 """
 
 from __future__ import annotations
@@ -14,9 +31,17 @@ import pytest
 
 import agent_families.store as store_mod
 from agent_families.store import (
+    EPISODE_STATUSES,
+    EPISODE_TERMINAL_STATUSES,
     FAILURE_KINDS,
+    FEAT_STATUSES,
+    FRONTIER_STATUSES,
+    QA_OUTCOMES,
+    RUN_ACCEPTANCE,
     RUN_STATUSES,
     RUN_TERMINAL_STATUSES,
+    SCEN_JUDGE_MODES,
+    SCENARIO_TIERS,
     SPAN_FINAL_STATUSES,
     STATUSES,
     TICKET_STATUSES,
@@ -54,6 +79,13 @@ EXPECTED_TABLES = {
     "failure_records",
     "tripwire_events",
     "ledger_entries",
+    # Phase 2 (plan 003 U1)
+    "episodes",
+    "frontier",
+    "scenario_manifests",
+    "qa_log",
+    "review_queue",
+    "settlement_reports",
 }
 
 
@@ -100,7 +132,7 @@ def test_schema_creates_idempotently(tmp_path):
         versions = s.conn.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
-        assert [r["version"] for r in versions] == [1, 2]
+        assert [r["version"] for r in versions] == [1, 2, 3]
     # a fresh connection over the same file is also a no-op
     with Store(db) as s2:
         s2.migrate()
@@ -394,8 +426,12 @@ def test_meta_roundtrip(store):
 
 def test_traceability_tables_accept_valid_chain(store):
     c = store.conn
+    episode = store.create_episode("linkding", "sha256:abc", 0)
     with store.transaction():
-        c.execute("INSERT INTO trace_feat VALUES ('FEAT-1', 'runtime-evidence-ref')")
+        c.execute(
+            "INSERT INTO trace_feat (id, evidence_ref)"
+            " VALUES ('FEAT-1', 'runtime-evidence-ref')"
+        )
         c.execute("INSERT INTO trace_msg VALUES ('MSG-1', 'asked about admin areas')")
         c.execute("INSERT INTO trace_msg_mentions VALUES ('MSG-1', 'FEAT-1')")
         c.execute("INSERT INTO trace_req VALUES ('REQ-1', 'MSG-1')")
@@ -412,7 +448,11 @@ def test_traceability_tables_accept_valid_chain(store):
             "INSERT INTO trace_chk VALUES ('CHK-1', 'AC-1', 'pass',"
             " 'pytest tests/test_login.py', 'all green')"
         )
-        c.execute("INSERT INTO trace_scen VALUES ('SCEN-1', 'FEAT-1', 'pass', '')")
+        c.execute(
+            "INSERT INTO trace_scen (id, feat_id, result, evidence,"
+            " episode_id, snapshot_id) VALUES ('SCEN-1', 'FEAT-1', 'pass', '', ?, 0)",
+            (episode,),
+        )
     for table in ("trace_feat", "trace_msg", "trace_msg_mentions", "trace_req",
                   "trace_tkt", "trace_tkt_covers", "trace_ac", "trace_span",
                   "trace_chk", "trace_scen"):
@@ -421,7 +461,9 @@ def test_traceability_tables_accept_valid_chain(store):
 
 def test_traceability_id_prefixes_constrained(store):
     with pytest.raises(sqlite3.IntegrityError):
-        store.conn.execute("INSERT INTO trace_feat VALUES ('XFEAT-1', 'ref')")
+        store.conn.execute(
+            "INSERT INTO trace_feat (id, evidence_ref) VALUES ('XFEAT-1', 'ref')"
+        )
     with pytest.raises(sqlite3.IntegrityError):
         store.conn.execute(
             "INSERT INTO trace_tkt (id, increment_id) VALUES ('TICKET-1', NULL)"
@@ -467,8 +509,13 @@ def test_phase1_migration_applies_on_phase0_db_without_data_loss(tmp_path, monke
             for r in s.conn.execute("SELECT version FROM schema_migrations").fetchall()
         ]
         assert versions == [1]
-        # seed Phase 0 data, including a trace_span row in the old (3-column) shape
-        insight = _add_insight(s, "survivor")
+        # seed Phase 0 data in the v1 shape (insert_insight targets the current
+        # schema, so the pre-migration row is written with the v1 column list)
+        insight = s.conn.execute(
+            "INSERT INTO insights (precondition, action, expected_outcome,"
+            " content_hash, created_at) VALUES ('p', 'a', 'o', 'hash-survivor-v1',"
+            " '2026-06-10T00:00:00+00:00')"
+        ).lastrowid
         with s.queue_operation("promote") as snap:
             s.set_status(insight, "active", snap)
         s.conn.execute("INSERT INTO trace_tkt VALUES ('TKT-old', NULL)")
@@ -477,14 +524,14 @@ def test_phase1_migration_applies_on_phase0_db_without_data_loss(tmp_path, monke
         )
     monkeypatch.undo()
     with Store(db) as s:
-        s.migrate()  # applies v2 on top
+        s.migrate()  # applies v2 (and v3) on top
         versions = [
             r["version"]
             for r in s.conn.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
         ]
-        assert versions == [1, 2]
+        assert versions == [1, 2, 3]
         assert EXPECTED_TABLES <= _table_names(s)
         # Phase 0 rows survive untouched
         assert s.get_insight(insight)["status"] == "active"
@@ -785,3 +832,328 @@ def test_msg_rows_accept_empty_mentions(store):
         " WHERE m.id = 'MSG-bare' GROUP BY m.id"
     ).fetchone()
     assert row["mentions"] == 0  # persisted and queryable with zero mentions
+
+
+# --- Phase 2 schema migration (plan 003 U1: R1, R3, R9, R10, R22, R23, R27) -------
+
+
+def _add_feat(s: Store, feat_id: str = "FEAT-1", digest: str = "sha256:abc") -> str:
+    s.conn.execute(
+        "INSERT INTO trace_feat (id, evidence_ref, target, digest)"
+        " VALUES (?, 'a11y-snapshot-ref', 'linkding', ?)",
+        (feat_id, digest),
+    )
+    return feat_id
+
+
+def test_phase2_migration_applies_on_phase1_db_without_data_loss(tmp_path, monkeypatch):
+    """Migration v3 upgrades a v1+v2 database in place, idempotently."""
+    db = tmp_path / "library.db"
+    with Store(db) as s:
+        monkeypatch.setattr(store_mod, "MIGRATIONS", store_mod.MIGRATIONS[:2])
+        s.migrate()  # Phase 0 + 1 schema only
+        # seed Phase 1 data, including FEAT/SCEN rows in the pre-Phase-2 shapes
+        # (raw insert: insert_insight targets the current, post-v3 column list)
+        insight = s.conn.execute(
+            "INSERT INTO insights (precondition, action, expected_outcome,"
+            " content_hash, created_at) VALUES ('p', 'a', 'o', 'hash-survivor-v2',"
+            " '2026-06-10T00:00:00+00:00')"
+        ).lastrowid
+        run_id = s.conn.execute(
+            "INSERT INTO runs (spec_ref, snapshot_id, status, created_at)"
+            " VALUES ('specs/01-trivial.md', 0, 'created',"
+            " '2026-06-10T00:00:00+00:00')"
+        ).lastrowid
+        s.insert_span("SPAN-old", run_id=run_id)
+        s.finalize_span("SPAN-old", "completed")
+        s.conn.execute(
+            "INSERT INTO trace_feat VALUES ('FEAT-old', 'old-evidence')"
+        )
+        s.conn.execute(
+            "INSERT INTO trace_scen VALUES ('SCEN-old', 'FEAT-old', 'pass', '')"
+        )
+    monkeypatch.undo()
+    with Store(db) as s:
+        s.migrate()  # applies v3 on top
+        s.migrate()  # second run applies nothing
+        versions = [
+            r["version"]
+            for r in s.conn.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+        assert versions == [1, 2, 3]
+        assert EXPECTED_TABLES <= _table_names(s)
+        # Phase 0/1 rows survive untouched; new columns backfill their defaults
+        assert s.get_insight(insight)["episode_id"] is None
+        run = s.get_run(run_id)
+        assert run["episode_id"] is None
+        assert run["increment_index"] is None
+        assert run["acceptance"] is None
+        feat = s.conn.execute(
+            "SELECT * FROM trace_feat WHERE id = 'FEAT-old'"
+        ).fetchone()
+        assert feat["status"] == "confirmed"  # pre-Phase-2 rows backfill confirmed
+        assert feat["digest"] is None  # no image pin existed when it was minted
+        scen = s.conn.execute(
+            "SELECT * FROM trace_scen WHERE id = 'SCEN-old'"
+        ).fetchone()
+        assert scen["result"] == "pass"
+        assert scen["episode_id"] is None  # legacy row survives the key trigger
+        assert s.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_feat_append_only_id_immutable_status_flippable(store):
+    feat = _add_feat(store)
+    row = store.conn.execute(
+        "SELECT * FROM trace_feat WHERE id = ?", (feat,)
+    ).fetchone()
+    assert row["status"] == "confirmed"
+    assert row["digest"] == "sha256:abc"
+    assert row["target"] == "linkding"
+    # IDs are append-only: renumbering is rejected by trigger (003 R9)
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute(
+            "UPDATE trace_feat SET id = 'FEAT-2' WHERE id = ?", (feat,)
+        )
+    # rows are never deleted: removed features deprecate instead
+    with pytest.raises(sqlite3.IntegrityError, match="never deleted"):
+        store.conn.execute("DELETE FROM trace_feat WHERE id = ?", (feat,))
+    store.conn.execute(
+        "UPDATE trace_feat SET status = 'deprecated' WHERE id = ?", (feat,)
+    )
+    assert store.conn.execute(
+        "SELECT status FROM trace_feat WHERE id = ?", (feat,)
+    ).fetchone()["status"] == "deprecated"
+    with pytest.raises(sqlite3.IntegrityError):  # status enum backstops raw writes
+        store.conn.execute(
+            "UPDATE trace_feat SET status = 'removed' WHERE id = ?", (feat,)
+        )
+    assert set(FEAT_STATUSES) == {"confirmed", "deprecated"}
+
+
+def test_mentions_fk_rejects_unconfirmed_feat(store):
+    """003 R10: a feature is mentionable only after confirmation mints its row."""
+    store.conn.execute("INSERT INTO trace_msg VALUES ('MSG-q', 'does tagging work?')")
+    # unconfirmed features have no FEAT row at all, so the FK rejects the mention
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO trace_msg_mentions VALUES ('MSG-q', 'FEAT-unconfirmed')"
+        )
+    # the grader-side confirmation step mints the row; only then is it mentionable
+    _add_feat(store, "FEAT-unconfirmed")
+    store.conn.execute(
+        "INSERT INTO trace_msg_mentions VALUES ('MSG-q', 'FEAT-unconfirmed')"
+    )
+    assert _count(store, "trace_msg_mentions") == 1
+
+
+def test_run_acceptance_enum(store):
+    episode = store.create_episode("linkding", "sha256:abc", 0)
+    run_id = store.create_run(
+        "episode-increment", 0, episode_id=episode, increment_index=1
+    )
+    run = store.get_run(run_id)
+    assert run["episode_id"] == episode
+    assert run["increment_index"] == 1
+    assert run["acceptance"] is None  # NULL until the UAT stage runs (003 R2)
+    for verdict in RUN_ACCEPTANCE:
+        store.set_run_acceptance(run_id, verdict)
+        assert store.get_run(run_id)["acceptance"] == verdict
+    assert set(RUN_ACCEPTANCE) == {"accepted", "rejected"}
+    with pytest.raises(StoreError, match="unknown acceptance"):
+        store.set_run_acceptance(run_id, "maybe")
+    with pytest.raises(StoreError, match="does not exist"):
+        store.set_run_acceptance(99999, "accepted")
+    with pytest.raises(sqlite3.IntegrityError):  # CHECK backstops raw writes too
+        store.conn.execute(
+            "UPDATE runs SET acceptance = 'shipped' WHERE id = ?", (run_id,)
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # episode FK must resolve
+        store.create_run("spec.md", 0, episode_id=99999)
+
+
+def test_episode_suspension_roundtrip(store):
+    episode = store.create_episode(
+        "linkding", "sha256:abc", 0, max_increments=5, cost_ceiling_usd=20.0
+    )
+    row = store.get_episode(episode)
+    assert row["status"] == "created"
+    assert row["target"] == "linkding"
+    assert row["digest"] == "sha256:abc"
+    assert row["snapshot_id"] == 0
+    assert row["max_increments"] == 5  # budget fields stamped at creation (003 R4)
+    assert row["cost_ceiling_usd"] == 20.0
+    assert row["settled_at"] is None
+    # suspension is resumable, never terminal (003 R3): quota suspends, the
+    # episode resumes mid-stream, and only then reaches a real terminal
+    for status in ("running", "suspended", "running", "budget_spent"):
+        store.set_episode_status(episode, status)
+        assert store.get_episode(episode)["status"] == status
+    assert set(EPISODE_TERMINAL_STATUSES) == {
+        "frontier_exhausted", "budget_spent", "aborted_error"
+    }
+    assert "suspended" in EPISODE_STATUSES
+    assert "suspended" not in EPISODE_TERMINAL_STATUSES
+    with pytest.raises(StoreError, match="unknown episode status"):
+        store.set_episode_status(episode, "finished")
+    with pytest.raises(StoreError, match="does not exist"):
+        store.set_episode_status(99999, "running")
+    with pytest.raises(sqlite3.IntegrityError):  # CHECK backstops raw writes too
+        store.conn.execute(
+            "INSERT INTO episodes (target, digest, snapshot_id, status, created_at)"
+            " VALUES ('t', 'd', 0, 'bogus', 'now')"
+        )
+
+
+def test_scen_row_requires_episode_and_snapshot_keys(store):
+    feat = _add_feat(store)
+    episode = store.create_episode("linkding", "sha256:abc", 0)
+    # missing either key is rejected at insert (003 R22)
+    with pytest.raises(sqlite3.IntegrityError, match="episode_id and snapshot_id"):
+        store.conn.execute(
+            "INSERT INTO trace_scen (id, feat_id, result, evidence)"
+            " VALUES ('SCEN-nokeys', ?, 'pass', '')",
+            (feat,),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="episode_id and snapshot_id"):
+        store.conn.execute(
+            "INSERT INTO trace_scen (id, feat_id, result, evidence, episode_id)"
+            " VALUES ('SCEN-nosnap', ?, 'pass', '', ?)",
+            (feat, episode),
+        )
+    store.conn.execute(
+        "INSERT INTO trace_scen (id, feat_id, result, evidence, episode_id,"
+        " snapshot_id, tier, judge_mode, judge_metadata_json, judge_input_json)"
+        " VALUES ('SCEN-keyed', ?, 'pass', 'evidence-ref', ?, 0, 'must', 'panel',"
+        " '{\"votes\": 3}', '{\"a11y_diff\": \"...\"}')",
+        (feat, episode),
+    )
+    row = store.conn.execute(
+        "SELECT * FROM trace_scen WHERE id = 'SCEN-keyed'"
+    ).fetchone()
+    assert row["episode_id"] == episode
+    assert row["snapshot_id"] == 0
+    assert row["tier"] == "must"
+    assert row["judge_mode"] == "panel"
+    # the judge-input payload persists — replay re-judging needs the original
+    # inputs, not just screenshots (003 R22)
+    assert "a11y_diff" in row["judge_input_json"]
+    assert set(SCENARIO_TIERS) == {"must", "should", "free"}
+    assert set(SCEN_JUDGE_MODES) == {"deterministic", "single", "panel"}
+    with pytest.raises(sqlite3.IntegrityError):  # tier enum backstops raw writes
+        store.conn.execute(
+            "INSERT INTO trace_scen (id, feat_id, episode_id, snapshot_id, tier)"
+            " VALUES ('SCEN-badtier', ?, ?, 0, 'optional')",
+            (feat, episode),
+        )
+
+
+def test_insight_provenance_columns_roundtrip(store):
+    """003 R27: add_idea provenance — required episode, optional evidence refs."""
+    feat = _add_feat(store)
+    episode = store.create_episode("linkding", "sha256:abc", 0)
+    _add_ticket(store, "TKT-ev")
+    store.conn.execute(
+        "INSERT INTO trace_scen (id, feat_id, episode_id, snapshot_id)"
+        " VALUES ('SCEN-ev', ?, ?, 0)",
+        (feat, episode),
+    )
+    insight = _add_insight(
+        store,
+        "provenanced",
+        episode_id=episode,
+        evidence_scenario_id="SCEN-ev",
+        evidence_ticket_id="TKT-ev",
+    )
+    row = store.get_insight(insight)
+    assert row["episode_id"] == episode
+    assert row["evidence_scenario_id"] == "SCEN-ev"
+    assert row["evidence_ticket_id"] == "TKT-ev"
+    # provenance-free registration still works (Phase 0/1 ideas)
+    bare = _add_insight(store, "bare")
+    assert store.get_insight(bare)["episode_id"] is None
+    # all three refs are FK-constrained
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_insight(store, "dangling-episode", episode_id=99999)
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_insight(store, "dangling-scen", evidence_scenario_id="SCEN-404")
+    with pytest.raises(sqlite3.IntegrityError):
+        _add_insight(store, "dangling-tkt", evidence_ticket_id="TKT-404")
+
+
+def test_phase2_support_tables_roundtrip(store):
+    """Frontier, scenario manifests, Q&A log, review queue, settlement reports."""
+    feat = _add_feat(store)
+    episode = store.create_episode("linkding", "sha256:abc", 0)
+    # frontier rows default unexplored with zero investigations (003 R10)
+    store.conn.execute("INSERT INTO frontier (feat_id) VALUES (?)", (feat,))
+    row = store.conn.execute(
+        "SELECT * FROM frontier WHERE feat_id = ?", (feat,)
+    ).fetchone()
+    assert row["status"] == "unexplored"
+    assert row["investigation_count"] == 0
+    assert row["force_scheduled"] == 0
+    for status in FRONTIER_STATUSES:
+        store.conn.execute(
+            "UPDATE frontier SET status = ? WHERE feat_id = ?", (status, feat)
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # status enum
+        store.conn.execute(
+            "UPDATE frontier SET status = 'done' WHERE feat_id = ?", (feat,)
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # FEAT FK must resolve
+        store.conn.execute("INSERT INTO frontier (feat_id) VALUES ('FEAT-404')")
+    # scenario manifests carry tier + archive status (003 R16, R9 deprecation)
+    store.conn.execute(
+        "INSERT INTO scenario_manifests (feat_id, tier, manifest_json, created_at)"
+        " VALUES (?, 'must', '{\"steps\": []}', 'now')",
+        (feat,),
+    )
+    store.conn.execute(
+        "UPDATE scenario_manifests SET status = 'archived' WHERE feat_id = ?", (feat,)
+    )
+    with pytest.raises(sqlite3.IntegrityError):  # tier enum
+        store.conn.execute(
+            "INSERT INTO scenario_manifests (feat_id, tier, manifest_json,"
+            " created_at) VALUES (?, 'bonus', '{}', 'now')",
+            (feat,),
+        )
+    # qa_log: typed outcomes + budget accounting (003 R12/R13)
+    store.conn.execute(
+        "INSERT INTO qa_log (episode_id, question, checker_verdict, retries,"
+        " outcome, budget_counted, created_at)"
+        " VALUES (?, 'is search fuzzy?', 'fail', 3, 'answer_unavailable', 0, 'now')",
+        (episode,),
+    )
+    qa = store.conn.execute("SELECT * FROM qa_log").fetchone()
+    assert qa["outcome"] == "answer_unavailable"
+    assert qa["budget_counted"] == 0  # refunded slot (003 R12)
+    assert set(QA_OUTCOMES) == {"answered", "answer_unavailable", "budget_exhausted"}
+    with pytest.raises(sqlite3.IntegrityError):  # outcome enum
+        store.conn.execute(
+            "INSERT INTO qa_log (episode_id, question, outcome, created_at)"
+            " VALUES (?, 'q', 'gave_up', 'now')",
+            (episode,),
+        )
+    # review queue rows open against the failed Q&A tuple (003 R12)
+    store.conn.execute(
+        "INSERT INTO review_queue (episode_id, qa_log_id, kind, created_at)"
+        " VALUES (?, ?, 'answer_unavailable', 'now')",
+        (episode, qa["id"]),
+    )
+    assert store.conn.execute(
+        "SELECT status FROM review_queue"
+    ).fetchone()["status"] == "open"
+    # settlement reports: exactly one per episode (003 R23)
+    store.conn.execute(
+        "INSERT INTO settlement_reports (episode_id, score, report_json, created_at)"
+        " VALUES (?, 0.85, '{\"tiers\": {}}', 'now')",
+        (episode,),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO settlement_reports (episode_id, created_at)"
+            " VALUES (?, 'now')",
+            (episode,),
+        )

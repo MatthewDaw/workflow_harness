@@ -12,6 +12,16 @@ stay NULLable and unwritten until Phase 2), typed failure records, shadow
 tripwire events, and the append-only ticket ledger. The orchestrator is the
 sole writer of all of them (002 R6) — agents never see this database.
 
+Phase 2 (Plan 003 U1) adds the episode layer via migration v3: episodes above
+runs (an increment is exactly one Phase 1 run — 003 R1), run acceptance (R2),
+the FEAT identity discipline (digest stamp, append-only triggers, `deprecated`
+status — R9), the frontier ledger (R10), scenario manifests (R16 storage),
+the Q&A log + human review queue (R12/R13 accounting), settlement reports
+(R23 storage), SCEN episode/snapshot keys + judge columns (R22), and idea
+provenance columns (R27). Backfill-safe over Phase 0/1 databases: every new
+column is NULLable-or-defaulted and the SCEN key requirement is enforced by
+an INSERT trigger so pre-existing rows survive untouched.
+
 Transaction discipline: the connection runs in manual-commit mode; writers compose
 inside :meth:`Store.transaction` (``BEGIN IMMEDIATE`` + busy-timeout backstop, R4)
 so U5 can commit one atomic registration. Multi-statement mutators refuse to run
@@ -67,11 +77,52 @@ FAILURE_KINDS = (
     "termination_unaware", "incorrect_verification",
 )
 
+# --- Phase 2 (Plan 003) state vocabularies -----------------------------------
+
+# Episode state machine (003 R3): three terminals plus the resumable,
+# non-terminal `suspended` (mid-increment quota exhaustion checkpoints the run
+# and suspends the episode — it never counts as budget_spent).
+EPISODE_STATUSES = (
+    "created", "running", "suspended",
+    "frontier_exhausted", "budget_spent", "aborted_error",
+)
+EPISODE_TERMINAL_STATUSES = ("frontier_exhausted", "budget_spent", "aborted_error")
+
+# Explorer UAT verdict on a run's delivered subset (003 R2); NULL until UAT.
+RUN_ACCEPTANCE = ("accepted", "rejected")
+
+# FEAT registry rows exist only once runtime-confirmed ("source proposes,
+# runtime confirms" — 003 R8); removed features deprecate, never delete (R9).
+FEAT_STATUSES = ("confirmed", "deprecated")
+
+# Frontier exploration states (003 R10).
+FRONTIER_STATUSES = (
+    "unexplored", "partially-explored", "explored", "newly-discovered",
+)
+
+# Scenario tolerance tiers (003 R16/R20).
+SCENARIO_TIERS = ("must", "should", "free")
+
+# Judge modes recorded on settled SCEN rows (003 R20/R22).
+SCEN_JUDGE_MODES = ("deterministic", "single", "panel")
+
+# Typed Q&A outcomes and checker verdicts (003 R12/R13).
+QA_OUTCOMES = ("answered", "answer_unavailable", "budget_exhausted")
+QA_CHECKER_VERDICTS = ("pass", "fail")
+
 _STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in STATUSES)
 _RUN_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_STATUSES)
 _TICKET_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in TICKET_STATUSES)
 _SPAN_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in SPAN_STATUSES)
 _FAILURE_KIND_SQL_ENUM = ", ".join(f"'{k}'" for k in FAILURE_KINDS)
+_EPISODE_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in EPISODE_STATUSES)
+_RUN_ACCEPTANCE_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_ACCEPTANCE)
+_FEAT_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in FEAT_STATUSES)
+_FRONTIER_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in FRONTIER_STATUSES)
+_SCENARIO_TIER_SQL_ENUM = ", ".join(f"'{s}'" for s in SCENARIO_TIERS)
+_SCEN_JUDGE_MODE_SQL_ENUM = ", ".join(f"'{s}'" for s in SCEN_JUDGE_MODES)
+_QA_OUTCOME_SQL_ENUM = ", ".join(f"'{s}'" for s in QA_OUTCOMES)
+_QA_CHECKER_SQL_ENUM = ", ".join(f"'{s}'" for s in QA_CHECKER_VERDICTS)
 
 
 class StoreError(Exception):
@@ -396,7 +447,166 @@ CREATE TABLE ledger_entries (
 CREATE INDEX idx_ledger_entries_ticket ON ledger_entries(ticket_id);
 """
 
-MIGRATIONS: tuple[tuple[int, str], ...] = ((1, _SCHEMA_V1), (2, _SCHEMA_V2))
+# Phase 2 (Plan 003 U1): episode layer + grading-side tables. Backfill-safe:
+# new columns are NULLable or defaulted; constraints that must not reject
+# pre-existing rows (SCEN keys) are INSERT triggers, not rebuilds.
+_SCHEMA_V3 = f"""
+-- Episodes (003 R1/R3/R4): one target × one library snapshot × one fresh
+-- workspace × one settlement, sitting above Phase 1 runs. snapshot_id 0 =
+-- before any active-set mutation (no FK — same convention as runs). Budget
+-- fields are stamped at creation from thresholds config and checked at
+-- increment boundaries (R4); settled_at is written by settlement (003 U7).
+CREATE TABLE episodes (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    target           TEXT NOT NULL,
+    digest           TEXT NOT NULL,
+    snapshot_id      INTEGER NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'created'
+                     CHECK (status IN ({_EPISODE_STATUS_SQL_ENUM})),
+    max_increments   INTEGER,
+    cost_ceiling_usd REAL,
+    created_at       TEXT NOT NULL,
+    settled_at       TEXT
+);
+
+-- An increment is exactly one Phase 1 run (003 R1). acceptance is the explorer
+-- UAT verdict on the delivered subset (R2): NULL until the acceptance stage runs.
+ALTER TABLE runs ADD COLUMN episode_id INTEGER REFERENCES episodes(id);
+ALTER TABLE runs ADD COLUMN increment_index INTEGER;
+ALTER TABLE runs ADD COLUMN acceptance TEXT
+    CHECK (acceptance IN ({_RUN_ACCEPTANCE_SQL_ENUM}));
+CREATE INDEX idx_runs_episode ON runs(episode_id);
+
+-- FEAT identity discipline (003 R8/R9): rows exist only once runtime-confirmed,
+-- stamped with the target and its image digest; IDs are append-only and never
+-- reused; removed features flip to 'deprecated', never delete. Pre-Phase-2
+-- rows backfill 'confirmed' with NULL target/digest (no image pin existed yet).
+ALTER TABLE trace_feat ADD COLUMN target TEXT;
+ALTER TABLE trace_feat ADD COLUMN digest TEXT;
+ALTER TABLE trace_feat ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'
+    CHECK (status IN ({_FEAT_STATUS_SQL_ENUM}));
+
+CREATE TRIGGER trg_trace_feat_id_immutable
+BEFORE UPDATE OF id ON trace_feat
+BEGIN
+    SELECT RAISE(ABORT,
+        'FEAT ids are append-only: never renumbered or reused (003 R9)');
+END;
+
+CREATE TRIGGER trg_trace_feat_no_delete
+BEFORE DELETE ON trace_feat
+BEGIN
+    SELECT RAISE(ABORT,
+        'FEAT rows are never deleted: flip status to deprecated (003 R9)');
+END;
+
+-- Frontier ledger (003 R10): per-FEAT exploration status driving increment
+-- requests (least-investigated first); force_scheduled marks rows the
+-- mention-coverage audit pushes ahead of the normal ordering.
+CREATE TABLE frontier (
+    feat_id             TEXT PRIMARY KEY REFERENCES trace_feat(id),
+    status              TEXT NOT NULL DEFAULT 'unexplored'
+                        CHECK (status IN ({_FRONTIER_STATUS_SQL_ENUM})),
+    investigation_count INTEGER NOT NULL DEFAULT 0,
+    force_scheduled     INTEGER NOT NULL DEFAULT 0
+                        CHECK (force_scheduled IN (0, 1))
+);
+
+-- Scenario manifests (003 R16): authored at FEAT-mint time; archived (never
+-- deleted) when their FEAT deprecates (R9).
+CREATE TABLE scenario_manifests (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    feat_id       TEXT NOT NULL REFERENCES trace_feat(id),
+    tier          TEXT NOT NULL CHECK (tier IN ({_SCENARIO_TIER_SQL_ENUM})),
+    manifest_json TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'active'
+                  CHECK (status IN ('active', 'archived')),
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX idx_scenario_manifests_feat ON scenario_manifests(feat_id);
+
+-- Q&A log (003 R12/R13): one row per question slot. Checker retries are
+-- grader-side and live inside the row (retries counter — they consume no
+-- budget); budget_counted is the accounting bit the elicitation-efficiency
+-- metric and the per-increment cap read (budget-free rows: refunded
+-- answer_unavailable slots; UAT feedback never lands here).
+CREATE TABLE qa_log (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id         INTEGER NOT NULL REFERENCES episodes(id),
+    run_id             INTEGER REFERENCES runs(id),
+    question           TEXT NOT NULL,
+    question_msg_id    TEXT REFERENCES trace_msg(id),
+    answer             TEXT,
+    answer_msg_id      TEXT REFERENCES trace_msg(id),
+    checker_verdict    TEXT CHECK (checker_verdict IN ({_QA_CHECKER_SQL_ENUM})),
+    contradiction_json TEXT,
+    retries            INTEGER NOT NULL DEFAULT 0,
+    outcome            TEXT CHECK (outcome IN ({_QA_OUTCOME_SQL_ENUM})),
+    budget_counted     INTEGER NOT NULL DEFAULT 1
+                       CHECK (budget_counted IN (0, 1)),
+    created_at         TEXT NOT NULL
+);
+CREATE INDEX idx_qa_log_episode ON qa_log(episode_id);
+
+-- Human review queue (003 R12): answer_unavailable tuples and other items
+-- queued for the human reflector.
+CREATE TABLE review_queue (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id   INTEGER REFERENCES episodes(id),
+    qa_log_id    INTEGER REFERENCES qa_log(id),
+    kind         TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{{}}',
+    status       TEXT NOT NULL DEFAULT 'open'
+                 CHECK (status IN ('open', 'resolved')),
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX idx_review_queue_episode ON review_queue(episode_id);
+
+-- Settlement reports (003 R23): one per episode — the human reflector's entry
+-- point; report_json carries the assembled report (003 U7 writes it).
+CREATE TABLE settlement_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id  INTEGER NOT NULL UNIQUE REFERENCES episodes(id),
+    score       REAL,
+    report_json TEXT NOT NULL DEFAULT '{{}}',
+    created_at  TEXT NOT NULL
+);
+
+-- SCEN columns (003 R22): rows are keyed (episode, snapshot) and carry tier,
+-- judge metadata, and the judge-input a11y-diff payloads (replay re-judging
+-- needs the original inputs, not just screenshots). Columns stay NULLable so
+-- pre-Phase-2 rows survive; the trigger requires keys on every NEW row.
+ALTER TABLE trace_scen ADD COLUMN episode_id INTEGER REFERENCES episodes(id);
+ALTER TABLE trace_scen ADD COLUMN snapshot_id INTEGER;
+ALTER TABLE trace_scen ADD COLUMN tier TEXT
+    CHECK (tier IN ({_SCENARIO_TIER_SQL_ENUM}));
+ALTER TABLE trace_scen ADD COLUMN judge_mode TEXT
+    CHECK (judge_mode IN ({_SCEN_JUDGE_MODE_SQL_ENUM}));
+ALTER TABLE trace_scen ADD COLUMN judge_metadata_json TEXT NOT NULL DEFAULT '{{}}';
+ALTER TABLE trace_scen ADD COLUMN judge_input_json TEXT NOT NULL DEFAULT '{{}}';
+CREATE INDEX idx_trace_scen_episode ON trace_scen(episode_id);
+
+CREATE TRIGGER trg_trace_scen_requires_keys
+BEFORE INSERT ON trace_scen
+WHEN NEW.episode_id IS NULL OR NEW.snapshot_id IS NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'SCEN rows require episode_id and snapshot_id keys (003 R22)');
+END;
+
+-- Idea provenance (003 R27): required --episode for Phase 2 ideas, optional
+-- --scenario/--ticket evidence refs — columns the Phase 3 reflector will
+-- populate mechanically.
+ALTER TABLE insights ADD COLUMN episode_id INTEGER REFERENCES episodes(id);
+ALTER TABLE insights ADD COLUMN evidence_scenario_id TEXT REFERENCES trace_scen(id);
+ALTER TABLE insights ADD COLUMN evidence_ticket_id TEXT REFERENCES trace_tkt(id);
+"""
+
+MIGRATIONS: tuple[tuple[int, str], ...] = (
+    (1, _SCHEMA_V1),
+    (2, _SCHEMA_V2),
+    (3, _SCHEMA_V3),
+)
 
 
 class Store:
@@ -626,15 +836,20 @@ class Store:
         embedding_dim: int | None = None,
         duplicate_of: int | None = None,
         supersedes: int | None = None,
+        episode_id: int | None = None,
+        evidence_scenario_id: str | None = None,
+        evidence_ticket_id: str | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO insights (precondition, action, expected_outcome, scope_tag,"
             " content_hash, status, batch_id, source_run_id, embedding_model,"
-            " embedding_dim, duplicate_of, supersedes, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " embedding_dim, duplicate_of, supersedes, episode_id,"
+            " evidence_scenario_id, evidence_ticket_id, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (precondition, action, expected_outcome, scope_tag, content_hash, status,
              batch_id, source_run_id, embedding_model, embedding_dim, duplicate_of,
-             supersedes, _utcnow()),
+             supersedes, episode_id, evidence_scenario_id, evidence_ticket_id,
+             _utcnow()),
         )
         return cur.lastrowid
 
@@ -724,12 +939,24 @@ class Store:
 
     # --- Phase 1: runs (002 R1) -----------------------------------------------
 
-    def create_run(self, spec_ref: str, snapshot_id: int) -> int:
-        """Mint a run row keyed by spec ref + library snapshot (0 = pre-mutation)."""
+    def create_run(
+        self,
+        spec_ref: str,
+        snapshot_id: int,
+        *,
+        episode_id: int | None = None,
+        increment_index: int | None = None,
+    ) -> int:
+        """Mint a run row keyed by spec ref + library snapshot (0 = pre-mutation).
+
+        Episode mode (003 R1): an increment is exactly one run, so episode runs
+        carry ``episode_id`` + ``increment_index``; standalone toy-spec runs
+        leave both NULL (Phase 1 callers are unchanged).
+        """
         cur = self.conn.execute(
-            "INSERT INTO runs (spec_ref, snapshot_id, status, created_at)"
-            " VALUES (?, ?, 'created', ?)",
-            (spec_ref, int(snapshot_id), _utcnow()),
+            "INSERT INTO runs (spec_ref, snapshot_id, status, episode_id,"
+            " increment_index, created_at) VALUES (?, ?, 'created', ?, ?, ?)",
+            (spec_ref, int(snapshot_id), episode_id, increment_index, _utcnow()),
         )
         return cur.lastrowid
 
@@ -917,3 +1144,59 @@ class Store:
              failure_record_id, content, _utcnow()),
         )
         return cur.lastrowid
+
+    # --- Phase 2: episodes and acceptance (003 R1-R4) ----------------------------
+
+    def create_episode(
+        self,
+        target: str,
+        digest: str,
+        snapshot_id: int,
+        *,
+        max_increments: int | None = None,
+        cost_ceiling_usd: float | None = None,
+    ) -> int:
+        """Mint an episode: one target × one library snapshot × one settlement.
+
+        Budget fields come from thresholds config (003 R4) and are stamped here
+        so the values that governed the episode are queryable forever.
+        """
+        cur = self.conn.execute(
+            "INSERT INTO episodes (target, digest, snapshot_id, status,"
+            " max_increments, cost_ceiling_usd, created_at)"
+            " VALUES (?, ?, ?, 'created', ?, ?, ?)",
+            (target, digest, int(snapshot_id), max_increments, cost_ceiling_usd,
+             _utcnow()),
+        )
+        return cur.lastrowid
+
+    def get_episode(self, episode_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()
+
+    def set_episode_status(self, episode_id: int, status: str) -> None:
+        """Flip episode status; `suspended` is resumable, terminals per 003 R3."""
+        if status not in EPISODE_STATUSES:
+            raise StoreError(
+                f"unknown episode status '{status}'"
+                f" (expected one of {EPISODE_STATUSES})"
+            )
+        cur = self.conn.execute(
+            "UPDATE episodes SET status = ? WHERE id = ?", (status, episode_id)
+        )
+        if cur.rowcount == 0:
+            raise StoreError(f"episode {episode_id} does not exist")
+
+    def set_run_acceptance(self, run_id: int, acceptance: str) -> None:
+        """Record the explorer's UAT verdict on a settled run's delivered subset."""
+        if acceptance not in RUN_ACCEPTANCE:
+            raise StoreError(
+                f"unknown acceptance '{acceptance}'"
+                f" (expected one of {RUN_ACCEPTANCE})"
+            )
+        cur = self.conn.execute(
+            "UPDATE runs SET acceptance = ? WHERE id = ?", (acceptance, run_id)
+        )
+        if cur.rowcount == 0:
+            raise StoreError(f"run {run_id} does not exist")
