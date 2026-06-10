@@ -36,15 +36,25 @@ for ($k=1; $k -le 6; $k++) {
   $before = (git -C $Dir rev-parse HEAD).Trim()
   $log = Join-Path $Repo "ralph-logs\$plan-$uid-try$k.json"
   Write-Host "[$Unit] attempt $k model=$model dir=$Dir"
-  Push-Location $Dir
-  $scoped | claude -p --model $model --dangerously-skip-permissions --output-format json | Out-File -Encoding utf8 $log
-  $ec = $LASTEXITCODE
-  Pop-Location
-  $quota = $false
-  try { $o = Get-Content $log -Raw | ConvertFrom-Json; if ($o.is_error -and ("$($o.subtype) $($o.result) $($o.error)" -match "(?i)limit|quota|rate|exhaust")) { $quota = $true } } catch {}
+  # run claude with a wall-clock timeout so a dropped connection can't hang the build
+  $tmpPrompt = Join-Path $env:TEMP "ralph-$plan-$uid-$k.prompt.txt"
+  $scoped | Set-Content $tmpPrompt -Encoding utf8
+  $claudeExe = (Get-Command claude).Source
+  $pr = Start-Process -FilePath $claudeExe -ArgumentList @("-p","--model",$model,"--dangerously-skip-permissions","--output-format","json") -RedirectStandardInput $tmpPrompt -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WorkingDirectory $Dir -NoNewWindow -PassThru
+  $timedOut = $false
+  if (-not $pr.WaitForExit(1800000)) {   # 30 min ceiling per call
+    $timedOut = $true
+    Get-CimInstance Win32_Process -Filter "ParentProcessId=$($pr.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+    Stop-Process -Id $pr.Id -Force -EA SilentlyContinue
+    Write-Host "[$Unit] claude TIMED OUT (30m) - killed, retrying"
+  }
+  Remove-Item $tmpPrompt -EA SilentlyContinue
+  if ($timedOut) { continue }   # transient (likely network) - retry now, don't 30m-sleep
+  $quota = $false; $parsedOk = $false
+  try { $o = Get-Content $log -Raw | ConvertFrom-Json; $parsedOk = $true; if ($o.is_error -and ("$($o.subtype) $($o.result) $($o.error)" -match "(?i)limit|quota|rate|exhaust")) { $quota = $true } } catch {}
   $after = (git -C $Dir rev-parse HEAD).Trim()
-  if ($ec -ne 0 -and $after -eq $before) { $quota = $true }
-  if ($quota) { Write-Host "[$Unit] quota wall - sleep 30m"; Start-Sleep -Seconds 1800; continue }
+  if (-not $parsedOk -and $after -eq $before) { $quota = $true }   # no valid envelope + no work = transient/quota
+  if ($quota) { Write-Host "[$Unit] quota/connection wall - sleep 30m"; Start-Sleep -Seconds 1800; continue }
   if ($after -ne $before) {
     Push-Location (Join-Path $Dir "agent-families")
     uv run --frozen pytest -q *> (Join-Path $Repo "ralph-logs\$plan-$uid-pytest$k.txt")
