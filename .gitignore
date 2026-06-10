@@ -52,3 +52,7 @@ npm/claude-plus/bin/claude-plus.exe
 
 .claude/worktrees/
 .claude/settings.local.json
+
+# agent-families ralph driver (mutable, never commit)
+agent-families/MODEL.txt
+ralph-logs/
