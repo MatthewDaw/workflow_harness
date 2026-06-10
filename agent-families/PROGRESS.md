@@ -45,7 +45,7 @@ holds, and the full offline suite is green.
 - [x] 004/U1 — Schema spine migration
 - [ ] 004/U2 — Retrieval into prompts
 - [ ] 004/U3 — Run-scoped working memory
-- [ ] 004/U4 — Kanboard onboarding + frozen micro-benchmark
+- [x] 004/U4 — Kanboard onboarding + frozen micro-benchmark
 - [ ] 004/U5 — Reflector Stage A
 - [ ] 004/U6 — Reflector Stage B and batch formation
 - [ ] 004/U7 — Validation and promotion
