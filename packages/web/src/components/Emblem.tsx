@@ -4,8 +4,8 @@ import type { SVGProps } from 'react';
  * Command HQ emblem — the field-command brand mark (olive-drab field, brass
  * compass tick + dashed perimeter, cream chevrons, corner rivets). Inline SVG so
  * it inherits crispness at any size and needs no asset request. Source of truth
- * is the brand logo kit; `public/logo/command-hq-emblem.svg` mirrors it for
- * favicon / <img> use.
+ * is the brand logo kit; `public/logo/command-hq-emblem.svg` mirrors it for the
+ * favicon.
  */
 export function Emblem({ size = 44, ...props }: { size?: number } & SVGProps<SVGSVGElement>) {
   return (

@@ -25,6 +25,9 @@ wrapper/dist/
 # gstack local runtime + tokens (never commit)
 .gstack/
 
+# brainstorm tooling scratch (wireframe iterations, server pids)
+.superpowers/
+
 # python scaffolding (vestigial)
 .venv/
 infra/cdk.bundles/
