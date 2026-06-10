@@ -13,7 +13,7 @@ holds, and the full offline suite is green.
 - [x] 001/U1 — Scaffold, config, and repo isolation
 - [x] 001/U2 — SQLite schema, store layer, snapshots, promotion queue
 - [x] 001/U3 — Embedding service and vector index
-- [ ] 001/U4 — Judge runner with record/replay seam
+- [x] 001/U4 — Judge runner with record/replay seam
 - [ ] 001/U5 — add_idea pipeline
 - [ ] 001/U6 — Lifecycle operations
 - [ ] 001/U7 — Rendering: concatenation and delta-patch compile
