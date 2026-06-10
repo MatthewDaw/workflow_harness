@@ -13,10 +13,24 @@ iteration the planner emits one structured-output plan; the deterministic lints
 below either accept it (persisted in one transaction) or feed typed failures
 back (``plan_lint`` failure records + a feedback prompt) and consume one
 iteration of the cap. Cap exhaustion sets the run terminal ``plan_failed`` and
-raises :class:`PlanFailed` — nothing downstream runs. Judged plan checks and
-assumption *verification* are explicitly deferred to Phase 2; the contract
-instead carries ``assumptions[]``, persisted with the plan and surfaced by
-:func:`plan_report`.
+raises :class:`PlanFailed` — nothing downstream runs. Judged plan checks stay
+deferred; the contract carries ``assumptions[]``, persisted with the plan and
+surfaced by :func:`plan_report`.
+
+Phase 2 amendments (plan-003 U5):
+
+- :func:`check_plan_assumptions` closes Phase 1's assumption-verification
+  seam (003 R13): the plan-checker converts the planner's ``assumptions[]``
+  into questions through an injected ``ask`` callable (the explorer's
+  verified-oracle round-trip, bound by the orchestrator). Conversions ride
+  the question budget INSIDE ``ask``; an over-budget assumption is recorded
+  ``unverified`` on the plan — a typed risk, never a blocker.
+- UAT carry-in (003 R11): ``run_planning`` accepts ``carry_in_msg_ids`` —
+  explorer-authored UAT feedback MSG rows already persisted by
+  ``explorer.run_uat``. They join the planner prompt and the valid
+  ``source_msg`` set, so bug REQs carry real MSG provenance; tickets fixing
+  them are ordinary tickets tagged ``kind: "bug"`` (a tag in the plan
+  document, not a ticket type — KTD Q4; §12 queries never special-case).
 
 The lint list (1:1 with R10, :data:`PLAN_LINTS`):
 
@@ -47,6 +61,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -76,6 +91,15 @@ PLAN_LINTS = (
 
 SEVERITY_ERROR = "error"
 SEVERITY_WARN = "warn"
+
+# Ticket kinds (003 R11/KTD Q4): `bug` is a tag carried on otherwise-ordinary
+# tickets; omitted means "feature".
+TICKET_KINDS = ("feature", "bug")
+DEFAULT_TICKET_KIND = "feature"
+
+# Per-assumption verification statuses written by the plan-checker (003 R13).
+ASSUMPTION_VERIFIED = "verified"
+ASSUMPTION_UNVERIFIED = "unverified"
 
 # --- the planner structured-output contract (R9/R10) --------------------------
 # Stays within the judge validator's schema subset (type/enum/required/
@@ -115,6 +139,8 @@ _TICKET_SCHEMA = {
         "depends_on": {"type": "array", "items": {"type": "string"}},
         "files": {"type": "array", "items": {"type": "string"}},
         "acceptance_criteria": {"type": "array", "items": _AC_SCHEMA},
+        # optional (003 R11): bug tickets are ordinary tickets with a tag
+        "kind": {"type": "string", "enum": list(TICKET_KINDS)},
     },
     "required": [
         "id",
@@ -254,9 +280,28 @@ def synthesize_messages(
 
 
 def build_planner_prompt(
-    spec_name: str, messages: list[SpecMessage], size_budget: int
+    spec_name: str,
+    messages: list[SpecMessage],
+    size_budget: int,
+    *,
+    carry_in: Sequence[tuple[str, str]] = (),
 ) -> str:
-    """The hardcoded Phase 1 planner prompt over the synthesized MSG listing."""
+    """The hardcoded Phase 1 planner prompt over the synthesized MSG listing.
+
+    ``carry_in`` (003 R11): (msg_id, content) pairs of explorer UAT feedback
+    from the previous increment — bug REQs are extracted from them with full
+    MSG provenance and their tickets tagged ``kind: "bug"``, prepended before
+    the new work.
+    """
+    carry_block = (
+        "\n\nUAT feedback from the previous increment (carry-in): extract a"
+        " requirement from each feedback message below (source_msg = its MSG"
+        " id) and cover it with a ticket whose kind is 'bug', ordered BEFORE"
+        " the new work:\n"
+        + "\n".join(f"[{mid}] {content}" for mid, content in carry_in)
+        if carry_in
+        else ""
+    )
     msg_block = "\n".join(f"[{m.msg_id}] {m.content}" for m in messages)
     return (
         "You are the planner for a software delivery pipeline. The spec"
@@ -274,7 +319,8 @@ def build_planner_prompt(
         " least one per ticket, each with a unique id, its text, and req set"
         " to a requirement id the ticket covers).\n"
         "- assumptions: anything the spec leaves ambiguous that you decided"
-        " rather than asked about, as plain strings (empty array if none).\n\n"
+        " rather than asked about, as plain strings (empty array if none)."
+        f"{carry_block}\n\n"
         f"Source messages:\n{msg_block}"
     )
 
@@ -571,6 +617,7 @@ def _persist_plan(
                     "id": ctid,
                     "title": ticket["title"],
                     "description": ticket["description"],
+                    "kind": ticket.get("kind", DEFAULT_TICKET_KIND),
                     "covers": covers,
                     "depends_on": [
                         tkt_map[dep] for dep in dict.fromkeys(ticket["depends_on"])
@@ -604,6 +651,79 @@ def plan_report(store: Store, run_id: int) -> dict:
     return json.loads(raw)
 
 
+# --- the plan-checker's assumption conversion (003 R13; closes the Phase 1 seam) --
+
+
+def build_assumption_question(assumption: str) -> str:
+    """One planner assumption rendered as a verified-oracle question."""
+    return (
+        f"The plan for the current increment assumed: {assumption} — Is this"
+        " assumption correct for the target app? Verify it against the live"
+        " UI and answer concretely."
+    )
+
+
+def check_plan_assumptions(store: Store, run_id: int, ask) -> list[dict]:
+    """Convert the persisted plan's ``assumptions[]`` into questions (003 R13).
+
+    ``ask`` is the verified-oracle round-trip bound by the orchestrator —
+    ``lambda q: explorer.ask_question(store, episode_id, q, mentions, ...)``
+    — returning an object exposing ``outcome`` (``answered`` |
+    ``answer_unavailable`` | ``budget_exhausted``) and ``answer``.
+    Conversions consume question budget INSIDE ``ask`` (the budget trains
+    elicitation; free verification would untrain it — KTD Q6). Outcomes:
+
+    - ``answered`` → the assumption is ``verified``, the answer recorded;
+    - ``budget_exhausted`` → ``unverified`` (typed risk, not a blocker);
+    - ``answer_unavailable`` → ``unverified`` (the slot was refunded and the
+      tuple queued for human review by the round-trip itself).
+
+    The records are persisted onto the plan document (``assumption_checks``)
+    and surfaced by :func:`plan_report`.
+    """
+    document = plan_report(store, run_id)
+    records: list[dict] = []
+    for index, assumption in enumerate(document.get("assumptions", [])):
+        outcome = ask(build_assumption_question(assumption))
+        kind = outcome.outcome
+        if kind == "answered":
+            record = {
+                "index": index,
+                "assumption": assumption,
+                "status": ASSUMPTION_VERIFIED,
+                "reason": None,
+                "answer": outcome.answer,
+            }
+        elif kind in ("budget_exhausted", "answer_unavailable"):
+            record = {
+                "index": index,
+                "assumption": assumption,
+                "status": ASSUMPTION_UNVERIFIED,
+                "reason": kind,
+                "answer": None,
+            }
+            logger.info(
+                "assumption %d recorded unverified (%s) — typed risk, not a"
+                " blocker (003 R13): %s",
+                index,
+                kind,
+                assumption,
+            )
+        else:
+            raise PlanningError(
+                f"ask returned unknown outcome {kind!r} for assumption"
+                f" {index} (expected answered / answer_unavailable /"
+                " budget_exhausted)"
+            )
+        records.append(record)
+    document["assumption_checks"] = records
+    store.set_meta(
+        plan_meta_key(run_id),
+        json.dumps(document, sort_keys=True, ensure_ascii=False),
+    )
+    return records
+
+
 # --- the planning Ralph loop (R10) --------------------------------------------------
 
 
@@ -621,8 +741,13 @@ def run_planning(
     prompt_set_version: str | None = None,
     mode: str | None = None,
     script_path: str | Path | None = None,
+    carry_in_msg_ids: Sequence[str] = (),
 ) -> PlanningResult:
     """Drive the planner Ralph loop: spec → MSG → session → lints → plan.
+
+    ``carry_in_msg_ids`` (003 R11): ids of already-persisted UAT feedback
+    MSG rows; they join the prompt and the valid ``source_msg`` set so bug
+    REQs trace to them.
 
     Lint errors become ``plan_lint`` failure records charged to the iteration's
     span and feed the next iteration's prompt; each lint bounce consumes one of
@@ -644,8 +769,22 @@ def run_planning(
     spec_path = Path(spec_path)
     transcript_dir = Path(transcript_dir)
     messages = synthesize_messages(store, run_id, spec_path)
-    msg_ids = {m.msg_id for m in messages}
-    base_prompt = build_planner_prompt(spec_path.name, messages, size_budget)
+    carry_in: list[tuple[str, str]] = []
+    for mid in dict.fromkeys(carry_in_msg_ids):
+        row = store.conn.execute(
+            "SELECT id, content FROM trace_msg WHERE id = ?", (mid,)
+        ).fetchone()
+        if row is None:
+            raise PlanningError(
+                f"carry-in message {mid} does not exist — UAT feedback must"
+                " be persisted (explorer.run_uat) before planning carries"
+                " it in (003 R11)"
+            )
+        carry_in.append((row["id"], row["content"]))
+    msg_ids = {m.msg_id for m in messages} | {mid for mid, _ in carry_in}
+    base_prompt = build_planner_prompt(
+        spec_path.name, messages, size_budget, carry_in=carry_in
+    )
 
     prompt = base_prompt
     last_errors: list[LintFinding] = []
