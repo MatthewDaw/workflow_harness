@@ -7,6 +7,10 @@ Plan 003 U1: Phase 2 schema migration — episodes/increments, FEAT identity
 discipline, frontier, scenario manifests, Q&A log, review queue, settlement
 reports, SCEN keys, idea provenance.
 
+Plan 004 U1: Phase 3a schema spine — run-mode taxonomy + epoch, append-only
+fitness-event log, episode-scoped workflows (run memory), batch-validation
+records, lineage seam columns.
+
 ## Conformance (plan 003 U1 test scenarios → tests)
 
 - migration idempotent over a Phase 1 database →
@@ -19,6 +23,22 @@ reports, SCEN keys, idea provenance.
 - episode suspension round-trip → ``test_episode_suspension_roundtrip``
 - SCEN row requires episode + snapshot keys →
   ``test_scen_row_requires_episode_and_snapshot_keys``
+
+## Conformance (plan 004 U1 test scenarios → tests)
+
+- mode enum rejects unknowns →
+  ``test_episode_mode_enum_rejects_unknowns``
+- migration idempotent over a Phase 2 database →
+  ``test_phase3a_migration_applies_on_phase2_db_without_data_loss``
+- fitness events append-only and reconstructible per (insight, snapshot) →
+  ``test_fitness_events_append_only_and_reconstructible``
+- trial-mode events excluded from a training-mode fitness query →
+  ``test_trial_mode_fitness_excluded_from_training_query``
+- workflows rows die with episode settlement →
+  ``test_workflows_die_with_episode_settlement``
+- batch-validation record round-trip → ``test_batch_validation_roundtrip``
+- epoch nullable → ``test_episode_epoch_nullable``
+- lineage seam columns present → ``test_lineage_seam_columns_present``
 """
 
 from __future__ import annotations
@@ -31,13 +51,16 @@ import pytest
 
 import agent_families.store as store_mod
 from agent_families.store import (
+    BATCH_VERDICTS,
     EPISODE_STATUSES,
     EPISODE_TERMINAL_STATUSES,
     FAILURE_KINDS,
     FEAT_STATUSES,
+    FITNESS_EVENT_KINDS,
     FRONTIER_STATUSES,
     QA_OUTCOMES,
     RUN_ACCEPTANCE,
+    RUN_MODES,
     RUN_STATUSES,
     RUN_TERMINAL_STATUSES,
     SCEN_JUDGE_MODES,
@@ -45,6 +68,7 @@ from agent_families.store import (
     SPAN_FINAL_STATUSES,
     STATUSES,
     TICKET_STATUSES,
+    WORKFLOW_STATUSES,
     Store,
     StoreError,
 )
@@ -86,6 +110,10 @@ EXPECTED_TABLES = {
     "qa_log",
     "review_queue",
     "settlement_reports",
+    # Phase 3a (plan 004 U1)
+    "fitness_events",
+    "workflows",
+    "batch_validations",
 }
 
 
@@ -132,7 +160,7 @@ def test_schema_creates_idempotently(tmp_path):
         versions = s.conn.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
-        assert [r["version"] for r in versions] == [1, 2, 3]
+        assert [r["version"] for r in versions] == [1, 2, 3, 4]
     # a fresh connection over the same file is also a no-op
     with Store(db) as s2:
         s2.migrate()
@@ -531,7 +559,7 @@ def test_phase1_migration_applies_on_phase0_db_without_data_loss(tmp_path, monke
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
         ]
-        assert versions == [1, 2, 3]
+        assert versions == [1, 2, 3, 4]
         assert EXPECTED_TABLES <= _table_names(s)
         # Phase 0 rows survive untouched
         assert s.get_insight(insight)["status"] == "active"
@@ -882,7 +910,7 @@ def test_phase2_migration_applies_on_phase1_db_without_data_loss(tmp_path, monke
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
         ]
-        assert versions == [1, 2, 3]
+        assert versions == [1, 2, 3, 4]
         assert EXPECTED_TABLES <= _table_names(s)
         # Phase 0/1 rows survive untouched; new columns backfill their defaults
         assert s.get_insight(insight)["episode_id"] is None
@@ -1157,3 +1185,274 @@ def test_phase2_support_tables_roundtrip(store):
             " VALUES (?, 'now')",
             (episode,),
         )
+
+
+# --- Phase 3a schema spine (plan 004 U1: R1) --------------------------------
+
+
+def test_phase3a_migration_applies_on_phase2_db_without_data_loss(
+    tmp_path, monkeypatch
+):
+    """Migration v4 upgrades a v1+v2+v3 database in place, idempotently."""
+    db = tmp_path / "library.db"
+    with Store(db) as s:
+        monkeypatch.setattr(store_mod, "MIGRATIONS", store_mod.MIGRATIONS[:3])
+        s.migrate()  # Phase 0 + 1 + 2 schema only
+        versions = [
+            r["version"]
+            for r in s.conn.execute("SELECT version FROM schema_migrations").fetchall()
+        ]
+        assert versions == [1, 2, 3]
+        # seed a Phase 2 episode in the pre-Phase-3a shape (no mode/epoch columns)
+        episode = s.conn.execute(
+            "INSERT INTO episodes (target, digest, snapshot_id, status, created_at)"
+            " VALUES ('linkding', 'sha256:abc', 0, 'frontier_exhausted',"
+            " '2026-06-10T00:00:00+00:00')"
+        ).lastrowid
+        insight = s.conn.execute(
+            "INSERT INTO insights (precondition, action, expected_outcome,"
+            " content_hash, created_at) VALUES ('p', 'a', 'o', 'hash-survivor-v3',"
+            " '2026-06-10T00:00:00+00:00')"
+        ).lastrowid
+        family = s.create_family("worker")
+        agent = s.create_agent(family, "generic-worker")
+        skill = s.create_skill(agent, "elicitation")
+    monkeypatch.undo()
+    with Store(db) as s:
+        s.migrate()  # applies v4 on top
+        s.migrate()  # second run applies nothing
+        versions = [
+            r["version"]
+            for r in s.conn.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+        assert versions == [1, 2, 3, 4]
+        assert EXPECTED_TABLES <= _table_names(s)
+        # pre-Phase-3a episodes backfill mode='training' with a NULL epoch
+        ep = s.get_episode(episode)
+        assert ep["mode"] == "training"
+        assert ep["epoch"] is None
+        # lineage seam columns backfill their defaults on existing rows
+        agent_row = s.conn.execute(
+            "SELECT * FROM agents WHERE id = ?", (agent,)
+        ).fetchone()
+        assert agent_row["routing_decisions"] == 0
+        assert agent_row["lineage_status"] is None
+        skill_row = s.conn.execute(
+            "SELECT * FROM skills WHERE id = ?", (skill,)
+        ).fetchone()
+        assert skill_row["parent_skill_id"] is None
+        assert skill_row["split_snapshot_id"] is None
+        assert s.get_insight(insight)["status"] == "quarantined"
+        assert s.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_episode_mode_enum_rejects_unknowns(store):
+    """004 R1: the run-mode taxonomy is `training | trial | benchmark`."""
+    assert set(RUN_MODES) == {"training", "trial", "benchmark"}
+    for mode in RUN_MODES:
+        episode = store.create_episode("linkding", "sha256:abc", 0, mode=mode)
+        assert store.get_episode(episode)["mode"] == mode
+    # the helper rejects unknowns with an actionable message
+    with pytest.raises(StoreError, match="unknown run mode"):
+        store.create_episode("linkding", "sha256:abc", 0, mode="prod")
+    # and the CHECK backstops raw writes too
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO episodes (target, digest, snapshot_id, status, mode,"
+            " created_at) VALUES ('t', 'd', 0, 'created', 'shadow', 'now')"
+        )
+
+
+def test_episode_epoch_nullable(store):
+    """004 R1: epoch is nullable here (Plan 5 populates the curriculum rotation)."""
+    default = store.create_episode("linkding", "sha256:abc", 0)
+    assert store.get_episode(default)["epoch"] is None
+    stamped = store.create_episode("linkding", "sha256:abc", 0, epoch=3)
+    assert store.get_episode(stamped)["epoch"] == 3
+
+
+def test_fitness_events_append_only_and_reconstructible(store):
+    """004 R1/R19: the log is append-only; state at S is COUNT over events <= S."""
+    insight = _add_insight(store, "fit")
+    e1 = store.create_episode("linkding", "sha256:abc", 0)
+    # events accrue across two snapshots; no snapshot is minted on a fitness write
+    snaps_before = _count(store, "snapshots")
+    store.record_fitness_event(insight, "retrieval", "training", 1, episode_id=e1)
+    store.record_fitness_event(insight, "retrieval", "training", 1, episode_id=e1)
+    store.record_fitness_event(insight, "win", "training", 1, episode_id=e1)
+    store.record_fitness_event(insight, "loss", "training", 3, episode_id=e1)
+    assert _count(store, "snapshots") == snaps_before  # writes mint nothing (R1)
+    # reconstruct fitness as of each snapshot
+    at1 = store.fitness_counts(insight, snapshot_id=1)
+    assert at1 == {"retrieval": 2, "win": 1, "loss": 0}
+    at3 = store.fitness_counts(insight, snapshot_id=3)
+    assert at3 == {"retrieval": 2, "win": 1, "loss": 1}
+    # unbounded query counts everything in the channel
+    assert store.fitness_counts(insight) == {"retrieval": 2, "win": 1, "loss": 1}
+    # append-only: the row can never be edited or deleted (immutability triggers)
+    event_id = store.conn.execute(
+        "SELECT id FROM fitness_events LIMIT 1"
+    ).fetchone()["id"]
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute(
+            "UPDATE fitness_events SET kind = 'win' WHERE id = ?", (event_id,)
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute("DELETE FROM fitness_events WHERE id = ?", (event_id,))
+    # enum guards on both kind and mode
+    assert set(FITNESS_EVENT_KINDS) == {"retrieval", "win", "loss"}
+    with pytest.raises(StoreError, match="unknown fitness event kind"):
+        store.record_fitness_event(insight, "draw", "training", 1)
+    with pytest.raises(StoreError, match="unknown run mode"):
+        store.record_fitness_event(insight, "win", "prod", 1)
+    with pytest.raises(sqlite3.IntegrityError):  # insight FK must resolve
+        store.record_fitness_event(99999, "win", "training", 1)
+
+
+def test_trial_mode_fitness_excluded_from_training_query(store):
+    """004 R19: trial/benchmark events land in a channel the ratchet never reads."""
+    insight = _add_insight(store, "channels")
+    store.record_fitness_event(insight, "win", "training", 1)
+    store.record_fitness_event(insight, "win", "trial", 1)
+    store.record_fitness_event(insight, "win", "benchmark", 1)
+    store.record_fitness_event(insight, "loss", "trial", 1)
+    # the training-mode (ratchet) query sees only training events
+    assert store.fitness_counts(insight, mode="training") == {
+        "retrieval": 0, "win": 1, "loss": 0
+    }
+    # the validation channel reads its own modes, kept separate from the ratchet
+    assert store.fitness_counts(insight, mode="trial") == {
+        "retrieval": 0, "win": 1, "loss": 1
+    }
+    assert store.fitness_counts(insight, mode="benchmark") == {
+        "retrieval": 0, "win": 1, "loss": 0
+    }
+    with pytest.raises(StoreError, match="unknown run mode"):
+        store.fitness_counts(insight, mode="prod")
+
+
+def test_workflows_die_with_episode_settlement(store):
+    """004 R6: run memory is episode-scoped — settlement kills the live rows."""
+    e1 = store.create_episode("linkding", "sha256:abc", 0)
+    e2 = store.create_episode("linkding", "sha256:abc", 0)
+    run = store.create_run("inc", 0, episode_id=e1, increment_index=1)
+    ticket = _add_ticket(store, "TKT-wf")
+    wf = store.insert_workflow(
+        e1,
+        precondition="after creating a bookmark",
+        action="assert it appears in the list without reload",
+        expected_outcome="optimistic UI update verified",
+        run_id=run,
+        source_ticket_id=ticket,
+    )
+    other = store.insert_workflow(
+        e2, precondition="p", action="a", expected_outcome="o"
+    )
+    row = store.conn.execute(
+        "SELECT * FROM workflows WHERE id = ?", (wf,)
+    ).fetchone()
+    assert row["status"] == "live"
+    assert row["source_ticket_id"] == ticket
+    assert [r["id"] for r in store.live_workflows(e1)] == [wf]
+    # settlement kills only this episode's run memory; siblings are untouched
+    killed = store.settle_workflows(e1)
+    assert killed == 1
+    assert store.live_workflows(e1) == []
+    assert [r["id"] for r in store.live_workflows(e2)] == [other]
+    # the dead row persists (auditable) but is no longer injectable
+    assert store.conn.execute(
+        "SELECT status FROM workflows WHERE id = ?", (wf,)
+    ).fetchone()["status"] == "dead"
+    assert set(WORKFLOW_STATUSES) == {"live", "dead"}
+    with pytest.raises(sqlite3.IntegrityError):  # status enum backstops raw writes
+        store.conn.execute(
+            "INSERT INTO workflows (episode_id, precondition, action,"
+            " expected_outcome, status, created_at)"
+            " VALUES (?, 'p', 'a', 'o', 'zombie', 'now')",
+            (e1,),
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # episode FK must resolve
+        store.insert_workflow(99999, precondition="p", action="a",
+                              expected_outcome="o")
+
+
+def test_batch_validation_roundtrip(store):
+    """004 R15-R17: batch ↔ trial/benchmark episode refs ↔ verdict."""
+    batch = store.ensure_batch("batch-2026-06-10")
+    trial = store.create_episode("linkding", "sha256:abc", 5, mode="trial")
+    benchmark = store.create_episode("kanboard", "sha256:def", 5, mode="benchmark")
+    vid = store.insert_batch_validation(
+        batch,
+        snapshot_id=5,
+        trial_episode_id=trial,
+        benchmark_episode_id=benchmark,
+        bootstrap=True,
+    )
+    row = store.get_batch_validation(vid)
+    assert row["batch_id"] == batch
+    assert row["snapshot_id"] == 5
+    assert row["trial_episode_id"] == trial
+    assert row["benchmark_episode_id"] == benchmark
+    assert row["verdict"] is None  # undecided until the decision rule runs
+    assert row["bootstrap"] == 1
+    assert row["replay_miss"] == 0
+    # the decision rule writes the verdict (+ replay_miss flag + bootstrap co-sign)
+    store.set_batch_verdict(vid, "promote", replay_miss=True, cosigned_by="human")
+    decided = store.get_batch_validation(vid)
+    assert decided["verdict"] == "promote"
+    assert decided["replay_miss"] == 1
+    assert decided["cosigned_by"] == "human"
+    assert set(BATCH_VERDICTS) == {"promote", "revert"}
+    with pytest.raises(StoreError, match="unknown batch verdict"):
+        store.insert_batch_validation(batch, verdict="maybe")
+    with pytest.raises(StoreError, match="unknown batch verdict"):
+        store.set_batch_verdict(vid, "shipped")
+    with pytest.raises(StoreError, match="does not exist"):
+        store.set_batch_verdict(99999, "revert")
+    with pytest.raises(sqlite3.IntegrityError):  # batch FK must resolve
+        store.insert_batch_validation(99999)
+    with pytest.raises(sqlite3.IntegrityError):  # verdict enum backstops raw writes
+        store.conn.execute(
+            "INSERT INTO batch_validations (batch_id, verdict, created_at)"
+            " VALUES (?, 'rollback', 'now')",
+            (batch,),
+        )
+
+
+def test_lineage_seam_columns_present(store):
+    """004 R1: lineage seam columns exist (no writer yet — Plan 4 U8 / Plan 5)."""
+    family = store.create_family("worker")
+    agent = store.create_agent(family, "generic-worker")
+    skill = store.create_skill(agent, "elicitation")
+    agent_cols = {
+        r["name"]
+        for r in store.conn.execute("PRAGMA table_info(agents)").fetchall()
+    }
+    assert {"routing_decisions", "lineage_status"} <= agent_cols
+    skill_cols = {
+        r["name"]
+        for r in store.conn.execute("PRAGMA table_info(skills)").fetchall()
+    }
+    assert {"parent_skill_id", "split_snapshot_id"} <= skill_cols
+    # the seam carries data: a split child references its parent + the snapshot
+    child = store.create_skill(agent, "elicitation-probing")
+    with store.queue_operation("split") as snap:
+        store.conn.execute(
+            "UPDATE skills SET parent_skill_id = ?, split_snapshot_id = ?"
+            " WHERE id = ?",
+            (skill, snap, child),
+        )
+    child_row = store.conn.execute(
+        "SELECT * FROM skills WHERE id = ?", (child,)
+    ).fetchone()
+    assert child_row["parent_skill_id"] == skill
+    assert child_row["split_snapshot_id"] == snap
+    # routing_decisions feeds Plan 5's min_routing_decisions split gate
+    store.conn.execute(
+        "UPDATE agents SET routing_decisions = 128 WHERE id = ?", (agent,)
+    )
+    assert store.conn.execute(
+        "SELECT routing_decisions FROM agents WHERE id = ?", (agent,)
+    ).fetchone()["routing_decisions"] == 128

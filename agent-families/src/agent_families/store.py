@@ -22,6 +22,16 @@ provenance columns (R27). Backfill-safe over Phase 0/1 databases: every new
 column is NULLable-or-defaulted and the SCEN key requirement is enforced by
 an INSERT trigger so pre-existing rows survive untouched.
 
+Phase 3a (Plan 004 U1) adds the learning-loop spine via migration v4: the
+run-mode taxonomy (`training | trial | benchmark`) and nullable `epoch` on
+episodes; the append-only `fitness_events` log (state-at-snapshot reconstructible
+by COUNT over events with ``snapshot_id <= S`` in the queried channel, no
+snapshot minted on writes); the episode-scoped `workflows` run-memory table
+(rows die at settlement); `batch_validations` records (batch ↔ trial/benchmark
+episode refs ↔ verdict); and the lineage seam columns (agents.routing_decisions /
+lineage_status, skills.parent_skill_id / split_snapshot_id) the self-reorganization
+lands on. Backfill-safe over Phase 0/1/2 databases.
+
 Transaction discipline: the connection runs in manual-commit mode; writers compose
 inside :meth:`Store.transaction` (``BEGIN IMMEDIATE`` + busy-timeout backstop, R4)
 so U5 can commit one atomic registration. Multi-statement mutators refuse to run
@@ -110,6 +120,26 @@ SCEN_JUDGE_MODES = ("deterministic", "single", "panel")
 QA_OUTCOMES = ("answered", "answer_unavailable", "budget_exhausted")
 QA_CHECKER_VERDICTS = ("pass", "fail")
 
+# --- Phase 3a (Plan 004) state vocabularies ----------------------------------
+
+# Run-mode taxonomy (004 R1): the spine column gating quarantine visibility,
+# fitness-channel routing, and SPC eligibility. An episode is exactly one mode;
+# an increment (= one run) inherits its episode's mode, and standalone Phase 1
+# runs are implicitly `training`.
+RUN_MODES = ("training", "trial", "benchmark")
+
+# Fitness-event kinds (004 R1/R19): retrieval = insight rendered into a prompt;
+# win = the session's ticket reaches done AND is unimplicated; loss = causal
+# blame only. The append-only log is the substrate; insight counters are derived.
+FITNESS_EVENT_KINDS = ("retrieval", "win", "loss")
+
+# Run-memory workflow lifecycle (004 R1/R5/R6): a workflow row lives within its
+# episode and dies at settlement (status flips live → dead).
+WORKFLOW_STATUSES = ("live", "dead")
+
+# Batch-validation verdicts (004 R1/R15-R17).
+BATCH_VERDICTS = ("promote", "revert")
+
 _STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in STATUSES)
 _RUN_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_STATUSES)
 _TICKET_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in TICKET_STATUSES)
@@ -123,6 +153,10 @@ _SCENARIO_TIER_SQL_ENUM = ", ".join(f"'{s}'" for s in SCENARIO_TIERS)
 _SCEN_JUDGE_MODE_SQL_ENUM = ", ".join(f"'{s}'" for s in SCEN_JUDGE_MODES)
 _QA_OUTCOME_SQL_ENUM = ", ".join(f"'{s}'" for s in QA_OUTCOMES)
 _QA_CHECKER_SQL_ENUM = ", ".join(f"'{s}'" for s in QA_CHECKER_VERDICTS)
+_RUN_MODE_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_MODES)
+_FITNESS_KIND_SQL_ENUM = ", ".join(f"'{s}'" for s in FITNESS_EVENT_KINDS)
+_WORKFLOW_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in WORKFLOW_STATUSES)
+_BATCH_VERDICT_SQL_ENUM = ", ".join(f"'{s}'" for s in BATCH_VERDICTS)
 
 
 class StoreError(Exception):
@@ -602,10 +636,110 @@ ALTER TABLE insights ADD COLUMN evidence_scenario_id TEXT REFERENCES trace_scen(
 ALTER TABLE insights ADD COLUMN evidence_ticket_id TEXT REFERENCES trace_tkt(id);
 """
 
+# Phase 3a (Plan 004 U1, R1): the learning-loop schema spine. Backfill-safe over
+# a Phase 0/1/2 database — every change is an ADD COLUMN (nullable or defaulted)
+# or a brand-new table; the append-only triggers add no constraint that could
+# reject a pre-existing row.
+_SCHEMA_V4 = f"""
+-- Run-mode taxonomy (R1): every episode is training | trial | benchmark. The
+-- mode gates quarantine visibility (retrieval), the fitness channel, and SPC
+-- eligibility downstream. An increment is exactly one run inside an episode, so
+-- a run's mode is its episode's; standalone Phase 1 runs are implicitly training.
+-- Pre-Phase-3a episodes backfill 'training' (the default).
+ALTER TABLE episodes ADD COLUMN mode TEXT NOT NULL DEFAULT 'training'
+    CHECK (mode IN ({_RUN_MODE_SQL_ENUM}));
+
+-- Epoch column (R1): one rotation through the target curriculum (DESIGN §11);
+-- nullable here, populated by Plan 5's curriculum bookkeeping.
+ALTER TABLE episodes ADD COLUMN epoch INTEGER;
+
+-- Append-only fitness-event log (R1, R19): one row per fitness event, keyed
+-- (insight, episode, run-mode, kind) and stamped with the library snapshot in
+-- force. Fitness state at any snapshot is COUNT(*) over events with
+-- snapshot_id <= S in the queried channel — no snapshot is minted on a fitness
+-- write, and rows are immutable (triggers below). training events feed the
+-- ratchet; trial/benchmark events land in the validation-only channel.
+CREATE TABLE fitness_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    insight_id  INTEGER NOT NULL REFERENCES insights(id),
+    episode_id  INTEGER REFERENCES episodes(id),
+    mode        TEXT NOT NULL CHECK (mode IN ({_RUN_MODE_SQL_ENUM})),
+    kind        TEXT NOT NULL CHECK (kind IN ({_FITNESS_KIND_SQL_ENUM})),
+    snapshot_id INTEGER NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX idx_fitness_events_insight ON fitness_events(insight_id, snapshot_id);
+CREATE INDEX idx_fitness_events_episode ON fitness_events(episode_id);
+
+CREATE TRIGGER trg_fitness_events_no_update
+BEFORE UPDATE ON fitness_events
+BEGIN
+    SELECT RAISE(ABORT,
+        'fitness_events is append-only: state is reconstructed, never edited (004 R1)');
+END;
+
+CREATE TRIGGER trg_fitness_events_no_delete
+BEFORE DELETE ON fitness_events
+BEGIN
+    SELECT RAISE(ABORT,
+        'fitness_events is append-only: events are never deleted (004 R1)');
+END;
+
+-- Run-scoped working memory (R1, R5/R6): episode-scoped typed workflow rows,
+-- induced on verifier-pass and injected into later increments' ledgers above
+-- library skills. They die at episode settlement (status flips live → dead) so
+-- the within-episode memory never leaks across episodes.
+CREATE TABLE workflows (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id       INTEGER NOT NULL REFERENCES episodes(id),
+    run_id           INTEGER REFERENCES runs(id),
+    source_ticket_id TEXT REFERENCES trace_tkt(id),
+    precondition     TEXT NOT NULL,
+    action           TEXT NOT NULL,
+    expected_outcome TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'live'
+                     CHECK (status IN ({_WORKFLOW_STATUS_SQL_ENUM})),
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX idx_workflows_episode ON workflows(episode_id);
+
+-- Batch-validation records (R1, R15-R17): one per batch validation cycle, keyed
+-- (batch, snapshot), linking the optional trial-replay episode and the required
+-- benchmark episode to the verdict. replay_miss / bootstrap / cosigned_by carry
+-- the R15/R16 telemetry. N=1 batches in this plan; the per-batch keying is the
+-- Plan 5 parallel-merge seam.
+CREATE TABLE batch_validations (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id             INTEGER NOT NULL REFERENCES batches(id),
+    snapshot_id          INTEGER,
+    trial_episode_id     INTEGER REFERENCES episodes(id),
+    benchmark_episode_id INTEGER REFERENCES episodes(id),
+    verdict              TEXT CHECK (verdict IN ({_BATCH_VERDICT_SQL_ENUM})),
+    replay_miss          INTEGER NOT NULL DEFAULT 0 CHECK (replay_miss IN (0, 1)),
+    bootstrap            INTEGER NOT NULL DEFAULT 0 CHECK (bootstrap IN (0, 1)),
+    cosigned_by          TEXT,
+    detail               TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL
+);
+CREATE INDEX idx_batch_validations_batch ON batch_validations(batch_id);
+
+-- Lineage seam (R1): columns the self-reorganization lands on. Agents already
+-- carry parent_id (Phase 0); routing_decisions feeds Plan 5's
+-- min_routing_decisions agent-split gate, and lineage_status marks a
+-- split-pending or retired-by-split parent. Skills gain parent_skill_id +
+-- split_snapshot_id so this plan's U8 skill split records provenance-correct
+-- child membership. All nullable / defaulted — no writer exists yet.
+ALTER TABLE agents ADD COLUMN routing_decisions INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agents ADD COLUMN lineage_status TEXT;
+ALTER TABLE skills ADD COLUMN parent_skill_id INTEGER REFERENCES skills(id);
+ALTER TABLE skills ADD COLUMN split_snapshot_id INTEGER REFERENCES snapshots(id);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
+    (4, _SCHEMA_V4),
 )
 
 
@@ -1155,18 +1289,26 @@ class Store:
         *,
         max_increments: int | None = None,
         cost_ceiling_usd: float | None = None,
+        mode: str = "training",
+        epoch: int | None = None,
     ) -> int:
         """Mint an episode: one target × one library snapshot × one settlement.
 
         Budget fields come from thresholds config (003 R4) and are stamped here
-        so the values that governed the episode are queryable forever.
+        so the values that governed the episode are queryable forever. ``mode``
+        is the run-mode taxonomy (004 R1) and ``epoch`` the curriculum rotation
+        (nullable; Plan 5 populates).
         """
+        if mode not in RUN_MODES:
+            raise StoreError(
+                f"unknown run mode '{mode}' (expected one of {RUN_MODES})"
+            )
         cur = self.conn.execute(
             "INSERT INTO episodes (target, digest, snapshot_id, status,"
-            " max_increments, cost_ceiling_usd, created_at)"
-            " VALUES (?, ?, ?, 'created', ?, ?, ?)",
+            " max_increments, cost_ceiling_usd, mode, epoch, created_at)"
+            " VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?)",
             (target, digest, int(snapshot_id), max_increments, cost_ceiling_usd,
-             _utcnow()),
+             mode, epoch, _utcnow()),
         )
         return cur.lastrowid
 
@@ -1200,3 +1342,174 @@ class Store:
         )
         if cur.rowcount == 0:
             raise StoreError(f"run {run_id} does not exist")
+
+    # --- Phase 3a: fitness-event log (004 R1/R19) -----------------------------
+
+    def record_fitness_event(
+        self,
+        insight_id: int,
+        kind: str,
+        mode: str,
+        snapshot_id: int,
+        *,
+        episode_id: int | None = None,
+    ) -> int:
+        """Append one fitness event (immutable). Mints no snapshot (004 R1).
+
+        The log is the substrate of state-at-snapshot: fitness at S in a channel
+        is the COUNT over events with ``snapshot_id <= S``. training events feed
+        the ratchet; trial/benchmark land in the validation-only channel (R19).
+        """
+        if kind not in FITNESS_EVENT_KINDS:
+            raise StoreError(
+                f"unknown fitness event kind '{kind}'"
+                f" (expected one of {FITNESS_EVENT_KINDS})"
+            )
+        if mode not in RUN_MODES:
+            raise StoreError(
+                f"unknown run mode '{mode}' (expected one of {RUN_MODES})"
+            )
+        cur = self.conn.execute(
+            "INSERT INTO fitness_events (insight_id, episode_id, mode, kind,"
+            " snapshot_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (insight_id, episode_id, mode, kind, int(snapshot_id), _utcnow()),
+        )
+        return cur.lastrowid
+
+    def fitness_counts(
+        self,
+        insight_id: int,
+        *,
+        snapshot_id: int | None = None,
+        mode: str = "training",
+    ) -> dict[str, int]:
+        """Reconstruct an insight's fitness in one channel as of a snapshot.
+
+        Returns ``{kind: count}`` for every kind (zeros included). ``mode``
+        selects the channel: `training` is the ratchet channel; trial/benchmark
+        events are excluded from it (004 R19). ``snapshot_id=None`` counts all
+        events; otherwise only those with ``snapshot_id <= snapshot_id``.
+        """
+        if mode not in RUN_MODES:
+            raise StoreError(
+                f"unknown run mode '{mode}' (expected one of {RUN_MODES})"
+            )
+        sql = (
+            "SELECT kind, COUNT(*) AS n FROM fitness_events"
+            " WHERE insight_id = ? AND mode = ?"
+        )
+        params: list[object] = [insight_id, mode]
+        if snapshot_id is not None:
+            sql += " AND snapshot_id <= ?"
+            params.append(int(snapshot_id))
+        sql += " GROUP BY kind"
+        counts = {kind: 0 for kind in FITNESS_EVENT_KINDS}
+        for row in self.conn.execute(sql, params).fetchall():
+            counts[row["kind"]] = row["n"]
+        return counts
+
+    # --- Phase 3a: run-scoped working memory (004 R1/R5/R6) -------------------
+
+    def insert_workflow(
+        self,
+        episode_id: int,
+        *,
+        precondition: str,
+        action: str,
+        expected_outcome: str,
+        run_id: int | None = None,
+        source_ticket_id: str | None = None,
+    ) -> int:
+        """Induce a `live` episode-scoped workflow row (dies at settlement)."""
+        cur = self.conn.execute(
+            "INSERT INTO workflows (episode_id, run_id, source_ticket_id,"
+            " precondition, action, expected_outcome, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'live', ?)",
+            (episode_id, run_id, source_ticket_id, precondition, action,
+             expected_outcome, _utcnow()),
+        )
+        return cur.lastrowid
+
+    def live_workflows(self, episode_id: int) -> list[sqlite3.Row]:
+        """Workflows still alive for an episode (injected above library skills)."""
+        return self.conn.execute(
+            "SELECT * FROM workflows WHERE episode_id = ? AND status = 'live'"
+            " ORDER BY id",
+            (episode_id,),
+        ).fetchall()
+
+    def settle_workflows(self, episode_id: int) -> int:
+        """Kill an episode's run memory at settlement; returns rows retired."""
+        cur = self.conn.execute(
+            "UPDATE workflows SET status = 'dead'"
+            " WHERE episode_id = ? AND status = 'live'",
+            (episode_id,),
+        )
+        return cur.rowcount
+
+    # --- Phase 3a: batch-validation records (004 R1/R15-R17) ------------------
+
+    def insert_batch_validation(
+        self,
+        batch_id: int,
+        *,
+        snapshot_id: int | None = None,
+        trial_episode_id: int | None = None,
+        benchmark_episode_id: int | None = None,
+        verdict: str | None = None,
+        replay_miss: bool = False,
+        bootstrap: bool = False,
+        cosigned_by: str | None = None,
+        detail: str = "",
+    ) -> int:
+        """Open a batch-validation record keyed (batch, snapshot) (004 R17)."""
+        if verdict is not None and verdict not in BATCH_VERDICTS:
+            raise StoreError(
+                f"unknown batch verdict '{verdict}'"
+                f" (expected one of {BATCH_VERDICTS})"
+            )
+        cur = self.conn.execute(
+            "INSERT INTO batch_validations (batch_id, snapshot_id,"
+            " trial_episode_id, benchmark_episode_id, verdict, replay_miss,"
+            " bootstrap, cosigned_by, detail, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (batch_id, snapshot_id, trial_episode_id, benchmark_episode_id,
+             verdict, 1 if replay_miss else 0, 1 if bootstrap else 0,
+             cosigned_by, detail, _utcnow()),
+        )
+        return cur.lastrowid
+
+    def get_batch_validation(self, validation_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM batch_validations WHERE id = ?", (validation_id,)
+        ).fetchone()
+
+    def set_batch_verdict(
+        self,
+        validation_id: int,
+        verdict: str,
+        *,
+        replay_miss: bool | None = None,
+        cosigned_by: str | None = None,
+    ) -> None:
+        """Record the promote/revert decision on a batch-validation record."""
+        if verdict not in BATCH_VERDICTS:
+            raise StoreError(
+                f"unknown batch verdict '{verdict}'"
+                f" (expected one of {BATCH_VERDICTS})"
+            )
+        sets = ["verdict = ?"]
+        params: list[object] = [verdict]
+        if replay_miss is not None:
+            sets.append("replay_miss = ?")
+            params.append(1 if replay_miss else 0)
+        if cosigned_by is not None:
+            sets.append("cosigned_by = ?")
+            params.append(cosigned_by)
+        params.append(validation_id)
+        cur = self.conn.execute(
+            f"UPDATE batch_validations SET {', '.join(sets)} WHERE id = ?",
+            params,
+        )
+        if cur.rowcount == 0:
+            raise StoreError(f"batch validation {validation_id} does not exist")
