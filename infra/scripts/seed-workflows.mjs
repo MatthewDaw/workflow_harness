@@ -14,18 +14,13 @@
 //   SEED_ORG=<org> SEED_DRY_RUN=1 node infra/scripts/seed-workflows.mjs   # report only
 //   SEED_ORG=<org> node infra/scripts/seed-workflows.mjs                  # write to `harness`
 import { existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 
 if (!ORG) {
   console.error('[seed-workflows] SEED_ORG is required (no default — refuses to guess the org).');
@@ -38,10 +33,11 @@ if (!existsSync(path.join(backendDist, 'seed', 'workflows.js'))) {
   );
   process.exit(1);
 }
-const { buildSeedWorkflows, STARTER_WORKFLOWS } = await import(
-  pathToFileURL(path.join(backendDist, 'seed', 'workflows.js')).href
+const { buildSeedWorkflows, STARTER_WORKFLOWS } = await importBackendDist(
+  'seed',
+  'workflows.js',
 );
-const { workflowKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
+const { workflowKey } = await importBackendDist('db', 'keys.js');
 
 // buildSeedWorkflows: one org-scoped kind:'workflow' record per starter file,
 // each parsed/validated through workflowSchema (system authorship, base variant).
@@ -57,7 +53,7 @@ if (process.env.SEED_DRY_RUN) {
     `[seed-workflows] DRY RUN — ${records.length} workflow records targeting org#${ORG} in ${TABLE}. Nothing written.`,
   );
 } else {
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+  const doc = makeDocClient();
   for (const record of records) {
     await doc.send(
       new PutCommand({

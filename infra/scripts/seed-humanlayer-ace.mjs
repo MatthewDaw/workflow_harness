@@ -14,19 +14,14 @@
 //   SEED_ORG=<org> SEED_DRY_RUN=1 node infra/scripts/seed-humanlayer-ace.mjs   # report only
 //   SEED_ORG=<org> node infra/scripts/seed-humanlayer-ace.mjs                  # write to `harness`
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const skillsDir = path.join(repoRoot, 'catalog', 'skills');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 
 if (!ORG) {
   console.error('[seed-hl-ace] SEED_ORG is required (no default — refuses to guess the org).');
@@ -71,10 +66,8 @@ if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
   );
   process.exit(1);
 }
-const { buildSeedSkills } = await import(
-  pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href
-);
-const { skillKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
+const { buildSeedSkills } = await importBackendDist('seed', 'skills.js');
+const { skillKey } = await importBackendDist('db', 'keys.js');
 
 function parseFrontmatter(md) {
   const lines = md.split(/\r?\n/);
@@ -134,7 +127,7 @@ if (process.env.SEED_DRY_RUN) {
     `[seed-hl-ace] DRY RUN — ${records.length} records (${ACE_SKILLS.length} skills + 1 bundle) targeting org#${ORG} in ${TABLE}. Nothing written.`,
   );
 } else {
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+  const doc = makeDocClient();
   for (const record of records) {
     await doc.send(
       new PutCommand({

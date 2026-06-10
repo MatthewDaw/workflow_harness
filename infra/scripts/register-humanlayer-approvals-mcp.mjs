@@ -20,20 +20,16 @@
 // Usage:
 //   SEED_ORG=<org> SEED_DRY_RUN=1 node infra/scripts/register-humanlayer-approvals-mcp.mjs  # report only
 //   SEED_ORG=<org> node infra/scripts/register-humanlayer-approvals-mcp.mjs                 # write to `harness`
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const sharedDist = path.join(repoRoot, 'packages', 'shared', 'dist');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 
 if (!ORG) {
   console.error('[reg-hl-approvals] SEED_ORG is required (no default — refuses to guess the org).');
@@ -57,7 +53,7 @@ if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
 const { mcpServerSchema, orgScope } = await import(
   pathToFileURL(path.join(sharedDist, 'index.js')).href
 );
-const { mcpServerKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
+const { mcpServerKey } = await importBackendDist('db', 'keys.js');
 
 // The single stdio MCP server record. Validate it through the compiled schema so
 // the on-disk shape matches exactly what `POST /mcp-servers` would accept.
@@ -88,7 +84,7 @@ if (process.env.SEED_DRY_RUN) {
     `[reg-hl-approvals] DRY RUN — 1 MCP-server record (${server.name}) targeting org#${ORG} in ${TABLE}. Nothing written.`,
   );
 } else {
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+  const doc = makeDocClient();
   await doc.send(
     new PutCommand({
       TableName: TABLE,

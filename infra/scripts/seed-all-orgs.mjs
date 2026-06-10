@@ -21,19 +21,14 @@
 //
 // Idempotent: each record is upserted by key, so re-running converges.
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, REGION, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const skillsDir = path.join(repoRoot, 'catalog', 'skills');
 const bundlesManifest = path.join(skillsDir, 'bundles.json');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 // U4 — SEED RE-EMBED WITHOUT A STORM. Every PutCommand below re-enters the
 // DynamoDB stream, and the stream consumer re-embeds any SKILL# whose desc+body
 // hash changed (U3). A full re-seed is therefore a BURST of writes, but the storm
@@ -74,18 +69,15 @@ if (!existsSync(path.join(backendDist, 'seed', 'workflows.js'))) {
 
 // Reuse the canonical record builder + key scheme from the built backend so this
 // seed produces byte-identical records to what the REST layer reads/writes.
-const { buildSeedSkills, assertBaseVariantOnly } = await import(
-  pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href
-);
+const { buildSeedSkills, assertBaseVariantOnly } = await importBackendDist('seed', 'skills.js');
 // Workflows are structured data (no markdown tree), so their source of truth is
 // the compiled STARTER_WORKFLOWS — seeded org-wide here so EVERY org gets the
 // starter DAG (not a single SEED_ORG, per the all-orgs convention).
-const { buildSeedWorkflows, STARTER_WORKFLOWS } = await import(
-  pathToFileURL(path.join(backendDist, 'seed', 'workflows.js')).href
+const { buildSeedWorkflows, STARTER_WORKFLOWS } = await importBackendDist(
+  'seed',
+  'workflows.js',
 );
-const { skillKey, workflowKey } = await import(
-  pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
-);
+const { skillKey, workflowKey } = await importBackendDist('db', 'keys.js');
 
 /** Optional inter-write pacing (U4) — no-op when WRITE_PACING_MS is 0. */
 const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
@@ -206,7 +198,7 @@ async function main() {
   }
   const manifest = readBundleManifest();
 
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+  const doc = makeDocClient();
 
   // U4 — confirm the seed targets the LIVE table. The default is `harness`
   // (us-east-1, acct 066756666605); a typo'd HARNESS_TABLE would silently seed

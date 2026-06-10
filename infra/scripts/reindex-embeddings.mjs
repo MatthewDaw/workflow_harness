@@ -34,17 +34,12 @@
 // (update the deployed Lambda's `BEDROCK_EMBEDDING_VERSION`), since the running
 // backend reads the active version from its environment.
 import { existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
-
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 
 /** The org-scope partition prefix the skill records live under (mirrors keys.ts). */
 const ORG_SCOPE_PREFIX = 'SCOPE#org#';
@@ -198,20 +193,15 @@ async function main() {
   }
   const dryRun = Boolean(process.env.REINDEX_DRY_RUN);
 
-  const { BedrockEmbedder } = await import(
-    pathToFileURL(path.join(backendDist, 'embeddings', 'bedrock.js')).href
+  const { BedrockEmbedder } = await importBackendDist('embeddings', 'bedrock.js');
+  const { S3Vectors, SKILL_VECTOR_INDEX, skillVectorKey } = await importBackendDist(
+    'embeddings',
+    's3vectors.js',
   );
-  const { S3Vectors, SKILL_VECTOR_INDEX, skillVectorKey } = await import(
-    pathToFileURL(path.join(backendDist, 'embeddings', 's3vectors.js')).href
-  );
-  const { skillContentHash } = await import(
-    pathToFileURL(path.join(backendDist, 'ws', 'streamConsumer.js')).href
-  );
-  const { isVersionSideRecord } = await import(
-    pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
-  );
+  const { skillContentHash } = await importBackendDist('ws', 'streamConsumer.js');
+  const { isVersionSideRecord } = await importBackendDist('db', 'keys.js');
 
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+  const doc = makeDocClient();
   // The embed run MUST stamp the target — pin it for this process so the compiled
   // `activeEmbeddingVersion()` resolves to `target` while re-embedding.
   process.env.BEDROCK_EMBEDDING_VERSION = target;

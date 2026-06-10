@@ -33,17 +33,12 @@
 // Read-only: it fetches vectors + scans the table; it writes nothing. A non-empty
 // report exits 1 so it can gate a CI / cron check; clean exits 0.
 import { existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
-
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 
 /** The org-scope partition prefix the skill records live under (mirrors keys.ts). */
 const ORG_SCOPE_PREFIX = 'SCOPE#org#';
@@ -198,20 +193,15 @@ async function main() {
   requireBackendDist();
   const asJson = process.argv.slice(2).includes('--json');
 
-  const { S3Vectors, SKILL_VECTOR_INDEX, skillVectorKey } = await import(
-    pathToFileURL(path.join(backendDist, 'embeddings', 's3vectors.js')).href
+  const { S3Vectors, SKILL_VECTOR_INDEX, skillVectorKey } = await importBackendDist(
+    'embeddings',
+    's3vectors.js',
   );
-  const { activeEmbeddingVersion } = await import(
-    pathToFileURL(path.join(backendDist, 'embeddings', 'bedrock.js')).href
-  );
-  const { skillContentHash } = await import(
-    pathToFileURL(path.join(backendDist, 'ws', 'streamConsumer.js')).href
-  );
-  const { isVersionSideRecord } = await import(
-    pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
-  );
+  const { activeEmbeddingVersion } = await importBackendDist('embeddings', 'bedrock.js');
+  const { skillContentHash } = await importBackendDist('ws', 'streamConsumer.js');
+  const { isVersionSideRecord } = await importBackendDist('db', 'keys.js');
 
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+  const doc = makeDocClient();
   const vectors = new S3Vectors();
   const orgs = await listOrgNames(doc, TABLE);
 

@@ -15,20 +15,15 @@
 //
 // Idempotent: each skill is upserted by key, so re-running converges.
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const skillsDir = path.join(repoRoot, 'catalog', 'skills');
 const bundlesManifest = path.join(skillsDir, 'bundles.json');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG ?? 'acme';
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 // Owner of the user-scoped grant for non-bundle skills (compound-engineering,
 // gstack, playwright-cli). They are NOT in the org default — they seed at this
 // user's scope so a granted account can see them while a fresh org cannot.
@@ -44,10 +39,8 @@ if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
 }
 
 // Reuse the canonical record builder + key scheme from the built backend.
-const { buildSeedSkills } = await import(
-  pathToFileURL(path.join(backendDist, 'seed', 'skills.js')).href
-);
-const { skillKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
+const { buildSeedSkills } = await importBackendDist('seed', 'skills.js');
+const { skillKey } = await importBackendDist('db', 'keys.js');
 
 /**
  * Parse the `name` and (folded) `description` out of a SKILL.md YAML front
@@ -169,7 +162,7 @@ async function main() {
     return;
   }
 
-  const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+  const doc = makeDocClient();
   for (const record of records) {
     await doc.send(
       new PutCommand({

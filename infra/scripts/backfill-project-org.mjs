@@ -13,18 +13,13 @@
 // Usage:
 //   SEED_DRY_RUN=1 node infra/scripts/backfill-project-org.mjs   # report only
 //   node infra/scripts/backfill-project-org.mjs                  # write
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 const DRY_RUN = Boolean(process.env.SEED_DRY_RUN);
 
 if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
@@ -33,9 +28,9 @@ if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
   );
   process.exit(1);
 }
-const { userKey } = await import(pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href);
+const { userKey } = await importBackendDist('db', 'keys.js');
 
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+const doc = makeDocClient();
 
 // 1. Enumerate every PROJECT META record (PK `PROJ#<id>`, SK `META`). A one-off
 //    full scan is acceptable here — there is no GSI spanning all projects, and

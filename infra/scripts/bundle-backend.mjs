@@ -12,9 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
+import { repoRoot } from './lib/common.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const backendDist = path.resolve(repoRoot, 'packages', 'backend', 'dist');
 const outRoot = path.resolve(here, '..', 'cdk.bundles');
 

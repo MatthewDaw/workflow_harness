@@ -10,26 +10,16 @@
 // Usage:
 //   SEED_ORG="test org" PROJECT_ID=workflow-harness SEED_DRY_RUN=1 node infra/scripts/optin-humanlayer.mjs
 //   SEED_ORG="test org" PROJECT_ID=workflow-harness node infra/scripts/optin-humanlayer.mjs
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import {
-  DynamoDBDocumentClient,
-  GetCommand,
-  QueryCommand,
-  PutCommand,
-} from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
 const PROJECT_ID = process.env.PROJECT_ID;
 const BUNDLE = process.env.BUNDLE ?? 'humanlayer-ace';
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 
 if (!ORG || !PROJECT_ID) {
   console.error('[optin-hl] SEED_ORG and PROJECT_ID are both required (no defaults).');
@@ -41,11 +31,9 @@ if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
   );
   process.exit(1);
 }
-const { projectKey, scopePartition } = await import(
-  pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
-);
+const { projectKey, scopePartition } = await importBackendDist('db', 'keys.js');
 
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+const doc = makeDocClient();
 const orgPart = scopePartition({ tier: 'org', id: ORG });
 
 const queryNames = async (skPrefix, predicate = () => true) => {

@@ -19,22 +19,17 @@
 // Usage:
 //   SEED_ORG="test org" PROJECT_ID=workflow-harness node infra/scripts/verify-humanlayer.mjs
 //   SEED_ORG="test org" node infra/scripts/verify-humanlayer.mjs   # catalog + local only (skips opt-in)
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..', '..');
 const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
 const PROJECT_ID = process.env.PROJECT_ID; // optional
 const BUNDLE = process.env.BUNDLE ?? 'humanlayer-ace';
-const TABLE = process.env.HARNESS_TABLE ?? 'harness';
-const REGION = process.env.AWS_REGION ?? 'us-east-1';
 
 const AGENTS_EXPECTED = [
   'codebase-analyzer',
@@ -58,11 +53,9 @@ if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
   process.exit(1);
 }
 
-const { projectKey, scopePartition } = await import(
-  pathToFileURL(path.join(backendDist, 'db', 'keys.js')).href
-);
+const { projectKey, scopePartition } = await importBackendDist('db', 'keys.js');
 
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+const doc = makeDocClient();
 const orgPart = scopePartition({ tier: 'org', id: ORG });
 
 let hardFail = false;
