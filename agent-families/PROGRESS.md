@@ -18,7 +18,7 @@ holds, and the full offline suite is green.
 - [x] 001/U6 — Lifecycle operations
 - [x] 001/U7 — Rendering: concatenation and delta-patch compile
 - [x] 001/U8 — SKILL.md export
-- [ ] 001/U9 — CLI assembly, init, and end-to-end acceptance
+- [x] 001/U9 — CLI assembly, init, and end-to-end acceptance
 
 ### Plan 002 — Phase 1: Pipeline Skeleton (docs/plans/2026-06-10-002-feat-agent-families-phase1-pipeline-skeleton-plan.md)
 - [ ] 002/U1 — Phase 1 schema migration
