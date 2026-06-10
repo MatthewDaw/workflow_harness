@@ -1,0 +1,46 @@
+{
+  "envelope": {
+    "duration_ms": 1234,
+    "is_error": false,
+    "num_turns": 1,
+    "result": "ok",
+    "structured_output": {
+      "confidence": 0.9,
+      "outcome": "new_skill"
+    },
+    "subtype": "success",
+    "total_cost_usd": 0.0042,
+    "type": "result"
+  },
+  "request": {
+    "model": "sonnet",
+    "prompt": "Place this insight in the library taxonomy.\n\nInsight: Pin subprocess encoding to utf-8 on Windows so judge output parses identically across machines.",
+    "schema": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "type": "number"
+        },
+        "outcome": {
+          "enum": [
+            "append_to_skill",
+            "new_skill",
+            "merge_discard",
+            "contradiction_flag",
+            "contradiction_supersede",
+            "lint_reject",
+            "rewrite_proposed",
+            "no_placement"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "confidence"
+      ],
+      "type": "object"
+    }
+  },
+  "request_hash": "659f7cb2cdd1e9cc69b3011a57076c307af1eb70d03d932dc1c5442a4674de22"
+}
