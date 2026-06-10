@@ -42,7 +42,7 @@ holds, and the full offline suite is green.
 - [x] 003/U9 — Trace-query CLI, idea provenance, and episode e2e
 
 ### Plan 004 — Phase 3a: Close the Learning Loop (docs/plans/2026-06-10-004-feat-agent-families-phase3a-learning-loop-plan.md)
-- [ ] 004/U1 — Schema spine migration
+- [x] 004/U1 — Schema spine migration
 - [ ] 004/U2 — Retrieval into prompts
 - [ ] 004/U3 — Run-scoped working memory
 - [ ] 004/U4 — Kanboard onboarding + frozen micro-benchmark
