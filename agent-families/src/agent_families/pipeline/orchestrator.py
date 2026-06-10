@@ -53,6 +53,13 @@ module hardcodes a tunable.
 invoked with a step name (:data:`CRASH_STEPS`) at every checkpoint boundary;
 tests raise from it to simulate process death deterministically. Real
 subprocess termination is reserved for the one coarse e2e (U8).
+
+Phase 2 amendment (plan-003 U6): :meth:`Orchestrator.run` gains the workspace
+dual-mode contract — an injected workspace (episode mode: the persistent
+target-engagement workspace) or per-run instantiation from the pinned
+template (standalone toy-spec mode) — and optional ``episode_id`` /
+``increment_index`` FKs stamped onto the run row (003 R1: an increment is
+exactly one Phase 1 run). Phase 1 callers are unchanged.
 """
 
 from __future__ import annotations
@@ -65,9 +72,11 @@ from pathlib import Path
 
 from agent_families.pipeline.sessions import SessionError, SessionQuotaExhausted
 from agent_families.pipeline.workspace import (
+    DEFAULT_TEMPLATE_DIR,
     Workspace,
     WorkspaceError,
     commit_iteration,
+    instantiate_workspace,
     reset_hard,
     reset_to_ticket_start,
     tag_ticket_start,
@@ -304,17 +313,56 @@ class Orchestrator:
 
     # --- entry points -------------------------------------------------------------
 
-    def run(self, spec_ref: str, workspace: Workspace) -> RunResult:
-        """Start a new run against an instantiated workspace (R1)."""
+    def run(
+        self,
+        spec_ref: str,
+        workspace: Workspace | None = None,
+        *,
+        episode_id: int | None = None,
+        increment_index: int | None = None,
+        workspace_dest: Path | str | None = None,
+        template_dir: Path | str = DEFAULT_TEMPLATE_DIR,
+        lock_path: Path | str | None = None,
+    ) -> RunResult:
+        """Start a new run (R1; 003 U6 dual-mode contract).
+
+        Workspace dual-mode (003 R1): episode mode INJECTS the engagement
+        workspace (created at the target's first episode, persisting across
+        increments and episodes); standalone toy-spec mode omits it and gets
+        per-run instantiation from the pinned template into
+        ``workspace_dest``. Episode runs carry ``episode_id`` +
+        ``increment_index`` onto the run row — an increment is exactly one
+        run; standalone runs leave both NULL (Phase 1 callers unchanged).
+        """
         if not spec_ref.strip():
             raise OrchestratorError("spec_ref must be non-empty")
+        if (episode_id is None) != (increment_index is None):
+            raise OrchestratorError(
+                "episode_id and increment_index travel together (003 R1: an"
+                " increment is exactly one run) — pass both or neither"
+            )
+        if workspace is None:
+            if workspace_dest is None:
+                raise OrchestratorError(
+                    "no workspace: inject one (episode mode, 003 R1) or pass"
+                    " workspace_dest for per-run instantiation (standalone"
+                    " toy-spec mode)"
+                )
+            workspace = instantiate_workspace(
+                template_dir, Path(workspace_dest), lock_path=lock_path
+            )
         root = Path(workspace.root)
         if not (root / ".git").exists():
             raise OrchestratorError(
                 f"workspace {root} is not a git repository; instantiate it"
                 " first (U2 instantiate_workspace)"
             )
-        run_id = self.store.create_run(spec_ref, self.store.current_snapshot_id())
+        run_id = self.store.create_run(
+            spec_ref,
+            self.store.current_snapshot_id(),
+            episode_id=episode_id,
+            increment_index=increment_index,
+        )
         state = _RunState(workspace_root=str(root))
         self._save_state(run_id, state)
         logger.info("run %d created: spec_ref=%s", run_id, spec_ref)

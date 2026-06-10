@@ -39,6 +39,15 @@ this is an assert, per the security non-goal.
 
 Retention: workspaces are kept after the run (repro commands re-execute
 against them); nothing in this module deletes a workspace.
+
+Phase 2 amendment (plan-003 U6, R1): workspace ownership moves from run to the
+**target engagement** — :func:`ensure_engagement_workspace` creates the
+workspace at the target's first episode and loads (never recreates) the same
+one on every later increment and episode; each episode continues the same
+product, and the workspace is retained after settlement (fresh workspaces
+return only with Plan 5's rebuild-probe episodes). Standalone toy-spec runs
+keep per-run :func:`instantiate_workspace` — the dual-mode contract Phase 1's
+tests gate.
 """
 
 from __future__ import annotations
@@ -294,6 +303,45 @@ def instantiate_workspace(
     _git(dest, "add", "-A")
     _git(dest, "commit", "-m", "af workspace: instantiated from pinned template")
     return Workspace(root=dest)
+
+
+def load_workspace(root: Path | str) -> Workspace:
+    """Load an existing workspace (the engagement-workspace path, 003 R1).
+
+    Loading validates without mutating: the directory must exist and carry the
+    git repo the orchestrator's commit/tag/reset discipline runs against.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        raise WorkspaceError(
+            f"workspace directory not found: {root} (engagement workspaces"
+            " persist across increments and episodes, 003 R1 — do not delete"
+            " them between runs)"
+        )
+    if not (root / ".git").exists():
+        raise WorkspaceError(
+            f"{root} is not a workspace (no .git): workspaces are git repos"
+            " created by instantiate_workspace"
+        )
+    return Workspace(root=root)
+
+
+def ensure_engagement_workspace(
+    dest: Path | str,
+    template_dir: Path | str = DEFAULT_TEMPLATE_DIR,
+    *,
+    lock_path: Path | str | None = None,
+) -> Workspace:
+    """Create-or-load the target engagement's persistent workspace (003 R1).
+
+    First episode for the target: instantiate from the pinned template.
+    Every later increment and episode: load the same workspace untouched —
+    each episode continues the same product, and settlement retains it.
+    """
+    dest = Path(dest)
+    if dest.exists():
+        return load_workspace(dest)
+    return instantiate_workspace(template_dir, dest, lock_path=lock_path)
 
 
 # --- iteration commits, ticket tags, resets (R11/R2/R3 plumbing) -------------
