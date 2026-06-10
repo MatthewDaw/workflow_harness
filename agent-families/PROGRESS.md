@@ -31,7 +31,7 @@ holds, and the full offline suite is green.
 - [x] 002/U8 — Toy-spec corpus and end-to-end acceptance
 
 ### Plan 003 — Phase 2: Explorer + Grader (docs/plans/2026-06-10-003-feat-agent-families-phase2-explorer-grader-plan.md)
-- [ ] 003/U1 — Phase 2 schema migration
+- [x] 003/U1 — Phase 2 schema migration
 - [ ] 003/U2 — Target harness: linkding lifecycle
 - [ ] 003/U3 — Registry pre-research and frontier ledger
 - [ ] 003/U4 — Scenario harness: resolve, cache, replay, heal
