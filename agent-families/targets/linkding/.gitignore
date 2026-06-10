@@ -1,0 +1,4 @@
+# Pinned source checkout (plan-003 U3): cloned at setup by
+# registry.ensure_source_checkout (git clone --depth 1 --branch v1.45.0),
+# verified against the image pin — never committed.
+source/
