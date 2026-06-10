@@ -49,6 +49,15 @@ of work well, leave the trail clean, and exit. The loop will run you again.
   the claude shim, no bind-mounted SQLite for targets, `newline='\n'` on writes that
   feed byte-stability tests.
 - Thresholds live in `thresholds.toml` with provenance comments — never hardcode a tunable.
+- **Required acceptance tests are hard requirements, not suggestions.** If a unit lists "Required
+  acceptance tests" with named tests and behavioral assertions, those EXACT tests (by name and
+  asserted behavior) MUST exist and pass. You may add more tests; you may NOT weaken, rename,
+  skip, or `xfail` them, and you may NOT make them pass trivially (e.g., asserting `True` or
+  mocking away the behavior under test). The unit is not done until a `## Conformance` section
+  exists in the unit's test file or a sibling `CONFORMANCE.md` mapping each named invariant to the
+  test that enforces it. A reviewer must be able to confirm in one read that each invariant has a
+  real, behavioral test. If you cannot implement an invariant honestly, mark the unit blocked with
+  the reason — do not fake-green it.
 - When a plan marks something a Phase-N seam or deferral, build the seam, never the
   deferred machinery.
 

@@ -48,6 +48,15 @@ foreach ($wave in $waves) {
   if ($todo.Count -eq 0) { continue }
   if ((Get-Content $progress -TotalCount 1) -match "blocked") { Write-Host "BLOCKED - stopping."; break }
 
+  # REVIEW CHECKPOINT: pause before the novel phases (Plan 4 retrieval/reflector, Plan 5 router/boundary)
+  # so a human reviews the prior plan + the required-acceptance-test conformance before barreling on.
+  $wavePlan = ($todo[0] -split '/')[0]
+  if (($wavePlan -eq "004" -or $wavePlan -eq "005") -and -not (Test-Path "agent-families\REVIEW-OK-$wavePlan.txt")) {
+    Write-Host "=== REVIEW CHECKPOINT before Plan $wavePlan - pausing for human review. ==="
+    Add-Content $progress "`n- REVIEW CHECKPOINT: paused before Plan $wavePlan (novel phase). To proceed: review the prior plan's units + their ## Conformance notes, then create agent-families\REVIEW-OK-$wavePlan.txt and relaunch ralph-wave.ps1."
+    break
+  }
+
   if ($todo.Count -eq 1) {
     Write-Host "=== SOLO: $($todo[0])  $(Get-Date -Format o) ==="
     $r = Run-Worker $todo[0] $repo

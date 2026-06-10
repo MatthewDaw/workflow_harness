@@ -132,9 +132,15 @@ flowchart TB
 - **Requirements:** R2, R3, R4
 - **Dependencies:** U1; Phase 0 U3 (embedding), Phase 1 U3 (sessions)
 - **Files:** `agent-families/src/agent_families/library/retrieval.py`, `agent-families/tests/test_retrieval.py`; touches `pipeline/{planning.py,ticket_loop.py}` (prompt assembly points)
-- **Approach:** Query construction per R2; rank skills by max member-insight cosine over the agent's active set (trial mode: + batch members); render via Phase 0's renderer; budget fill with whole-skill drops, every drop logged with rank and size.
-- **Test scenarios:** each family's query assembles from the specified artifacts (fixture-checked); ranking honors max-member cosine (planted near-duplicate insight dominates); budget overflow drops lowest-ranked whole skill and logs it; quarantined insight invisible in training mode, visible in its batch's trial mode; injected prompt section is byte-stable for fixed inputs.
-- **Verification:** a planted high-relevance skill demonstrably appears in a fake session's prompt; drop log populated under a tight budget.
+- **Approach:** Query construction per R2; rank skills by max member-insight cosine over the **family's active pool with an own-skills prior** (trial mode: + batch members); render via Phase 0's renderer; budget fill with whole-skill drops, every drop logged with rank and size. Build the prior/fallback as a single parameterized scorer (own-skills weight = config dial); at one generic agent the prior is a no-op but the seam and the scorer must exist (Plan 5 R14b turns the dial on).
+- **Required acceptance tests (these exact behavioral assertions MUST exist and pass — do not substitute weaker ones; a `## Conformance` note must map each invariant → its test name):**
+  - `test_budget_caps_injection` — with ≥3× budget of relevant skills available, injected token count ≤ configured budget AND every injected skill is whole (no mid-skill truncation). *(bloat invariant — the load-bearing "no context bloat" guarantee)*
+  - `test_relevance_is_self_focusing` — for a query embedded near cluster A, with cluster-B insights also in the pool, the top-k contains **zero** cluster-B insights (B scores below the margin). *(proves a wider pool does not dilute a focused query)*
+  - `test_pool_is_family_scoped` — the candidate set equals the family's active insights, not a single agent's partition; the own-skills-prior parameter exists and defaults to a configured share.
+  - `test_ranking_honors_full_text_cosine` — a planted high-relevance insight outranks a description-similar-but-body-irrelevant one (SkillRouter body-signal invariant).
+  - `test_quarantine_visibility_by_mode` — quarantined insight invisible in `training` mode, visible only in its batch's `trial` mode.
+  - `test_injection_byte_stable` — identical inputs produce byte-identical injected section.
+- **Verification:** all six named tests pass; the `## Conformance` mapping is present; a planted high-relevance skill appears in a fake session's prompt; drop log populated under a tight budget.
 
 ### U3. Run-scoped working memory
 
