@@ -27,7 +27,7 @@ holds, and the full offline suite is green.
 - [x] 002/U4 — Orchestrator core: run/ticket state machine, checkpoint/resume
 - [x] 002/U5 — Planning stage
 - [x] 002/U6 — Ticket loop: worker, harness gate, verifier
-- [ ] 002/U7 — Trace capture, shadow tripwires, accounting
+- [x] 002/U7 — Trace capture, shadow tripwires, accounting
 - [ ] 002/U8 — Toy-spec corpus and end-to-end acceptance
 
 ### Plan 003 — Phase 2: Explorer + Grader (docs/plans/2026-06-10-003-feat-agent-families-phase2-explorer-grader-plan.md)
