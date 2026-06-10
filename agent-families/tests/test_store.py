@@ -1,4 +1,8 @@
-"""U2: SQLite schema, store layer, snapshots, promotion queue (R1-R4)."""
+"""Plan 001 U2: SQLite schema, store layer, snapshots, promotion queue (R1-R4).
+
+Plan 002 U1: Phase 1 schema migration — runs, ticket lifecycle + audit, span
+lifecycle/cost columns, failure records, tripwire events, ledger entries.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,17 @@ import time
 
 import pytest
 
-from agent_families.store import STATUSES, Store, StoreError
+import agent_families.store as store_mod
+from agent_families.store import (
+    FAILURE_KINDS,
+    RUN_STATUSES,
+    RUN_TERMINAL_STATUSES,
+    SPAN_FINAL_STATUSES,
+    STATUSES,
+    TICKET_STATUSES,
+    Store,
+    StoreError,
+)
 
 EXPECTED_TABLES = {
     "schema_migrations",
@@ -34,6 +48,12 @@ EXPECTED_TABLES = {
     "trace_span",
     "trace_chk",
     "trace_scen",
+    # Phase 1 (plan 002 U1)
+    "runs",
+    "ticket_status_transitions",
+    "failure_records",
+    "tripwire_events",
+    "ledger_entries",
 }
 
 
@@ -80,7 +100,7 @@ def test_schema_creates_idempotently(tmp_path):
         versions = s.conn.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
-        assert [r["version"] for r in versions] == [1]
+        assert [r["version"] for r in versions] == [1, 2]
     # a fresh connection over the same file is also a no-op
     with Store(db) as s2:
         s2.migrate()
@@ -379,11 +399,14 @@ def test_traceability_tables_accept_valid_chain(store):
         c.execute("INSERT INTO trace_msg VALUES ('MSG-1', 'asked about admin areas')")
         c.execute("INSERT INTO trace_msg_mentions VALUES ('MSG-1', 'FEAT-1')")
         c.execute("INSERT INTO trace_req VALUES ('REQ-1', 'MSG-1')")
-        c.execute("INSERT INTO trace_tkt VALUES ('TKT-1', 'INC-1')")
+        c.execute(
+            "INSERT INTO trace_tkt (id, increment_id) VALUES ('TKT-1', 'INC-1')"
+        )
         c.execute("INSERT INTO trace_tkt_covers VALUES ('TKT-1', 'REQ-1')")
         c.execute("INSERT INTO trace_ac VALUES ('AC-1', 'TKT-1', 'REQ-1')")
         c.execute(
-            "INSERT INTO trace_span VALUES ('SPAN-1', 'TKT-1', '[\"src/app.py\"]')"
+            "INSERT INTO trace_span (id, ticket_id, files_json, status)"
+            " VALUES ('SPAN-1', 'TKT-1', '[\"src/app.py\"]', 'completed')"
         )
         c.execute(
             "INSERT INTO trace_chk VALUES ('CHK-1', 'AC-1', 'pass',"
@@ -400,7 +423,9 @@ def test_traceability_id_prefixes_constrained(store):
     with pytest.raises(sqlite3.IntegrityError):
         store.conn.execute("INSERT INTO trace_feat VALUES ('XFEAT-1', 'ref')")
     with pytest.raises(sqlite3.IntegrityError):
-        store.conn.execute("INSERT INTO trace_tkt VALUES ('TICKET-1', NULL)")
+        store.conn.execute(
+            "INSERT INTO trace_tkt (id, increment_id) VALUES ('TICKET-1', NULL)"
+        )
 
 
 def test_traceability_links_constrained(store):
@@ -419,3 +444,344 @@ def test_traceability_links_constrained(store):
         ).fetchall()
     }
     assert "idx_trace_span_ticket" in indexes
+
+
+# --- Phase 1 schema migration (plan 002 U1: R1, R2, R13, R16, R17, R20) -----------
+
+
+def _add_ticket(s: Store, tkt_id: str = "TKT-1") -> str:
+    s.conn.execute(
+        "INSERT INTO trace_tkt (id, increment_id) VALUES (?, NULL)", (tkt_id,)
+    )
+    return tkt_id
+
+
+def test_phase1_migration_applies_on_phase0_db_without_data_loss(tmp_path, monkeypatch):
+    """Migration v2 upgrades a v1-only database in place, preserving every row."""
+    db = tmp_path / "library.db"
+    with Store(db) as s:
+        monkeypatch.setattr(store_mod, "MIGRATIONS", store_mod.MIGRATIONS[:1])
+        s.migrate()  # Phase 0 schema only
+        versions = [
+            r["version"]
+            for r in s.conn.execute("SELECT version FROM schema_migrations").fetchall()
+        ]
+        assert versions == [1]
+        # seed Phase 0 data, including a trace_span row in the old (3-column) shape
+        insight = _add_insight(s, "survivor")
+        with s.queue_operation("promote") as snap:
+            s.set_status(insight, "active", snap)
+        s.conn.execute("INSERT INTO trace_tkt VALUES ('TKT-old', NULL)")
+        s.conn.execute(
+            "INSERT INTO trace_span VALUES ('SPAN-old', 'TKT-old', '[\"a.ts\"]')"
+        )
+    monkeypatch.undo()
+    with Store(db) as s:
+        s.migrate()  # applies v2 on top
+        versions = [
+            r["version"]
+            for r in s.conn.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+        assert versions == [1, 2]
+        assert EXPECTED_TABLES <= _table_names(s)
+        # Phase 0 rows survive untouched
+        assert s.get_insight(insight)["status"] == "active"
+        assert s.current_snapshot_id() == snap
+        span = s.conn.execute(
+            "SELECT * FROM trace_span WHERE id = 'SPAN-old'"
+        ).fetchone()
+        assert span["ticket_id"] == "TKT-old"
+        assert span["files_json"] == '["a.ts"]'
+        # pre-lifecycle spans are backfilled 'completed', never flagged as orphans
+        assert span["status"] == "completed"
+        assert s.orphan_spans() == []
+        # tickets that predate the migration carry the default status
+        assert s.conn.execute(
+            "SELECT status FROM trace_tkt WHERE id = 'TKT-old'"
+        ).fetchone()["status"] == "pending"
+        # Phase 0 integrity intact post-migration (foreign keys still resolve)
+        assert s.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_run_row_roundtrip_all_terminals(store):
+    assert set(RUN_TERMINAL_STATUSES) <= set(RUN_STATUSES)
+    for terminal in RUN_TERMINAL_STATUSES:
+        run_id = store.create_run("specs/01-trivial.md", store.current_snapshot_id())
+        row = store.get_run(run_id)
+        assert row["status"] == "created"
+        assert row["spec_ref"] == "specs/01-trivial.md"
+        assert row["snapshot_id"] == 0  # pre-mutation library snapshot is recorded
+        for state in ("planning", "executing", terminal):
+            store.set_run_status(run_id, state)
+        assert store.get_run(run_id)["status"] == terminal
+    # totals columns exist and round-trip at settlement
+    store.conn.execute(
+        "UPDATE runs SET total_cost_usd = 1.25, total_input_tokens = 1000,"
+        " total_output_tokens = 500, total_turns = 12, total_duration_ms = 60000,"
+        " cost_partial_spans = 1 WHERE id = ?",
+        (run_id,),
+    )
+    settled = store.get_run(run_id)
+    assert settled["total_cost_usd"] == 1.25
+    assert settled["cost_partial_spans"] == 1
+
+
+def test_run_status_enum_rejects_unknown_values(store):
+    run_id = store.create_run("spec.md", 0)
+    with pytest.raises(StoreError, match="unknown run status"):
+        store.set_run_status(run_id, "finished")
+    with pytest.raises(StoreError, match="does not exist"):
+        store.set_run_status(99999, "success")
+    with pytest.raises(sqlite3.IntegrityError):  # CHECK backstops raw writes too
+        store.conn.execute(
+            "INSERT INTO runs (spec_ref, snapshot_id, status, created_at)"
+            " VALUES ('s', 0, 'bogus', 't')"
+        )
+
+
+def test_ticket_status_transitions_audited(store):
+    ticket = _add_ticket(store)
+    run_id = store.create_run("spec.md", 0)
+    assert store.conn.execute(
+        "SELECT status FROM trace_tkt WHERE id = ?", (ticket,)
+    ).fetchone()["status"] == "pending"
+    with store.transaction():
+        store.set_ticket_status(ticket, "in_progress", run_id=run_id)
+        store.set_ticket_status(ticket, "escalated", run_id=run_id)
+    rows = store.conn.execute(
+        "SELECT * FROM ticket_status_transitions WHERE ticket_id = ? ORDER BY id",
+        (ticket,),
+    ).fetchall()
+    assert [(r["from_status"], r["to_status"]) for r in rows] == [
+        ("pending", "in_progress"),
+        ("in_progress", "escalated"),
+    ]
+    assert all(r["run_id"] == run_id for r in rows)
+    assert store.conn.execute(
+        "SELECT status FROM trace_tkt WHERE id = ?", (ticket,)
+    ).fetchone()["status"] == "escalated"
+
+
+def test_ticket_status_enum_rejects_unknown_values(store):
+    ticket = _add_ticket(store)
+    assert set(TICKET_STATUSES) == {
+        "pending", "in_progress", "done", "escalated", "blocked"
+    }
+    with store.transaction():
+        with pytest.raises(StoreError, match="unknown ticket status"):
+            store.set_ticket_status(ticket, "cancelled")
+        with pytest.raises(StoreError, match="does not exist"):
+            store.set_ticket_status("TKT-404", "done")
+        store.set_ticket_status(ticket, "blocked")
+    with pytest.raises(sqlite3.IntegrityError):  # CHECK backstops raw writes too
+        store.conn.execute(
+            "UPDATE trace_tkt SET status = 'bogus' WHERE id = ?", (ticket,)
+        )
+    with pytest.raises(StoreError, match="transaction"):
+        store.set_ticket_status(ticket, "done")  # multi-statement: txn required
+
+
+def test_span_insert_running_then_finalize(store):
+    ticket = _add_ticket(store)
+    run_id = store.create_run("spec.md", 0)
+    store.insert_span(
+        "SPAN-w1",
+        run_id=run_id,
+        family="worker",
+        agent="generic-worker",
+        ticket_id=ticket,
+        ralph_iteration=1,
+        model_version="claude-opus-4-8",
+        prompt_set_version="ps-abc123",
+    )
+    row = store.conn.execute(
+        "SELECT * FROM trace_span WHERE id = 'SPAN-w1'"
+    ).fetchone()
+    assert row["status"] == "running"
+    assert row["family"] == "worker"
+    assert row["model_version"] == "claude-opus-4-8"
+    assert row["prompt_set_version"] == "ps-abc123"
+    assert row["episode"] is None and row["increment_id"] is None  # Phase 2 carve-out
+    store.finalize_span(
+        "SPAN-w1",
+        "completed",
+        num_turns=7,
+        duration_ms=42_000,
+        cost_usd=0.31,
+        input_tokens=12_000,
+        output_tokens=3_000,
+        files_json='["src/app.tsx"]',
+    )
+    row = store.conn.execute(
+        "SELECT * FROM trace_span WHERE id = 'SPAN-w1'"
+    ).fetchone()
+    assert row["status"] == "completed"
+    assert row["num_turns"] == 7
+    assert row["duration_ms"] == 42_000
+    assert row["cost_usd"] == 0.31
+    assert row["cost_partial"] == 0
+    assert row["files_json"] == '["src/app.tsx"]'
+    # a killed session finalizes with best-effort partial cost (R16)
+    store.insert_span("SPAN-w2", run_id=run_id, ticket_id=ticket, ralph_iteration=2)
+    store.finalize_span("SPAN-w2", "timeout", cost_usd=0.05, cost_partial=True)
+    killed = store.conn.execute(
+        "SELECT * FROM trace_span WHERE id = 'SPAN-w2'"
+    ).fetchone()
+    assert killed["status"] == "timeout"
+    assert killed["cost_partial"] == 1
+    # spans without a ticket are legal (judge and planner invocations)
+    store.insert_span("SPAN-judge", run_id=run_id, family="judge")
+    store.finalize_span("SPAN-judge", "completed")
+
+
+def test_finalize_span_rejects_nonfinal_status_and_missing_span(store):
+    store.insert_span("SPAN-x")
+    with pytest.raises(StoreError, match="not a final span status"):
+        store.finalize_span("SPAN-x", "running")
+    with pytest.raises(StoreError, match="does not exist"):
+        store.finalize_span("SPAN-404", "completed")
+    with pytest.raises(sqlite3.IntegrityError):  # CHECK backstops raw writes
+        store.conn.execute(
+            "UPDATE trace_span SET status = 'bogus' WHERE id = 'SPAN-x'"
+        )
+    assert set(SPAN_FINAL_STATUSES) == {"completed", "error", "timeout", "aborted"}
+
+
+def test_orphan_query_returns_unfinalized_spans(store):
+    run_a = store.create_run("spec-a.md", 0)
+    run_b = store.create_run("spec-b.md", 0)
+    store.insert_span("SPAN-1", run_id=run_a)
+    store.insert_span("SPAN-2", run_id=run_a)
+    store.insert_span("SPAN-3", run_id=run_b)
+    store.finalize_span("SPAN-1", "completed")
+    assert [r["id"] for r in store.orphan_spans()] == ["SPAN-2", "SPAN-3"]
+    assert [r["id"] for r in store.orphan_spans(run_id=run_a)] == ["SPAN-2"]
+    # resume marks orphans aborted; the query then comes back empty
+    for orphan in store.orphan_spans():
+        store.finalize_span(orphan["id"], "aborted")
+    assert store.orphan_spans() == []
+
+
+def test_failure_record_roundtrip_and_kind_enum(store):
+    ticket = _add_ticket(store)
+    run_id = store.create_run("spec.md", 0)
+    store.insert_span("SPAN-f", run_id=run_id, ticket_id=ticket)
+    record_id = store.insert_failure_record(
+        failure_kind="gate_test",
+        location="src/app.test.tsx:12",
+        expected="login form renders",
+        observed="TypeError: cannot read properties of undefined",
+        repro_command="npx vitest run src/app.test.tsx",
+        run_id=run_id,
+        ticket_id=ticket,
+        span_id="SPAN-f",
+    )
+    row = store.conn.execute(
+        "SELECT * FROM failure_records WHERE id = ?", (record_id,)
+    ).fetchone()
+    assert row["failure_kind"] == "gate_test"
+    assert row["repro_command"] == "npx vitest run src/app.test.tsx"
+    assert row["span_id"] == "SPAN-f"
+    with pytest.raises(StoreError, match="unknown failure kind"):
+        store.insert_failure_record(failure_kind="vibes")
+    with pytest.raises(sqlite3.IntegrityError):  # links must resolve
+        store.insert_failure_record(failure_kind="gate_lint", span_id="SPAN-404")
+    # the MAST taxonomy kinds the tripwire escalations emit are in the enum
+    assert {"step_repetition", "incorrect_verification"} <= set(FAILURE_KINDS)
+
+
+def test_tripwire_event_insert_with_model_and_dim(store):
+    run_id = store.create_run("spec.md", 0)
+    store.insert_span("SPAN-t", run_id=run_id)
+    event_id = store.insert_tripwire_event(
+        detector_kind="step_repetition",
+        would_have_fired=True,
+        span_id="SPAN-t",
+        run_id=run_id,
+        ralph_iteration=3,
+        similarity=0.97,
+        embedding_model="nomic-ai/nomic-embed-text-v1.5",
+        embedding_dim=768,
+    )
+    row = store.conn.execute(
+        "SELECT * FROM tripwire_events WHERE id = ?", (event_id,)
+    ).fetchone()
+    assert row["detector_kind"] == "step_repetition"
+    assert row["would_have_fired"] == 1
+    assert row["similarity"] == 0.97
+    assert row["embedding_model"] == "nomic-ai/nomic-embed-text-v1.5"
+    assert row["embedding_dim"] == 768
+    # the no-progress detector logs a canonical failure-set hash, no embedding
+    no_progress = store.insert_tripwire_event(
+        detector_kind="no_progress",
+        would_have_fired=False,
+        run_id=run_id,
+        ralph_iteration=3,
+        failure_set_hash="sha256:deadbeef",
+    )
+    row = store.conn.execute(
+        "SELECT * FROM tripwire_events WHERE id = ?", (no_progress,)
+    ).fetchone()
+    assert row["failure_set_hash"] == "sha256:deadbeef"
+    assert row["embedding_model"] is None
+    assert row["would_have_fired"] == 0
+
+
+def test_ledger_entries_reference_spans_chks_and_failures(store):
+    ticket = _add_ticket(store)
+    run_id = store.create_run("spec.md", 0)
+    store.insert_span("SPAN-l", run_id=run_id, ticket_id=ticket)
+    with store.transaction():
+        store.conn.execute("INSERT INTO trace_msg VALUES ('MSG-l', 'p')")
+        store.conn.execute("INSERT INTO trace_req VALUES ('REQ-l', 'MSG-l')")
+        store.conn.execute("INSERT INTO trace_ac VALUES ('AC-l', 'TKT-1', 'REQ-l')")
+        store.conn.execute(
+            "INSERT INTO trace_chk VALUES ('CHK-l', 'AC-l', 'pass', 'npm test', '')"
+        )
+    failure_id = store.insert_failure_record(
+        failure_kind="gate_typecheck", ticket_id=ticket, run_id=run_id
+    )
+    entry_id = store.append_ledger_entry(
+        ticket_id=ticket,
+        entry_kind="gate_failure",
+        run_id=run_id,
+        ralph_iteration=1,
+        span_id="SPAN-l",
+        chk_id="CHK-l",
+        failure_record_id=failure_id,
+        content="tsc failed; see repro",
+    )
+    row = store.conn.execute(
+        "SELECT * FROM ledger_entries WHERE id = ?", (entry_id,)
+    ).fetchone()
+    assert row["span_id"] == "SPAN-l"
+    assert row["chk_id"] == "CHK-l"
+    assert row["failure_record_id"] == failure_id
+    # all three refs are FK-constrained
+    with pytest.raises(sqlite3.IntegrityError):
+        store.append_ledger_entry(
+            ticket_id=ticket, entry_kind="x", span_id="SPAN-404"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.append_ledger_entry(ticket_id=ticket, entry_kind="x", chk_id="CHK-404")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.append_ledger_entry(
+            ticket_id=ticket, entry_kind="x", failure_record_id=99999
+        )
+    with pytest.raises(sqlite3.IntegrityError):  # and the ledger needs its ticket
+        store.append_ledger_entry(ticket_id="TKT-404", entry_kind="x")
+
+
+def test_msg_rows_accept_empty_mentions(store):
+    """002 R20: orchestrator-synthesized MSG rows carry no FEAT mentions yet."""
+    store.conn.execute(
+        "INSERT INTO trace_msg VALUES ('MSG-bare', 'spec paragraph 1')"
+    )
+    row = store.conn.execute(
+        "SELECT m.id, COUNT(mm.feat_id) AS mentions FROM trace_msg m"
+        " LEFT JOIN trace_msg_mentions mm ON mm.msg_id = m.id"
+        " WHERE m.id = 'MSG-bare' GROUP BY m.id"
+    ).fetchone()
+    assert row["mentions"] == 0  # persisted and queryable with zero mentions
