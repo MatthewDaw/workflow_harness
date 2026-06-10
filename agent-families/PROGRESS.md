@@ -16,7 +16,7 @@ holds, and the full offline suite is green.
 - [x] 001/U4 — Judge runner with record/replay seam
 - [x] 001/U5 — add_idea pipeline
 - [ ] 001/U6 — Lifecycle operations
-- [ ] 001/U7 — Rendering: concatenation and delta-patch compile
+- [x] 001/U7 — Rendering: concatenation and delta-patch compile
 - [ ] 001/U8 — SKILL.md export
 - [ ] 001/U9 — CLI assembly, init, and end-to-end acceptance
 
