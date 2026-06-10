@@ -37,7 +37,7 @@ holds, and the full offline suite is green.
 - [x] 003/U4 — Scenario harness: resolve, cache, replay, heal
 - [x] 003/U5 — Explorer subsystem
 - [ ] 003/U6 — Episode orchestration
-- [ ] 003/U7 — Grader settlement and report
+- [x] 003/U7 — Grader settlement and report
 - [ ] 003/U8 — Mutation-seeded verifier audits
 - [ ] 003/U9 — Trace-query CLI, idea provenance, and episode e2e
 
