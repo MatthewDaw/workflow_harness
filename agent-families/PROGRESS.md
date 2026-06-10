@@ -34,7 +34,7 @@ holds, and the full offline suite is green.
 - [x] 003/U1 — Phase 2 schema migration
 - [x] 003/U2 — Target harness: linkding lifecycle
 - [x] 003/U3 — Registry pre-research and frontier ledger
-- [ ] 003/U4 — Scenario harness: resolve, cache, replay, heal
+- [x] 003/U4 — Scenario harness: resolve, cache, replay, heal
 - [ ] 003/U5 — Explorer subsystem
 - [ ] 003/U6 — Episode orchestration
 - [ ] 003/U7 — Grader settlement and report
