@@ -261,6 +261,26 @@ export function installFetchStub(seed: SeedData) {
   );
 }
 
+/**
+ * The shape `installFetchStub`'s StubRequest records for each fetch call —
+ * what mutation tests assert against to see what RTK Query actually sent.
+ */
+export interface StubReq {
+  url: string;
+  method: string;
+  body?: unknown;
+}
+
+/** The most recent stubbed fetch call matching `pred` (URL + method). */
+export function lastMatching(pred: (u: string, m: string) => boolean): StubReq | undefined {
+  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const req = calls[i]![0] as StubReq;
+    if (pred(req.url, req.method)) return req;
+  }
+  return undefined;
+}
+
 export interface RenderOptions {
   route?: string;
   /** Route pattern to bind params (e.g. '/sessions/:sessionId'). Defaults to `route`. */

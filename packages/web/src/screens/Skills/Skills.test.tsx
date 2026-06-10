@@ -3,7 +3,7 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Skill } from '@harness/shared';
 import { Skills } from './Skills.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
 
 const ORG = { tier: 'org', id: 'acme' } as const;
 
@@ -51,21 +51,10 @@ const BUNDLE_SKILLS: Skill[] = [
   },
 ];
 
-interface StubReq {
-  url: string;
-  method: string;
-  body: unknown;
-}
-
 function lastScopePost(): { url: string; body: unknown } | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (req.method === 'POST' && req.url.includes('/scope')) {
-      return { url: req.url, body: req.body ? JSON.parse(String(req.body)) : undefined };
-    }
-  }
-  return undefined;
+  const req = lastMatching((u, m) => m === 'POST' && u.includes('/scope'));
+  if (!req) return undefined;
+  return { url: req.url, body: req.body ? JSON.parse(String(req.body)) : undefined };
 }
 
 describe('Skills scope controls (U17)', () => {

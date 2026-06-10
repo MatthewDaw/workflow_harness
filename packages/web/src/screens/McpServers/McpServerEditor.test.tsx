@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { McpServer } from '@harness/shared';
 import { McpServerEditor } from './McpServerEditor.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
 
 const ORG = { tier: 'org', id: 'acme' } as const;
 
@@ -18,22 +18,10 @@ const SERVERS: McpServer[] = [
   },
 ];
 
-interface StubReq {
-  url: string;
-  method: string;
-  body: unknown;
-}
-
 /** Body of the last POST to the mcp-servers create/update endpoint. */
 function lastServerPost(): Record<string, unknown> | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (req.method === 'POST' && /\/mcp-servers$/.test(req.url.split('?')[0] ?? '')) {
-      return req.body ? JSON.parse(String(req.body)) : undefined;
-    }
-  }
-  return undefined;
+  const req = lastMatching((u, m) => m === 'POST' && /\/mcp-servers$/.test(u.split('?')[0] ?? ''));
+  return req?.body ? JSON.parse(String(req.body)) : undefined;
 }
 
 const adminSeed = (extra: Record<string, unknown> = {}) => ({ me: { admin: true }, ...extra });

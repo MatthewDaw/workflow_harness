@@ -7,7 +7,6 @@ import type {
   Workflow,
   Skill,
   McpServer,
-  Priority,
   WeeklyUpdate,
   ScopeRef,
   ControlAction,
@@ -1039,8 +1038,6 @@ export const baseApi = createApi({
     }),
   }),
 });
-
-export type { Priority };
 
 export const {
   useGetMeQuery,

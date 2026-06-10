@@ -9,13 +9,13 @@ import {
   createAgent,
   deleteAgent,
   dissolveAgentBundle,
-  flattenAgentBundle,
   getAgent,
   handler as agentsHandler,
   promoteAgent,
   removeMember,
   resolveAgents,
 } from '../src/rest/agents.js';
+import { flattenBundle } from '../src/rest/bundles.js';
 import { installInMemoryTable } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
@@ -182,7 +182,7 @@ describe('nested agent bundles (pure flatten)', () => {
       ['b', agent('b')],
       ['c', agent('c')],
     ]);
-    expect(flattenAgentBundle(outer, byName).sort()).toEqual(['a', 'b', 'c']);
+    expect(flattenBundle(outer, byName).sort()).toEqual(['a', 'b', 'c']);
   });
 });
 

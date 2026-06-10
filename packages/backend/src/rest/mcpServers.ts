@@ -9,7 +9,8 @@ import {
   forbidden,
   notFound,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   pathParam,
   unauthorized,
 } from './runtime.js';
@@ -70,12 +71,8 @@ export async function createMcpServer(
   const { principal, org } = auth;
 
   const name = pathParam(event, 'name');
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
 
   // Force org scope (ignore any client-supplied scope) and parse the rest.
   const candidate = { ...(body as Record<string, unknown>), scope: orgScope(org) };
@@ -131,12 +128,8 @@ export async function promoteMcpServer(
   if (!auth.org) return unauthorized();
   const org = auth.org;
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const variantId = (body as { variantId?: unknown })?.variantId;
   if (typeof variantId !== 'string' || !variantId) return badRequest('missing variantId');
   const revRaw = (body as { rev?: unknown })?.rev;

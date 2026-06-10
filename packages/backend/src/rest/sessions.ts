@@ -8,7 +8,8 @@ import {
   json,
   notFound,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   pathParam,
   principalOf,
   queryParam,
@@ -176,12 +177,8 @@ export async function control(
   const id = pathParam(event, 'id');
   if (!id) return badRequest('missing session id');
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = controlBodySchema.safeParse(body);
   if (!parsed.success) return badRequest(parsed.error.message);
 

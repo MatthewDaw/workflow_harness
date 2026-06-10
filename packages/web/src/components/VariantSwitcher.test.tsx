@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VariantSwitcher } from './VariantSwitcher.js';
-import { renderWithProviders } from '../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../test/testUtils.js';
 
 const VARIANTS = {
   gh: [
@@ -18,21 +18,6 @@ const VARIANTS = {
     },
   ],
 };
-
-interface StubReq {
-  url: string;
-  method: string;
-  body: unknown;
-}
-
-function lastMatching(pred: (u: string, m: string) => boolean): StubReq | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (pred(req.url, req.method)) return req;
-  }
-  return undefined;
-}
 
 describe('VariantSwitcher (catalog versioning)', () => {
   afterEach(() => vi.unstubAllGlobals());

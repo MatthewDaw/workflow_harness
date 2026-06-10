@@ -16,7 +16,8 @@ import {
   forbidden,
   notFound,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   pathParam,
   principalOf,
   queryParam,
@@ -24,8 +25,7 @@ import {
 } from './runtime.js';
 import { isAdmin, isOrgAdmin } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
-import { flattenBundle } from './skills.js';
-import { flattenAgentBundle } from './agents.js';
+import { flattenBundle } from './bundles.js';
 import { STARTER_BUNDLE_NAME } from '../seed/skills.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
@@ -155,12 +155,8 @@ export async function createProject(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
 
   // The owner is always the caller — never trust a client-supplied owner. The
   // org is stamped from the creator's EFFECTIVE org so the project follows their
@@ -762,7 +758,7 @@ export async function enableProjectAgentBundle(
   const bundle = byName.get(bundleName);
   if (!bundle || bundle.kind !== 'bundle') return notFound();
 
-  const members = flattenAgentBundle(bundle, byName);
+  const members = flattenBundle(bundle, byName);
   const updated = await deps.repo.addAgentBundleToProject(project.id, bundleName, members, org);
   if (!updated) return notFound();
   return ok({ project: updated });
@@ -791,7 +787,7 @@ export async function disableProjectAgentBundle(
 
   // The members this bundle would contribute (empty if it vanished from the catalog).
   const bundle = byName.get(bundleName);
-  const members = bundle && bundle.kind === 'bundle' ? flattenAgentBundle(bundle, byName) : [];
+  const members = bundle && bundle.kind === 'bundle' ? flattenBundle(bundle, byName) : [];
 
   // Members still covered by some OTHER enabled agent bundle must be kept.
   const keep = new Set<string>();
@@ -799,7 +795,7 @@ export async function disableProjectAgentBundle(
     if (otherName === bundleName) continue;
     const other = byName.get(otherName);
     if (other && other.kind === 'bundle') {
-      for (const member of flattenAgentBundle(other, byName)) keep.add(member);
+      for (const member of flattenBundle(other, byName)) keep.add(member);
     }
   }
   const removable = members.filter((m) => !keep.has(m));

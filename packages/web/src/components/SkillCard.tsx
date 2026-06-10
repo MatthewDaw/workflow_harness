@@ -27,7 +27,7 @@ export function authorOf(s: Skill): string {
  * shows prose, not a `--- name: … ---` dump; the `line-clamp` then bounds the
  * height. Falls back to the raw description if stripping leaves nothing.
  */
-export function descriptionOf(s: Skill): string {
+function descriptionOf(s: Skill): string {
   const raw = s.description ?? '';
   const stripped = stripFrontmatter(raw).trim();
   return stripped || raw;

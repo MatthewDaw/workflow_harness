@@ -6,7 +6,8 @@ import {
   defaultRepo,
   forbidden,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   principalOf,
   unauthorized,
 } from './runtime.js';
@@ -54,12 +55,8 @@ export async function putDod(
   if (!principal) return unauthorized();
   if (!isAdmin(event)) return forbidden();
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = definitionOfDoneSchema.safeParse(body ?? {});
   if (!parsed.success) return badRequest(parsed.error.message);
   const dod: DefinitionOfDone = parsed.data;

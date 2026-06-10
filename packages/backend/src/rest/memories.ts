@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda
 import { reconcileMemoriesRequestSchema, type Memory } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import type { Principal } from '../auth/verify.js';
-import { badRequest, defaultRepo, notFound, ok, parseBody, pathParam, unauthorized } from './runtime.js';
+import { badRequest, defaultRepo, notFound, ok, parseBodySafe, INVALID_JSON, pathParam, unauthorized } from './runtime.js';
 import { resolvePrincipal } from './bearerAuth.js';
 
 /**
@@ -72,12 +72,8 @@ export async function reconcileMemories(
   const pid = pathParam(event, 'pid');
   if (!pid) return badRequest('missing project id');
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = reconcileMemoriesRequestSchema.safeParse(body);
   if (!parsed.success) return badRequest(parsed.error.message);
 

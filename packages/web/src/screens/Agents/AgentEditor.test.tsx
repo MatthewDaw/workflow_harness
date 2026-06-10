@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Agent, McpServer, Skill } from '@harness/shared';
 import { AgentEditor } from './AgentEditor.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
 
 const ORG = { tier: 'org', id: 'acme' } as const;
 
@@ -48,22 +48,10 @@ const MCP_SERVERS: McpServer[] = [
   { name: 'linear', scope: ORG, transport: 'http', url: 'https://mcp.linear.app', headers: {} },
 ];
 
-interface StubReq {
-  url: string;
-  method: string;
-  body: unknown;
-}
-
 /** Find the body of the last POST to the agents create/update endpoint. */
 function lastAgentPost(): Record<string, unknown> | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (req.method === 'POST' && /\/agents$/.test(req.url.split('?')[0] ?? '')) {
-      return req.body ? JSON.parse(String(req.body)) : undefined;
-    }
-  }
-  return undefined;
+  const req = lastMatching((u, m) => m === 'POST' && /\/agents$/.test(u.split('?')[0] ?? ''));
+  return req?.body ? JSON.parse(String(req.body)) : undefined;
 }
 
 describe('AgentEditor (U17)', () => {

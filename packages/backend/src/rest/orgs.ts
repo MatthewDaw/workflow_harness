@@ -14,7 +14,8 @@ import {
   defaultRepo,
   json,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   principalOf,
   unauthorized,
 } from './runtime.js';
@@ -92,12 +93,8 @@ export async function createOrg(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = createOrgRequestSchema.safeParse(body ?? {});
   if (!parsed.success) return badRequest(validationMessage(parsed.error));
   const { name, password } = parsed.data;
@@ -143,12 +140,8 @@ export async function joinOrg(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = joinOrgRequestSchema.safeParse(body ?? {});
   if (!parsed.success) return badRequest(validationMessage(parsed.error));
   const { name, password } = parsed.data;
@@ -179,12 +172,8 @@ export async function switchOrg(
   const principal = principalOf(event);
   if (!principal) return unauthorized();
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = switchOrgRequestSchema.safeParse(body ?? {});
   if (!parsed.success) return badRequest(validationMessage(parsed.error));
   const { org } = parsed.data;

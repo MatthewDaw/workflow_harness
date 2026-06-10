@@ -1,19 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { Skill } from '@harness/shared';
 import { SkillCard, authorOf } from './SkillCard.js';
+import { bundleMemberNames } from '../lib/bundles.js';
 
 const ANY_AUTHOR = '__any__';
-
-/** Names that are members of any resolved bundle (transitive leaves preferred). */
-function bundleMemberNames(skills: Skill[]): Set<string> {
-  const names = new Set<string>();
-  for (const s of skills) {
-    if (s.kind !== 'bundle') continue;
-    const members = s.resolvedMembers ?? s.members;
-    for (const m of members) names.add(m);
-  }
-  return names;
-}
 
 /**
  * The shared skills-catalog view: the filter bar (bundle toggle + author filter)

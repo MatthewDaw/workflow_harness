@@ -11,6 +11,7 @@ import {
 } from '../../api/baseApi.js';
 import { ScreenHeader } from '../../components/primitives.js';
 import { SkillCatalog } from '../../components/SkillCatalog.js';
+import { bundleMemberNames } from '../../lib/bundles.js';
 import { VariantSwitcher } from '../../components/VariantSwitcher.js';
 import {
   CatalogPicker,
@@ -76,14 +77,7 @@ export function ProjectSkills() {
   // The leaf members of every catalog bundle. Used both to build the modal's
   // bundle member rows and to decide which standalone skills get a top-level row
   // (a skill that belongs to some bundle is only reachable via that bundle).
-  const bundleMemberNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const s of catalog) {
-      if (s.kind !== 'bundle') continue;
-      for (const m of s.resolvedMembers ?? s.members) names.add(m);
-    }
-    return names;
-  }, [catalog]);
+  const memberNames = useMemo(() => bundleMemberNames(catalog), [catalog]);
 
   // The modal rows: one bundle row per catalog bundle (members mapped to skill
   // refs), plus one skill row per standalone skill that is NOT a member of any
@@ -107,7 +101,7 @@ export function ProjectSkills() {
     }
     for (const s of catalog) {
       if (s.kind === 'bundle') continue;
-      if (bundleMemberNames.has(s.name)) continue;
+      if (memberNames.has(s.name)) continue;
       out.push({
         ref: { type: 'skill', name: s.name },
         label: s.name,
@@ -115,7 +109,7 @@ export function ProjectSkills() {
       });
     }
     return out;
-  }, [catalog, bundleMemberNames]);
+  }, [catalog, memberNames]);
 
   // The refs that are ON when the modal opens: each enabled bundle as a bundle
   // ref, plus each enabled skill NOT already covered by an enabled bundle as a

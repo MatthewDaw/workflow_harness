@@ -306,10 +306,6 @@ export const sessionProjectionSchema = z.object({
 });
 export type SessionProjection = z.infer<typeof sessionProjectionSchema>;
 
-export const PRIORITIES = ['high', 'medium', 'low'] as const;
-export const prioritySchema = z.enum(PRIORITIES);
-export type Priority = z.infer<typeof prioritySchema>;
-
 /**
  * An agent record is either a runnable `agent` or a `bundle` — a grouping of
  * other agents (mirrors `SKILL_KINDS`). A bundle has `members` (member agent

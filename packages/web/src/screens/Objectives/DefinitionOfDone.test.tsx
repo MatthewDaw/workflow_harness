@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { DefinitionOfDone } from '@harness/shared';
 import { Objectives } from './Objectives.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
 
 /**
  * Plan-mapping feature 1: the org-wide Definition of Done surfaced on the
@@ -11,22 +11,11 @@ import { renderWithProviders } from '../../test/testUtils.js';
  * admin editor (two checkboxes + notes) that saves via PUT /dod. Advisory.
  */
 
-interface StubReq {
-  url: string;
-  method: string;
-  body: unknown;
-}
-
 /** Find the last request to /dod matching a method (reads the stubbed Request). */
 function lastDodCall(method: string): { url: string; body: unknown } | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (req.method === method && /\/dod$/.test(req.url)) {
-      return { url: req.url, body: req.body ? JSON.parse(String(req.body)) : undefined };
-    }
-  }
-  return undefined;
+  const req = lastMatching((u, m) => m === method && /\/dod$/.test(u));
+  if (!req) return undefined;
+  return { url: req.url, body: req.body ? JSON.parse(String(req.body)) : undefined };
 }
 
 const TIGHTENED: DefinitionOfDone = {

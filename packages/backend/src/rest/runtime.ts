@@ -85,3 +85,15 @@ export function parseBody(event: APIGatewayProxyEventV2): unknown {
     : event.body;
   return raw.trim() ? JSON.parse(raw) : undefined;
 }
+
+/** Sentinel `parseBodySafe` returns for malformed JSON (answer with `badRequest`). */
+export const INVALID_JSON: unique symbol = Symbol('invalid-json');
+
+/** `parseBody`, but malformed JSON yields the `INVALID_JSON` sentinel instead of throwing. */
+export function parseBodySafe(event: APIGatewayProxyEventV2): unknown | typeof INVALID_JSON {
+  try {
+    return parseBody(event);
+  } catch {
+    return INVALID_JSON;
+  }
+}

@@ -29,11 +29,10 @@ export type ScopeRef = z.infer<typeof scopeRefSchema>;
  * `scopeRefSchema`; the 3-tier `resolveScoped`/`isVisible` helpers below stay
  * intact for them and for the wrapper golden fixture.
  */
-export const orgScopeRefSchema = z.object({
-  tier: z.literal('org'),
-  id: z.string().min(1),
-});
-export type OrgScopeRef = z.infer<typeof orgScopeRefSchema>;
+export interface OrgScopeRef {
+  tier: 'org';
+  id: string;
+}
 
 /** Construct an org scope ref for the given org id. */
 export function orgScope(org: string): OrgScopeRef {

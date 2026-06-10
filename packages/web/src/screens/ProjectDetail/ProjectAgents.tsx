@@ -11,6 +11,7 @@ import {
   useDisableProjectAgentBundleMutation,
 } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
+import { bundleMemberNames } from '../../lib/bundles.js';
 import {
   CatalogPicker,
   type CatalogPickerRow,
@@ -79,14 +80,7 @@ export function ProjectAgents() {
 
   // Leaf member names of every catalog agent bundle — a plain agent that belongs
   // to some bundle is only reachable via that bundle in the picker.
-  const bundleMemberNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const a of agents) {
-      if (a.kind !== 'bundle') continue;
-      for (const m of a.resolvedMembers ?? a.members) names.add(m);
-    }
-    return names;
-  }, [agents]);
+  const memberNames = useMemo(() => bundleMemberNames(agents), [agents]);
 
   // The picker rows: one bundle row per catalog agent bundle (members mapped to
   // agent refs), plus one agent row per standalone agent that is NOT a member of
@@ -122,11 +116,11 @@ export function ProjectAgents() {
     }
     for (const a of agents) {
       if (a.kind === 'bundle') continue;
-      if (bundleMemberNames.has(a.name)) continue;
+      if (memberNames.has(a.name)) continue;
       out.push(agentRow(a));
     }
     return out;
-  }, [agents, byName, bundleMemberNames]);
+  }, [agents, byName, memberNames]);
 
   // The refs ON when the modal opens: each enabled bundle as an agent-bundle ref,
   // plus each enabled agent NOT already covered by an enabled bundle as an agent ref.

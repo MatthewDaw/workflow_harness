@@ -8,7 +8,8 @@ import {
   defaultRepo,
   notFound,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   pathParam,
   unauthorized,
 } from './runtime.js';
@@ -84,12 +85,8 @@ export async function putWeekly(
   if (!pid || !week) return badRequest('missing project or week');
   if (!(await ownedProject(deps.repo, principal, pid))) return notFound();
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = weeklyUpdateSchema.safeParse({
     validated: false,
     ...(body as Record<string, unknown>),

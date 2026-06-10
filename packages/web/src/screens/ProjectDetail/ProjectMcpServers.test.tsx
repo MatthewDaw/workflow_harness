@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { McpServer, Project } from '@harness/shared';
 import { ProjectMcpServers } from './ProjectMcpServers.js';
 import { ProjectLayout } from './ProjectLayout.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
 
 const ORG = { tier: 'org', id: 'acme' } as const;
 
@@ -40,20 +40,6 @@ const SERVERS: McpServer[] = [
     headers: {},
   },
 ];
-
-interface StubReq {
-  url: string;
-  method: string;
-}
-
-function lastMatching(pred: (u: string, m: string) => boolean): StubReq | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (pred(req.url, req.method)) return req;
-  }
-  return undefined;
-}
 
 describe('ProjectMcpServers (project opt-in)', () => {
   afterEach(() => vi.unstubAllGlobals());

@@ -4,22 +4,12 @@ import type { Agent } from '@harness/shared';
 import { useGetAgentsQuery } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
+import { bundleMemberNames } from '../../lib/bundles.js';
 
 const ANY_AUTHOR = '__any__';
 
 function authorOf(a: { createdBy?: { name: string } }): string {
   return a.createdBy?.name ?? 'Unknown';
-}
-
-/** Names that are members of any resolved agent bundle (transitive leaves preferred). */
-function bundleMemberNames(agents: Agent[]): Set<string> {
-  const names = new Set<string>();
-  for (const a of agents) {
-    if (a.kind !== 'bundle') continue;
-    const members = a.resolvedMembers ?? a.members;
-    for (const m of members) names.add(m);
-  }
-  return names;
 }
 
 /** Agents registry (collapsed model): a single flat org catalog, bundles included. */

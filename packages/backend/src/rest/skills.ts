@@ -17,7 +17,8 @@ import {
   gone,
   notFound,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   pathParam,
   unauthorized,
 } from './runtime.js';
@@ -25,6 +26,7 @@ import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 import { withAuthorNames } from './authorNames.js';
+import { flattenBundle } from './bundles.js';
 import {
   getS3Vectors,
   SKILL_VECTOR_INDEX,
@@ -73,29 +75,6 @@ export interface SkillsDeps {
   golden?: GoldenJudge;
 }
 
-/**
- * Flatten a bundle's members transitively into the set of leaf-skill names.
- * Nested bundles are expanded; a cycle is guarded by a visited set.
- */
-export function flattenBundle(
-  bundle: Skill,
-  byName: Map<string, Skill>,
-  seen = new Set<string>(),
-): string[] {
-  const leaves: string[] = [];
-  for (const memberName of bundle.members) {
-    if (seen.has(memberName)) continue;
-    seen.add(memberName);
-    const member = byName.get(memberName);
-    if (member?.kind === 'bundle') {
-      leaves.push(...flattenBundle(member, byName, seen));
-    } else {
-      leaves.push(memberName);
-    }
-  }
-  return [...new Set(leaves)];
-}
-
 export async function resolveSkills(
   event: APIGatewayProxyEventV2,
   deps: SkillsDeps,
@@ -136,12 +115,8 @@ export async function createSkill(
   const { principal, org } = auth;
 
   const name = pathParam(event, 'name');
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
 
   // Force org scope (ignore any client-supplied scope) and parse the rest.
   const candidate = { ...(body as Record<string, unknown>), scope: orgScope(org) };
@@ -336,12 +311,8 @@ export async function promoteSkill(
   if (!auth.org) return unauthorized();
   const org = auth.org;
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const variantId = (body as { variantId?: unknown })?.variantId;
   if (typeof variantId !== 'string' || !variantId) return badRequest('missing variantId');
   const revRaw = (body as { rev?: unknown })?.rev;
@@ -397,12 +368,8 @@ export async function foldIdea(
   const ideaId = pathParam(event, 'ideaId');
   if (!name || !ideaId) return badRequest('missing name or ideaId');
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const b = (body ?? {}) as Record<string, unknown>;
 
   // The idea must exist on this skill family before we touch the skill revision —
@@ -595,12 +562,8 @@ export async function addMember(
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const member = (body as { member?: unknown })?.member;
   if (typeof member !== 'string' || !member) return badRequest('missing member');
 

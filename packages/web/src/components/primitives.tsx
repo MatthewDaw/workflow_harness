@@ -47,10 +47,6 @@ export function Bar({ pct, color }: { pct: number; color?: string }) {
   );
 }
 
-export function Box({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`hq-box ${className}`}>{children}</div>;
-}
-
 export function ScreenHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <div className="mb-3">

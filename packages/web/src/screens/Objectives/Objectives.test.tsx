@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ObjectiveNode } from '@harness/shared';
 import { Objectives } from './Objectives.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
 
 const OBJECTIVES: ObjectiveNode[] = [
   { id: 'rc1', org: 'acme', level: 'rally_cry', title: 'Win the quarter', pct: 40 },
@@ -17,22 +17,11 @@ const OBJECTIVES: ObjectiveNode[] = [
   },
 ];
 
-interface StubReq {
-  url: string;
-  method: string;
-  body: unknown;
-}
-
 /** Find the last request to /objectives matching a method (reads the stubbed Request). */
 function lastObjectivesCall(method: string): { url: string; body: unknown } | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (req.method === method && /\/objectives(\/|$)/.test(req.url)) {
-      return { url: req.url, body: req.body ? JSON.parse(String(req.body)) : undefined };
-    }
-  }
-  return undefined;
+  const req = lastMatching((u, m) => m === method && /\/objectives(\/|$)/.test(u));
+  if (!req) return undefined;
+  return { url: req.url, body: req.body ? JSON.parse(String(req.body)) : undefined };
 }
 
 describe('Objectives editor (HQ-owned RCDO)', () => {

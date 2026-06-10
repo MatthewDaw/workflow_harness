@@ -291,15 +291,6 @@ func ResetAll() int {
 	return cleared
 }
 
-// Prune removes registry records for daemons that are no longer usable: the
-// process is dead, the socket no longer answers, OR the daemon answers with a
-// protocol version this build cannot speak. It returns the surviving (live and
-// compatible) entries, freshly indexed. `ls` calls List (which prunes inline);
-// callers that want an explicit sweep can use Prune.
-func Prune() ([]Entry, error) {
-	return List()
-}
-
 // removeMeta deletes the registry record for a repo root (on clean shutdown).
 func removeMeta(repoRoot string) error {
 	p, err := metaPath(repoRoot)

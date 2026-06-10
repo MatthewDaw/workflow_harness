@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Skill } from '@harness/shared';
 import { SkillBundle } from './SkillBundle.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
 
 const SCOPE = { tier: 'org', id: 'acme' } as const;
 
@@ -46,29 +46,6 @@ const SKILLS: Skill[] = [
   },
 ];
 
-interface StubReq {
-  url: string;
-  method: string;
-  body: unknown;
-}
-
-function lastMatching(
-  pred: (url: string, method: string) => boolean,
-): { url: string; method: string; body: unknown } | undefined {
-  const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-  for (let i = calls.length - 1; i >= 0; i--) {
-    const req = calls[i]![0] as StubReq;
-    if (pred(req.url, req.method)) {
-      return {
-        url: req.url,
-        method: req.method,
-        body: req.body ? JSON.parse(String(req.body)) : undefined,
-      };
-    }
-  }
-  return undefined;
-}
-
 describe('SkillBundle ops (U17)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -101,7 +78,7 @@ describe('SkillBundle ops (U17)', () => {
       ).toBeDefined(),
     );
     const post = lastMatching((u, m) => m === 'POST' && u.includes('skills/review-kit/members'))!;
-    expect(post.body).toMatchObject({ member: 'qa' });
+    expect(JSON.parse(String(post.body))).toMatchObject({ member: 'qa' });
   });
 
   it('removes a member via removeBundleMember (DELETE)', async () => {

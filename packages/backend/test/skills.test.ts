@@ -10,7 +10,6 @@ import {
   createSkill,
   deleteSkill,
   dissolveBundle,
-  flattenBundle,
   foldIdea,
   foldTargetVariant,
   getSkill,
@@ -19,6 +18,7 @@ import {
   removeMember,
   resolveSkills,
 } from '../src/rest/skills.js';
+import { flattenBundle } from '../src/rest/bundles.js';
 import type { Idea } from '@harness/shared';
 import { handler as skillsHandler } from '../src/rest/skills.js';
 import { installInMemoryTable } from './helpers/memtable.js';

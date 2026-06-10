@@ -9,7 +9,8 @@ import {
   forbidden,
   notFound,
   ok,
-  parseBody,
+  parseBodySafe,
+  INVALID_JSON,
   pathParam,
   principalOf,
   unauthorized,
@@ -76,12 +77,8 @@ export async function createObjective(
   if (!principal) return unauthorized();
   if (!isAdmin(event)) return forbidden();
 
-  let body: unknown;
-  try {
-    body = parseBody(event);
-  } catch {
-    return badRequest('invalid JSON body');
-  }
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
   // The org is always the caller's EFFECTIVE org — never a client-supplied one.
   const org = await effectiveOrg(event, deps.repo);
   if (!org) return unauthorized();
