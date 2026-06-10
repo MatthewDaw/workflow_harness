@@ -28,6 +28,7 @@ import { effectiveOrg } from './membership.js';
 import { flattenBundle } from './bundles.js';
 import { STARTER_BUNDLE_NAME } from '../seed/skills.js';
 import { resolvePrincipal } from './bearerAuth.js';
+import { ownedProject } from './ownership.js';
 
 /**
  * REST: projects (U8).
@@ -254,20 +255,6 @@ export async function deleteProjectHandler(
 
 // --- U7: GitHub framing refresh -----------------------------------------
 
-/** Resolve the project for the caller, or a 404 result. */
-async function ownedProject(
-  event: APIGatewayProxyEventV2,
-  deps: ProjectsDeps,
-): Promise<{ project: Project } | { error: APIGatewayProxyResultV2 }> {
-  const principal = principalOf(event);
-  if (!principal) return { error: unauthorized() };
-  const id = pathParam(event, 'id');
-  if (!id) return { error: badRequest('missing project id') };
-  const project = await deps.repo.getProject(id);
-  if (!project || project.ownerUserId !== principal.userId) return { error: notFound() };
-  return { project };
-}
-
 /**
  * POST /projects/:id/refresh — re-read the project's framing from GitHub
  * (`completion:` frontmatter, PRD goal, owned Supporting Outcomes), store it, and
@@ -279,7 +266,7 @@ export async function refreshProject(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const resolved = await ownedProject(event, deps);
+  const resolved = await ownedProject(event, deps.repo);
   if ('error' in resolved) return resolved.error;
   const { project } = resolved;
 
@@ -333,7 +320,7 @@ export async function getProjectDocs(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const resolved = await ownedProject(event, deps);
+  const resolved = await ownedProject(event, deps.repo);
   if ('error' in resolved) return resolved.error;
   const { project } = resolved;
 
@@ -358,7 +345,7 @@ export async function getProjectDocContent(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const resolved = await ownedProject(event, deps);
+  const resolved = await ownedProject(event, deps.repo);
   if ('error' in resolved) return resolved.error;
   const { project } = resolved;
 
@@ -392,7 +379,7 @@ export async function getProjectRequirements(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const resolved = await ownedProject(event, deps);
+  const resolved = await ownedProject(event, deps.repo);
   if ('error' in resolved) return resolved.error;
   const { project } = resolved;
 
@@ -420,7 +407,7 @@ export async function getProjectWireframe(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const resolved = await ownedProject(event, deps);
+  const resolved = await ownedProject(event, deps.repo);
   if ('error' in resolved) return resolved.error;
   const { project } = resolved;
 
@@ -450,7 +437,7 @@ export async function getProjectLearnings(
   event: APIGatewayProxyEventV2,
   deps: ProjectsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const resolved = await ownedProject(event, deps);
+  const resolved = await ownedProject(event, deps.repo);
   if ('error' in resolved) return resolved.error;
   const { project } = resolved;
 

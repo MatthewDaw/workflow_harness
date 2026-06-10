@@ -13,12 +13,8 @@
 // Usage:
 //   SEED_ORG=<org> SEED_DRY_RUN=1 node infra/scripts/seed-workflows.mjs   # report only
 //   SEED_ORG=<org> node infra/scripts/seed-workflows.mjs                  # write to `harness`
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
-
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
+import { TABLE, makeDocClient, importBackendDist, requireBackendDist } from './lib/common.mjs';
 
 const ORG = process.env.SEED_ORG;
 
@@ -27,12 +23,7 @@ if (!ORG) {
   process.exit(1);
 }
 
-if (!existsSync(path.join(backendDist, 'seed', 'workflows.js'))) {
-  console.error(
-    `[seed-workflows] missing ${backendDist}/seed/workflows.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
+requireBackendDist('seed-workflows', 'seed/workflows.js');
 const { buildSeedWorkflows, STARTER_WORKFLOWS } = await importBackendDist(
   'seed',
   'workflows.js',

@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Project, SessionProjection, Skill } from '@harness/shared';
-import { corroborationCount, orgScope } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { corroborationCount } from '@harness/shared';
+import { memRepoHarness } from './helpers/memtable.js';
+import {
+  FakeEmbedder,
+  FakeIdeaVectors as FakeVectors,
+  FakeJudge,
+  FakeWriter,
+  seedSession as seedSessionFor,
+  seedSkill as seedSkillFor,
+  vectorFor,
+} from './helpers/idea-fakes.js';
 import {
   associateAndFinalize,
   finalizeRoute,
@@ -15,9 +19,8 @@ import {
   type TopicFinding,
 } from '../src/ideas/associate.js';
 import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
-import type { S3Vectors, VectorItem, QueryHit, QueryOptions } from '../src/embeddings/s3vectors.js';
-import type { IdeaFinding } from '../src/ideas/synth.js';
-import type { JudgeCandidate, JudgeTopic, JudgeVerdict, RerankJudge } from '../src/rerank/judge.js';
+import type { S3Vectors } from '../src/embeddings/s3vectors.js';
+import type { RerankJudge } from '../src/rerank/judge.js';
 
 /**
  * U10 — idea creation & re-evaluation MOVE semantics (the FINAL pipeline step).
@@ -28,103 +31,16 @@ import type { JudgeCandidate, JudgeTopic, JudgeVerdict, RerankJudge } from '../s
  * DIFFERENT best skill strips the session off the prior skill's idea and adds it to
  * the new one — no double counting.
  *
- * The embedder / idea-writer / S3 Vectors are FAKES so nothing touches the network,
- * mirroring corroborate.test.ts: the writer encodes the lesson key into the concept
- * (`concept:<key>`); the embedder maps that to a one-hot vector, so two phrasings of
- * one lesson share a vector (similarity 1.0) and distinct lessons are orthogonal.
+ * The embedder / idea-writer / S3 Vectors are the shared FAKES
+ * (helpers/idea-fakes.ts) so nothing touches the network: the writer encodes the
+ * lesson key into the concept (`concept:<key>`); the embedder maps that to a
+ * one-hot vector, so two phrasings of one lesson share a vector (similarity 1.0)
+ * and distinct lessons are orthogonal.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 
 const ORG = 'acme';
-
-function lessonKey(content: IdeaFinding): string {
-  const text = `${content.description ?? ''} ${(content.implLearnings ?? []).join(' ')}`;
-  if (/decimal|money|currency|float/i.test(text)) return 'money';
-  if (/retry|backoff|idempot/i.test(text)) return 'retry';
-  return 'other';
-}
-
-function vectorFor(key: string): number[] {
-  const axes: Record<string, number[]> = {
-    money: [1, 0, 0, 0],
-    retry: [0, 1, 0, 0],
-    other: [0, 0, 1, 0],
-  };
-  return axes[key] ?? [0, 0, 0, 1];
-}
-
-function cosine(a: number[], b: number[]): number {
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += (a[i] ?? 0) * (b[i] ?? 0);
-    na += (a[i] ?? 0) ** 2;
-    nb += (b[i] ?? 0) ** 2;
-  }
-  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
-}
-
-/**
- * A fake embedder used for BOTH the skill-retrieval embed (raw topic text) and
- * the idea-index embed (writer-encoded `concept:<key>`). Either way it resolves
- * the lesson key, so a topic about money and its money concept share a vector.
- */
-class FakeEmbedder {
-  async embed(text: string) {
-    const key = text.startsWith('concept:')
-      ? text.slice('concept:'.length).split(' ')[0]!
-      : lessonKey({ description: text });
-    return { vector: vectorFor(key), embeddingModel: 'fake', embeddingVersion: 'fake-v1' };
-  }
-}
-
-/** A fake idea-writer encoding the lesson key into the concept (mirrors corroborate.test.ts). */
-class FakeWriter {
-  async write(finding: IdeaFinding): Promise<string> {
-    return `concept:${lessonKey(finding)}`;
-  }
-  async merge(_existing: string, finding: IdeaFinding): Promise<string> {
-    return `concept:${lessonKey(finding)} [resynth]`;
-  }
-}
-
-/** A fake in-memory S3 Vectors idea index honouring org + skillBaseName metadata. */
-class FakeVectors {
-  items: VectorItem[] = [];
-  async putVectors(_index: string, items: VectorItem[]): Promise<void> {
-    for (const it of items) {
-      this.items = this.items.filter((x) => x.key !== it.key);
-      this.items.push(it);
-    }
-  }
-  async queryTopK(
-    _index: string,
-    vector: number[],
-    k: number,
-    opts: QueryOptions = {},
-  ): Promise<QueryHit[]> {
-    return this.items
-      .filter((it) => opts.orgFilter === undefined || it.metadata.org === opts.orgFilter)
-      .map((it) => ({ key: it.key, score: cosine(vector, it.vector), metadata: it.metadata }))
-      .filter((h) => (opts.floor === undefined ? true : h.score >= opts.floor))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, k);
-  }
-}
-
-/** A scripted judge for the end-to-end route → finalize path. */
-class FakeJudge {
-  lastCandidates?: JudgeCandidate[];
-  constructor(private readonly verdict: JudgeVerdict) {}
-  async judge(_topic: JudgeTopic, candidates: JudgeCandidate[]): Promise<JudgeVerdict> {
-    this.lastCandidates = candidates;
-    return this.verdict;
-  }
-}
 
 let embedder: FakeEmbedder;
 let writer: FakeWriter;
@@ -140,46 +56,10 @@ function deps(judge?: FakeJudge): AssociateDeps {
   };
 }
 
-async function seedSession(opts: {
-  sessionId: string;
-  projectId: string;
-  org: string;
-}): Promise<void> {
-  const project = {
-    id: opts.projectId,
-    name: opts.projectId,
-    repo: `gh/${opts.org}/${opts.projectId}`,
-    ownerUserId: 'matt',
-    liveSessionCount: 0,
-    org: opts.org,
-  } as Project;
-  await repo.putProject(project);
-  const projection = {
-    sessionId: opts.sessionId,
-    projectId: opts.projectId,
-    name: 'a-session',
-    host: 'matt@mbp',
-    status: 'live',
-    tokens: 0,
-    startedAt: 1,
-    lastEventAt: 1,
-    maxSeq: 0,
-  } as SessionProjection;
-  await repo.putSessionProjectionConditional(projection, undefined);
-}
-
-async function seedSkill(org: string, name: string, description: string): Promise<void> {
-  const skill = {
-    name,
-    scope: orgScope(org),
-    kind: 'skill',
-    description,
-    source: 'built-in',
-    members: [],
-    body: '',
-  } as unknown as Skill;
-  await repo.putSkill(skill);
-}
+const seedSession = (opts: { sessionId: string; projectId: string; org: string }) =>
+  seedSessionFor(repo, opts);
+const seedSkill = (org: string, name: string, description: string) =>
+  seedSkillFor(repo, org, name, description);
 
 function topic(over: Partial<TopicFinding> = {}): TopicFinding {
   return {
@@ -207,8 +87,6 @@ function routed(over: Partial<RouteResult> & { skillBaseName: string }): RouteRe
 }
 
 beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
   embedder = new FakeEmbedder();
   writer = new FakeWriter();
   vectors = new FakeVectors();

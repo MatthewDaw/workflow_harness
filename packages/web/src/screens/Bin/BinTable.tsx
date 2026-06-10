@@ -104,13 +104,15 @@ function BinRow({
         <div className="flex items-center justify-end">
           {isAdmin && (
             // v1 admin-only action stub: acting on a bin entry (creating a skill
-            // from it) is the `/skill-idea-iterate` flow's territory; this is the
-            // admin affordance that flow surfaces. Non-admins never see it.
+            // from it) is the `/skill-idea-iterate` flow's territory. Disabled —
+            // not silently inert — until that flow wires it up. Non-admins never
+            // see it.
             <button
               type="button"
               className="hq-btn"
               data-testid={`bin-create-skill-${e.entryId}`}
-              title="Create a skill from this recurring topic"
+              disabled
+              title="Not wired up yet — run /skill-idea-iterate to create a skill from this topic"
             >
               create skill
             </button>

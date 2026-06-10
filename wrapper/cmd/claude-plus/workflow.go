@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -118,30 +116,24 @@ func parseWorkflowArgs(args []string) (name, project string, err error) {
 	return name, project, nil
 }
 
-// loadWorkflowCreds resolves the HQ API base + device token the executor uses for
-// the run REST calls. It mirrors config.APIBase / the daemon's loadHQConfig: the
-// env overrides (CLAUDE_PLUS_API_URL / CLAUDE_PLUS_TOKEN) win, else the
-// "wsURL\ntoken\napiBase" credentials file written by `claude+ login`.
+// loadWorkflowCreds resolves the HQ API base + device token the executor uses
+// for the run REST calls: the env overrides (CLAUDE_PLUS_API_URL /
+// CLAUDE_PLUS_TOKEN) win, else the credentials file written by `claude+ login`
+// (read via config.LoadCredentials).
 func loadWorkflowCreds() (base, token string, ok bool) {
-	base, baseOK := config.APIBase()
+	base, _ = config.APIBase()
 	token = os.Getenv("CLAUDE_PLUS_TOKEN")
-	if base != "" && token != "" {
-		return base, token, true
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", false
-	}
-	b, err := os.ReadFile(filepath.Join(home, ".claude-plus", "credentials"))
-	if err != nil {
-		return "", "", false
-	}
-	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
-	if token == "" && len(lines) >= 2 {
-		token = strings.TrimSpace(lines[1])
-	}
-	if !baseOK && len(lines) >= 3 {
-		base = strings.TrimSpace(lines[2])
+	if base == "" || token == "" {
+		creds, credsOK := config.LoadCredentials()
+		if !credsOK {
+			return "", "", false
+		}
+		if token == "" {
+			token = creds.Token
+		}
+		if base == "" {
+			base = creds.APIBase
+		}
 	}
 	if base == "" || token == "" {
 		return "", "", false
@@ -198,10 +190,11 @@ func executeWaves(cl *workflowClient, repoRoot, name, projectID, runID string, w
 	outputs := map[string]string{}
 	failed := false
 
-	// Bounded concurrency: a token-bucket of permits shared across the wave, so a
-	// wide wave never fans out into an unbounded number of headless model calls
-	// (mirrors the daemon's judge Limiter, but blocking — every ready node must run).
-	limit := newLimiter(workflowConcurrency)
+	// Bounded concurrency: a buffered channel of permits shared across the wave,
+	// so a wide wave never fans out into an unbounded number of headless model
+	// calls. Acquiring BLOCKS (every ready node must eventually run), unlike the
+	// daemon's judge limiter's non-blocking skip.
+	sem := make(chan struct{}, workflowConcurrency)
 
 	for _, wave := range waves {
 		var wg sync.WaitGroup
@@ -210,8 +203,8 @@ func executeWaves(cl *workflowClient, repoRoot, name, projectID, runID string, w
 			wg.Add(1)
 			go func(node workflow.Node) {
 				defer wg.Done()
-				limit.acquire()
-				defer limit.release()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 
 				// Snapshot the dependency outputs this node needs (completed in prior
 				// waves) under the lock.
@@ -222,14 +215,13 @@ func executeWaves(cl *workflowClient, repoRoot, name, projectID, runID string, w
 				}
 				mu.Unlock()
 
-				out, runs, ok := runOneNode(cl, repoRoot, name, projectID, runID, node, byID, deps)
+				out, ok := runOneNode(cl, repoRoot, name, projectID, runID, node, byID, deps)
 				mu.Lock()
 				outputs[node.ID] = out
 				if !ok {
 					failed = true
 				}
 				mu.Unlock()
-				_ = runs
 			}(node)
 		}
 		wg.Wait()
@@ -245,8 +237,8 @@ func executeWaves(cl *workflowClient, repoRoot, name, projectID, runID string, w
 // once, then (if it carries a rerun rule) loop until done or the MaxRuns cap, and
 // finally flip it to `done`/`failed`. It POSTs a node-status update after each
 // transition so the web overlay tracks live progress, and returns the node's final
-// output, its run count, and whether it succeeded.
-func runOneNode(cl *workflowClient, repoRoot, name, projectID, runID string, node workflow.Node, byID map[string]workflow.Node, deps map[string]string) (string, int, bool) {
+// output and whether it succeeded.
+func runOneNode(cl *workflowClient, repoRoot, name, projectID, runID string, node workflow.Node, byID map[string]workflow.Node, deps map[string]string) (string, bool) {
 	fmt.Printf("  node %q (%s): running\n", node.ID, node.Agent)
 	cl.postNode(name, projectID, runID, node.ID, nodeUpdate{State: "running"})
 
@@ -256,11 +248,11 @@ func runOneNode(cl *workflowClient, repoRoot, name, projectID, runID string, nod
 	if !ok {
 		fmt.Printf("  node %q: failed after %d run(s)\n", node.ID, runs)
 		cl.postNode(name, projectID, runID, node.ID, nodeUpdate{State: "failed", Runs: runs, OutputTail: tail})
-		return out, runs, false
+		return out, false
 	}
 	fmt.Printf("  node %q: done after %d run(s)\n", node.ID, runs)
 	cl.postNode(name, projectID, runID, node.ID, nodeUpdate{State: "done", Runs: runs, OutputTail: tail})
-	return out, runs, true
+	return out, true
 }
 
 // outputTail clips a node's captured stdout to the last slice stored on the run
@@ -279,27 +271,9 @@ func outputTail(s string) string {
 // wave never spawns an unbounded burst of headless agents.
 const workflowConcurrency = 2
 
-// limiter is a blocking token-bucket of N permits — the bounded-concurrency
-// primitive for the wave scheduler. It mirrors topic.Limiter's buffered-channel
-// idiom, but acquire BLOCKS (every ready node must eventually run) rather than the
-// judge limiter's non-blocking skip.
-type limiter struct{ ch chan struct{} }
-
-func newLimiter(n int) *limiter {
-	if n < 1 {
-		n = 1
-	}
-	return &limiter{ch: make(chan struct{}, n)}
-}
-
-func (l *limiter) acquire() { l.ch <- struct{}{} }
-func (l *limiter) release() { <-l.ch }
-
 // -----------------------------------------------------------------------------
-// workflowClient — the device-token HTTP client for the run REST surface. It
-// mirrors config.HTTPRemoteSource's getJSON/postJSON (Bearer auth, JSON bodies)
-// but is local to the command because it needs the POST response body (the minted
-// runId) that the sync source's postJSON discards.
+// workflowClient — the device-token HTTP client for the run REST surface: thin
+// wrappers binding this command's base URL + token onto config.DoJSON.
 // -----------------------------------------------------------------------------
 
 type workflowClient struct {
@@ -335,7 +309,7 @@ func (c *workflowClient) createRun(name, projectID string) (string, error) {
 			RunID string `json:"runId"`
 		} `json:"run"`
 	}
-	path := "/workflows/" + urlEscape(name) + "/runs"
+	path := "/workflows/" + url.PathEscape(name) + "/runs"
 	if err := c.postJSON(path, map[string]any{"projectId": projectID}, &resp); err != nil {
 		return "", err
 	}
@@ -349,6 +323,7 @@ func (c *workflowClient) createRun(name, projectID string) (string, error) {
 // merges only the fields present. Runs/OutputTail are omitted on a bare state
 // flip (e.g. `running`) so they don't clobber the node's accumulating count.
 type nodeUpdate struct {
+	ProjectID  string `json:"projectId"`
 	State      string `json:"state"`
 	Runs       int    `json:"runs,omitempty"`
 	OutputTail string `json:"outputTail,omitempty"`
@@ -359,77 +334,19 @@ type nodeUpdate struct {
 // aborts the run (the agents have already done the work; losing a status ping must
 // not fail the execution).
 func (c *workflowClient) postNode(name, projectID, runID, nodeID string, u nodeUpdate) {
-	path := "/workflows/" + urlEscape(name) + "/runs/" + urlEscape(runID) + "/nodes/" + urlEscape(nodeID)
-	body := map[string]any{"projectId": projectID, "state": u.State}
-	if u.Runs > 0 {
-		body["runs"] = u.Runs
-	}
-	if u.OutputTail != "" {
-		body["outputTail"] = u.OutputTail
-	}
-	if err := c.postJSON(path, body, nil); err != nil {
+	path := "/workflows/" + url.PathEscape(name) + "/runs/" + url.PathEscape(runID) + "/nodes/" + url.PathEscape(nodeID)
+	u.ProjectID = projectID
+	if err := c.postJSON(path, u, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "claude+: workflow node status update failed (%s): %v\n", nodeID, err)
 	}
 }
 
 func (c *workflowClient) getJSON(path string, dst any) error {
-	req, err := http.NewRequest(http.MethodGet, c.base+path, nil)
-	if err != nil {
-		return err
-	}
-	c.auth(req)
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", path, resp.Status)
-	}
-	if dst == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(dst)
+	return config.DoJSON(c.client, http.MethodGet, c.base+path, c.token, nil, dst, path)
 }
 
 // postJSON POSTs a JSON payload and decodes the response into dst (nil to ignore
 // the body). It accepts any 2xx (POST /runs returns 201 Created).
-func (c *workflowClient) postJSON(path string, payload any, dst any) error {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPost, c.base+path, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("content-type", "application/json")
-	c.auth(req)
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("POST %s: %s", path, resp.Status)
-	}
-	if dst == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(dst)
-}
-
-func (c *workflowClient) auth(req *http.Request) {
-	if c.token != "" {
-		req.Header.Set("authorization", "Bearer "+c.token)
-	}
-}
-
-// urlEscape percent-encodes a single path segment (a workflow/run/node id) so a
-// name with spaces or slashes routes correctly. url.PathEscape is the same helper
-// config.remote uses for its path params.
-func urlEscape(s string) string {
-	return url.PathEscape(s)
+func (c *workflowClient) postJSON(path string, payload, dst any) error {
+	return config.DoJSON(c.client, http.MethodPost, c.base+path, c.token, payload, dst, path)
 }

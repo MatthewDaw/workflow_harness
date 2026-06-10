@@ -12,11 +12,8 @@ import { Construct } from 'constructs';
  * stream-consumer / ideas Lambdas attach to for put+query.
  *
  * S3 Vectors is GA (Dec 2025), pay-per-use with no idle floor, AWS-native (stays
- * in-account, IAM, no new vendor/secret). This is the GA replacement for the
- * Classic-generation `SearchStack` (OpenSearch Serverless), which carries an
- * idle-cost floor + a public network policy and stays un-instantiated in
- * `infra/bin/infra.ts` — this stack mirrors that exclusion (we add VectorsStack,
- * we do NOT add SearchStack).
+ * in-account, IAM, no new vendor/secret). It replaces the retired OpenSearch
+ * Serverless SearchStack (idle-cost floor, public network policy).
  *
  * ---------------------------------------------------------------------------
  * INDEX-STRATEGY DECISION: one fixed index per data-type, `org` as a FILTERABLE
@@ -138,23 +135,10 @@ export class VectorsStack extends cdk.Stack {
       ],
     });
 
-    // ---- Grant wiring (CROSS-STACK — intentional stub) ----------------------
-    // U1 requires put/query be granted ONLY to the stream-consumer Lambda role
-    // and a future ideas Lambda role. Both of those roles live in `ApiStack`
-    // (the stream consumer exists today as `StreamConsumerFn`; the ideas Lambda
-    // does NOT exist yet — it is introduced in U8/U11). Rather than reach across
-    // stacks from here (which couples ApiStack ordering to VectorsStack and is
-    // the wrong direction — ApiStack already depends on shared resources), this
-    // stack EXPORTS `accessPolicy` and the index ARNs, and the attachment is
-    // done in ApiStack when it wires the consumer + ideas Lambdas:
-    //
-    //   // in api-stack.ts, once VectorsStack is passed in via props (U3/U8):
-    //   vectors.accessPolicy.attachToRole(streamConsumerFn.role!);
-    //   vectors.accessPolicy.attachToRole(ideasFn.role!);   // <-- future (U8)
-    //
-    // Until U3/U8 wire it, NO role is attached, so the policy grants nothing to
-    // anyone — least-privilege by construction (an unattached managed policy is
-    // inert). This is the deliberate "grant stub" the unit calls for.
+    // Grant wiring is cross-stack by design: the consumer/ideas Lambda roles
+    // live in ApiStack, which attaches `accessPolicy` to them (U3/U8). Until
+    // then the policy is attached to no role and grants nothing — an unattached
+    // managed policy is inert, so this stays least-privilege by construction.
 
     // ---- Outputs ------------------------------------------------------------
     new cdk.CfnOutput(this, 'VectorBucketName', {

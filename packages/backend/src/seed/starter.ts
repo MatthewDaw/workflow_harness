@@ -1,13 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { orgScope, skillSchema, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import {
-  buildSeedSkills,
-  STARTER_BUNDLE_NAME,
-  type BundleManifest,
-  type SeedSkillFile,
-} from './skills.js';
+import { buildSeedSkills, STARTER_BUNDLE_NAME } from './skills.js';
+import { readBundleManifest, readSkillFiles } from './skillsFromDisk.js';
 
 /**
  * Pre-load a brand-new org's catalog with the product **command-hq-starter**
@@ -53,54 +49,10 @@ function repoSkillsDir(): string | undefined {
   return dir && existsSync(dir) ? dir : undefined;
 }
 
-/** Minimal SKILL.md front-matter parse (name + folded description), matching the
- * deploy seeder. Only used on the disk-fallback path. */
-function parseFrontmatter(md: string): { name?: string; description: string } {
-  const lines = md.split(/\r?\n/);
-  if (lines[0]?.trim() !== '---') return { description: '' };
-  let name: string | undefined;
-  const desc: string[] = [];
-  let inDesc = false;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    if (line.trim() === '---') break;
-    const top = /^([A-Za-z0-9_-]+):\s?(.*)$/.exec(line);
-    if (top && !line.startsWith(' ')) {
-      inDesc = false;
-      const [, key, value] = top;
-      if (key === 'name') name = value!.trim();
-      else if (key === 'description') {
-        inDesc = true;
-        const v = value!.trim();
-        if (v && v !== '>-' && v !== '>' && v !== '|' && v !== '|-') desc.push(v);
-      }
-      continue;
-    }
-    if (inDesc && line.trim()) desc.push(line.trim());
-  }
-  return { name, description: desc.join(' ').trim() };
-}
-
 /** Build the org-scoped starter records from the repo's `catalog/skills` on disk. */
 function diskStarterRecords(dir: string, org: string): Skill[] {
-  const files: SeedSkillFile[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const md = path.join(dir, entry.name, 'SKILL.md');
-    if (!existsSync(md)) continue;
-    const body = readFileSync(md, 'utf8');
-    const { name, description } = parseFrontmatter(body);
-    files.push({ name: name ?? entry.name, description, body });
-  }
-  let manifest: BundleManifest = {};
-  const manifestPath = path.join(dir, 'bundles.json');
-  if (existsSync(manifestPath)) {
-    try {
-      manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as BundleManifest;
-    } catch {
-      manifest = {};
-    }
-  }
+  const files = readSkillFiles(dir);
+  const manifest = readBundleManifest(path.join(dir, 'bundles.json'));
   // Keep ONLY the org-scoped records (starter bundle + members); the user-granted
   // built-ins are not part of a new org's default.
   return buildSeedSkills(org, files, manifest).filter((s) => s.scope.tier === 'org');

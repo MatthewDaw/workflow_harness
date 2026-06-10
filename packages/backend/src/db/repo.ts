@@ -42,6 +42,7 @@ import {
   variantIdFor,
 } from '@harness/shared';
 import * as k from './keys.js';
+import { flattenBundle } from '../catalog/bundles.js';
 
 /**
  * A live WebSocket connection in the registry. Daemon connections also carry the
@@ -539,42 +540,82 @@ export class Repo {
     return (res.Items ?? []) as InstanceRecord[];
   }
 
-  // --- Agents + skills (scoped) ------------------------------------------
+  // --- Catalog items (skills / agents / mcp servers / workflows) ----------
+  //
+  // All four kinds share the same persistence shape: the live record lives
+  // under its per-kind item key (see `itemKey`), and the catalog list is a
+  // per-scope `<KIND>#` prefix scan. The public per-kind methods are thin
+  // typed wrappers over these generics.
+
+  private async putCatalogItem<T extends { scope: ScopeRef; name: string }>(
+    kind: k.CatalogKind,
+    item: T,
+  ): Promise<void> {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { ...this.itemKey(kind, item.scope, item.name), ...item },
+      }),
+    );
+  }
+
+  private async getCatalogItem<T>(
+    kind: k.CatalogKind,
+    scope: ScopeRef,
+    name: string,
+  ): Promise<T | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.table, Key: this.itemKey(kind, scope, name) }),
+    );
+    return res.Item as T | undefined;
+  }
+
+  private async deleteCatalogItem(kind: k.CatalogKind, scope: ScopeRef, name: string): Promise<void> {
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.table, Key: this.itemKey(kind, scope, name) }),
+    );
+  }
+
+  /**
+   * The catalog of one kind visible to a viewer. With no `userId` this is the
+   * org-only catalog (back-compat with every existing caller/test). With a
+   * `userId` it merges the org scope AND the user scope, so user-scoped items
+   * are included and a user-scoped item SHADOWS an org-scoped one of the same
+   * name (resolveScoped: narrowest scope wins).
+   */
+  private async listCatalog<T extends { name: string; scope: ScopeRef }>(
+    kind: k.CatalogKind,
+    org: string,
+    userId?: string,
+  ): Promise<T[]> {
+    const orgItems = await this.listScoped<T>(orgScope(org), `${kind}#`);
+    if (userId === undefined) return orgItems;
+    const userItems = await this.listScoped<T>(userScope(userId), `${kind}#`);
+    return resolveScoped([...orgItems, ...userItems], { org, userId });
+  }
 
   async putAgent(a: Agent): Promise<void> {
-    await this.doc.send(
-      new PutCommand({ TableName: this.table, Item: { ...k.agentKey(a.scope, a.name), ...a } }),
-    );
+    return this.putCatalogItem('AGENT', a);
   }
 
   async getAgent(scope: ScopeRef, name: string): Promise<Agent | undefined> {
-    const res = await this.doc.send(
-      new GetCommand({ TableName: this.table, Key: k.agentKey(scope, name) }),
-    );
-    return res.Item as Agent | undefined;
+    return this.getCatalogItem<Agent>('AGENT', scope, name);
   }
 
   async deleteAgent(scope: ScopeRef, name: string): Promise<void> {
-    await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.agentKey(scope, name) }));
+    return this.deleteCatalogItem('AGENT', scope, name);
   }
 
   async putWorkflow(w: Workflow): Promise<void> {
-    await this.doc.send(
-      new PutCommand({ TableName: this.table, Item: { ...k.workflowKey(w.scope, w.name), ...w } }),
-    );
+    return this.putCatalogItem('WORKFLOW', w);
   }
 
   async getWorkflow(scope: ScopeRef, name: string): Promise<Workflow | undefined> {
-    const res = await this.doc.send(
-      new GetCommand({ TableName: this.table, Key: k.workflowKey(scope, name) }),
-    );
-    return res.Item as Workflow | undefined;
+    return this.getCatalogItem<Workflow>('WORKFLOW', scope, name);
   }
 
   async deleteWorkflow(scope: ScopeRef, name: string): Promise<void> {
-    await this.doc.send(
-      new DeleteCommand({ TableName: this.table, Key: k.workflowKey(scope, name) }),
-    );
+    return this.deleteCatalogItem('WORKFLOW', scope, name);
   }
 
   // --- Workflow runs (live execution status, M5) -------------------------
@@ -631,39 +672,27 @@ export class Repo {
   }
 
   async putSkill(s: Skill): Promise<void> {
-    await this.doc.send(
-      new PutCommand({ TableName: this.table, Item: { ...k.skillKey(s.scope, s.name), ...s } }),
-    );
+    return this.putCatalogItem('SKILL', s);
   }
 
   async getSkill(scope: ScopeRef, name: string): Promise<Skill | undefined> {
-    const res = await this.doc.send(
-      new GetCommand({ TableName: this.table, Key: k.skillKey(scope, name) }),
-    );
-    return res.Item as Skill | undefined;
+    return this.getCatalogItem<Skill>('SKILL', scope, name);
   }
 
   async deleteSkill(scope: ScopeRef, name: string): Promise<void> {
-    await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.skillKey(scope, name) }));
+    return this.deleteCatalogItem('SKILL', scope, name);
   }
 
   async putMcpServer(s: McpServer): Promise<void> {
-    await this.doc.send(
-      new PutCommand({ TableName: this.table, Item: { ...k.mcpServerKey(s.scope, s.name), ...s } }),
-    );
+    return this.putCatalogItem('MCPSERVER', s);
   }
 
   async getMcpServer(scope: ScopeRef, name: string): Promise<McpServer | undefined> {
-    const res = await this.doc.send(
-      new GetCommand({ TableName: this.table, Key: k.mcpServerKey(scope, name) }),
-    );
-    return res.Item as McpServer | undefined;
+    return this.getCatalogItem<McpServer>('MCPSERVER', scope, name);
   }
 
   async deleteMcpServer(scope: ScopeRef, name: string): Promise<void> {
-    await this.doc.send(
-      new DeleteCommand({ TableName: this.table, Key: k.mcpServerKey(scope, name) }),
-    );
+    return this.deleteCatalogItem('MCPSERVER', scope, name);
   }
 
   // --- Versioning: variants + revisions + TRUE pointer (KTD6) -------------
@@ -858,60 +887,20 @@ export class Repo {
     );
   }
 
-  /**
-   * The catalog of agents visible to a viewer. With no `userId` this is the
-   * org-only catalog (back-compat with every existing caller/test). With a
-   * `userId` it merges the org scope AND the user scope, so user-scoped agents
-   * are included and a user-scoped item SHADOWS an org-scoped one of the same
-   * name (resolveScoped: narrowest scope wins).
-   */
   async listAgents(org: string, userId?: string): Promise<Agent[]> {
-    const orgAgents = await this.listScoped<Agent>(orgScope(org), 'AGENT#');
-    if (userId === undefined) return orgAgents;
-    const userAgents = await this.listScoped<Agent>(userScope(userId), 'AGENT#');
-    return resolveScoped([...orgAgents, ...userAgents], { org, userId });
+    return this.listCatalog<Agent>('AGENT', org, userId);
   }
 
-  /**
-   * The catalog of workflows visible to a viewer. With no `userId` this is the
-   * org-only catalog (back-compat with every existing caller/test). With a
-   * `userId` it merges the org scope AND the user scope, so user-scoped workflows
-   * are included and a user-scoped item SHADOWS an org-scoped one of the same
-   * name (resolveScoped: narrowest scope wins).
-   */
   async listWorkflows(org: string, userId?: string): Promise<Workflow[]> {
-    const orgWorkflows = await this.listScoped<Workflow>(orgScope(org), 'WORKFLOW#');
-    if (userId === undefined) return orgWorkflows;
-    const userWorkflows = await this.listScoped<Workflow>(userScope(userId), 'WORKFLOW#');
-    return resolveScoped([...orgWorkflows, ...userWorkflows], { org, userId });
+    return this.listCatalog<Workflow>('WORKFLOW', org, userId);
   }
 
-  /**
-   * The catalog of skills visible to a viewer. With no `userId` this is the
-   * org-only catalog (back-compat with every existing caller/test). With a
-   * `userId` it merges the org scope AND the user scope, so user-scoped skills
-   * are included and a user-scoped item SHADOWS an org-scoped one of the same
-   * name (resolveScoped: narrowest scope wins).
-   */
   async listSkills(org: string, userId?: string): Promise<Skill[]> {
-    const orgSkills = await this.listScoped<Skill>(orgScope(org), 'SKILL#');
-    if (userId === undefined) return orgSkills;
-    const userSkills = await this.listScoped<Skill>(userScope(userId), 'SKILL#');
-    return resolveScoped([...orgSkills, ...userSkills], { org, userId });
+    return this.listCatalog<Skill>('SKILL', org, userId);
   }
 
-  /**
-   * The catalog of MCP servers visible to a viewer. With no `userId` this is the
-   * org-only catalog (the catalog is org-only today — there is no user-scoped MCP
-   * authoring UI). With a `userId` it merges the org scope AND the user scope, so
-   * a user-scoped item SHADOWS an org-scoped one of the same name (resolveScoped:
-   * narrowest scope wins). Mirrors listSkills for parity and future-proofing.
-   */
   async listMcpServers(org: string, userId?: string): Promise<McpServer[]> {
-    const orgServers = await this.listScoped<McpServer>(orgScope(org), 'MCPSERVER#');
-    if (userId === undefined) return orgServers;
-    const userServers = await this.listScoped<McpServer>(userScope(userId), 'MCPSERVER#');
-    return resolveScoped([...orgServers, ...userServers], { org, userId });
+    return this.listCatalog<McpServer>('MCPSERVER', org, userId);
   }
 
   private async listScoped<T>(scope: ScopeRef, skPrefix: string): Promise<T[]> {
@@ -1242,20 +1231,7 @@ export class Repo {
   private async expandAgentSkills(org: string, agent: Agent): Promise<string[]> {
     const catalog = await this.listSkills(org);
     const byName = new Map(catalog.map((s) => [s.name, s]));
-    const leaves: string[] = [];
-    const seen = new Set<string>();
-    const walk = (name: string): void => {
-      if (seen.has(name)) return;
-      seen.add(name);
-      const s = byName.get(name);
-      if (s?.kind === 'bundle') {
-        for (const m of s.members) walk(m);
-      } else {
-        leaves.push(name);
-      }
-    };
-    for (const name of agent.skills) walk(name);
-    return [...new Set(leaves)];
+    return flattenBundle({ members: agent.skills }, byName);
   }
 
   // --- Objectives + weekly updates ---------------------------------------

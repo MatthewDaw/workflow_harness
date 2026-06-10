@@ -272,7 +272,7 @@ func (t *Tailer) handleUser(msg messageEnvelope) {
 			return
 		}
 		t.firstTurn(text)
-		t.emit(event.UserMsgText(t.sessID, tokenCount(text), capContent(text)))
+		t.emit(event.UserMsgText(t.sessID, EstimateTokens(text), capContent(text)))
 		return
 	}
 
@@ -285,7 +285,7 @@ func (t *Tailer) handleUser(msg messageEnvelope) {
 				continue
 			}
 			t.firstTurn(text)
-			t.emit(event.UserMsgText(t.sessID, tokenCount(text), capContent(text)))
+			t.emit(event.UserMsgText(t.sessID, EstimateTokens(text), capContent(text)))
 		case "tool_result":
 			summary := capContent(textFromContent(b.Content))
 			// Current transcript tool_result rows carry no duration; report 0ms.

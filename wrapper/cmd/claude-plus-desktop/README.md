@@ -1,19 +1,8 @@
-# README
+# claude-plus-desktop
 
-## About
-
-This is the official Wails React-TS template.
-
-You can configure the project by editing `wails.json`. More information about the project settings can be found
-here: https://wails.io/docs/reference/project-config
-
-## Live Development
-
-To run in live development mode, run `wails dev` in the project directory. This will run a Vite development
-server that will provide very fast hot reload of your frontend changes. If you want to develop in a browser
-and have access to your Go methods, there is also a dev server that runs on http://localhost:34115. Connect
-to this in your browser, and you can call your Go code from devtools.
-
-## Building
-
-To build a redistributable, production mode package, use `wails build`.
+The claude+ desktop GUI (Wails + React/TS): a windowed front end over the same
+per-repo claude+ daemon the CLI attaches to, with terminal, session tabs, an
+event stream, and a status bar. Launched via `claude+ --gui` or by running the
+binary in a repo. The Go/JS boundary lives in `app.go` (bound methods) and
+`internal/desktop` (daemon-to-webview bridge); `frontend/wailsjs/` is generated.
+Develop with `wails dev`, build with `wails build`, from this directory.

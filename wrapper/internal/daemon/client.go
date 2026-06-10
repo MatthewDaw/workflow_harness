@@ -73,22 +73,7 @@ func Dial(repoRoot string) (*Client, error) {
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	c, err := dialSock(e.Sock)
-	if err == nil {
-		return c, nil
-	}
-	var mismatch errProtocolMismatch
-	if !errors.As(err, &mismatch) {
-		return nil, err
-	}
-	// Recoverable: an incompatible daemon is squatting this repo. Retire it and
-	// bring up a fresh one, then attach exactly once more.
-	stopStale(e)
-	fresh, err := EnsureDaemon(repoRoot)
-	if err != nil {
-		return nil, fmt.Errorf("replace incompatible daemon: %w", err)
-	}
-	return dialSock(fresh.Sock)
+	return dialWithReplace(e)
 }
 
 // DialIndex connects to the daemon at registry index n (`--session=N`). Like
@@ -98,6 +83,14 @@ func DialIndex(n int) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return dialWithReplace(e)
+}
+
+// dialWithReplace attaches to the daemon described by e. On a protocol-mismatch
+// handshake (an incompatible build squatting the repo) it retires the stale
+// daemon, brings up a fresh one, and attaches exactly once more; any other dial
+// error is returned as-is.
+func dialWithReplace(e Entry) (*Client, error) {
 	c, err := dialSock(e.Sock)
 	if err == nil {
 		return c, nil
@@ -238,8 +231,8 @@ func (c *Client) Detach() error {
 }
 
 // Run reads frames from the daemon and dispatches output/session updates until
-// the connection closes. Call Out/OnSessions before Run. Returns ErrDetached on
-// a clean local detach (the caller decides; Run itself returns on conn close).
+// the connection closes (it returns the read error, io.EOF on a clean close).
+// Call Out/OnSessions before Run.
 func (c *Client) Run() error {
 	// Signal Shutdown (which must not read c.r concurrently) that the reader has
 	// returned — i.e. the daemon closed the conn. Guard the nil case for Clients

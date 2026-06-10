@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Skill } from '@harness/shared';
 import { Pill } from './primitives.js';
 import { MarkdownView } from './MarkdownView.js';
+import { OverlayModal } from './OverlayModal.js';
 import { stripFrontmatter } from '../lib/frontmatter.js';
+import { authorOf } from '../lib/catalogUi.js';
 import { VariantSwitcher } from './VariantSwitcher.js';
 import { variantOf, useGetSkillIdeasQuery, type SkillIdea } from '../api/baseApi.js';
 
@@ -16,8 +18,8 @@ import { variantOf, useGetSkillIdeasQuery, type SkillIdea } from '../api/baseApi
 const CORROBORATION_K = 2;
 
 /** The author/creator of a skill — its createdBy name, falling back to source. */
-export function authorOf(s: Skill): string {
-  return s.createdBy?.name ?? s.source ?? 'system';
+export function skillAuthor(s: Skill): string {
+  return authorOf(s, s.source ?? 'system');
 }
 
 /**
@@ -72,7 +74,7 @@ export function SkillCard({
         </div>
         <div className="my-1.5 line-clamp-3 text-xs text-mut">{descriptionOf(skill)}</div>
         <div className="mt-1.5 text-[11px] text-faint" data-testid={`skill-author-${skill.name}`}>
-          by {authorOf(skill)}
+          by {skillAuthor(skill)}
         </div>
       </Link>
     );
@@ -86,7 +88,7 @@ export function SkillCard({
       <div className="my-1.5 line-clamp-3 text-xs text-mut">{descriptionOf(skill)}</div>
       <SkillBodyPreview skill={skill} />
       <div className="mt-1.5 text-[11px] text-faint" data-testid={`skill-author-${skill.name}`}>
-        by {authorOf(skill)}
+        by {skillAuthor(skill)}
       </div>
       {showVariants && (
         <div className="mt-2 border-t border-odd pt-2">
@@ -138,46 +140,21 @@ function SkillBodyModal({
   body: string;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/50 p-4 sm:p-8"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`${skill.name} skill`}
-      data-testid={`skill-modal-${skill.name}`}
-      onClick={onClose}
+    <OverlayModal
+      ariaLabel={`${skill.name} skill`}
+      testid={`skill-modal-${skill.name}`}
+      closeTestid={`skill-modal-close-${skill.name}`}
+      onClose={onClose}
+      header={
+        <Pill variant="skill" className="font-semibold">
+          {skill.name}
+        </Pill>
+      }
     >
-      <div
-        className="hq-box mx-auto flex h-full w-full max-w-[900px] flex-col overflow-hidden bg-paper"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-odd pb-2">
-          <Pill variant="skill" className="font-semibold">
-            {skill.name}
-          </Pill>
-          <button
-            type="button"
-            className="hq-btn"
-            data-testid={`skill-modal-close-${skill.name}`}
-            onClick={onClose}
-          >
-            ✕ Close
-          </button>
-        </div>
-        <div className="mt-2 min-h-0 flex-1 overflow-auto">
-          <SkillIdeasDropdown name={variantOf(skill).baseName} />
-          <MarkdownView markdown={body} />
-        </div>
-      </div>
-    </div>
+      <SkillIdeasDropdown name={variantOf(skill).baseName} />
+      <MarkdownView markdown={body} />
+    </OverlayModal>
   );
 }
 

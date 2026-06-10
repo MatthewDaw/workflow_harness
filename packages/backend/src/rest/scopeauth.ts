@@ -1,25 +1,11 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
-import type { ScopeRef, UserProfile } from '@harness/shared';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+import type { UserProfile } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import type { Principal } from '../auth/verify.js';
 import { resolvePrincipal } from './bearerAuth.js';
+import { forbidden, unauthorized } from './runtime.js';
 
-/**
- * Authorization helpers shared by the scoped Agents/Skills registries (U9).
- *
- * Read rules per tier (canReadScope):
- *  - org:     the caller must belong to the org (scope.id === principal.org).
- *  - user:    the caller may read only their own user scope.
- *  - project: the caller must own the project (resolved via the Repo).
- *
- * Write rules per tier (canWriteScope):
- *  - org:     only an admin (the `custom:admin` claim) may write at org scope,
- *             and only within their own org.
- *  - user:    a user may write only their own user scope.
- *  - project: a user may write a project scope only if they own the project
- *             (project.ownerUserId === principal.userId) — never an arbitrary
- *             project id (cross-tenant write).
- */
+/** Authorization helpers shared by the org-catalog registries (skills/agents/mcp/workflows). */
 
 /**
  * Is a catalog record CANONICAL — owned by the git seed (`catalog/skills` /
@@ -103,49 +89,40 @@ export async function resolveOrgCatalogAuth(
   return { principal, org, admin: isOrgAdmin(event, profile, org) };
 }
 
+/** A passed gate (the resolved auth) or the HTTP error response to return. */
+export type OrgCatalogGate<A = OrgCatalogAuth> = { auth: A } | { error: APIGatewayProxyResultV2 };
+
 /**
- * May `principal` read at `scope`? The org/user tiers are decided from the
- * principal alone; the project tier requires a Repo lookup so ownership /
- * org-membership of the project can be enforced (no cross-tenant reads).
+ * Gate a READ-side org-catalog handler: resolve the caller or produce the 401.
+ *
+ * Accepts EITHER the gateway Cognito JWT (HQ web) OR the claude+ device token —
+ * these routes are wired with `HttpNoneAuthorizer`, so the raw HS256 bearer
+ * token reaches the handler instead of being pre-rejected by the gateway. What a
+ * missing org means differs per read handler (404, empty list, …), so org
+ * handling stays with the caller.
  */
-export async function canReadScope(
-  scope: ScopeRef,
-  principal: Principal,
+export async function requireOrgCatalogAuth(
+  event: APIGatewayProxyEventV2,
   repo: Repo,
-): Promise<boolean> {
-  switch (scope.tier) {
-    case 'org':
-      return scope.id === principal.org;
-    case 'user':
-      return scope.id === principal.userId;
-    case 'project': {
-      const project = await repo.getProject(scope.id);
-      if (!project) return false;
-      return project.ownerUserId === principal.userId;
-    }
-  }
+): Promise<OrgCatalogGate> {
+  const auth = await resolveOrgCatalogAuth(event, repo);
+  if (!auth) return { error: unauthorized() };
+  return { auth };
 }
 
 /**
- * May `principal` write at `scope`? `admin` gates the org tier. The project tier
- * requires real authorization against the project record (ownership or org
- * match) — it is no longer unconditionally allowed (cross-tenant write fix).
+ * Gate a WRITE-side (admin) org-catalog handler: verified caller (else 401),
+ * server-side admin (else 403), resolvable org (else 401). Admin is decided
+ * from the PROFILE, not the token, so the claude+ device token — which carries
+ * org + identity but NO role claim — can write the catalog (see `isOrgAdmin`).
  */
-export async function canWriteScope(
-  scope: ScopeRef,
-  principal: Principal,
-  admin: boolean,
+export async function requireOrgCatalogAdmin(
+  event: APIGatewayProxyEventV2,
   repo: Repo,
-): Promise<boolean> {
-  switch (scope.tier) {
-    case 'org':
-      return admin && scope.id === principal.org;
-    case 'user':
-      return scope.id === principal.userId;
-    case 'project': {
-      const project = await repo.getProject(scope.id);
-      if (!project) return false;
-      return project.ownerUserId === principal.userId;
-    }
-  }
+): Promise<OrgCatalogGate<OrgCatalogAuth & { org: string }>> {
+  const auth = await resolveOrgCatalogAuth(event, repo);
+  if (!auth) return { error: unauthorized() };
+  if (!auth.admin) return { error: forbidden() };
+  if (!auth.org) return { error: unauthorized() };
+  return { auth: { ...auth, org: auth.org } };
 }

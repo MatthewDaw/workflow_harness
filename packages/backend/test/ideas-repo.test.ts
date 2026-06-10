@@ -1,11 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import { orgScope, type Idea, type UnassignedEntry } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import * as k from '../src/db/keys.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * U6 — idea + unassigned-bin keys, schemas, and repo CRUD with conditional
@@ -16,14 +12,7 @@ import { installInMemoryTable } from './helpers/memtable.js';
  * fold↔corroboration race is safe.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 const ORG = 'acme';
 const SKILL = 'hq-update-skills';

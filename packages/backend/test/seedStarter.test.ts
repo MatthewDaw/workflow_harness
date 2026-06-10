@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { orgScope, type Skill } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import { seedStarterForOrg } from '../src/seed/starter.js';
 import { STARTER_BUNDLE_NAME } from '../src/seed/skills.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * A new org is pre-loaded with the command-hq-starter bundle + its members, cloned
@@ -14,9 +10,7 @@ import { installInMemoryTable } from './helpers/memtable.js';
  * scope) are NOT part of a new org's default and must not leak in.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 
 const TEMPLATE = 'acme';
 
@@ -51,8 +45,6 @@ async function seedTemplate(): Promise<void> {
 }
 
 beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
   delete process.env.HQ_REPO_SKILLS_DIR; // force the clone path (no disk fallback)
 });
 

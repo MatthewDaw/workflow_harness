@@ -6,6 +6,7 @@ import {
 } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { type OpenRouterEmbedder, getEmbedder } from '../embeddings/embed.js';
+import { envNumber } from '../lib/env.js';
 import {
   IDEA_VECTOR_INDEX,
   getS3Vectors,
@@ -58,17 +59,17 @@ import { getIdeaWriter, type IdeaFinding, type IdeaWriter } from './synth.js';
  */
 
 /**
- * Idea-merge similarity threshold (cosine similarity in [0,1]). Strict-ish: a
- * top match must be at/above this to merge; below it, a new idea is born. Env
- * overrideable for tuning against real topics.
+ * Default idea-merge similarity threshold (cosine similarity in [0,1]).
+ * Strict-ish: a top match must be at/above the threshold to merge; below it, a
+ * new idea is born.
  */
-export const IDEA_MERGE_THRESHOLD = Number(process.env.IDEA_MERGE_THRESHOLD ?? 0.9);
+export const IDEA_MERGE_THRESHOLD = 0.9;
 /** Corroboration K — distinct sessions required to mark an idea corroborated. */
 export const CORROBORATION_K = Number(process.env.CORROBORATION_K ?? 2);
 
-/** Resolve the configured merge threshold at call time (env overrideable). */
+/** The configured merge threshold (`IDEA_MERGE_THRESHOLD`), read at call time. */
 function mergeThreshold(): number {
-  return Number(process.env.IDEA_MERGE_THRESHOLD ?? IDEA_MERGE_THRESHOLD);
+  return envNumber('IDEA_MERGE_THRESHOLD', IDEA_MERGE_THRESHOLD);
 }
 
 /**

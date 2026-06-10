@@ -1,135 +1,38 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { corroborationCount } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
+import {
+  FakeEmbedder,
+  FakeIdeaVectors as FakeVectors,
+  FakeWriter,
+} from './helpers/idea-fakes.js';
 import {
   CORROBORATION_K,
   corroborateFinding,
   type Finding,
 } from '../src/ideas/corroborate.js';
 import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
-import type { S3Vectors, VectorItem, QueryHit, QueryOptions } from '../src/embeddings/s3vectors.js';
-import type { IdeaWriter, IdeaFinding } from '../src/ideas/synth.js';
+import type { S3Vectors } from '../src/embeddings/s3vectors.js';
+import type { IdeaWriter } from '../src/ideas/synth.js';
 
 /**
  * U7 — corroboration + within-skill dedup with MERGE-REWRITE. The embedder,
- * idea-writer, and S3 Vectors are FAKES so nothing touches the network:
- *
- *  - The fake embedder maps text to a deterministic vector via a "lesson key" —
- *    the dominant unit-axis. Two phrasings of the same lesson share a key, so
- *    their vectors are identical (similarity 1.0); distinct lessons get
- *    orthogonal axes (similarity 0).
- *  - The fake idea-writer echoes a stable concept per lesson on `write`, and on
- *    `merge` produces a marked re-synthesized concept so the test can assert the
- *    text was actually rewritten.
- *  - The fake S3 Vectors is an in-memory index honouring the org filter +
- *    skillBaseName metadata; cosine similarity is computed on the stored floats.
+ * idea-writer, and S3 Vectors are the shared FAKES (helpers/idea-fakes.ts) so
+ * nothing touches the network: two phrasings of one lesson share a vector
+ * (similarity 1.0), distinct lessons are orthogonal, and the writer marks
+ * re-synthesized text so a test can prove the rewrite happened.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 
 const ORG = 'acme';
 const SKILL = 'hq-update-skills';
-
-/**
- * Map a finding's content to its "lesson key" — the test's notion of which
- * underlying lesson it expresses. Two phrasings of one lesson share a key.
- */
-function lessonKey(content: IdeaFinding): string {
-  const text = `${content.description ?? ''} ${(content.implLearnings ?? []).join(' ')}`;
-  if (/decimal|money|currency|float/i.test(text)) return 'money';
-  if (/retry|backoff|idempot/i.test(text)) return 'retry';
-  return 'other';
-}
-
-/** A 4-dim one-hot vector keyed on the lesson, so same lesson → identical vector. */
-function vectorFor(key: string): number[] {
-  const axes: Record<string, number[]> = {
-    money: [1, 0, 0, 0],
-    retry: [0, 1, 0, 0],
-    other: [0, 0, 1, 0],
-  };
-  return axes[key] ?? [0, 0, 0, 1];
-}
-
-function cosine(a: number[], b: number[]): number {
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += (a[i] ?? 0) * (b[i] ?? 0);
-    na += (a[i] ?? 0) ** 2;
-    nb += (b[i] ?? 0) ** 2;
-  }
-  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
-}
-
-/** A fake embedder: text → one-hot lesson vector, stamped like the real one. */
-class FakeEmbedder {
-  // The embedder receives the SYNTHESIZED concept, which the fake writer encodes
-  // as `concept:<lessonKey>` so the lesson survives synthesis.
-  async embed(text: string) {
-    const key = text.startsWith('concept:') ? text.slice('concept:'.length).split(' ')[0]! : 'other';
-    return {
-      vector: vectorFor(key),
-      embeddingModel: 'fake',
-      embeddingVersion: 'fake-v1',
-    };
-  }
-}
-
-/** A fake idea-writer recording merge calls and marking re-synthesized text. */
-class FakeWriter {
-  mergeCalls: Array<{ existing: string; finding: IdeaFinding }> = [];
-  async write(finding: IdeaFinding): Promise<string> {
-    // Encode the lesson key into the concept so the fake embedder can recover it.
-    return `concept:${lessonKey(finding)}`;
-  }
-  async merge(existingText: string, finding: IdeaFinding): Promise<string> {
-    this.mergeCalls.push({ existing: existingText, finding });
-    // Preserve the lesson key prefix so re-embedding stays on the same axis, but
-    // mark the text so the test can prove a rewrite happened.
-    const key = lessonKey(finding);
-    return `concept:${key} [resynth+${this.mergeCalls.length}]`;
-  }
-}
-
-/** A fake in-memory S3 Vectors index honouring org + skillBaseName filtering. */
-class FakeVectors {
-  items: VectorItem[] = [];
-  async putVectors(_index: string, items: VectorItem[]): Promise<void> {
-    for (const it of items) {
-      this.items = this.items.filter((x) => x.key !== it.key);
-      this.items.push(it);
-    }
-  }
-  async queryTopK(
-    _index: string,
-    vector: number[],
-    k: number,
-    opts: QueryOptions = {},
-  ): Promise<QueryHit[]> {
-    return this.items
-      .filter((it) => opts.orgFilter === undefined || it.metadata.org === opts.orgFilter)
-      .map((it) => ({ key: it.key, score: cosine(vector, it.vector), metadata: it.metadata }))
-      .filter((h) => (opts.floor === undefined ? true : h.score >= opts.floor))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, k);
-  }
-}
 
 let embedder: FakeEmbedder;
 let writer: FakeWriter;
 let vectors: FakeVectors;
 
 beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
   embedder = new FakeEmbedder();
   writer = new FakeWriter();
   vectors = new FakeVectors();

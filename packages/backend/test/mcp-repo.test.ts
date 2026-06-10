@@ -1,11 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import { orgScope, type Agent, type McpServer, type Project, type Skill } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import * as k from '../src/db/keys.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * MCP server persistence + project/agent attachment (mirrors the skills repo
@@ -15,14 +11,7 @@ import { installInMemoryTable } from './helpers/memtable.js';
  * into enabledMcpServers; disabling an agent never prunes the servers.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 const ORG = 'acme';
 const MATT = 'matt';

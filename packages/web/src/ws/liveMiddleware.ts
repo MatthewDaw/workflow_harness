@@ -1,6 +1,6 @@
 import type { Middleware } from '@reduxjs/toolkit';
 import { safeParseEnvelope, type Envelope, type SessionProjection } from '@harness/shared';
-import { baseApi } from '../api/baseApi.js';
+import { baseApi, SESSION_LIST_ARGS } from '../api/baseApi.js';
 import { wsConnect, wsDisconnect, wsSubscribe, wsUnsubscribe, wsEvent } from './liveActions.js';
 
 /**
@@ -95,7 +95,7 @@ export const liveMiddleware: Middleware = (store) => {
       applyEventToProjection(undefined, env);
 
     // Update the matching row in any cached sessions list.
-    for (const live of [undefined, { live: true }, { live: false }] as const) {
+    for (const live of SESSION_LIST_ARGS) {
       dispatch(
         baseApi.util.updateQueryData('getSessions', live, (draft) => {
           const idx = draft.findIndex((s) => s.sessionId === sessionId);
@@ -166,9 +166,9 @@ export const liveMiddleware: Middleware = (store) => {
   };
 };
 
-/** Find a session's projection in any cached getSessions list (richest first). */
+/** Find a session's projection in any cached getSessions list. */
 function findInLists(state: never, sessionId: string): SessionProjection | undefined {
-  for (const arg of [undefined, { live: false }, { live: true }] as const) {
+  for (const arg of SESSION_LIST_ARGS) {
     const list = baseApi.endpoints.getSessions.select(arg)(state).data as
       | SessionProjection[]
       | undefined;

@@ -1,14 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import type { Envelope, Event } from '@harness/shared';
-import { Repo, type ConnectionRecord } from '../src/db/repo.js';
+import { type ConnectionRecord } from '../src/db/repo.js';
 import { ingest, type EventDeps } from '../src/ws/event.js';
 import { connect } from '../src/ws/connect.js';
 import { disconnect } from '../src/ws/disconnect.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * U6 event ingestion: append + projection upsert, out-of-order/duplicate seq,
@@ -17,14 +14,7 @@ import { installInMemoryTable } from './helpers/memtable.js';
  * an in-memory table; AWS is fully mocked.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 const SESSION = 's-1';
 const INSTANCE = 'inst-a';

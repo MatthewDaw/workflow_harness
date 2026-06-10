@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { StartupError } from '../wailsjs/go/main/App';
 import Terminal from './Terminal';
 import Sessions from './Sessions';
 import Stream from './Stream';
@@ -14,6 +15,13 @@ const TABS: { id: View; label: string }[] = [
 
 function App() {
   const [view, setView] = useState<View>('session');
+  // Non-empty when the Go side failed to resolve the repo / start or attach to
+  // the daemon; drives the banner and the connection badge.
+  const [startupError, setStartupError] = useState('');
+
+  useEffect(() => {
+    void StartupError().then((e) => setStartupError(e ?? ''));
+  }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', margin: 0 }}>
@@ -46,10 +54,32 @@ function App() {
             {t.label}
           </button>
         ))}
-        <span style={{ marginLeft: 'auto', padding: '0 14px', color: '#7fc99a', fontSize: 12 }}>
-          ● HQ linked
+        <span
+          style={{
+            marginLeft: 'auto',
+            padding: '0 14px',
+            color: startupError ? '#e07a7a' : '#7fc99a',
+            fontSize: 12,
+          }}
+        >
+          {startupError ? '● not connected' : '● HQ linked'}
         </span>
       </nav>
+
+      {startupError && (
+        <div
+          style={{
+            background: '#5a1f1f',
+            color: '#f0c4c4',
+            padding: '6px 14px',
+            fontFamily: 'sans-serif',
+            fontSize: 13,
+            borderBottom: '1px solid #7a2c2c',
+          }}
+        >
+          Failed to connect to the claude+ daemon: {startupError}
+        </div>
+      )}
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {/* Sessions sub-tab row — Session view only. */}

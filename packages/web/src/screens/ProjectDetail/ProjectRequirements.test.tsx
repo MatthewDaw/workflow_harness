@@ -1,23 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import type { Project } from '@harness/shared';
 import { ProjectRequirements, ProjectRequirementsFull } from './ProjectRequirements.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { makeProject, renderWithProviders } from '../../test/testUtils.js';
 
-const PROJECT: Project = {
-  id: 'weekly-compass',
-  name: 'weekly-compass',
-  repo: 'gh/acme/weekly-compass',
-  ownerUserId: 'user-matt',
-  progressPct: 62,
-  liveSessionCount: 0,
-  enabledSkills: [],
-  enabledAgents: [],
-  enabledWorkflows: [],
-  enabledAgentBundles: [],
-  enabledBundles: [],
-  enabledMcpServers: [],
-};
+// progressPct drives the fallback progress-bar assertions below.
+const PROJECT = makeProject({ progressPct: 62 });
 
 const seed = {
   projects: [PROJECT],

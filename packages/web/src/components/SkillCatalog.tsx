@@ -1,9 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { Skill } from '@harness/shared';
-import { SkillCard, authorOf } from './SkillCard.js';
+import { SkillCard, skillAuthor } from './SkillCard.js';
+import { useAuthorFilter, AuthorSelect } from './AuthorFilter.js';
+import { bundlesFirst } from '../lib/catalogUi.js';
 import { bundleMemberNames } from '../lib/bundles.js';
-
-const ANY_AUTHOR = '__any__';
 
 /**
  * The shared skills-catalog view: the filter bar (bundle toggle + author filter)
@@ -31,17 +31,11 @@ export function SkillCatalog({
   showVariants?: boolean;
 }) {
   const [showInBundles, setShowInBundles] = useState(false);
-  const [author, setAuthor] = useState<string>(ANY_AUTHOR);
+  const { author, setAuthor, authors, matches } = useAuthorFilter(skills, skillAuthor);
   const memberNames = useMemo(() => bundleMemberNames(skills), [skills]);
 
-  const authors = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of skills) set.add(authorOf(s));
-    return [...set].sort();
-  }, [skills]);
-
   const visible = (s: Skill): boolean => {
-    if (author !== ANY_AUTHOR && authorOf(s) !== author) return false;
+    if (!matches(s)) return false;
     if (s.kind === 'bundle') return true;
     if (showInBundles) return true;
     return !memberNames.has(s.name);
@@ -49,14 +43,7 @@ export function SkillCatalog({
 
   // Bundles lead the grid (they're the entry points that drill into sub-skills),
   // then plain skills — order is otherwise stable so the catalog stays steady.
-  const catalog = skills
-    .filter(visible)
-    .map((s, i) => [s, i] as const)
-    .sort(([a, ai], [b, bi]) => {
-      const rank = (s: Skill) => (s.kind === 'bundle' ? 0 : 1);
-      return rank(a) - rank(b) || ai - bi;
-    })
-    .map(([s]) => s);
+  const catalog = bundlesFirst(skills.filter(visible), (s) => s.kind === 'bundle');
 
   return (
     <>
@@ -70,24 +57,14 @@ export function SkillCatalog({
           />
           Show skills that are in bundles
         </label>
-        {authors.length > 1 && (
-          <label className="flex items-center gap-1.5">
-            Author
-            <select
-              className="hq-btn normal-case"
-              data-testid="author-filter"
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-            >
-              <option value={ANY_AUTHOR}>any</option>
-              {authors.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        <AuthorSelect
+          author={author}
+          onChange={setAuthor}
+          authors={authors}
+          testid="author-filter"
+          anyLabel="any"
+          hideWhenSingle
+        />
       </div>
       {catalog.length === 0 && <div className="hq-box text-mut">{emptyHint}</div>}
       <div className="grid grid-cols-3 gap-3.5">

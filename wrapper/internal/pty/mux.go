@@ -329,16 +329,6 @@ func (m *Mux) RemoveSink(id string) {
 	}
 }
 
-// Focused returns the currently focused session, or nil if none.
-func (m *Mux) Focused() *Session {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.focusIdx < 0 || m.focusIdx >= len(m.sessions) {
-		return nil
-	}
-	return m.sessions[m.focusIdx]
-}
-
 // Get returns a session by id.
 func (m *Mux) Get(id string) *Session {
 	m.mu.RLock()
@@ -351,47 +341,6 @@ func (m *Mux) Get(id string) *Session {
 	return nil
 }
 
-// Focus switches the focused session by id. Input then routes only to it.
-func (m *Mux) Focus(id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for i, s := range m.sessions {
-		if s.ID == id {
-			m.focusIdx = i
-			return nil
-		}
-	}
-	return fmt.Errorf("no session %q", id)
-}
-
-// FocusNext / FocusPrev cycle focus through the sub-tab row.
-func (m *Mux) FocusNext() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.sessions) == 0 {
-		return
-	}
-	m.focusIdx = (m.focusIdx + 1) % len(m.sessions)
-}
-
-func (m *Mux) FocusPrev() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.sessions) == 0 {
-		return
-	}
-	m.focusIdx = (m.focusIdx - 1 + len(m.sessions)) % len(m.sessions)
-}
-
-// WriteFocused routes input bytes to the focused session's PTY stdin.
-func (m *Mux) WriteFocused(p []byte) (int, error) {
-	s := m.Focused()
-	if s == nil {
-		return 0, fmt.Errorf("no focused session")
-	}
-	return s.Write(p)
-}
-
 // WriteTo routes input bytes to a specific session (used by control inject so a
 // background session can be steered without stealing focus).
 func (m *Mux) WriteTo(id string, p []byte) (int, error) {
@@ -400,19 +349,6 @@ func (m *Mux) WriteTo(id string, p []byte) (int, error) {
 		return 0, fmt.Errorf("no session %q", id)
 	}
 	return s.Write(p)
-}
-
-// Resize applies new dimensions to all sessions (SIGWINCH propagation). The
-// focused session is what the client sees, but background PTYs are kept in sync
-// so switching focus shows correctly-sized output.
-func (m *Mux) Resize(cols, rows int) {
-	m.mu.Lock()
-	m.cols, m.rows = cols, rows
-	sessions := append([]*Session(nil), m.sessions...)
-	m.mu.Unlock()
-	for _, s := range sessions {
-		_ = s.Resize(cols, rows)
-	}
 }
 
 // Count returns the number of live sessions.

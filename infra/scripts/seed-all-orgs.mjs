@@ -19,32 +19,26 @@
 //   SEED_DRY_RUN=1 node infra/scripts/seed-all-orgs.mjs  # enumerate + report, write nothing
 //   HARNESS_TABLE=harness AWS_REGION=us-east-1 node infra/scripts/seed-all-orgs.mjs
 //
-// Idempotent: each record is upserted by key, so re-running converges.
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+// Idempotent: each record is upserted by key, so re-running converges. No write
+// throttling needed (U4): the stream consumer hash-skips unchanged skills (U3)
+// and drains with bounded embed concurrency, so a re-seed burst can't storm
+// Bedrock; on-demand `harness` absorbs the writes themselves fine.
 import path from 'node:path';
-import { PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, REGION, makeDocClient, importBackendDist } from './lib/common.mjs';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  repoRoot,
+  TABLE,
+  REGION,
+  makeDocClient,
+  importBackendDist,
+  requireBackendDist,
+  listOrgNames,
+} from './lib/common.mjs';
+import { readSkillFiles, readBundleManifest } from './lib/catalog.mjs';
 
 const skillsDir = path.join(repoRoot, 'catalog', 'skills');
 const bundlesManifest = path.join(skillsDir, 'bundles.json');
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
-// U4 — SEED RE-EMBED WITHOUT A STORM. Every PutCommand below re-enters the
-// DynamoDB stream, and the stream consumer re-embeds any SKILL# whose desc+body
-// hash changed (U3). A full re-seed is therefore a BURST of writes, but the storm
-// is bounded at two layers, so this script does not need to throttle its own
-// writes:
-//   1. U3 hash-skip — an unchanged skill recomputes the SAME `descHash`, so the
-//      consumer no-ops it (no embed, no vector write). A re-seed of an unchanged
-//      catalog fires ZERO embeds; only genuinely-changed skills re-embed.
-//   2. U4 bounded consumer concurrency — the stream consumer drains each batch
-//      with a fixed worker pool (`STREAM_EMBED_CONCURRENCY`, default 4), so even a
-//      burst where every skill changed fans out at most that many simultaneous
-//      Bedrock embeds, never one-per-write unbounded.
-// Pace the seed's OWN writes only enough to stay under the table's write capacity
-// (on-demand `harness` absorbs this fine); the embed-rate ceiling is the consumer's
-// job, not the seeder's.
-const WRITE_PACING_MS = Number(process.env.SEED_WRITE_PACING_MS ?? '0');
 // The template org new-org creation clones the starter bundle from. We always
 // (re)seed it so the clone-on-create path has a canonical source even if no real
 // org named this exists yet. Keep in sync with starter.ts's STARTER_TEMPLATE_ORG.
@@ -54,18 +48,7 @@ const TEMPLATE_ORG = process.env.STARTER_TEMPLATE_ORG ?? 'acme';
 // this user's scope so a granted account can see them while a fresh org cannot.
 const GRANT_OWNER = process.env.SEED_GRANT_OWNER ?? 'system';
 
-if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
-  console.error(
-    `[seed-all-orgs] missing ${backendDist}/seed/skills.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
-if (!existsSync(path.join(backendDist, 'seed', 'workflows.js'))) {
-  console.error(
-    `[seed-all-orgs] missing ${backendDist}/seed/workflows.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
+requireBackendDist('seed-all-orgs', 'seed/skills.js', 'seed/workflows.js');
 
 // Reuse the canonical record builder + key scheme from the built backend so this
 // seed produces byte-identical records to what the REST layer reads/writes.
@@ -79,124 +62,13 @@ const { buildSeedWorkflows, STARTER_WORKFLOWS } = await importBackendDist(
 );
 const { skillKey, workflowKey } = await importBackendDist('db', 'keys.js');
 
-/** Optional inter-write pacing (U4) — no-op when WRITE_PACING_MS is 0. */
-const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
-
-/** Parse `name` + (folded) `description` from a SKILL.md YAML front matter block. */
-function parseFrontmatter(md) {
-  const lines = md.split(/\r?\n/);
-  if (lines[0]?.trim() !== '---') return { name: undefined, description: '' };
-  let name;
-  const descParts = [];
-  let inDesc = false;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === '---') break;
-    const top = /^([A-Za-z0-9_-]+):\s?(.*)$/.exec(line);
-    if (top && !line.startsWith(' ')) {
-      inDesc = false;
-      const [, key, value] = top;
-      if (key === 'name') name = value.trim();
-      else if (key === 'description') {
-        inDesc = true;
-        const v = value.trim();
-        if (v && v !== '>-' && v !== '>' && v !== '|' && v !== '|-') descParts.push(v);
-      }
-      continue;
-    }
-    if (inDesc && line.trim()) descParts.push(line.trim());
-  }
-  return { name, description: descParts.join(' ').trim() };
-}
-
-/**
- * Read the WHOLE skill directory tree into a `{ relPath: contents }` map
- * (U-Skill-Store): SKILL.md PLUS sibling scripts/resources. POSIX-relative paths.
- */
-function readSkillDir(dir) {
-  const out = {};
-  const walk = (cur, rel) => {
-    for (const entry of readdirSync(cur, { withFileTypes: true })) {
-      const abs = path.join(cur, entry.name);
-      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        walk(abs, relPath);
-      } else if (entry.isFile()) {
-        out[relPath] = readFileSync(abs, 'utf8');
-      }
-    }
-  };
-  walk(dir, '');
-  return out;
-}
-
-function readSkillFiles() {
-  if (!existsSync(skillsDir)) {
-    console.error(`[seed-all-orgs] no skills dir at ${skillsDir}`);
-    process.exit(1);
-  }
-  const files = [];
-  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = path.join(skillsDir, entry.name);
-    const skillMd = path.join(dir, 'SKILL.md');
-    if (!existsSync(skillMd)) continue;
-    const body = readFileSync(skillMd, 'utf8');
-    const { name, description } = parseFrontmatter(body);
-    files.push({ name: name ?? entry.name, description, body, files: readSkillDir(dir) });
-  }
-  return files.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function readBundleManifest() {
-  if (!existsSync(bundlesManifest)) {
-    console.warn(
-      `[seed-all-orgs] no bundle manifest at ${bundlesManifest} — seeding all skills standalone.`,
-    );
-    return {};
-  }
-  try {
-    return JSON.parse(readFileSync(bundlesManifest, 'utf8'));
-  } catch (err) {
-    console.error(`[seed-all-orgs] could not parse ${bundlesManifest}:`, err);
-    process.exit(1);
-  }
-}
-
-/**
- * Enumerate every org by scanning for its META record (`PK = ORG#<name>`,
- * `SK = META`). Paginated so it survives a table larger than one scan page.
- */
-async function listOrgNames(doc) {
-  const names = [];
-  let ExclusiveStartKey;
-  do {
-    const res = await doc.send(
-      new ScanCommand({
-        TableName: TABLE,
-        FilterExpression: 'SK = :meta AND begins_with(PK, :orgp)',
-        ExpressionAttributeValues: { ':meta': 'META', ':orgp': 'ORG#' },
-        ProjectionExpression: 'PK',
-        ExclusiveStartKey,
-      }),
-    );
-    for (const item of res.Items ?? []) {
-      if (typeof item.PK === 'string' && item.PK.startsWith('ORG#')) {
-        names.push(item.PK.slice('ORG#'.length));
-      }
-    }
-    ExclusiveStartKey = res.LastEvaluatedKey;
-  } while (ExclusiveStartKey);
-  return names;
-}
-
 async function main() {
-  const files = readSkillFiles();
+  const files = readSkillFiles(skillsDir, 'seed-all-orgs');
   if (files.length === 0) {
     console.error('[seed-all-orgs] found no SKILL.md files to seed');
     process.exit(1);
   }
-  const manifest = readBundleManifest();
+  const manifest = readBundleManifest(bundlesManifest, 'seed-all-orgs');
 
   const doc = makeDocClient();
 
@@ -212,7 +84,7 @@ async function main() {
     );
   }
 
-  const discovered = await listOrgNames(doc);
+  const discovered = await listOrgNames(doc, TABLE);
   // Union the discovered orgs with the template org so the clone-on-create source
   // is always seeded, even if no real org named TEMPLATE_ORG exists yet.
   const orgs = Array.from(new Set([TEMPLATE_ORG, ...discovered])).sort();
@@ -231,12 +103,9 @@ async function main() {
     const records = buildSeedSkills(org, files, manifest, GRANT_OWNER).filter(
       (r) => r.scope.tier === 'org',
     );
-    // U19 — SEED-SAFE PROMOTION. Re-assert the base-variant-only contract on the
-    // exact records this loop is about to write (buildSeedSkills already asserts,
-    // but the filter could in principle drop the failing record; re-assert post-
-    // filter so the script can NEVER write a fork). Combined with the fact that we
-    // only ever PutCommand `skillKey(...)` (the BASE variant's live record) and
-    // NEVER a `#TRUE` pointer row below, a fork promoted to #TRUE survives re-seed.
+    // U19 — re-assert the base-variant-only contract on the post-filter records
+    // so this script can NEVER write a fork (buildSeedSkills already asserts,
+    // but the filter could in principle drop the failing record).
     assertBaseVariantOnly(records);
     // The starter workflow(s) — org-scoped, one record each — alongside skills.
     const workflows = buildSeedWorkflows(org, STARTER_WORKFLOWS);
@@ -254,10 +123,9 @@ async function main() {
     }
     for (const record of records) {
       const key = skillKey(record.scope, record.name);
-      // Defense in depth: the seed writes the live BASE-variant record only and
-      // must never touch a per-baseName `#TRUE` pointer or a `#r<N>` revision row.
-      // skillKey() produces `SKILL#<name>`, never those side-record SKs — assert it
-      // so a key-scheme change can't silently let the seed clobber a promotion.
+      // Defense in depth: the seed writes the live BASE-variant record only —
+      // never a `#TRUE` pointer or `#r<N>` revision row — so a promotion survives
+      // re-seed even if the key scheme changes under us.
       if (key.SK.endsWith('#TRUE') || /#r\d+$/.test(key.SK)) {
         throw new Error(`[seed-all-orgs] refusing to write a version side-record SK: ${key.SK}`);
       }
@@ -267,7 +135,6 @@ async function main() {
           Item: { ...key, ...record },
         }),
       );
-      await sleep(WRITE_PACING_MS);
     }
     for (const wf of workflows) {
       await doc.send(

@@ -3,8 +3,6 @@ package daemon
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net"
 	"time"
@@ -112,8 +110,8 @@ func readFrame(r *bufio.Reader) (Frame, error) {
 // and session count). ok is false when the socket does not answer a well-formed
 // pong within a short timeout (dead/stale daemon, or a non-claude+ listener that
 // happens to hold the port). This is the single low-level liveness primitive;
-// alive, compatible, and pingSessions are thin wrappers over it so the wire
-// behavior (and timeouts) stay consistent.
+// alive and compatible are thin wrappers over it so the wire behavior (and
+// timeouts) stay consistent.
 func probe(sock string) (pong Frame, ok bool) {
 	conn, err := net.DialTimeout("tcp", sock, 300*time.Millisecond)
 	if err != nil {
@@ -149,15 +147,3 @@ func compatible(sock string) bool {
 	f, ok := probe(sock)
 	return ok && f.Version == ProtocolVersion
 }
-
-// pingSessions returns the live session count reported by the daemon.
-func pingSessions(sock string) (int, error) {
-	f, ok := probe(sock)
-	if !ok {
-		return 0, fmt.Errorf("daemon at %s did not answer a pong", sock)
-	}
-	return f.Sessions, nil
-}
-
-// ErrDetached is returned by AttachClient.Run when the user cleanly detaches.
-var ErrDetached = errors.New("detached")

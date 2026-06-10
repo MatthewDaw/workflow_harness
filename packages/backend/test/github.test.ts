@@ -29,6 +29,34 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string): string =>
   readFileSync(join(here, 'fixtures', 'github', name), 'utf8');
 
+// A real RSA key so the App JWT actually signs/verifies.
+const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+
+function resp(status: number, body: unknown): FetchResponse {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    text: async () => JSON.stringify(body),
+    json: async () => body,
+  };
+}
+
+const makeApp = (
+  fetch: FetchLike,
+  overrides: Partial<ConstructorParameters<typeof GitHubApp>[0]> = {},
+) =>
+  new GitHubApp(
+    {
+      appId: '12345',
+      privateKeyPem,
+      installationId: '99',
+      repo: 'acme/weekly-compass',
+      ...overrides,
+    },
+    fetch,
+  );
+
 describe('history: PRD/PROGRESS parsing + framing', () => {
   it('reads the goal and owned Supporting Outcomes from PRD.md', () => {
     const prd = parsePrd(fixture('PRD.md'));
@@ -138,10 +166,6 @@ describe('history: commit attribution', () => {
 });
 
 describe('app: GitHub App client (recorded fixtures, no network)', () => {
-  // A real RSA key so the App JWT actually signs/verifies.
-  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-
   function fakeFetch(): { calls: string[]; fetch: FetchLike } {
     const calls: string[] = [];
     const fetch: FetchLike = async (url): Promise<FetchResponse> => {
@@ -172,21 +196,6 @@ describe('app: GitHub App client (recorded fixtures, no network)', () => {
     return { calls, fetch };
   }
 
-  function resp(status: number, body: unknown): FetchResponse {
-    return {
-      status,
-      ok: status >= 200 && status < 300,
-      text: async () => JSON.stringify(body),
-      json: async () => body,
-    };
-  }
-
-  const makeApp = (fetch: FetchLike) =>
-    new GitHubApp(
-      { appId: '12345', privateKeyPem, installationId: '99', repo: 'acme/weekly-compass' },
-      fetch,
-    );
-
   it('mints an App JWT signed by the App key', async () => {
     const { fetch } = fakeFetch();
     const jwt = await makeApp(fetch).appJwt();
@@ -216,9 +225,6 @@ describe('app: GitHub App client (recorded fixtures, no network)', () => {
 });
 
 describe('app: docs/plans tree + content + cache (U8)', () => {
-  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-
   const DOC_A = '---\ncompletion: 58\n---\n# Alpha plan\nbody';
   const DOC_B = '# Beta plan\nno frontmatter';
 
@@ -247,21 +253,6 @@ describe('app: docs/plans tree + content + cache (U8)', () => {
     };
     return { calls, fetch };
   }
-
-  function resp(status: number, body: unknown): FetchResponse {
-    return {
-      status,
-      ok: status >= 200 && status < 300,
-      text: async () => JSON.stringify(body),
-      json: async () => body,
-    };
-  }
-
-  const makeApp = (fetch: FetchLike) =>
-    new GitHubApp(
-      { appId: '1', privateKeyPem, installationId: '9', repo: 'acme/weekly-compass' },
-      fetch,
-    );
 
   it('lists docs/plans/*.md with per-doc completion + derived title', async () => {
     const { fetch } = docsFetch();
@@ -502,15 +493,6 @@ describe('PublicGitHubReader (no-auth public repo fallback)', () => {
       return resp(404, { message: 'Not Found' });
     };
     return { calls, fetch };
-  }
-
-  function resp(status: number, body: unknown): FetchResponse {
-    return {
-      status,
-      ok: status >= 200 && status < 300,
-      text: async () => JSON.stringify(body),
-      json: async () => body,
-    };
   }
 
   it('reads docs/PRD.md without minting a token or sending Authorization', async () => {

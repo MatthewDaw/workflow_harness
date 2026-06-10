@@ -22,10 +22,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
-
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
+import { GetCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  TABLE,
+  makeDocClient,
+  importBackendDist,
+  requireBackendDist,
+  queryByPrefix,
+} from './lib/common.mjs';
 
 const ORG = process.env.SEED_ORG;
 const PROJECT_ID = process.env.PROJECT_ID; // optional
@@ -46,12 +50,7 @@ if (!ORG) {
   console.error('[verify-hl] SEED_ORG is required (no default — refuses to guess the org).');
   process.exit(1);
 }
-if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
-  console.error(
-    `[verify-hl] missing ${backendDist}/db/keys.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
+requireBackendDist('verify-hl', 'db/keys.js');
 
 const { projectKey, scopePartition } = await importBackendDist('db', 'keys.js');
 
@@ -67,16 +66,7 @@ const bad = (label) => {
 const warn = (label) => console.log(`  ⚠ ${label}`);
 
 const missing = (need, have) => need.filter((n) => !have.includes(n));
-const queryNames = async (skPrefix) => {
-  const res = await doc.send(
-    new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-      ExpressionAttributeValues: { ':pk': orgPart, ':sk': skPrefix },
-    }),
-  );
-  return res.Items ?? [];
-};
+const queryNames = (skPrefix) => queryByPrefix(doc, TABLE, orgPart, skPrefix);
 
 // ---- A. Catalog (hard) ----
 console.log(`\n[A] Catalog — org#${ORG}`);

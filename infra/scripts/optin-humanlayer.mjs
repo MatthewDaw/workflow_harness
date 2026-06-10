@@ -10,12 +10,14 @@
 // Usage:
 //   SEED_ORG="test org" PROJECT_ID=workflow-harness SEED_DRY_RUN=1 node infra/scripts/optin-humanlayer.mjs
 //   SEED_ORG="test org" PROJECT_ID=workflow-harness node infra/scripts/optin-humanlayer.mjs
-import path from 'node:path';
-import { existsSync } from 'node:fs';
-import { GetCommand, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
-
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
+import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  TABLE,
+  makeDocClient,
+  importBackendDist,
+  requireBackendDist,
+  queryByPrefix,
+} from './lib/common.mjs';
 
 const ORG = process.env.SEED_ORG;
 const PROJECT_ID = process.env.PROJECT_ID;
@@ -25,27 +27,14 @@ if (!ORG || !PROJECT_ID) {
   console.error('[optin-hl] SEED_ORG and PROJECT_ID are both required (no defaults).');
   process.exit(1);
 }
-if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
-  console.error(
-    `[optin-hl] missing ${backendDist}/db/keys.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
+requireBackendDist('optin-hl', 'db/keys.js');
 const { projectKey, scopePartition } = await importBackendDist('db', 'keys.js');
 
 const doc = makeDocClient();
 const orgPart = scopePartition({ tier: 'org', id: ORG });
 
-const queryNames = async (skPrefix, predicate = () => true) => {
-  const res = await doc.send(
-    new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-      ExpressionAttributeValues: { ':pk': orgPart, ':sk': skPrefix },
-    }),
-  );
-  return (res.Items ?? []).filter(predicate).map((i) => i.name);
-};
+const queryNames = async (skPrefix, predicate = () => true) =>
+  (await queryByPrefix(doc, TABLE, orgPart, skPrefix)).filter(predicate).map((i) => i.name);
 
 // 1. Authoritative names from the org#SEED_ORG catalog.
 const bundle = await doc.send(

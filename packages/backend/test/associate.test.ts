@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Project, SessionProjection } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { describe, expect, it } from 'vitest';
+import { memRepoHarness } from './helpers/memtable.js';
+import {
+  FakeSkillVectors as FakeVectors,
+  fakeEmbedder,
+  seedSession as seedSessionFor,
+} from './helpers/idea-fakes.js';
 import {
   associateTopic,
   ASSOCIATION_TOP_K,
@@ -12,111 +12,27 @@ import {
   type AssociateDeps,
   type TopicFinding,
 } from '../src/ideas/associate.js';
-import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
-import { SKILL_VECTOR_INDEX, type QueryHit, type QueryOptions, type S3Vectors } from '../src/embeddings/s3vectors.js';
+import { SKILL_VECTOR_INDEX, type QueryHit, type S3Vectors } from '../src/embeddings/s3vectors.js';
 
 /**
  * U8 — topic ingestion & top-k retrieval (the RETRIEVAL half of association).
  *
- * The embedder + S3 Vectors are FAKES so nothing touches the network:
- *  - the fake embedder echoes a deterministic vector per topic so the test can
- *    steer which org's skill it "matches";
- *  - the fake S3 Vectors is an in-memory index keyed by org; `queryTopK` honours
- *    the `orgFilter` (so org A's query NEVER sees org B's skills) and the floor.
+ * The embedder + S3 Vectors are FAKES (helpers/idea-fakes.ts) so nothing
+ * touches the network: the fake index is keyed by org and `queryTopK` honours
+ * the `orgFilter` (so org A's query NEVER sees org B's skills) and the floor.
  *
  * Org resolution is the security-critical assertion: it is resolved from the
  * SESSION → PROJECT → stamped `project.org`, NEVER from a caller `principal.org`.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-/** A stored skill vector in the fake index: keyed by org, carries a score. */
-interface StoredVector {
-  org: string;
-  skillBaseName: string;
-  score: number;
-}
-
-/** A fake S3 Vectors index: returns pre-seeded hits for the queried org only. */
-class FakeVectors {
-  // org -> the hits to return for any query in that org (already "scored").
-  private byOrg = new Map<string, StoredVector[]>();
-  lastQuery?: { index: string; opts: QueryOptions };
-
-  seed(vectors: StoredVector[]): void {
-    for (const v of vectors) {
-      const list = this.byOrg.get(v.org) ?? [];
-      list.push(v);
-      this.byOrg.set(v.org, list);
-    }
-  }
-
-  async queryTopK(
-    indexName: string,
-    _vector: number[],
-    k: number,
-    opts: QueryOptions = {},
-  ): Promise<QueryHit[]> {
-    this.lastQuery = { index: indexName, opts };
-    // ISOLATION: only ever return vectors stamped with the queried org. A query
-    // with no org filter returns nothing (the caller always passes one).
-    const org = opts.orgFilter;
-    const pool = org ? this.byOrg.get(org) ?? [] : [];
-    const floor = opts.floor;
-    return pool
-      .filter((v) => (floor === undefined ? true : v.score >= floor))
-      .map((v) => ({
-        key: `${v.org}#${v.skillBaseName}`,
-        score: v.score,
-        metadata: { org: v.org, skillBaseName: v.skillBaseName },
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, k);
-  }
-}
-
-/** A fake embedder — returns a fixed vector (the fake index ignores it). */
-const fakeEmbedder = {
-  async embed() {
-    return { vector: [1, 0, 0, 0], embeddingModel: 'fake', embeddingVersion: 'fake-v1' };
-  },
-} as unknown as OpenRouterEmbedder;
+const { repo } = memRepoHarness();
 
 function deps(vectors: FakeVectors): AssociateDeps {
   return { repo, embedder: fakeEmbedder, vectors: vectors as unknown as S3Vectors };
 }
 
-/** Seed a session pointer + projection under a project stamped with `org`. */
-async function seedSession(opts: {
-  sessionId: string;
-  projectId: string;
-  org?: string;
-}): Promise<void> {
-  const project: Project = {
-    id: opts.projectId,
-    name: opts.projectId,
-    repo: `gh/${opts.org ?? 'x'}/${opts.projectId}`,
-    ownerUserId: 'matt',
-    liveSessionCount: 0,
-    ...(opts.org !== undefined ? { org: opts.org } : {}),
-  } as Project;
-  await repo.putProject(project);
-
-  const projection: SessionProjection = {
-    sessionId: opts.sessionId,
-    projectId: opts.projectId,
-    name: 'a-session',
-    host: 'matt@mbp',
-    status: 'live',
-    tokens: 0,
-    startedAt: 1,
-    lastEventAt: 1,
-    maxSeq: 0,
-  } as SessionProjection;
-  await repo.putSessionProjectionConditional(projection, undefined);
-}
+const seedSession = (opts: { sessionId: string; projectId: string; org?: string }) =>
+  seedSessionFor(repo, opts);
 
 function topic(over: Partial<TopicFinding> = {}): TopicFinding {
   return {
@@ -128,11 +44,6 @@ function topic(over: Partial<TopicFinding> = {}): TopicFinding {
     ...over,
   };
 }
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 describe('associateTopic — top-k retrieval (U8)', () => {
   it('yields org-scoped top-k candidates above the floor', async () => {

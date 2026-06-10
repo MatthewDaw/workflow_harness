@@ -1,6 +1,6 @@
 package config
 
-// Verification gate (U-Verify-Gate). A sync that reports "pulled N" is not proof
+// Verification gate. A sync that reports "pulled N" is not proof
 // the install is usable: a skill dir may be missing its SKILL.md or name
 // frontmatter, an agent file may be malformed or reference skills that never
 // landed, and an MCP server may have failed to materialize. VerifyEffectiveSet runs
@@ -313,32 +313,4 @@ func mcpVerifyStatus(ar McpAuthReport) (VerifyStatus, string) {
 	default:
 		return VerifyOK, ""
 	}
-}
-
-// frontmatterField extracts a single top-level scalar field from a leading YAML
-// `---` frontmatter block. It is intentionally tiny (the package carries no YAML
-// dependency): it scans only the first frontmatter block for `key:` and returns the
-// trimmed value, or "" if there is no frontmatter or no such key. Good enough for
-// the presence checks the gate makes (name).
-func frontmatterField(content, key string) string {
-	norm := strings.ReplaceAll(content, "\r\n", "\n")
-	if !strings.HasPrefix(norm, "---\n") {
-		return ""
-	}
-	rest := norm[len("---\n"):]
-	end := strings.Index(rest, "\n---")
-	if end < 0 {
-		return ""
-	}
-	fm := rest[:end]
-	for _, line := range strings.Split(fm, "\n") {
-		k, v, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(k) == key {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }

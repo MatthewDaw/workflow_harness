@@ -1,4 +1,5 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { signDeviceToken } from '../../src/auth/verify.js';
 
 /**
  * Build an HTTP API (v2) event with a Cognito JWT authorizer context, as the
@@ -49,8 +50,44 @@ export function httpEvent(opts: {
   } as unknown as APIGatewayProxyEventV2;
 }
 
+/** An admin event for the caller's own org (org-catalog writes require admin). */
+export function adminEvent(opts: Parameters<typeof httpEvent>[0], org = 'acme') {
+  return httpEvent({ org, admin: true, ...opts });
+}
+
+/**
+ * Build an event authenticated ONLY by an HS256 device token in the bearer
+ * header (no Cognito jwt claims) — how the claude+ wrapper calls the
+ * HttpNoneAuthorizer routes. Sets DEVICE_TOKEN_SECRET so the handler's
+ * resolvePrincipal can verify the token offline.
+ */
+export async function deviceTokenEvent(opts: {
+  method: string;
+  userId: string;
+  org: string;
+  secret?: string;
+  path?: Record<string, string>;
+  rawPath?: string;
+  body?: unknown;
+}): Promise<APIGatewayProxyEventV2> {
+  const secret = opts.secret ?? 'test-device-secret';
+  process.env.DEVICE_TOKEN_SECRET = secret;
+  const token = await signDeviceToken(
+    { userId: opts.userId, org: opts.org },
+    { secret: new TextEncoder().encode(secret) },
+  );
+  return httpEvent({
+    method: opts.method,
+    userId: null,
+    headers: { authorization: `Bearer ${token}` },
+    path: opts.path,
+    rawPath: opts.rawPath,
+    body: opts.body,
+  });
+}
+
 /** Parse a handler's JSON result body. */
-export function bodyOf<T = unknown>(res: { body?: string } | string): T {
+export function bodyOf<T = unknown>(res: APIGatewayProxyResultV2 | { body?: string }): T {
   const raw = typeof res === 'string' ? res : (res.body ?? '');
   return JSON.parse(raw) as T;
 }

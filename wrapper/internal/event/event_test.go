@@ -66,8 +66,8 @@ func TestConstructorsValidate(t *testing.T) {
 	events := []Event{
 		SessionStart("a91f", "weekly-compass", "matt@mbp", "reconcile-variance", "builder", "acme/weekly-compass"),
 		SessionRename("a91f", "reconcile-variance"),
-		UserMsg("a91f", 120),
-		AssistantMsg("a91f", 84),
+		UserMsgText("a91f", 120, ""),
+		AssistantMsgText("a91f", 84, ""),
 		ToolCall("a91f", "Read", "src/state/weeklyLifecycle.ts"),
 		ToolResult("a91f", true, 8, "142 lines"),
 		StatusChange("a91f", StatusActive, StatusNeedsInput),
@@ -122,9 +122,9 @@ func TestRejectsUnknownKind(t *testing.T) {
 
 func TestRejectsBadEnvelope(t *testing.T) {
 	cases := []Envelope{
-		{V: 2, InstanceID: "i", Host: "h", Event: UserMsg("s", 1)},                 // bad version
-		{V: 1, InstanceID: "", Host: "h", Event: UserMsg("s", 1)},                  // missing instanceId
-		{V: 1, InstanceID: "i", Host: "h", Seq: -1, Event: UserMsg("s", 1)},        // negative seq
+		{V: 2, InstanceID: "i", Host: "h", Event: UserMsgText("s", 1, "")},          // bad version
+		{V: 1, InstanceID: "", Host: "h", Event: UserMsgText("s", 1, "")},           // missing instanceId
+		{V: 1, InstanceID: "i", Host: "h", Seq: -1, Event: UserMsgText("s", 1, "")}, // negative seq
 		{V: 1, InstanceID: "i", Host: "h", Event: StatusChange("s", "weird", "x")}, // bad status
 	}
 	for i, env := range cases {

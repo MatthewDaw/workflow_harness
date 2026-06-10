@@ -13,14 +13,7 @@ import {
   type CatalogRef,
   type CatalogPickerRow,
 } from '../../components/CatalogPicker.js';
-
-/** Short, secret-free summary line for an enabled server (command or url). */
-function summarize(server: McpServer): string {
-  if (server.transport === 'stdio') {
-    return [server.command, ...server.args].join(' ');
-  }
-  return server.url;
-}
+import { mcpSummary } from '../../lib/catalogUi.js';
 
 /**
  * Project MCP Servers sub-tab (collapsed model): manage the project's
@@ -57,7 +50,7 @@ export function ProjectMcpServers() {
     ref: { type: 'mcp', name: s.name },
     label: s.name,
     hint: s.transport,
-    description: summarize(s),
+    description: mcpSummary(s),
   }));
 
   // The refs that are ON when the modal opens: the project's current enabled set.
@@ -147,7 +140,7 @@ export function ProjectMcpServers() {
                   {server && (
                     <span className="mr-1.5 text-[11px] text-faint">{server.transport}</span>
                   )}
-                  <span className="text-xs text-mut">{server ? summarize(server) : ''}</span>
+                  <span className="text-xs text-mut">{server ? mcpSummary(server) : ''}</span>
                 </span>
                 <button
                   type="button"

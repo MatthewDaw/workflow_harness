@@ -1,5 +1,4 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { mockClient } from 'aws-sdk-client-mock';
@@ -27,8 +26,10 @@ import { handler as orgsHandler } from '../rest/orgs.js';
 import { handler as weeklyHandler } from '../rest/weekly.js';
 import { handler as memoriesHandler } from '../rest/memories.js';
 import { handler as deviceHandler } from '../rest/device.js';
+import { handler as workflowsHandler } from '../rest/workflows.js';
 import { defaultRepo } from '../rest/runtime.js';
-import { seedSkills, type BundleManifest, type SeedSkillFile } from '../seed/skills.js';
+import { seedSkills } from '../seed/skills.js';
+import { readBundleManifest, readSkillFiles } from '../seed/skillsFromDisk.js';
 
 /**
  * Local dev backend for Command HQ.
@@ -227,6 +228,14 @@ export const ROUTES: Route[] = [
     handler: projectsHandler,
   },
   {
+    re: /^\/projects\/(?<projectId>[^/]+)\/workflows\/(?<workflowName>[^/]+)$/,
+    handler: projectsHandler,
+  },
+  {
+    re: /^\/projects\/(?<projectId>[^/]+)\/agent-bundles\/(?<bundleName>[^/]+)$/,
+    handler: projectsHandler,
+  },
+  {
     re: /^\/projects\/(?<projectId>[^/]+)\/mcp-servers\/(?<name>[^/]+)$/,
     handler: projectsHandler,
   },
@@ -247,9 +256,27 @@ export const ROUTES: Route[] = [
   { re: /^\/sessions\/(?<id>[^/]+)$/, handler: sessionsHandler },
   { re: /^\/sessions$/, handler: sessionsHandler },
 
+  // Agent catalog verbs (promote + the bundle verbs) precede the bare /{name}.
   { re: /^\/agents\/(?<name>[^/]+)\/scope$/, handler: agentsHandler },
+  { re: /^\/agents\/(?<name>[^/]+)\/promote$/, handler: agentsHandler },
+  { re: /^\/agents\/(?<name>[^/]+)\/members\/(?<member>[^/]+)$/, handler: agentsHandler },
+  { re: /^\/agents\/(?<name>[^/]+)\/members$/, handler: agentsHandler },
+  { re: /^\/agents\/(?<name>[^/]+)\/dissolve$/, handler: agentsHandler },
   { re: /^\/agents\/(?<name>[^/]+)$/, handler: agentsHandler },
   { re: /^\/agents$/, handler: agentsHandler },
+
+  // Workflows: CRUD + promote + the run-status surface, all on the workflows
+  // Lambda (mirrors api-stack). Most-specific first so the run/node tails are
+  // matched before the bare /{name} route.
+  {
+    re: /^\/workflows\/(?<name>[^/]+)\/runs\/(?<runId>[^/]+)\/nodes\/(?<nodeId>[^/]+)$/,
+    handler: workflowsHandler,
+  },
+  { re: /^\/workflows\/(?<name>[^/]+)\/runs\/(?<runId>[^/]+)$/, handler: workflowsHandler },
+  { re: /^\/workflows\/(?<name>[^/]+)\/runs$/, handler: workflowsHandler },
+  { re: /^\/workflows\/(?<name>[^/]+)\/promote$/, handler: workflowsHandler },
+  { re: /^\/workflows\/(?<name>[^/]+)$/, handler: workflowsHandler },
+  { re: /^\/workflows$/, handler: workflowsHandler },
 
   // Fold an idea into a new revision (U16) — most specific first so the
   // two-segment `ideas/{ideaId}/fold` path is matched before `/{name}`.
@@ -441,72 +468,15 @@ const REPO_ROOT = path.resolve(
   '..',
 );
 const SKILLS_DIR = path.join(REPO_ROOT, 'catalog', 'skills');
-const BUNDLES_MANIFEST = path.join(SKILLS_DIR, 'bundles.json');
-
-/**
- * Parse `name` + (folded) `description` from a SKILL.md YAML front matter block.
- * The repo skills use `description: >-` folded scalars, so we gather indented
- * continuation lines until the next top-level key or the closing `---`. Ported
- * from infra/scripts/seed-skills.mjs so the dev seed matches the deploy seed.
- */
-function parseFrontmatter(md: string): { name?: string; description: string } {
-  const lines = md.split(/\r?\n/);
-  if (lines[0]?.trim() !== '---') return { name: undefined, description: '' };
-  let name: string | undefined;
-  const descParts: string[] = [];
-  let inDesc = false;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    if (line.trim() === '---') break;
-    const top = /^([A-Za-z0-9_-]+):\s?(.*)$/.exec(line);
-    if (top && !line.startsWith(' ')) {
-      inDesc = false;
-      const [, key, value] = top;
-      if (key === 'name') name = value!.trim();
-      else if (key === 'description') {
-        inDesc = true;
-        const v = value!.trim();
-        if (v && v !== '>-' && v !== '>' && v !== '|' && v !== '|-') descParts.push(v);
-      }
-      continue;
-    }
-    if (inDesc && line.trim()) descParts.push(line.trim());
-  }
-  return { name, description: descParts.join(' ').trim() };
-}
-
-function readSkillFiles(): SeedSkillFile[] {
-  if (!existsSync(SKILLS_DIR)) return [];
-  const files: SeedSkillFile[] = [];
-  for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const skillMd = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
-    if (!existsSync(skillMd)) continue;
-    const body = readFileSync(skillMd, 'utf8');
-    const { name, description } = parseFrontmatter(body);
-    files.push({ name: name ?? entry.name, description, body });
-  }
-  return files.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function readBundleManifest(): BundleManifest {
-  if (!existsSync(BUNDLES_MANIFEST)) return {};
-  try {
-    return JSON.parse(readFileSync(BUNDLES_MANIFEST, 'utf8')) as BundleManifest;
-  } catch (err) {
-    console.warn(`[dev-api] could not parse ${BUNDLES_MANIFEST}; seeding no bundles:`, err);
-    return {};
-  }
-}
 
 async function seedDevSkills(): Promise<void> {
   const org = process.env.HQ_DEV_ORG ?? 'dev-org';
-  const files = readSkillFiles();
+  const files = readSkillFiles(SKILLS_DIR);
   if (files.length === 0) {
     console.warn(`[dev-api] no SKILL.md files under ${SKILLS_DIR}; Skills tab will be empty.`);
     return;
   }
-  const manifest = readBundleManifest();
+  const manifest = readBundleManifest(path.join(SKILLS_DIR, 'bundles.json'));
   const records = await seedSkills(defaultRepo(), org, files, manifest);
   const skills = records.filter((r) => r.kind === 'skill').length;
   const bundles = records.filter((r) => r.kind === 'bundle').length;

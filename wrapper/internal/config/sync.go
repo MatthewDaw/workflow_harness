@@ -19,7 +19,7 @@ type RemoteItem struct {
 type DriftKind string
 
 const (
-	DriftNeedsPush DriftKind = "needs_push" // local-only: push to HQ user scope
+	DriftNeedsPush DriftKind = "needs_push" // local-only: push to HQ org scope
 	DriftNeedsPull DriftKind = "needs_pull" // HQ-only: pull down to local
 	DriftDiffers   DriftKind = "differs"    // present both sides, content hash mismatch
 	DriftInSync    DriftKind = "in_sync"    // identical
@@ -108,7 +108,7 @@ func (r DriftReport) DriftCount() int {
 // pure drift + reconcile logic be tested with an in-memory fake while the real
 // HTTP implementation (remote.go) talks to Command HQ. HQ stays read-only for
 // GitHub progress, but agents/skills are HQ-owned, so push/pull here is the one
-// place the wrapper writes back to HQ (user scope only).
+// place the wrapper writes back to HQ.
 type RemoteSource interface {
 	// Fetch returns HQ's effective agents+skills for this user+project, each with
 	// a content hash comparable to the local hash. Malformed remote entries are
@@ -116,12 +116,12 @@ type RemoteSource interface {
 	Fetch() ([]RemoteItem, error)
 	// Body returns the full content of a remote item, used to materialize a pull.
 	Body(item RemoteItem) (string, error)
-	// Push uploads a local-only item to HQ at the caller's user scope.
+	// Push uploads a local-only item to HQ at the org scope of the catalog.
 	Push(item Item, body string) error
 	// AgentSkills returns the skill names the named agent depends on
 	// (agentSchema.skills), captured during the most recent Fetch. Reconcile uses
 	// it to ensure an agent's skills are materialized after the agent itself
-	// (U-Agent-Deps). An unknown agent yields nil.
+	// An unknown agent yields nil.
 	AgentSkills(agentName string) []string
 	// DeclaredSkills returns the project's FULL declared enabled skill set captured
 	// during the most recent Fetch: every project.enabledSkills name plus the
@@ -157,7 +157,7 @@ func ComputeDrift(src RemoteSource, plus string) (DriftReport, error) {
 
 // Reconcile actuates a drift report against HQ: HQ-only items (needs_pull) are
 // written into the given per-project tree (`plus`); local-only items (needs_push)
-// are pushed to HQ user scope. `differs` rows are left for the user to resolve
+// are pushed to HQ org scope. `differs` rows are left for the user to resolve
 // explicitly (we never silently overwrite an edited definition). Per-item
 // failures are collected and do not abort the run, so the operation is safe to
 // retry; running it again on a converged set is a no-op (idempotent). Returns
@@ -168,7 +168,7 @@ func Reconcile(report DriftReport, src RemoteSource, local []Item, plus string) 
 		byKey[string(it.Kind)+"/"+it.Name] = it
 	}
 	// Track which skills are present (locally already, or pulled during this run) so
-	// the agent-dependency pass (U-Agent-Deps) only pulls skills that are still
+	// the agent-dependency pass only pulls skills that are still
 	// missing — and so it never double-pulls a skill the main loop already handled.
 	skillPresent := map[string]bool{}
 	for _, it := range local {
@@ -216,14 +216,14 @@ func Reconcile(report DriftReport, src RemoteSource, local []Item, plus string) 
 		case DriftInSync, DriftDiffers:
 			// An agent that is already present (or locally edited) still needs its
 			// skill deps ensured — the agent file landing does not guarantee its
-			// skills are on disk (U-Agent-Deps).
+			// skills are on disk.
 			if row.Kind == KindAgent {
 				ensureDepsFor = append(ensureDepsFor, row.Name)
 			}
 		}
 	}
 
-	// U-Agent-Deps: ensure every skill each materialized/present agent depends on is
+	// Ensure every skill each materialized/present agent depends on is
 	// on disk, pulling any that are still missing. The dep skill's body is available
 	// from the same Fetch (the backend union-adds an enabled agent's skills into the
 	// project's enabled set, so they are cached). A dep with no available body (or a

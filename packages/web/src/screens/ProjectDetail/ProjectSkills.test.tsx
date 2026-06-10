@@ -1,80 +1,31 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Project, Skill } from '@harness/shared';
+import type { Skill } from '@harness/shared';
 import { ProjectSkills } from './ProjectSkills.js';
-import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
+import { lastMatching, makeProject, makeSkill, renderWithProviders } from '../../test/testUtils.js';
 
-const ORG = { tier: 'org', id: 'acme' } as const;
-
-const PROJECT: Project = {
-  id: 'weekly-compass',
-  name: 'weekly-compass',
-  repo: 'gh/acme/weekly-compass',
-  ownerUserId: 'user-matt',
-  progressPct: 0,
-  liveSessionCount: 0,
-  enabledSkills: ['gh'],
-  enabledBundles: [],
-  enabledAgents: [],
-  enabledWorkflows: [],
-  enabledAgentBundles: [],
-  enabledMcpServers: [],
-};
+const PROJECT = makeProject({ enabledSkills: ['gh'] });
 
 const SKILLS: Skill[] = [
-  {
+  makeSkill({
     name: 'gh',
-    scope: ORG,
-    kind: 'skill',
     description: 'GitHub CLI',
     source: 'built-in',
-    members: [],
-    body: '',
     createdBy: { userId: 'u', name: 'Matt' },
-  },
-  {
-    name: 'browse',
-    scope: ORG,
-    kind: 'skill',
-    description: 'Browser',
-    source: 'local',
-    members: [],
-    body: '',
-    createdBy: { userId: 'u', name: 'Sam' },
-  },
+  }),
+  makeSkill({ name: 'browse', description: 'Browser', createdBy: { userId: 'u', name: 'Sam' } }),
   // A bundle whose members are reachable only by expanding it in the picker.
-  {
+  makeSkill({
     name: 'frontend',
-    scope: ORG,
     kind: 'bundle',
     description: 'Frontend pack',
-    source: 'local',
     members: ['react-skill', 'css-skill'],
     resolvedMembers: ['react-skill', 'css-skill'],
-    body: '',
     createdBy: { userId: 'u', name: 'Sam' },
-  },
-  {
-    name: 'react-skill',
-    scope: ORG,
-    kind: 'skill',
-    description: 'React',
-    source: 'local',
-    members: [],
-    body: '',
-    createdBy: { userId: 'u', name: 'Sam' },
-  },
-  {
-    name: 'css-skill',
-    scope: ORG,
-    kind: 'skill',
-    description: 'CSS',
-    source: 'local',
-    members: [],
-    body: '',
-    createdBy: { userId: 'u', name: 'Sam' },
-  },
+  }),
+  makeSkill({ name: 'react-skill', description: 'React', createdBy: { userId: 'u', name: 'Sam' } }),
+  makeSkill({ name: 'css-skill', description: 'CSS', createdBy: { userId: 'u', name: 'Sam' } }),
 ];
 
 describe('ProjectSkills (project opt-in)', () => {

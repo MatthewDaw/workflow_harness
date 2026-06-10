@@ -1,33 +1,25 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { Agent } from '@harness/shared';
 import { useGetAgentsQuery } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
 import { MarkdownView } from '../../components/MarkdownView.js';
+import { OverlayModal } from '../../components/OverlayModal.js';
+import { useAuthorFilter, AuthorSelect } from '../../components/AuthorFilter.js';
+import { authorOf, bundlesFirst } from '../../lib/catalogUi.js';
 import { bundleMemberNames } from '../../lib/bundles.js';
-
-const ANY_AUTHOR = '__any__';
-
-function authorOf(a: { createdBy?: { name: string } }): string {
-  return a.createdBy?.name ?? 'Unknown';
-}
 
 /** Agents registry (collapsed model): a single flat org catalog, bundles included. */
 export function Agents() {
   const { data, isLoading } = useGetAgentsQuery();
   const agents = data ?? [];
 
-  const [author, setAuthor] = useState<string>(ANY_AUTHOR);
   const [showInBundles, setShowInBundles] = useState(false);
-  const authors = useMemo(() => {
-    const set = new Set<string>();
-    for (const a of agents) set.add(authorOf(a));
-    return [...set].sort();
-  }, [agents]);
+  const { author, setAuthor, authors, matches } = useAuthorFilter(agents, authorOf);
   const memberNames = useMemo(() => bundleMemberNames(agents), [agents]);
 
   const visible = (a: Agent): boolean => {
-    if (author !== ANY_AUTHOR && authorOf(a) !== author) return false;
+    if (!matches(a)) return false;
     if (a.kind === 'bundle') return true;
     if (showInBundles) return true;
     return !memberNames.has(a.name);
@@ -35,14 +27,7 @@ export function Agents() {
 
   // Bundles lead the grid (entry points that drill into member agents), then plain
   // agents — order is otherwise stable so the catalog stays steady (mirrors SkillCatalog).
-  const catalog = agents
-    .filter(visible)
-    .map((a, i) => [a, i] as const)
-    .sort(([a, ai], [b, bi]) => {
-      const rank = (x: Agent) => (x.kind === 'bundle' ? 0 : 1);
-      return rank(a) - rank(b) || ai - bi;
-    })
-    .map(([a]) => a);
+  const catalog = bundlesFirst(agents.filter(visible), (a) => a.kind === 'bundle');
 
   return (
     <div className="hq-pad" data-testid="agents-screen">
@@ -65,22 +50,12 @@ export function Agents() {
           />
           Show agents that are in bundles
         </label>
-        <label className="flex items-center gap-1.5">
-          Author
-          <select
-            className="hq-btn normal-case"
-            data-testid="agent-author-filter"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-          >
-            <option value={ANY_AUTHOR}>any author</option>
-            {authors.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-        </label>
+        <AuthorSelect
+          author={author}
+          onChange={setAuthor}
+          authors={authors}
+          testid="agent-author-filter"
+        />
       </div>
       {isLoading && <div className="text-mut">Loading agents…</div>}
       <div className="grid grid-cols-3 gap-3.5" data-testid="agent-catalog-grid">
@@ -242,67 +217,42 @@ function AgentBodyModal({
   prompt: string;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/50 p-4 sm:p-8"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`${agent.name} agent`}
-      data-testid={`agent-modal-${agent.name}`}
-      onClick={onClose}
+    <OverlayModal
+      ariaLabel={`${agent.name} agent`}
+      testid={`agent-modal-${agent.name}`}
+      closeTestid={`agent-modal-close-${agent.name}`}
+      onClose={onClose}
+      header={
+        <span className="flex items-center gap-2">
+          <b>{agent.name}</b>
+          <Pill>{agent.model}</Pill>
+        </span>
+      }
     >
-      <div
-        className="hq-box mx-auto flex h-full w-full max-w-[900px] flex-col overflow-hidden bg-paper"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-odd pb-2">
-          <span className="flex items-center gap-2">
-            <b>{agent.name}</b>
-            <Pill>{agent.model}</Pill>
-          </span>
-          <button
-            type="button"
-            className="hq-btn"
-            data-testid={`agent-modal-close-${agent.name}`}
-            onClick={onClose}
-          >
-            ✕ Close
-          </button>
+      {agent.description && <div className="mb-3 text-xs text-mut">{agent.description}</div>}
+      <AttachmentList
+        label="Skills"
+        items={agent.skills}
+        variant="skill"
+        testid={`agent-skills-${agent.name}`}
+        alwaysShow
+        emptyHint="No skills ship with this agent"
+      />
+      <AttachmentList
+        label="MCP servers"
+        items={agent.mcpServers}
+        testid={`agent-mcp-${agent.name}`}
+        alwaysShow
+        emptyHint="No MCP servers ship with this agent"
+      />
+      <AttachmentList label="Tools" items={agent.tools} testid={`agent-tools-${agent.name}`} />
+      {prompt && (
+        <div data-testid={`agent-prompt-${agent.name}`}>
+          <SectionHeader>System prompt</SectionHeader>
+          <MarkdownView markdown={prompt} />
         </div>
-        <div className="mt-2 min-h-0 flex-1 overflow-auto">
-          {agent.description && <div className="mb-3 text-xs text-mut">{agent.description}</div>}
-          <AttachmentList
-            label="Skills"
-            items={agent.skills}
-            variant="skill"
-            testid={`agent-skills-${agent.name}`}
-            alwaysShow
-            emptyHint="No skills ship with this agent"
-          />
-          <AttachmentList
-            label="MCP servers"
-            items={agent.mcpServers}
-            testid={`agent-mcp-${agent.name}`}
-            alwaysShow
-            emptyHint="No MCP servers ship with this agent"
-          />
-          <AttachmentList label="Tools" items={agent.tools} testid={`agent-tools-${agent.name}`} />
-          {prompt && (
-            <div data-testid={`agent-prompt-${agent.name}`}>
-              <SectionHeader>System prompt</SectionHeader>
-              <MarkdownView markdown={prompt} />
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+      )}
+    </OverlayModal>
   );
 }

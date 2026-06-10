@@ -1,10 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { orgScope, type Agent, type Skill } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
-import { signDeviceToken } from '../src/auth/verify.js';
 import {
   addMember,
   createSkill,
@@ -19,21 +13,30 @@ import {
   resolveSkills,
 } from '../src/rest/skills.js';
 import { flattenBundle } from '../src/rest/bundles.js';
-import type { Idea } from '@harness/shared';
+import type { Idea, Skill } from '@harness/shared';
+import { orgScope } from '@harness/shared';
 import { handler as skillsHandler } from '../src/rest/skills.js';
-import { installInMemoryTable } from './helpers/memtable.js';
-import { bodyOf, httpEvent } from './helpers/httpevent.js';
+import { memRepoHarness } from './helpers/memtable.js';
+import { adminEvent, bodyOf, deviceTokenEvent, httpEvent } from './helpers/httpevent.js';
+import {
+  MATT,
+  ORG,
+  SCOPE,
+  makeAgent as agent,
+  makeBundle as bundle,
+  makeSkill as skill,
+} from './helpers/factories.js';
+import { describeOrgCatalogContract } from './helpers/catalog-contract.js';
 
 /**
- * Org-catalog skills + bundles. Skills are org-only (3-tier scope retired):
- * GET lists the org catalog, writes are admin-gated and stamp createdBy, the
- * scope-change route is retired (410). Bundle add/remove/dissolve + transitive
- * flatten are unchanged behaviorally.
+ * Org-catalog skills + bundles. Skills are org-only (3-tier scope retired).
+ * The generic REST contract (list, admin-gated writes, createdBy, versioning +
+ * promote, built-ins fork-only) runs via describeOrgCatalogContract; this file
+ * keeps the skill-specific behavior: bundles, the idea cascade on delete, the
+ * device-token write path, fold (U16/U19), and golden replay (U18).
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 
 /**
  * U21 — the delete path removes the skill's vector. We inject a fake S3Vectors
@@ -66,41 +69,42 @@ const fakeGolden = {
 const deps = { repo, vectors: fakeVectors, golden: fakeGolden };
 
 beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
   deletedVectors.length = 0;
   goldenCalls.length = 0;
   goldenVerdict = { satisfied: true, reason: 'ok' };
 });
 
-const MATT = 'matt';
-const ORG = 'acme';
-const SCOPE = orgScope(ORG);
+const builtinSkill = (name: string, body = ''): Skill => ({
+  ...skill(name, body),
+  source: 'built-in',
+});
 
-function skill(name: string, body = ''): Skill {
-  return { name, scope: SCOPE, kind: 'skill', description: '', source: 'local', members: [], body };
-}
-function bundle(name: string, members: string[]): Skill {
-  return { name, scope: SCOPE, kind: 'bundle', description: '', source: 'local', members };
-}
-function agent(name: string, skills: string[]): Agent {
-  return { name, scope: SCOPE, model: 'opus', prompt: '', skills, tools: [] };
-}
+describeOrgCatalogContract<Skill>({
+  noun: 'skill',
+  plural: 'skills',
+  entity: 'SKILL',
+  repo,
+  sampleNames: ['reconcile', 'forecast'],
+  builtinName: 'hq-add-skill',
+  make: (name) => skill(name),
+  makeBuiltin: (name) => builtinSkill(name, 'canonical'),
+  mutate: (s) => ({ ...s, body: 'new body' }),
+  assertMutated: (stored) => expect(stored?.body).toBe('new body'),
+  create: (e) => createSkill(e, deps),
+  remove: (e) => deleteSkill(e, deps),
+  get: (e) => getSkill(e, deps),
+  list: (e) => resolveSkills(e, deps),
+  promote: (e) => promoteSkill(e, deps),
+  put: (s) => repo.putSkill(s),
+  read: (name) => repo.getSkill(SCOPE, name),
+  nonAdminPromote: 'forbidden',
+  assertBuiltinUntouched: (stored) => {
+    expect(stored?.source).toBe('built-in');
+    expect(stored?.body).toBe('canonical');
+  },
+});
 
-/** An admin event for the caller's own org (org-catalog writes require admin). */
-function adminEvent(opts: Parameters<typeof httpEvent>[0]) {
-  return httpEvent({ org: ORG, admin: true, ...opts });
-}
-
-describe('GET /skills (org catalog)', () => {
-  it('returns the org catalog for the caller', async () => {
-    await repo.putSkill(skill('reconcile'));
-    await repo.putSkill(skill('forecast'));
-    const res = await resolveSkills(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
-    const { skills } = bodyOf<{ skills: Skill[] }>(res as { body: string });
-    expect(skills.map((s) => s.name).sort()).toEqual(['forecast', 'reconcile']);
-  });
-
+describe('GET /skills (org catalog, author resolution + bundle annotation)', () => {
   it('resolves a UUID createdBy.name to the author profile name (email)', async () => {
     // claude+ device-token writes stamp createdBy.name with the Cognito sub; the
     // list should display the author's real PROFILE name instead.
@@ -108,7 +112,7 @@ describe('GET /skills (org catalog)', () => {
     await repo.putUser({ userId: sub, name: 'mattdaw7@gmail.com', org: ORG });
     await repo.putSkill({ ...skill('gstack'), createdBy: { userId: sub, name: sub } });
     const res = await resolveSkills(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
-    const { skills } = bodyOf<{ skills: Skill[] }>(res as { body: string });
+    const { skills } = bodyOf<{ skills: Skill[] }>(res);
     const s = skills.find((x) => x.name === 'gstack')!;
     expect(s.createdBy).toEqual({ userId: sub, name: 'mattdaw7@gmail.com' });
   });
@@ -117,7 +121,7 @@ describe('GET /skills (org catalog)', () => {
     await repo.putSkill({ ...skill('seeded'), createdBy: { userId: 'system', name: 'system' } });
     await repo.putSkill({ ...skill('orphan'), createdBy: { userId: 'ghost', name: 'ghost' } });
     const res = await resolveSkills(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
-    const { skills } = bodyOf<{ skills: Skill[] }>(res as { body: string });
+    const { skills } = bodyOf<{ skills: Skill[] }>(res);
     expect(skills.find((x) => x.name === 'seeded')!.createdBy).toEqual({
       userId: 'system',
       name: 'system',
@@ -135,81 +139,14 @@ describe('GET /skills (org catalog)', () => {
     await repo.putSkill(bundle('outer', ['inner']));
     const res = await resolveSkills(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
     const { skills } = bodyOf<{ skills: Array<Skill & { resolvedMembers?: string[] }> }>(
-      res as { body: string },
+      res,
     );
     const outer = skills.find((s) => s.name === 'outer')!;
     expect(outer.resolvedMembers!.sort()).toEqual(['a', 'b']);
   });
 });
 
-describe('POST /skills (admin-gated org write + createdBy)', () => {
-  it('forbids a non-admin create', async () => {
-    const res = await createSkill(
-      httpEvent({ method: 'POST', userId: MATT, org: ORG, body: skill('reconcile') }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 403 });
-  });
-
-  it('forces org scope, ignores a client scope, and stamps createdBy from the principal', async () => {
-    const res = await createSkill(
-      adminEvent({
-        method: 'POST',
-        userId: MATT,
-        // client tries to sneak a user scope; server must override to org.
-        body: { ...skill('reconcile'), scope: { tier: 'user', id: 'someone' } },
-      }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 201 });
-    const stored = await repo.getSkill(SCOPE, 'reconcile');
-    expect(stored?.scope).toEqual({ tier: 'org', id: ORG });
-    expect(stored?.createdBy).toEqual({ userId: MATT, name: MATT });
-  });
-});
-
-describe('PUT /skills/:name (preserves createdBy)', () => {
-  it('updates fields but keeps the original createdBy', async () => {
-    await repo.putSkill({
-      ...skill('reconcile', 'old'),
-      createdBy: { userId: 'alice', name: 'Alice' },
-    });
-    const res = await createSkill(
-      adminEvent({
-        method: 'PUT',
-        userId: MATT,
-        path: { name: 'reconcile' },
-        body: skill('reconcile', 'new body'),
-      }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 200 });
-    const stored = await repo.getSkill(SCOPE, 'reconcile');
-    expect(stored?.body).toBe('new body');
-    expect(stored?.createdBy).toEqual({ userId: 'alice', name: 'Alice' });
-  });
-});
-
-describe('DELETE /skills/:name', () => {
-  it('deletes for an admin', async () => {
-    await repo.putSkill(skill('reconcile'));
-    const res = await deleteSkill(
-      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'reconcile' } }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 200 });
-    expect(await repo.getSkill(SCOPE, 'reconcile')).toBeUndefined();
-  });
-
-  it('forbids a non-admin delete', async () => {
-    await repo.putSkill(skill('reconcile'));
-    const res = await deleteSkill(
-      httpEvent({ method: 'DELETE', userId: MATT, org: ORG, path: { name: 'reconcile' } }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 403 });
-  });
-
+describe('DELETE /skills/:name (idea cascade, U21)', () => {
   // U21 — skill delete/rename → idea orphan policy.
   it("cascades the skill's ideas to the bin and removes its vector", async () => {
     await repo.putSkill(skill('reconcile'));
@@ -367,7 +304,7 @@ describe('dissolve', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ members: string[] }>(res as { body: string }).members.sort()).toEqual([
+    expect(bodyOf<{ members: string[] }>(res).members.sort()).toEqual([
       'a',
       'b',
     ]);
@@ -392,7 +329,7 @@ describe('usage / blast radius', () => {
       }),
       deps,
     );
-    expect(bodyOf<{ count: number }>(res as { body: string }).count).toBe(2);
+    expect(bodyOf<{ count: number }>(res).count).toBe(2);
   });
 });
 
@@ -407,32 +344,14 @@ describe('skill body round-trip', () => {
       httpEvent({ method: 'GET', userId: MATT, org: ORG, path: { name: 'reconcile' } }),
       deps,
     );
-    expect(bodyOf<{ skill: Skill }>(read as { body: string }).skill.body).toBe('# Reconcile\nmd');
+    expect(bodyOf<{ skill: Skill }>(read).skill.body).toBe('# Reconcile\nmd');
   });
 });
 
 /**
- * VERSIONING (KTD6) at the REST layer: create mints rev 1 of the base variant
- * and initializes TRUE; an update snapshots the NEXT revision of the same variant
- * rather than clobbering; promote (any authed member) repoints TRUE.
+ * VERSIONING (KTD6) at the REST layer beyond the shared contract: an update
+ * snapshots the NEXT revision of the same variant rather than clobbering.
  */
-describe('versioning: create snapshots rev 1 + initializes TRUE', () => {
-  it('stamps baseName/variantId/version on create and sets the TRUE pointer', async () => {
-    const res = await createSkill(
-      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'v1') }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 201 });
-    const { skill: created } = bodyOf<{ skill: Skill }>(res as { body: string });
-    expect(created.variantId).toBe('reconcile');
-    expect(created.baseName).toBe('reconcile');
-    expect(created.version).toBe(1);
-
-    const truth = await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile');
-    expect(truth).toMatchObject({ baseName: 'reconcile', variantId: 'reconcile', rev: 1 });
-  });
-});
-
 describe('versioning: update snapshots the next revision (no clobber)', () => {
   it('advances the base variant to rev 2 and keeps a rev-1 snapshot', async () => {
     await createSkill(
@@ -449,7 +368,7 @@ describe('versioning: update snapshots the next revision (no clobber)', () => {
       deps,
     );
     expect(put).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ skill: Skill }>(put as { body: string }).skill.version).toBe(2);
+    expect(bodyOf<{ skill: Skill }>(put).skill.version).toBe(2);
 
     const revs = await repo.listRevisions(SCOPE, 'SKILL', 'reconcile');
     expect(revs.map((r) => r.version).sort()).toEqual([1, 2]);
@@ -459,47 +378,6 @@ describe('versioning: update snapshots the next revision (no clobber)', () => {
 });
 
 describe('POST /skills/:name/promote (skill-edit gated, U16)', () => {
-  it('repoints TRUE to the given variant for an admin', async () => {
-    await createSkill(
-      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'base') }),
-      deps,
-    );
-    // Promote now requires the same skill-edit (admin) authority as the revision
-    // write it points at — an admin repoints TRUE to a (hypothetical) fork variant.
-    const res = await promoteSkill(
-      adminEvent({
-        method: 'POST',
-        userId: MATT,
-        path: { name: 'reconcile' },
-        rawPath: '/skills/reconcile/promote',
-        body: { variantId: 'reconcile#R#r#U#matt', rev: 1 },
-      }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 200 });
-    const truth = await repo.getTrueVariant(SCOPE, 'SKILL', 'reconcile');
-    expect(truth).toEqual({ baseName: 'reconcile', variantId: 'reconcile#R#r#U#matt', rev: 1 });
-  });
-
-  it('forbids a non-admin promote (reconciled with the revision-write gate)', async () => {
-    await createSkill(
-      adminEvent({ method: 'POST', userId: MATT, body: skill('reconcile', 'base') }),
-      deps,
-    );
-    const res = await promoteSkill(
-      httpEvent({
-        method: 'POST',
-        userId: 'bob',
-        org: ORG,
-        path: { name: 'reconcile' },
-        rawPath: '/skills/reconcile/promote',
-        body: { variantId: 'reconcile#R#r#U#bob', rev: 1 },
-      }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 403 });
-  });
-
   it('400s when variantId is missing', async () => {
     const res = await promoteSkill(
       adminEvent({
@@ -555,26 +433,10 @@ describe('POST /skills/:name/scope (retired)', () => {
  * able to register skills directly instead of routing through the git seed.
  */
 describe('device-token catalog writes (claude+ wrapper, server-side admin)', () => {
-  const SECRET = new TextEncoder().encode('test-device-secret');
-
-  beforeEach(() => {
-    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
-  });
-
-  async function deviceEvent(
+  const deviceEvent = (
     userId: string,
     opts: { method: string; path?: Record<string, string>; body?: unknown; rawPath?: string },
-  ) {
-    const token = await signDeviceToken({ userId, org: ORG }, { secret: SECRET });
-    return httpEvent({
-      method: opts.method,
-      userId: null, // no Cognito jwt claims — only the bearer header
-      headers: { authorization: `Bearer ${token}` },
-      path: opts.path,
-      rawPath: opts.rawPath,
-      body: opts.body,
-    });
-  }
+  ) => deviceTokenEvent({ userId, org: ORG, ...opts });
 
   it('lets a device-token org admin (adminOrgs) create a skill', async () => {
     await repo.putUser({ userId: MATT, org: ORG, orgs: [ORG], adminOrgs: [ORG], admin: true });
@@ -626,7 +488,7 @@ describe('device-token catalog writes (claude+ wrapper, server-side admin)', () 
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ skill: Skill }>(res as { body: string }).skill.body).toBe('body');
+    expect(bodyOf<{ skill: Skill }>(res).skill.body).toBe('body');
   });
 
   it('401s when the bearer token is absent entirely', async () => {
@@ -645,29 +507,7 @@ describe('device-token catalog writes (claude+ wrapper, server-side admin)', () 
  * authorUserId), which the variant model already supports; deletes and built-in
  * bundle-membership edits are rejected (manage via .claude/skills + re-seed).
  */
-describe('built-ins are fork-only via REST (git-seed owned)', () => {
-  const builtinSkill = (name: string, body = ''): Skill => ({
-    ...skill(name, body),
-    source: 'built-in',
-  });
-
-  it('rejects an in-place PUT to a built-in base (409), leaving it untouched', async () => {
-    await repo.putSkill(builtinSkill('hq-add-skill', 'canonical'));
-    const res = await createSkill(
-      adminEvent({
-        method: 'PUT',
-        userId: MATT,
-        path: { name: 'hq-add-skill' },
-        body: skill('hq-add-skill', 'edited'),
-      }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 409 });
-    const stored = await repo.getSkill(SCOPE, 'hq-add-skill');
-    expect(stored?.source).toBe('built-in');
-    expect(stored?.body).toBe('canonical');
-  });
-
+describe('built-ins are fork-only via REST (skill-specific guards)', () => {
   it('rejects a POST that would clobber a built-in base (409)', async () => {
     await repo.putSkill(builtinSkill('hq-add-skill'));
     const res = await createSkill(
@@ -675,30 +515,6 @@ describe('built-ins are fork-only via REST (git-seed owned)', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 409 });
-  });
-
-  it('ALLOWS forking a built-in (repoId + authorUserId set)', async () => {
-    await repo.putSkill(builtinSkill('hq-add-skill'));
-    const res = await createSkill(
-      adminEvent({
-        method: 'PUT',
-        userId: MATT,
-        path: { name: 'hq-add-skill' },
-        body: { ...skill('hq-add-skill', 'my fork'), repoId: 'repo1', authorUserId: MATT },
-      }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 200 });
-  });
-
-  it('rejects deleting a built-in (409)', async () => {
-    await repo.putSkill(builtinSkill('hq-add-skill'));
-    const res = await deleteSkill(
-      adminEvent({ method: 'DELETE', userId: MATT, path: { name: 'hq-add-skill' } }),
-      deps,
-    );
-    expect(res).toMatchObject({ statusCode: 409 });
-    expect(await repo.getSkill(SCOPE, 'hq-add-skill')).toBeDefined();
   });
 
   it('rejects mutating a built-in bundle membership (409)', async () => {
@@ -799,11 +615,6 @@ describe('bundle-overwrite guard (skill push must not clobber a bundle)', () => 
  * incoming corroboration is safe. Fold is admin-gated (skill-edit permission).
  */
 describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
-  const builtinSkill = (name: string, body = ''): Skill => ({
-    ...skill(name, body),
-    source: 'built-in',
-  });
-
   function idea(over: Partial<Idea> = {}): Idea {
     return {
       ideaId: 'i-1',
@@ -841,7 +652,7 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res);
     // A new revision was snapshotted (rev 2 of the base variant), body merged.
     expect(stamped.version).toBe(2);
     expect(stamped.body).toContain('Folded');
@@ -871,7 +682,7 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
     );
     // Forking is allowed: the built-in guard only rejects an in-place fold.
     expect(res).toMatchObject({ statusCode: 200 });
-    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res);
     expect(stamped.repoId).toBe('repo1');
     expect(stamped.variantId).toBe('hq-add-skill#R#repo1#U#matt');
     expect((await repo.getIdea(ORG, 'hq-add-skill', 'i-1'))?.status).toBe('folded');
@@ -932,17 +743,14 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
   });
 
   it('forbids a non-admin device token folding', async () => {
-    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
-    const SECRET = new TextEncoder().encode('test-device-secret');
     await repo.putUser({ userId: 'bob', org: ORG, orgs: [ORG], adminOrgs: [], admin: false });
     await repo.putSkill(skill('reconcile', 'v1'));
     await repo.putIdea(idea());
-    const token = await signDeviceToken({ userId: 'bob', org: ORG }, { secret: SECRET });
     const res = await foldIdea(
-      httpEvent({
+      await deviceTokenEvent({
         method: 'POST',
-        userId: null,
-        headers: { authorization: `Bearer ${token}` },
+        userId: 'bob',
+        org: ORG,
         path: { name: 'reconcile', ideaId: 'i-1' },
         rawPath: '/skills/reconcile/ideas/i-1/fold',
         body: { body: 'v2' },
@@ -1053,7 +861,7 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res);
     // Forked the repoX variant (no 409 against the built-in), authored by the caller.
     expect(stamped.repoId).toBe('repoX');
     expect(stamped.authorUserId).toBe(MATT);
@@ -1088,7 +896,7 @@ describe('POST /skills/:name/ideas/:ideaId/fold (U16)', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const { skill: stamped } = bodyOf<{ skill: Skill }>(res as { body: string });
+    const { skill: stamped } = bodyOf<{ skill: Skill }>(res);
     expect(stamped.repoId).toBe('repoChosen');
     expect(stamped.authorUserId).toBe('bob');
   });
@@ -1259,7 +1067,7 @@ describe('U18: golden-set regression (fold records, promote replays)', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     const out = bodyOf<{ goldenReplay: unknown[]; goldenRegressions: unknown[] }>(
-      res as { body: string },
+      res,
     );
     expect(out.goldenReplay).toHaveLength(1);
     expect(out.goldenRegressions).toHaveLength(0);
@@ -1287,7 +1095,7 @@ describe('U18: golden-set regression (fold records, promote replays)', () => {
     const out = bodyOf<{
       true: { rev: number };
       goldenRegressions: Array<{ caseId: string; reason: string }>;
-    }>(res as { body: string });
+    }>(res);
     expect(out.true.rev).toBe(2);
     expect(out.goldenRegressions).toHaveLength(1);
     expect(out.goldenRegressions[0]!.caseId).toBe('i-1');
@@ -1310,7 +1118,7 @@ describe('U18: golden-set regression (fold records, promote replays)', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const out = bodyOf<{ goldenReplay: unknown[] }>(res as { body: string });
+    const out = bodyOf<{ goldenReplay: unknown[] }>(res);
     expect(out.goldenReplay).toHaveLength(0);
     expect(goldenCalls).toHaveLength(0);
   });
@@ -1344,7 +1152,7 @@ describe('U18: golden-set regression (fold records, promote replays)', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const out = bodyOf<{ goldenReplay: unknown[] }>(res as { body: string });
+    const out = bodyOf<{ goldenReplay: unknown[] }>(res);
     expect(out.goldenReplay).toHaveLength(0);
     // Org A's lone case still belongs to org A.
     expect(await repo.listGoldenCasesForSkill(ORG, 'reconcile')).toHaveLength(1);

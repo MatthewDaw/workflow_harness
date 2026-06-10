@@ -1,15 +1,21 @@
 // Command claude-plus is the claude+ CLI: a thin attach client over a per-repo
-// background daemon (the tmux model, KTD2).
+// background daemon (the tmux model).
 //
 // Usage:
 //
-//	claude+              attach-or-create the daemon for the current repo
-//	claude+ ls           list running daemons (index, repo, host, sessions, state, uptime)
-//	claude+ reset        force-retire all daemons + clear the registry (recover a wedged state)
-//	claude+ login        device-code sign-in to Command HQ (writes credentials)
-//	claude+ --session=N  attach to the daemon at registry index N
-//	claude+ stop=N       stop the daemon at registry index N (also accepts `stop N`)
-//	claude+ --version    print the version
+//	claude+                              attach-or-create the daemon for the current repo
+//	claude+ ls                           list running daemons (index, repo, host, sessions, state, uptime)
+//	claude+ reset                        force-retire all daemons + clear the registry (recover a wedged state)
+//	claude+ login [--api U] [--ws U]     device-code sign-in to Command HQ (writes credentials)
+//	claude+ sync                         reconcile this repo's skills/agents/MCP from HQ (`sync-skills` is an alias)
+//	claude+ run-workflow <name>          run a workflow DAG headlessly, reporting node status to HQ
+//	claude+ stop=N                       stop the daemon at registry index N (also accepts `stop N`)
+//	claude+ --session=N                  attach to the daemon at registry index N
+//	claude+ --gui                        launch the desktop GUI for this repo
+//	claude+ --dangerously-skip-permissions
+//	                                     start this repo's daemon in dangerous mode (every spawned
+//	                                     claude session runs with --dangerously-skip-permissions)
+//	claude+ --version                    print the version
 //
 // Hidden verbs used internally:
 //
@@ -37,13 +43,14 @@ import (
 var version = "dev"
 
 func main() {
-	// Hidden internal verbs are dispatched before flag parsing. A verb may carry
-	// an inline `=value` (e.g. `stop=2`) for parity with the `--session=N` flag;
-	// split it off so the switch matches the bare verb and the value is forwarded.
+	// Verbs are dispatched before flag parsing. Only `stop` accepts an inline
+	// `=value` (`stop=2`, for parity with `--session=N`); any other `x=y`
+	// argument falls through to flag parsing and errors instead of silently
+	// dropping the value.
 	if len(os.Args) >= 2 {
 		verb := os.Args[1]
 		inlineVal := ""
-		if i := strings.IndexByte(verb, '='); i >= 0 {
+		if i := strings.IndexByte(verb, '='); i >= 0 && verb[:i] == "stop" {
 			verb, inlineVal = verb[:i], verb[i+1:]
 		}
 		switch verb {
@@ -266,7 +273,10 @@ func cmdAttachIndex(n int) error {
 // NON-ZERO (fail loudly). MCP servers that materialized but need an interactive
 // login are printed (they do not fail the gate) so the user knows what to run.
 func cmdSync() error {
-	cwd, err := os.Getwd()
+	// Resolve the repo ROOT (not the bare cwd) so a sync run from a subdirectory
+	// binds to the same project id and config root as every other entry point —
+	// a cwd-keyed sync from a subdir silently diverged from the daemon's.
+	repo, err := resolveRepoRoot()
 	if err != nil {
 		return err
 	}
@@ -276,9 +286,9 @@ func cmdSync() error {
 	// roots, and skills enabled on a divergent/duplicate project record land on a
 	// record this checkout never reads. Printing both makes that divergence visible
 	// instead of surfacing as a silent "pulled 0".
-	projectID := config.ProjectIDFor(cwd)
-	root, _ := config.ProjectConfigDir(cwd)
-	pulled, pushed, gate, err := daemon.SyncSkillsNow(cwd)
+	projectID := config.ProjectIDFor(repo)
+	root, _ := config.ProjectConfigDir(repo)
+	pulled, pushed, gate, err := daemon.SyncSkillsNow(repo)
 	// Surface needs-auth servers regardless of gate pass/fail — they are actionable
 	// and are not the reason for any failure.
 	for _, na := range gate.NeedsAuth() {
@@ -381,24 +391,14 @@ func tagPinnedSession(raw []byte) []byte {
 	return out
 }
 
-// resolveRepoRoot walks up from cwd to the nearest .git directory; falls back to
-// cwd when not in a git repo (every directory can host a daemon).
+// resolveRepoRoot resolves the repo root for cwd via the shared
+// config.RepoRootFor (nearest .git dir, falling back to cwd).
 func resolveRepoRoot() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	dir := cwd
-	for {
-		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && fi.IsDir() {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return cwd, nil
-		}
-		dir = parent
-	}
+	return config.RepoRootFor(cwd), nil
 }
 
 func fmtUptime(d time.Duration) string {

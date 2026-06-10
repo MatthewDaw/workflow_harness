@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/daemon"
 	"github.com/workflow-harness/claude-plus/internal/desktop"
 	"github.com/workflow-harness/claude-plus/internal/event"
@@ -149,7 +149,6 @@ func (a *clientAdapter) NewSession() error                               { retur
 func (a *clientAdapter) Rename(sessID, name string) error                { return a.c.Rename(sessID, name) }
 func (a *clientAdapter) CloseSession(sessID string) error                { return a.c.CloseSession(sessID) }
 func (a *clientAdapter) Shutdown() error                                 { return a.c.Shutdown() }
-func (a *clientAdapter) Detach() error                                   { return a.c.Detach() }
 func (a *clientAdapter) Run() error                                      { return a.c.Run() }
 func (a *clientAdapter) InitialSessions() []daemon.SessInfo              { return a.c.Sessions }
 
@@ -165,22 +164,12 @@ func hasDangerousFlag(args []string) bool {
 	return false
 }
 
-// resolveRepoRoot walks up from cwd to the nearest .git dir; falls back to cwd.
-// (Mirrors cmd/claude-plus/main.go so the desktop targets the same daemon.)
+// resolveRepoRoot resolves the repo root for cwd via the shared
+// config.RepoRootFor, so the desktop targets the same daemon as the CLI.
 func resolveRepoRoot() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	dir := cwd
-	for {
-		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && fi.IsDir() {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return cwd, nil
-		}
-		dir = parent
-	}
+	return config.RepoRootFor(cwd), nil
 }

@@ -60,8 +60,11 @@ func TestMuxKillRemovesAndRefocuses(t *testing.T) {
 	if m.Count() != 0 {
 		t.Fatalf("after killing last, count = %d, want 0", m.Count())
 	}
-	if m.Focused() != nil {
-		t.Error("Focused must be nil when no sessions remain")
+	m.mu.RLock()
+	fi := m.focusIdx
+	m.mu.RUnlock()
+	if fi != -1 {
+		t.Errorf("focusIdx = %d, want -1 when no sessions remain", fi)
 	}
 }
 

@@ -1,14 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import type { Envelope, Event, SessionProjection } from '@harness/shared';
-import { Repo, type ConnectionRecord } from '../src/db/repo.js';
+import { type ConnectionRecord } from '../src/db/repo.js';
 import { subscribe } from '../src/ws/subscribe.js';
 import { control } from '../src/ws/control.js';
 import { ingest } from '../src/ws/event.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * U7 control gateway: subscribe replays a recent window then registers a live
@@ -16,14 +13,7 @@ import { installInMemoryTable } from './helpers/memtable.js';
  * daemon's connection. End-to-end through the real Repo + in-memory table.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 const SESSION = 's-1';
 const INSTANCE = 'inst-a';

@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { QueryVectorsCommand, S3VectorsClient } from '@aws-sdk/client-s3vectors';
-import type { Idea, IdeaSource, Project, SessionProjection, UnassignedEntry } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
+import type { Idea } from '@harness/shared';
 import {
   ideaKey,
   ideaPrefixForSkill,
@@ -13,9 +10,16 @@ import {
   unassignedBinPrefix,
   ORG_SCOPE_PREFIX,
 } from '../src/db/keys.js';
-import { signDeviceToken } from '../src/auth/verify.js';
-import { installInMemoryTable } from './helpers/memtable.js';
-import { bodyOf, httpEvent } from './helpers/httpevent.js';
+import { memRepoHarness } from './helpers/memtable.js';
+import { bodyOf, deviceTokenEvent, httpEvent } from './helpers/httpevent.js';
+import {
+  FakeIdeaVectors,
+  FakeSkillVectors as FakeVectors,
+  FakeWriter,
+  fakeEmbedder,
+  seedSession as seedSessionFor,
+} from './helpers/idea-fakes.js';
+import { makeBinEntry, makeIdea } from './helpers/factories.js';
 import {
   CORROBORATION_K,
   type IdeaWithCorroboration,
@@ -32,16 +36,12 @@ import {
 } from '../src/ideas/associate.js';
 import { corroborateFinding, type Finding } from '../src/ideas/corroborate.js';
 import { S3Vectors } from '../src/embeddings/s3vectors.js';
-import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
 import {
   IDEA_VECTOR_INDEX,
   SKILL_VECTOR_INDEX,
-  type QueryHit,
-  type QueryOptions,
   type S3Vectors as S3VectorsType,
-  type VectorItem,
 } from '../src/embeddings/s3vectors.js';
-import type { IdeaFinding, IdeaWriter } from '../src/ideas/synth.js';
+import type { IdeaWriter } from '../src/ideas/synth.js';
 import type { RerankJudge } from '../src/rerank/judge.js';
 
 /**
@@ -63,53 +63,12 @@ import type { RerankJudge } from '../src/rerank/judge.js';
  *     org B's ideas/bin entries; a blank org is REJECTED, not defaulted.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 const ORG_A = 'org-a';
 const ORG_B = 'org-b';
 const SKILL = 'reconcile';
-
-let seq = 0;
-function source(sessionId: string): IdeaSource {
-  return { sessionId, segmentId: `${sessionId}-seg`, seq: seq++, snippet: '' };
-}
-
-function makeIdea(ideaId: string, opts: { org: string; sessions: number; skillBaseName?: string }): Idea {
-  const sources: IdeaSource[] = [];
-  for (let i = 0; i < opts.sessions; i++) sources.push(source(`${ideaId}-sess-${i}`));
-  return {
-    ideaId,
-    skillBaseName: opts.skillBaseName ?? SKILL,
-    org: opts.org,
-    text: `lesson ${ideaId}`,
-    sources,
-    status: 'open',
-    corroborationVersion: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  };
-}
-
-function makeBinEntry(entryId: string, opts: { org: string; sessions: number }): UnassignedEntry {
-  const sources: IdeaSource[] = [];
-  for (let i = 0; i < opts.sessions; i++) sources.push(source(`${entryId}-sess-${i}`));
-  return {
-    entryId,
-    org: opts.org,
-    text: `topic ${entryId}`,
-    sources,
-    createdAt: 1,
-    updatedAt: 1,
-  };
-}
 
 // ───────────────────────────────────────────────────────────────────────────
 // 1. KEY-LEVEL PARTITIONING — every idea / bin record is `SCOPE#org#<org>`.
@@ -158,63 +117,12 @@ describe('U22 — every idea/bin record is SCOPE#org# partitioned', () => {
 //   skill-index query always carries the org filter.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** A fake S3 Vectors index that returns hits for the queried org ONLY. */
-class FakeVectors {
-  private byOrg = new Map<string, Array<{ org: string; skillBaseName: string; score: number }>>();
-  queries: QueryOptions[] = [];
-
-  seed(v: { org: string; skillBaseName: string; score: number }): void {
-    const list = this.byOrg.get(v.org) ?? [];
-    list.push(v);
-    this.byOrg.set(v.org, list);
-  }
-
-  async queryTopK(_index: string, _vector: number[], k: number, opts: QueryOptions = {}): Promise<QueryHit[]> {
-    this.queries.push(opts);
-    // ISOLATION: a query with no orgFilter returns NOTHING; otherwise only the
-    // queried org's vectors. (The real S3 filter does the same server-side.)
-    const pool = opts.orgFilter ? this.byOrg.get(opts.orgFilter) ?? [] : [];
-    return pool
-      .filter((v) => (opts.floor === undefined ? true : v.score >= opts.floor))
-      .map((v) => ({ key: `${v.org}#${v.skillBaseName}`, score: v.score, metadata: { org: v.org, skillBaseName: v.skillBaseName } }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, k);
-  }
-}
-
-const fakeEmbedder = {
-  async embed() {
-    return { vector: [1, 0, 0, 0], embeddingModel: 'fake', embeddingVersion: 'fake-v1' };
-  },
-} as unknown as OpenRouterEmbedder;
-
 function assocDeps(vectors: FakeVectors, over: Partial<AssociateDeps> = {}): AssociateDeps {
   return { repo, embedder: fakeEmbedder, vectors: vectors as unknown as S3VectorsType, ...over };
 }
 
-async function seedSession(opts: { sessionId: string; projectId: string; org?: string }): Promise<void> {
-  const project: Project = {
-    id: opts.projectId,
-    name: opts.projectId,
-    repo: `gh/x/${opts.projectId}`,
-    ownerUserId: 'matt',
-    liveSessionCount: 0,
-    ...(opts.org !== undefined ? { org: opts.org } : {}),
-  } as Project;
-  await repo.putProject(project);
-  const projection: SessionProjection = {
-    sessionId: opts.sessionId,
-    projectId: opts.projectId,
-    name: 'a-session',
-    host: 'matt@mbp',
-    status: 'live',
-    tokens: 0,
-    startedAt: 1,
-    lastEventAt: 1,
-    maxSeq: 0,
-  } as SessionProjection;
-  await repo.putSessionProjectionConditional(projection, undefined);
-}
+const seedSession = (opts: { sessionId: string; projectId: string; org?: string }) =>
+  seedSessionFor(repo, opts);
 
 function topic(over: Partial<TopicFinding> = {}): TopicFinding {
   return {
@@ -238,7 +146,7 @@ describe('U22 — association: org A topic never retrieves org B skills', () => 
 
     expect(res.org).toBe(ORG_A);
     // The skill-index query carried the org filter, scoped to the RESOLVED org.
-    expect(vectors.queries[0]!.orgFilter).toBe(ORG_A);
+    expect(vectors.queries[0]!.opts.orgFilter).toBe(ORG_A);
     // org B's strong skill is invisible → no candidates → bin seam.
     expect(res.outcome).toBe('unassigned');
     expect(res.candidates).toEqual([]);
@@ -252,10 +160,9 @@ describe('U22 — association: org A topic never retrieves org B skills', () => 
     await associateTopic(topic(), assocDeps(vectors));
 
     expect(vectors.queries).toHaveLength(1);
-    expect(vectors.queries[0]!.orgFilter).toBe(ORG_A);
+    expect(vectors.queries[0]!.opts.orgFilter).toBe(ORG_A);
     // It was the SKILL index (not the ideas index) that was queried for retrieval.
-    // (asserted indirectly: the fake records opts only; the index name is fixed by
-    //  associate.ts to SKILL_VECTOR_INDEX, exercised by associate.test.ts.)
+    expect(vectors.queries[0]!.index).toBe(SKILL_VECTOR_INDEX);
     expect(SKILL_VECTOR_INDEX).toBe('skills');
   });
 
@@ -271,7 +178,7 @@ describe('U22 — association: org A topic never retrieves org B skills', () => 
     const res = await routeTopic(topic(), assocDeps(vectors, { judge: alwaysFirstJudge }));
 
     expect(res.org).toBe(ORG_A);
-    expect(vectors.queries.every((q) => q.orgFilter === ORG_A)).toBe(true);
+    expect(vectors.queries.every((q) => q.opts.orgFilter === ORG_A)).toBe(true);
     // Routed to org A's skill, never org B's stronger one.
     expect(res.outcome).toBe('routed');
     expect(res.skillBaseName).toBe('a-skill');
@@ -306,35 +213,13 @@ const alwaysFirstJudge = {
 //   blank org is REJECTED (the guard added in this unit).
 // ───────────────────────────────────────────────────────────────────────────
 
-class FakeIdeaVectors {
-  items: VectorItem[] = [];
-  queries: QueryOptions[] = [];
-  async putVectors(_index: string, items: VectorItem[]): Promise<void> {
-    for (const it of items) {
-      this.items = this.items.filter((x) => x.key !== it.key);
-      this.items.push(it);
-    }
-  }
-  async queryTopK(_index: string, _vector: number[], k: number, opts: QueryOptions = {}): Promise<QueryHit[]> {
-    this.queries.push(opts);
-    return this.items
-      .filter((it) => opts.orgFilter === undefined || it.metadata.org === opts.orgFilter)
-      .map((it) => ({ key: it.key, score: 1, metadata: it.metadata }))
-      .slice(0, k);
-  }
-}
-
-const fakeWriter = {
-  async write(_f: IdeaFinding) {
-    return 'concept:money';
-  },
-  async merge(existing: string, _f: IdeaFinding) {
-    return `${existing} [resynth]`;
-  },
-} as unknown as IdeaWriter;
-
 function corroDeps(vectors: FakeIdeaVectors) {
-  return { repo, embedder: fakeEmbedder, vectors: vectors as unknown as S3VectorsType, writer: fakeWriter };
+  return {
+    repo,
+    embedder: fakeEmbedder,
+    vectors: vectors as unknown as S3VectorsType,
+    writer: new FakeWriter() as unknown as IdeaWriter,
+  };
 }
 
 function finding(over: Partial<Finding> = {}): Finding {
@@ -436,19 +321,19 @@ describe('U22 — REST reads never leak across orgs and reject a blank org', () 
 
   it('candidate-learnings: org A never returns org B corroborated ideas', async () => {
     const res = await resolveCandidateLearnings(getEvent(SKILL, ORG_A), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings.map((i) => i.ideaId)).toEqual(['a-strong']);
   });
 
   it('all-ideas: org A never returns org B ideas', async () => {
     const res = await resolveSkillIdeas(getEvent(SKILL, ORG_A), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     expect(ideas.map((i) => i.ideaId).sort()).toEqual(['a-strong', 'a-weak']);
   });
 
   it('unassigned-bin: org A never returns org B bin entries', async () => {
     const res = await resolveUnassignedBin(binEvent(ORG_A), deps);
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     expect(entries.map((e) => e.entryId)).toEqual(['a-bin']);
   });
 
@@ -459,17 +344,17 @@ describe('U22 — REST reads never leak across orgs and reject a blank org', () 
     await repo.putUser({ userId: 'matt', org: ORG_B });
 
     const cl = await resolveCandidateLearnings(getEvent(SKILL, ORG_A), deps);
-    expect(bodyOf<{ learnings: Idea[] }>(cl as { body: string }).learnings.map((i) => i.ideaId)).toEqual([
+    expect(bodyOf<{ learnings: Idea[] }>(cl).learnings.map((i) => i.ideaId)).toEqual([
       'b-strong',
     ]);
 
     const all = await resolveSkillIdeas(getEvent(SKILL, ORG_A), deps);
-    expect(bodyOf<{ ideas: IdeaWithCorroboration[] }>(all as { body: string }).ideas.map((i) => i.ideaId)).toEqual([
+    expect(bodyOf<{ ideas: IdeaWithCorroboration[] }>(all).ideas.map((i) => i.ideaId)).toEqual([
       'b-strong',
     ]);
 
     const bin = await resolveUnassignedBin(binEvent(ORG_A), deps);
-    expect(bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(bin as { body: string }).entries.map((e) => e.entryId)).toEqual([
+    expect(bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(bin).entries.map((e) => e.entryId)).toEqual([
       'b-bin',
     ]);
   });
@@ -480,13 +365,13 @@ describe('U22 — REST reads never leak across orgs and reject a blank org', () 
     // org's data. This is the "no/blank org returns nothing, never cross-org leak"
     // scenario — proven against a table that DOES hold org A + org B records.
     const cl = await resolveCandidateLearnings(getEvent(SKILL, ''), deps);
-    expect(bodyOf<{ learnings: Idea[] }>(cl as { body: string }).learnings).toEqual([]);
+    expect(bodyOf<{ learnings: Idea[] }>(cl).learnings).toEqual([]);
 
     const all = await resolveSkillIdeas(getEvent(SKILL, ''), deps);
-    expect(bodyOf<{ ideas: IdeaWithCorroboration[] }>(all as { body: string }).ideas).toEqual([]);
+    expect(bodyOf<{ ideas: IdeaWithCorroboration[] }>(all).ideas).toEqual([]);
 
     const bin = await resolveUnassignedBin(binEvent(''), deps);
-    expect(bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(bin as { body: string }).entries).toEqual([]);
+    expect(bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(bin).entries).toEqual([]);
   });
 
   it('an unauthenticated request (no principal) is rejected 401, not defaulted to an org', async () => {
@@ -496,17 +381,14 @@ describe('U22 — REST reads never leak across orgs and reject a blank org', () 
   });
 
   it('a device token for org A reads ONLY org A (cross-org isolation through the wrapper path)', async () => {
-    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
-    const secret = new TextEncoder().encode('test-device-secret');
-    const token = await signDeviceToken({ userId: 'wrapper-user', org: ORG_A }, { secret });
-    const event = httpEvent({
+    const event = await deviceTokenEvent({
       method: 'GET',
-      userId: null,
-      headers: { authorization: `Bearer ${token}` },
+      userId: 'wrapper-user',
+      org: ORG_A,
       path: { name: SKILL },
     });
     const res = await resolveCandidateLearnings(event, deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings.map((i) => i.ideaId)).toEqual(['a-strong']);
   });
 });

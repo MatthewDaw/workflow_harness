@@ -1,7 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it, vi } from 'vitest';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import type { DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
 import type { Envelope, Event, Idea, ObjectiveNode, Project, Skill } from '@harness/shared';
@@ -13,7 +10,6 @@ import type {
 import type { RerankJudge } from '../src/rerank/judge.js';
 import type { IdeaWriter } from '../src/ideas/synth.js';
 import type { OpenRouterEmbedder } from '../src/embeddings/embed.js';
-import { Repo } from '../src/db/repo.js';
 import {
   consume,
   skillContentHash,
@@ -28,7 +24,7 @@ import {
   type VectorItem,
 } from '../src/embeddings/s3vectors.js';
 import * as k from '../src/db/keys.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * U5/U10 Streams backstop: a DynamoDB-stream record for an appended event must
@@ -37,14 +33,7 @@ import { installInMemoryTable } from './helpers/memtable.js';
  * objective roll-up — exactly what "Streams drive projections/roll-ups" promises.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 function deps(): StreamConsumerDeps {
   return { repo };

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Pill } from './primitives.js';
+import { OverlayModal } from './OverlayModal.js';
 
 /**
  * A reference to one toggleable catalog entry. The picker is catalog-agnostic —
@@ -97,15 +98,6 @@ export function CatalogPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialSelected.map(refKey).sort().join('|')]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   const isStaged = (ref: CatalogRef) => staged.has(refKey(ref));
@@ -152,60 +144,16 @@ export function CatalogPicker({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/50 p-4 sm:p-8"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      data-testid="catalog-picker"
-      onClick={onClose}
-    >
-      <div
-        className="hq-box mx-auto flex h-full w-full max-w-[760px] flex-col overflow-hidden bg-paper"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-odd pb-2">
-          <h2 className="m-0 text-base font-semibold">{title}</h2>
-          <button
-            type="button"
-            className="hq-btn"
-            data-testid="catalog-picker-cancel"
-            onClick={onClose}
-          >
-            ✕ Cancel
-          </button>
-        </div>
-
-        <div className="mt-3 min-h-0 flex-1 overflow-auto">
-          {rows.length === 0 ? (
-            <div className="hq-box text-mut" data-testid="catalog-picker-empty">
-              {emptyHint}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {rows.map((row) =>
-                row.ref.type === 'bundle' || row.ref.type === 'agent-bundle' ? (
-                  <BundleRow
-                    key={refKey(row.ref)}
-                    row={row}
-                    bundleStaged={isStaged(row.ref)}
-                    isStaged={isStaged}
-                    onToggleBundle={() => toggle(row.ref)}
-                    onToggleMember={toggle}
-                  />
-                ) : (
-                  <PlainRow
-                    key={refKey(row.ref)}
-                    row={row}
-                    checked={isStaged(row.ref)}
-                    onToggle={() => toggle(row.ref)}
-                  />
-                ),
-              )}
-            </div>
-          )}
-        </div>
-
+    <OverlayModal
+      ariaLabel={title}
+      testid="catalog-picker"
+      closeTestid="catalog-picker-close"
+      closeLabel="✕ Cancel"
+      onClose={onClose}
+      maxWidthClass="max-w-[760px]"
+      contentClassName="mt-3 min-h-0 flex-1 overflow-auto"
+      header={<h2 className="m-0 text-base font-semibold">{title}</h2>}
+      footer={
         <div className="mt-3 flex items-center justify-end gap-2 border-t border-odd pt-3">
           <button
             type="button"
@@ -225,8 +173,36 @@ export function CatalogPicker({
             {busyNow ? 'Applying…' : 'Apply'}
           </button>
         </div>
-      </div>
-    </div>
+      }
+    >
+      {rows.length === 0 ? (
+        <div className="hq-box text-mut" data-testid="catalog-picker-empty">
+          {emptyHint}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {rows.map((row) =>
+            row.ref.type === 'bundle' || row.ref.type === 'agent-bundle' ? (
+              <BundleRow
+                key={refKey(row.ref)}
+                row={row}
+                bundleStaged={isStaged(row.ref)}
+                isStaged={isStaged}
+                onToggleBundle={() => toggle(row.ref)}
+                onToggleMember={toggle}
+              />
+            ) : (
+              <PlainRow
+                key={refKey(row.ref)}
+                row={row}
+                checked={isStaged(row.ref)}
+                onToggle={() => toggle(row.ref)}
+              />
+            ),
+          )}
+        </div>
+      )}
+    </OverlayModal>
   );
 }
 

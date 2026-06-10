@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Agent } from '@harness/shared';
 import { orgScope } from '@harness/shared';
@@ -75,24 +75,6 @@ export function AgentEditor() {
     navigate('/agents');
   };
 
-  const [skillFilter, setSkillFilter] = useState('');
-  const allSkills = skills ?? [];
-  const q = skillFilter.trim().toLowerCase();
-  const catalog = q
-    ? allSkills.filter(
-        (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
-      )
-    : allSkills;
-
-  const [mcpFilter, setMcpFilter] = useState('');
-  const allMcpServers = mcpServers ?? [];
-  const mq = mcpFilter.trim().toLowerCase();
-  const mcpCatalog = mq
-    ? allMcpServers.filter(
-        (s) => s.name.toLowerCase().includes(mq) || s.transport.toLowerCase().includes(mq),
-      )
-    : allMcpServers;
-
   return (
     <div className="hq-pad" data-testid="agent-editor">
       <ScreenHeader
@@ -143,98 +125,26 @@ export function AgentEditor() {
           onChange={(e) => set({ prompt: e.target.value })}
         />
 
-        <div className="mt-3 text-xs font-medium text-mut">Skills (catalog)</div>
-        <input
-          className="hq-input mt-1 w-full"
-          data-testid="skill-filter"
-          placeholder="Filter skills…"
-          value={skillFilter}
-          onChange={(e) => setSkillFilter(e.target.value)}
+        <FilterableTogglePills
+          label="Skills (catalog)"
+          noun="skills"
+          items={skills ?? []}
+          selected={agent.skills}
+          onToggle={toggleSkill}
+          testidPrefix="skill"
+          filterFields={(s) => [s.name, s.description]}
         />
-        <div className="mt-1 flex flex-wrap gap-1.5" data-testid="skill-catalog">
-          {allSkills.length === 0 && (
-            <span className="text-xs text-faint">No skills available.</span>
-          )}
-          {allSkills.length > 0 && catalog.length === 0 && (
-            <span className="text-xs text-faint" data-testid="skill-filter-empty">
-              No skills match “{skillFilter}”.
-            </span>
-          )}
-          {catalog.map((s) => {
-            const on = agent.skills.includes(s.name);
-            return (
-              <button
-                key={s.name}
-                type="button"
-                className={`hq-btn ${on ? 'hq-btn-pri' : ''}`}
-                data-testid={`catalog-skill-${s.name}`}
-                aria-pressed={on}
-                onClick={() => toggleSkill(s.name)}
-              >
-                {on ? '✓ ' : '+ '}
-                {s.name}
-              </button>
-            );
-          })}
-        </div>
 
-        {agent.skills.length > 0 && (
-          <div className="mt-2">
-            <span className="text-[11px] text-faint">selected: </span>
-            {agent.skills.map((s) => (
-              <Pill key={s} variant="skill" className="mr-1">
-                {s}
-              </Pill>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-3 text-xs font-medium text-mut">MCP servers (catalog)</div>
-        <input
-          className="hq-input mt-1 w-full"
-          data-testid="mcp-filter"
-          placeholder="Filter MCP servers…"
-          value={mcpFilter}
-          onChange={(e) => setMcpFilter(e.target.value)}
+        <FilterableTogglePills
+          label="MCP servers (catalog)"
+          noun="MCP servers"
+          items={mcpServers ?? []}
+          selected={agent.mcpServers}
+          onToggle={toggleMcpServer}
+          testidPrefix="mcp"
+          filterFields={(s) => [s.name, s.transport]}
+          renderHint={(s) => <span className="ml-1 text-[11px] text-faint">{s.transport}</span>}
         />
-        <div className="mt-1 flex flex-wrap gap-1.5" data-testid="mcp-catalog">
-          {allMcpServers.length === 0 && (
-            <span className="text-xs text-faint">No MCP servers available.</span>
-          )}
-          {allMcpServers.length > 0 && mcpCatalog.length === 0 && (
-            <span className="text-xs text-faint" data-testid="mcp-filter-empty">
-              No MCP servers match “{mcpFilter}”.
-            </span>
-          )}
-          {mcpCatalog.map((s) => {
-            const on = agent.mcpServers.includes(s.name);
-            return (
-              <button
-                key={s.name}
-                type="button"
-                className={`hq-btn ${on ? 'hq-btn-pri' : ''}`}
-                data-testid={`catalog-mcp-${s.name}`}
-                aria-pressed={on}
-                onClick={() => toggleMcpServer(s.name)}
-              >
-                {on ? '✓ ' : '+ '}
-                {s.name}
-                <span className="ml-1 text-[11px] text-faint">{s.transport}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {agent.mcpServers.length > 0 && (
-          <div className="mt-2">
-            <span className="text-[11px] text-faint">selected: </span>
-            {agent.mcpServers.map((s) => (
-              <Pill key={s} variant="skill" className="mr-1">
-                {s}
-              </Pill>
-            ))}
-          </div>
-        )}
 
         <div className="hq-hr" />
         <div className="flex gap-2">
@@ -258,5 +168,89 @@ export function AgentEditor() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * One filterable toggle-pill picker (the skills and MCP-server catalogs). A text
+ * filter narrows the catalog; each entry is a pressed/unpressed toggle button,
+ * and the current selection echoes below as pills. `filterFields` keeps the
+ * per-picker match fields explicit (skills match description, servers match
+ * transport); `testidPrefix` drives `{p}-filter`, `{p}-catalog`,
+ * `{p}-filter-empty`, and `catalog-{p}-{name}`.
+ */
+function FilterableTogglePills<T extends { name: string }>({
+  label,
+  noun,
+  items,
+  selected,
+  onToggle,
+  testidPrefix,
+  filterFields,
+  renderHint,
+}: {
+  label: string;
+  /** Plural noun for the placeholder and empty-state copy. */
+  noun: string;
+  items: T[];
+  selected: string[];
+  onToggle: (name: string) => void;
+  testidPrefix: string;
+  filterFields: (item: T) => string[];
+  renderHint?: (item: T) => ReactNode;
+}) {
+  const [filter, setFilter] = useState('');
+  const q = filter.trim().toLowerCase();
+  const catalog = q
+    ? items.filter((it) => filterFields(it).some((f) => f.toLowerCase().includes(q)))
+    : items;
+
+  return (
+    <>
+      <div className="mt-3 text-xs font-medium text-mut">{label}</div>
+      <input
+        className="hq-input mt-1 w-full"
+        data-testid={`${testidPrefix}-filter`}
+        placeholder={`Filter ${noun}…`}
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+      />
+      <div className="mt-1 flex flex-wrap gap-1.5" data-testid={`${testidPrefix}-catalog`}>
+        {items.length === 0 && <span className="text-xs text-faint">No {noun} available.</span>}
+        {items.length > 0 && catalog.length === 0 && (
+          <span className="text-xs text-faint" data-testid={`${testidPrefix}-filter-empty`}>
+            No {noun} match “{filter}”.
+          </span>
+        )}
+        {catalog.map((it) => {
+          const on = selected.includes(it.name);
+          return (
+            <button
+              key={it.name}
+              type="button"
+              className={`hq-btn ${on ? 'hq-btn-pri' : ''}`}
+              data-testid={`catalog-${testidPrefix}-${it.name}`}
+              aria-pressed={on}
+              onClick={() => onToggle(it.name)}
+            >
+              {on ? '✓ ' : '+ '}
+              {it.name}
+              {renderHint?.(it)}
+            </button>
+          );
+        })}
+      </div>
+
+      {selected.length > 0 && (
+        <div className="mt-2">
+          <span className="text-[11px] text-faint">selected: </span>
+          {selected.map((s) => (
+            <Pill key={s} variant="skill" className="mr-1">
+              {s}
+            </Pill>
+          ))}
+        </div>
+      )}
+    </>
   );
 }

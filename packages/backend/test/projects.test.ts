@@ -1,10 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { LearningRecord, Project, SessionProjection, Skill } from '@harness/shared';
 import { orgScope, skillSchema } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import {
   createProject,
   deleteProjectHandler,
@@ -24,7 +20,7 @@ import {
   type ProjectsDeps,
 } from '../src/rest/projects.js';
 import type { GitHubApp } from '../src/github/app.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
 /**
@@ -32,15 +28,8 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * live counts; POST forces ownership to the caller.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 const MATT = 'matt';
 const ALICE = 'alice';
@@ -79,7 +68,7 @@ describe('GET /projects', () => {
 
     const res = await listProjects(httpEvent({ method: 'GET', userId: MATT }), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const { projects } = bodyOf<{ projects: Project[] }>(res as { body: string });
+    const { projects } = bodyOf<{ projects: Project[] }>(res);
     const ids = projects.map((p) => p.id).sort();
     expect(ids).toEqual(['side-quest', 'weekly-compass']);
     const wc = projects.find((p) => p.id === 'weekly-compass')!;
@@ -94,13 +83,13 @@ describe('GET /projects', () => {
     await repo.putProject(project('other-repo', MATT, 'other-org'));
 
     const res = await listProjects(httpEvent({ method: 'GET', userId: MATT, org: 'acme' }), deps);
-    const { projects } = bodyOf<{ projects: Project[] }>(res as { body: string });
+    const { projects } = bodyOf<{ projects: Project[] }>(res);
     expect(projects.map((p) => p.id)).toEqual(['weekly-compass']);
   });
 
   it('returns an empty list for a user with no projects', async () => {
     const res = await listProjects(httpEvent({ method: 'GET', userId: 'nobody' }), deps);
-    expect(bodyOf<{ projects: unknown[] }>(res as { body: string }).projects).toEqual([]);
+    expect(bodyOf<{ projects: unknown[] }>(res).projects).toEqual([]);
   });
 
   it('401s without an authenticated principal', async () => {
@@ -117,7 +106,7 @@ describe('GET /projects/:id', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ project: Project }>(res as { body: string }).project.id).toBe('weekly-compass');
+    expect(bodyOf<{ project: Project }>(res).project.id).toBe('weekly-compass');
   });
 
   it("404s another user's project (no enumeration, not 403)", async () => {
@@ -191,7 +180,7 @@ describe('POST /projects/:id/refresh (U7)', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     const body = bodyOf<{ project: Project & { supportingOutcomeIds?: string[] }; stale: boolean }>(
-      res as { body: string },
+      res,
     );
     expect(calls.framing).toBe(1);
     expect(body.stale).toBe(false);
@@ -216,7 +205,7 @@ describe('POST /projects/:id/refresh (U7)', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     const body = bodyOf<{ project: Project & { framingStale?: boolean }; stale: boolean }>(
-      res as { body: string },
+      res,
     );
     expect(body.stale).toBe(true);
     expect(body.project.framingStale).toBe(true);
@@ -239,7 +228,7 @@ describe('POST /projects/:id/refresh (U7)', () => {
       httpEvent({ method: 'POST', userId: MATT, path: { id: 'weekly-compass' } }),
       { repo, githubFor: () => undefined },
     );
-    expect(bodyOf<{ stale: boolean }>(res as { body: string }).stale).toBe(true);
+    expect(bodyOf<{ stale: boolean }>(res).stale).toBe(true);
   });
 });
 
@@ -256,7 +245,7 @@ describe('GET /projects/:id serves stored framing (U7)', () => {
       deps,
     );
     const body = bodyOf<{ project: Project & { supportingOutcomeIds?: string[] } }>(
-      res as { body: string },
+      res,
     );
     expect(body.project.progressPct).toBe(73);
     expect(body.project.prdGoal).toBe('A goal');
@@ -274,7 +263,7 @@ describe('GET /projects/:id/docs (U8)', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     const { docs } = bodyOf<{ docs: { path: string; title: string; completion?: number }[] }>(
-      res as { body: string },
+      res,
     );
     expect(docs).toEqual([{ path: 'docs/plans/a.md', title: 'Alpha', completion: 58 }]);
   });
@@ -287,7 +276,7 @@ describe('GET /projects/:id/docs (U8)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ docs: unknown[]; stale: boolean }>(res as { body: string });
+    const body = bodyOf<{ docs: unknown[]; stale: boolean }>(res);
     expect(body.docs).toEqual([]);
     expect(body.stale).toBe(true);
   });
@@ -317,7 +306,7 @@ describe('GET /projects/:id/docs/content (U8)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ path: string; markdown: string }>(res as { body: string });
+    const body = bodyOf<{ path: string; markdown: string }>(res);
     expect(body.path).toBe('docs/plans/a.md');
     expect(body.markdown).toContain('# Alpha');
   });
@@ -359,7 +348,7 @@ describe('GET /projects/:id/requirements (docs/PRD.md)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ markdown: string }>(res as { body: string }).markdown).toContain(
+    expect(bodyOf<{ markdown: string }>(res).markdown).toContain(
       '# Project Requirements',
     );
     expect(calls.readPrd).toBe(1);
@@ -372,7 +361,7 @@ describe('GET /projects/:id/requirements (docs/PRD.md)', () => {
       { repo, githubFor: () => undefined },
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ markdown: string; stale: boolean }>(res as { body: string });
+    const body = bodyOf<{ markdown: string; stale: boolean }>(res);
     expect(body.markdown).toBe('');
     expect(body.stale).toBe(true);
   });
@@ -385,7 +374,7 @@ describe('GET /projects/:id/requirements (docs/PRD.md)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ markdown: string; stale: boolean }>(res as { body: string });
+    const body = bodyOf<{ markdown: string; stale: boolean }>(res);
     expect(body.markdown).toBe('');
     expect(body.stale).toBe(true);
   });
@@ -412,7 +401,7 @@ describe('GET /projects/:id/wireframe (docs/wireframe.html)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ html: string }>(res as { body: string }).html).toContain('wireframe body');
+    expect(bodyOf<{ html: string }>(res).html).toContain('wireframe body');
     expect(calls.readWireframe).toBe(1);
   });
 
@@ -423,7 +412,7 @@ describe('GET /projects/:id/wireframe (docs/wireframe.html)', () => {
       { repo, githubFor: () => undefined },
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ html: string; stale: boolean }>(res as { body: string });
+    const body = bodyOf<{ html: string; stale: boolean }>(res);
     expect(body.html).toBe('');
     expect(body.stale).toBe(true);
   });
@@ -436,7 +425,7 @@ describe('GET /projects/:id/wireframe (docs/wireframe.html)', () => {
       depsWith(app),
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ html: string; stale: boolean }>(res as { body: string });
+    const body = bodyOf<{ html: string; stale: boolean }>(res);
     expect(body.html).toBe('');
     expect(body.stale).toBe(true);
   });
@@ -479,7 +468,7 @@ describe('handler: PUT /projects/:id/requirements no longer routes to a write', 
         body: { markdown: '# should not persist' },
       }),
     );
-    const body = bodyOf<{ markdown?: string; projects?: unknown[] }>(res as { body: string });
+    const body = bodyOf<{ markdown?: string; projects?: unknown[] }>(res);
     expect(body.markdown).toBeUndefined();
   });
 });
@@ -512,7 +501,7 @@ describe('GET /projects/:id/learnings', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const { learnings } = bodyOf<{ learnings: LearningRecord[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: LearningRecord[] }>(res);
     expect(learnings).toHaveLength(2);
     expect(learnings.map((l) => l.stream).sort()).toEqual(['doc', 'impl']);
   });
@@ -532,7 +521,7 @@ describe('GET /projects/:id/learnings', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const { learnings } = bodyOf<{ learnings: LearningRecord[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: LearningRecord[] }>(res);
     expect(learnings).toHaveLength(1);
     expect(learnings[0]!.stream).toBe('doc');
     expect(learnings[0]!.docRef).toBe('docs/plans/a.md');
@@ -545,7 +534,7 @@ describe('GET /projects/:id/learnings', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ learnings: LearningRecord[] }>(res as { body: string }).learnings).toEqual([]);
+    expect(bodyOf<{ learnings: LearningRecord[] }>(res).learnings).toEqual([]);
   });
 
   it("404s another user's project learnings (no enumeration, same authz as sibling reads)", async () => {
@@ -570,7 +559,7 @@ describe('GET /projects/:id/learnings', () => {
       }),
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ learnings: LearningRecord[] }>(res as { body: string }).learnings).toHaveLength(
+    expect(bodyOf<{ learnings: LearningRecord[] }>(res).learnings).toHaveLength(
       1,
     );
   });
@@ -673,7 +662,7 @@ describe('POST /projects', () => {
         deps,
       );
       expect(res).toMatchObject({ statusCode: 409 });
-      expect(bodyOf<{ error: string }>(res as { body: string }).error).toContain(
+      expect(bodyOf<{ error: string }>(res).error).toContain(
         'matthewdaw-fractions-tutorial',
       );
       // No phantom created; the canonical record is untouched.
@@ -737,7 +726,7 @@ describe('DELETE /projects/:id', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ deleted: boolean }>(res as { body: string }).deleted).toBe(true);
+    expect(bodyOf<{ deleted: boolean }>(res).deleted).toBe(true);
 
     expect(await repo.getProject('weekly-compass')).toBeUndefined();
     expect(await repo.listSessionsForProject('weekly-compass')).toEqual([]);
@@ -922,7 +911,7 @@ describe('project bundle opt-in', () => {
 
     const res = await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'pack'), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const { project: p } = bodyOf<{ project: Project }>(res as { body: string });
+    const { project: p } = bodyOf<{ project: Project }>(res);
     expect(p.enabledBundles).toEqual(['pack']);
     expect([...(p.enabledSkills ?? [])].sort()).toEqual(['alpha', 'beta']);
   });
@@ -936,7 +925,7 @@ describe('project bundle opt-in', () => {
 
     const res = await enableProjectBundle(bundleEvent('POST', 'weekly-compass', 'outer'), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const { project: p } = bodyOf<{ project: Project }>(res as { body: string });
+    const { project: p } = bodyOf<{ project: Project }>(res);
     expect(p.enabledBundles).toEqual(['outer']);
     expect([...(p.enabledSkills ?? [])].sort()).toEqual(['leaf1', 'leaf2']);
   });
@@ -968,7 +957,7 @@ describe('project bundle opt-in', () => {
 
     const res = await disableProjectBundle(bundleEvent('DELETE', 'weekly-compass', 'packA'), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const { project: p } = bodyOf<{ project: Project }>(res as { body: string });
+    const { project: p } = bodyOf<{ project: Project }>(res);
     expect(p.enabledBundles).toEqual(['packB']);
     // `only-a` is dropped; `shared` survives (still covered by packB); `only-b` stays.
     expect([...(p.enabledSkills ?? [])].sort()).toEqual(['only-b', 'shared']);
@@ -983,7 +972,7 @@ describe('project bundle opt-in', () => {
 
     const res = await disableProjectBundle(bundleEvent('DELETE', 'weekly-compass', 'gone'), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const { project: out } = bodyOf<{ project: Project }>(res as { body: string });
+    const { project: out } = bodyOf<{ project: Project }>(res);
     expect(out.enabledBundles).toEqual([]);
     // No catalog entry => no leaves to strip; the orphan skill is left intact.
     expect(out.enabledSkills).toEqual(['orphan']);

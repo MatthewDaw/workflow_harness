@@ -1,14 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { ObjectiveNode, Project } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import { createObjective, getObjective, listObjectives } from '../src/rest/objectives.js';
 import { buildTree, leafPct, recomputeRollup } from '../src/projections/rollup.js';
 import type { ProjectProgress } from '../src/projections/rollup.js';
 import { recomputeOrgRollup } from '../src/projections/rollupRepo.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 import type { ObjectiveTreeNode } from '../src/projections/rollup.js';
 
@@ -18,15 +14,8 @@ import type { ObjectiveTreeNode } from '../src/projections/rollup.js';
  * stored on the project that owns each Supporting Outcome).
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 const ORG = 'acme';
 const MATT = 'matt';

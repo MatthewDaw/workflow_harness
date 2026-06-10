@@ -122,28 +122,74 @@ func ownerRepoFromRemote(url string) string {
 	return owner + "/" + repo
 }
 
+// RepoRootFor walks up from dir to the nearest directory containing a .git
+// directory and returns it, falling back to dir itself when none is found
+// (every directory can host a daemon). It is the single repo-root resolution
+// shared by the CLI and desktop entry points.
+func RepoRootFor(dir string) string {
+	d := dir
+	for {
+		if fi, err := os.Stat(filepath.Join(d, ".git")); err == nil && fi.IsDir() {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return dir
+		}
+		d = parent
+	}
+}
+
+// Credentials is the parsed ~/.claude-plus/credentials file written by
+// `claude+ login`: line 1 the WebSocket URL, line 2 the device token, line 3
+// the REST API base (optional in older files). Absent lines parse as "".
+type Credentials struct {
+	WSURL   string
+	Token   string
+	APIBase string
+}
+
+// LoadCredentials reads and parses ~/.claude-plus/credentials. ok is false when
+// the home dir cannot be resolved or the file is missing/unreadable; callers
+// still check the individual fields they need for emptiness. It is the single
+// reader of the credentials file shared by the CLI entry points and APIBase.
+func LoadCredentials() (Credentials, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Credentials{}, false
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".claude-plus", "credentials"))
+	if err != nil {
+		return Credentials{}, false
+	}
+	lines := splitCredLines(string(b))
+	var c Credentials
+	if len(lines) >= 1 {
+		c.WSURL = strings.TrimSpace(lines[0])
+	}
+	if len(lines) >= 2 {
+		c.Token = strings.TrimSpace(lines[1])
+	}
+	if len(lines) >= 3 {
+		c.APIBase = strings.TrimSpace(lines[2])
+	}
+	return c, true
+}
+
 // APIBase resolves HQ's REST base URL (distinct from the WebSocket URL): the
-// CLAUDE_PLUS_API_URL env var, or the third line (index 2, non-empty) of
-// ~/.claude-plus/credentials. Returns ok=false when neither is configured. It is
-// the single resolver shared by the daemon runtime and the per-session launch
-// path so they never disagree about where HQ lives.
+// CLAUDE_PLUS_API_URL env var, or the third credentials line. Returns ok=false
+// when neither is configured. It is the single resolver shared by the daemon
+// runtime and the per-session launch path so they never disagree about where
+// HQ lives.
 func APIBase() (string, bool) {
 	if base := os.Getenv("CLAUDE_PLUS_API_URL"); base != "" {
 		return base, true
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	c, ok := LoadCredentials()
+	if !ok || c.APIBase == "" {
 		return "", false
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".claude-plus", "credentials"))
-	if err != nil {
-		return "", false
-	}
-	lines := splitCredLines(string(b))
-	if len(lines) >= 3 && lines[2] != "" {
-		return lines[2], true
-	}
-	return "", false
+	return c.APIBase, true
 }
 
 // splitCredLines splits credentials-file text into CR-trimmed lines, mirroring

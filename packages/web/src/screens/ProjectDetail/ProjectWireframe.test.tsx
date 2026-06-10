@@ -1,23 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, fireEvent } from '@testing-library/react';
-import type { Project } from '@harness/shared';
 import { WireframePreview } from './ProjectWireframe.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { makeProject, renderWithProviders } from '../../test/testUtils.js';
 
-const PROJECT: Project = {
-  id: 'weekly-compass',
-  name: 'weekly-compass',
-  repo: 'gh/acme/weekly-compass',
-  ownerUserId: 'user-matt',
-  progressPct: 62,
-  liveSessionCount: 0,
-  enabledSkills: [],
-  enabledAgents: [],
-  enabledWorkflows: [],
-  enabledAgentBundles: [],
-  enabledBundles: [],
-  enabledMcpServers: [],
-};
+const PROJECT = makeProject({ progressPct: 62 });
 
 const WF = '<!doctype html><title>WF</title><body>hello wireframe</body>';
 

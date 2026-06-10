@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -429,33 +430,11 @@ func loadHQConfig() (hqConfig, bool) {
 		return hqConfig{}, false
 	}
 	// credentials file is "url\ntoken\n".
-	lines := splitLines(string(b))
+	lines := strings.Split(strings.ReplaceAll(string(b), "\r", ""), "\n")
 	if len(lines) >= 2 && lines[0] != "" && lines[1] != "" {
 		return hqConfig{URL: lines[0], Token: lines[1]}, true
 	}
 	return hqConfig{}, false
-}
-
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, trimCR(s[start:i]))
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		out = append(out, trimCR(s[start:]))
-	}
-	return out
-}
-
-func trimCR(s string) string {
-	if len(s) > 0 && s[len(s)-1] == '\r' {
-		return s[:len(s)-1]
-	}
-	return s
 }
 
 // StartRuntime starts the capture loop for a daemon and, when HQ credentials are
@@ -604,7 +583,7 @@ func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *
 	// Agents/skills drift meter (U19): poll HQ's effective registry and fold the
 	// drift count into the status snapshot. Only runs when an HQ REST base is
 	// configured; otherwise the meter stays at 0 (no remote to compare against).
-	if base, ok := loadAPIBase(); ok {
+	if base, ok := config.APIBase(); ok {
 		if cfg, ok := loadHQConfig(); ok {
 			src := config.NewHTTPRemoteSource(base, cfg.Token, config.ProjectIDFor(d.repoRoot))
 			rt.cfgSrc = src
@@ -617,6 +596,57 @@ func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *
 	return rt
 }
 
+// runSkillSync is the ONE shared skills/agents reconcile pipeline behind both
+// the daemon's auto-sync (reconcileSkills) and the CLI one-shot (SyncSkillsNow):
+// EnsureConfigDir -> Fetch -> ReadLocal -> Diff -> Reconcile -> fetch-gated
+// PruneToEffective -> injectCandidateLearnings.
+//
+// Invariants:
+//   - EnsureConfigDir (not the pure ProjectConfigDir) so the root + its
+//     seed-once .mcp.json (the user's personal MCP servers) exist BEFORE a pull
+//     can merge HQ servers into a fresh .mcp.json — otherwise a
+//     sync-before-first-spawn would create .mcp.json with only HQ servers and
+//     the seed would later be skipped.
+//   - A successful Fetch GATES the prune: a tight mirror only deletes
+//     local-only items once the authoritative set is known — never on a 401 /
+//     transient error (that would wipe the root). PruneToEffective itself only
+//     ever deletes under the per-project root.
+//   - injectCandidateLearnings runs AFTER reconcile so the canonical files are
+//     in place (U12); the block is excluded from the drift hash, so it never
+//     re-triggers a pull.
+//
+// Hard errors (config dir, fetch, read-local) are logged under logPrefix and
+// returned raw. Reconcile errors are returned for the caller to judge: the
+// daemon logs and swallows them, the CLI treats them as non-fatal and lets its
+// verify gate arbitrate.
+func runSkillSync(repoRoot, logPrefix string, src config.RemoteSource) (plus string, pulled, pushed int, reconcileErrs []error, err error) {
+	plus, err = config.EnsureConfigDir(repoRoot)
+	if err != nil {
+		diag.Logf("%s: resolve project config dir failed: %v", logPrefix, err)
+		return "", 0, 0, nil, err
+	}
+	remote, err := src.Fetch()
+	if err != nil {
+		diag.Logf("%s: fetch failed (no prune): %v", logPrefix, err)
+		return "", 0, 0, nil, err
+	}
+	local, err := config.ReadLocal(plus)
+	if err != nil {
+		diag.Logf("%s: read local failed: %v", logPrefix, err)
+		return "", 0, 0, nil, err
+	}
+	report := config.Diff(local, remote)
+	pulled, pushed, reconcileErrs = config.Reconcile(report, src, local, plus)
+	if removed, perrs := config.PruneToEffective(plus, repoRoot, remote); removed > 0 || len(perrs) > 0 {
+		diag.Logf("%s: pruned %d stale item(s)", logPrefix, removed)
+		for _, e := range perrs {
+			diag.Logf("%s prune: %v", logPrefix, e)
+		}
+	}
+	injectCandidateLearnings(src, plus, remote)
+	return plus, pulled, pushed, reconcileErrs, nil
+}
+
 // reconcileSkills pulls HQ's effective skills/agents that are missing locally and
 // pushes local-only ones, so skills matching the user's applicable scopes appear
 // in ~/.claude. It is best-effort: every error is logged and swallowed so it can
@@ -627,50 +657,16 @@ func (rt *Runtime) reconcileSkills() {
 	if src == nil {
 		return
 	}
-	// EnsureConfigDir (not the pure ProjectConfigDir) so the root + its seed-once
-	// .mcp.json (the user's personal MCP servers) exist BEFORE a pull can merge HQ
-	// servers into a fresh .mcp.json — otherwise a sync-before-first-spawn would
-	// create .mcp.json with only HQ servers and the seed would later be skipped.
-	plus, err := config.EnsureConfigDir(rt.d.repoRoot)
+	_, pulled, pushed, errs, err := runSkillSync(rt.d.repoRoot, "skills auto-sync", src)
 	if err != nil {
-		diag.Logf("skills auto-sync: resolve project config dir failed: %v", err)
-		return
+		return // logged by runSkillSync; best-effort, never blocks a session
 	}
-	// Fetch HQ's effective set FIRST. A successful fetch is what GATES the prune
-	// below: we only delete local-only items once we know the authoritative set —
-	// never on a 401 / transient error (that would wipe the root).
-	remote, err := src.Fetch()
-	if err != nil {
-		diag.Logf("skills auto-sync: fetch failed (no prune): %v", err)
-		return
-	}
-	local, err := config.ReadLocal(plus)
-	if err != nil {
-		diag.Logf("skills auto-sync: read local failed: %v", err)
-		return
-	}
-	report := config.Diff(local, remote)
-	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
 	for _, e := range errs {
 		diag.Logf("skills auto-sync: %v", e)
-	}
-	// Tight mirror: delete project-root skills/agents no longer in HQ's effective
-	// set (or provided by the repo's own .claude). Safe — the fetch above
-	// succeeded, and PruneToEffective only ever deletes under the per-project root.
-	if removed, perrs := config.PruneToEffective(plus, rt.d.repoRoot, remote); removed > 0 || len(perrs) > 0 {
-		diag.Logf("skills auto-sync: pruned %d stale item(s)", removed)
-		for _, e := range perrs {
-			diag.Logf("skills auto-sync prune: %v", e)
-		}
 	}
 	if pulled > 0 || pushed > 0 {
 		diag.Logf("skills auto-sync: pulled %d, pushed %d", pulled, pushed)
 	}
-	// Inject each materialized skill's corroborated candidate-learnings block into
-	// its on-disk SKILL.md (U12). Done AFTER reconcile so the canonical files are in
-	// place; the block is excluded from the drift hash, so this never re-triggers a
-	// pull. Best-effort: surfacing must never block the session.
-	injectCandidateLearnings(src, plus, remote)
 	// Refresh the drift meter to reflect the post-reconcile state.
 	_ = rt.d.SyncConfigOnce(src)
 }
@@ -711,7 +707,7 @@ func injectCandidateLearnings(src config.RemoteSource, plus string, remote []con
 // can surface needs-auth MCP servers (which do NOT fail the gate). Returns counts
 // actuated plus the gate report.
 func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyReport, err error) {
-	base, ok := loadAPIBase()
+	base, ok := config.APIBase()
 	if !ok {
 		return 0, 0, config.VerifyReport{}, fmt.Errorf("no HQ API base configured (run `claude+ login`)")
 	}
@@ -720,25 +716,10 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 		return 0, 0, config.VerifyReport{}, fmt.Errorf("not signed in to HQ (run `claude+ login`)")
 	}
 	src := config.NewHTTPRemoteSource(base, cfg.Token, config.ProjectIDFor(repoRoot))
-	// EnsureConfigDir (not ProjectConfigDir): seed the root's personal .claude.json
-	// before any pull merges HQ MCP servers into it (see reconcileSkills).
-	plus, err := config.EnsureConfigDir(repoRoot)
+	plus, pulled, pushed, errs, err := runSkillSync(repoRoot, "sync-skills", src)
 	if err != nil {
 		return 0, 0, config.VerifyReport{}, err
 	}
-	// Fetch HQ's effective set FIRST. A successful fetch is what GATES the prune
-	// below: a tight mirror must never delete local items on a 401 / transient
-	// error.
-	remote, err := src.Fetch()
-	if err != nil {
-		return 0, 0, config.VerifyReport{}, err
-	}
-	local, err := config.ReadLocal(plus)
-	if err != nil {
-		return 0, 0, config.VerifyReport{}, err
-	}
-	report := config.Diff(local, remote)
-	pulled, pushed, errs := config.Reconcile(report, src, local, plus)
 	// Reconcile errors are NON-FATAL here. A PUSH failure must not abort a
 	// pull-focused sync: publishing a local-only skill/agent to the org catalog is
 	// admin-gated (POST /skills|/agents), so a non-admin device token legitimately
@@ -748,20 +729,6 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 	for _, e := range errs {
 		diag.Logf("sync-skills: non-fatal reconcile error (e.g. cannot publish without admin): %v", e)
 	}
-	// Tight mirror: delete project-root skills/agents that are no longer in HQ's
-	// effective enabled set (or provided by the repo's own .claude). Safe — the
-	// fetch above succeeded, and PruneToEffective only ever deletes under the
-	// per-project root, never ~/.claude.
-	if removed, perrs := config.PruneToEffective(plus, repoRoot, remote); removed > 0 || len(perrs) > 0 {
-		diag.Logf("sync-skills: pruned %d stale item(s)", removed)
-		for _, e := range perrs {
-			diag.Logf("sync-skills prune: %v", e)
-		}
-	}
-	// Inject each materialized skill's corroborated candidate-learnings block (U12)
-	// before the gate. The block is excluded from the drift hash, so it neither
-	// trips the verify gate nor forces a re-pull next session.
-	injectCandidateLearnings(src, plus, remote)
 	// U-Verify-Gate: after reconcile, verify the EFFECTIVE enabled set actually
 	// landed on disk (skill dirs + frontmatter; agent files + deps; MCP not failed).
 	// A partial install fails loudly (non-zero) rather than reporting a misleading
@@ -788,7 +755,7 @@ func SyncSkillsNow(repoRoot string) (pulled, pushed int, gate config.VerifyRepor
 // session. ReadLocalMemories' error is tolerated (a missing memory/ dir yields an
 // empty set, which is a valid reconcile), so the only hard error is the PUT.
 func SyncMemoriesNow(repoRoot string) error {
-	base, ok := loadAPIBase()
+	base, ok := config.APIBase()
 	if !ok {
 		return nil // no HQ API base configured — nothing to sync to (no-op)
 	}
@@ -854,14 +821,6 @@ func (rt *Runtime) configSyncLoop(src config.RemoteSource) {
 			sync()
 		}
 	}
-}
-
-// loadAPIBase resolves HQ's REST base URL (distinct from the WebSocket URL). The
-// derivation now lives in the config package (config.APIBase) so the daemon, the
-// per-session launch path, and the config-dir manifest share ONE resolver; this
-// keeps the function name/signature for the daemon's existing callers.
-func loadAPIBase() (string, bool) {
-	return config.APIBase()
 }
 
 // captureLoop announces each session to HQ (session.start) and tails its
@@ -1161,7 +1120,7 @@ func (rt *Runtime) runTopicGate(tabID string, te *topicEntry, emit func(string, 
 	}
 	te.st.LastOffset = harvest.EndOffset
 
-	turnTokens := tokenEstimate(harvest.LatestUserPrompt, harvest.AssistantTail)
+	turnTokens := capture.EstimateTokens(harvest.LatestUserPrompt, harvest.AssistantTail)
 	decision := te.st.Gate(topic.GateInput{FilesTouched: harvest.FilesTouched, TurnTokens: turnTokens})
 	if !decision.Fire {
 		snap := *te.st
@@ -1215,17 +1174,6 @@ func (rt *Runtime) runTopicGate(tabID string, te *topicEntry, emit func(string, 
 		}
 		rt.checkpointTopic(tabID, &snap)
 	}()
-}
-
-// tokenEstimate is the cheap ~4-chars/token heuristic used for the cadence floor's
-// token accounting (the transcript rows carry server usage, but the gate only
-// needs a rough turn size, not an exact count).
-func tokenEstimate(parts ...string) int64 {
-	var n int64
-	for _, p := range parts {
-		n += int64(len(p) / 4)
-	}
-	return n
 }
 
 // installHooks resolves this binary's path and writes the managed hooks block

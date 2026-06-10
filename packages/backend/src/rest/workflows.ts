@@ -4,16 +4,13 @@ import {
   workflowSchema,
   orgScope,
   workflowRunNodeStateSchema,
-  type Workflow,
   type WorkflowRun,
 } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import {
   badRequest,
-  conflict,
   created,
   defaultRepo,
-  forbidden,
   notFound,
   ok,
   parseBodySafe,
@@ -22,10 +19,8 @@ import {
   queryParam,
   unauthorized,
 } from './runtime.js';
-import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
-import { effectiveOrg } from './membership.js';
-import { resolvePrincipal } from './bearerAuth.js';
-import { withAuthorNames } from './authorNames.js';
+import { requireOrgCatalogAuth } from './scopeauth.js';
+import { makeCatalogHandlers } from './catalogResource.js';
 
 /**
  * REST: workflows — collapsed to a single ORG catalog (mirrors agents.ts).
@@ -52,139 +47,26 @@ export interface WorkflowsDeps {
   repo: Repo;
 }
 
-export async function resolveWorkflows(
-  event: APIGatewayProxyEventV2,
-  deps: WorkflowsDeps,
-): Promise<APIGatewayProxyResultV2> {
-  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer route).
-  const principal = await resolvePrincipal(event);
-  if (!principal) return unauthorized();
-  const org = (await effectiveOrg(event, deps.repo)) ?? principal.org;
-  if (!org) return ok({ workflows: [] });
-  // Pass the caller's userId so the merged org+user catalog is returned (a
-  // user-scoped workflow shadows an org-scoped one of the same name).
-  const workflows = await deps.repo.listWorkflows(org, principal.userId);
-  // Show the author's real name (their email) instead of the raw Cognito sub that
-  // claude+ device-token writes stamp into createdBy.name.
-  return ok({ workflows: await withAuthorNames(deps.repo, workflows) });
-}
+const handlers = makeCatalogHandlers({
+  kind: 'WORKFLOW',
+  schema: workflowSchema,
+  label: 'workflow',
+  responseKey: 'workflow',
+  listKey: 'workflows',
+  seedHint: 'catalog/workflows',
+  repoOps: {
+    list: (repo, org, userId) => repo.listWorkflows(org, userId),
+    get: (repo, scope, name) => repo.getWorkflow(scope, name),
+    del: (repo, scope, name) => repo.deleteWorkflow(scope, name),
+  },
+});
 
-export async function createWorkflow(
-  event: APIGatewayProxyEventV2,
-  deps: WorkflowsDeps,
-): Promise<APIGatewayProxyResultV2> {
-  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer
-  // route); admin is decided server-side from the profile so the device token
-  // (no role claim) can write.
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  if (!auth.admin) return forbidden();
-  if (!auth.org) return unauthorized();
-  const { principal, org } = auth;
-
-  const name = pathParam(event, 'name');
-  const body = parseBodySafe(event);
-  if (body === INVALID_JSON) return badRequest('invalid JSON body');
-
-  // Force org scope (ignore any client-supplied scope) and parse the rest.
-  const candidate = { ...(body as Record<string, unknown>), scope: orgScope(org) };
-  const parsed = workflowSchema.safeParse(candidate);
-  if (!parsed.success) return badRequest(parsed.error.message);
-  const workflow: Workflow = parsed.data;
-
-  // Canonical built-ins are owned by the git seed: reject an in-place write to the
-  // BASE variant (no repo/author). Forking (repoId + authorUserId) is still allowed.
-  const targetName = name ?? workflow.name;
-  const existing = await deps.repo.getWorkflow(orgScope(org), targetName);
-  if (isBuiltin(existing) && !workflow.repoId && !workflow.authorUserId) {
-    return conflict(
-      `"${targetName}" is a canonical built-in workflow — fork it (set repoId + authorUserId) ` +
-        `or change it in catalog/workflows and re-seed; in-place writes are rejected.`,
-    );
-  }
-
-  if (name) {
-    // PUT /workflows/:name — update; preserve the existing createdBy stamp.
-    workflow.createdBy = existing?.createdBy ?? workflow.createdBy;
-    workflow.baseName = existing?.baseName ?? workflow.baseName ?? name;
-  } else {
-    workflow.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
-    workflow.baseName = workflow.baseName ?? workflow.name;
-  }
-
-  // VERSIONING (KTD6): snapshot a revision + fork/advance the variant instead of
-  // clobbering; `putNewVersion` also upserts the live record under `workflowKey`.
-  const stamped = await deps.repo.putNewVersion('WORKFLOW', workflow, {
-    repoId: workflow.repoId,
-    authorUserId: workflow.authorUserId,
-  });
-  return name ? ok({ workflow: stamped }) : created({ workflow: stamped });
-}
-
-/**
- * POST /workflows/:name/promote — repoint the org-wide TRUE variant for a baseName.
- * NOT admin-gated (any authed member). Body: `{ variantId, rev? }`. Mirrors
- * agents' promote: it ONLY repoints TRUE, never editing/deleting a variant.
- */
-export async function promoteWorkflow(
-  event: APIGatewayProxyEventV2,
-  deps: WorkflowsDeps,
-): Promise<APIGatewayProxyResultV2> {
-  // Promote is NOT admin-gated (any authed org member may repoint TRUE), but it
-  // still accepts the device token via the shared resolver.
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  const name = pathParam(event, 'name');
-  if (!name) return badRequest('missing name');
-  if (!auth.org) return unauthorized();
-  const org = auth.org;
-
-  const body = parseBodySafe(event);
-  if (body === INVALID_JSON) return badRequest('invalid JSON body');
-  const variantId = (body as { variantId?: unknown })?.variantId;
-  if (typeof variantId !== 'string' || !variantId) return badRequest('missing variantId');
-  const revRaw = (body as { rev?: unknown })?.rev;
-  const rev = typeof revRaw === 'number' ? revRaw : undefined;
-
-  const pointer = { baseName: name, variantId, ...(rev !== undefined ? { rev } : {}) };
-  await deps.repo.setTrueVariant(orgScope(org), 'WORKFLOW', pointer);
-  return ok({ true: pointer });
-}
-
-export async function getWorkflow(
-  event: APIGatewayProxyEventV2,
-  deps: WorkflowsDeps,
-): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  const name = pathParam(event, 'name');
-  if (!name) return badRequest('missing name');
-  if (!auth.org) return notFound();
-  const workflow = await deps.repo.getWorkflow(orgScope(auth.org), name);
-  if (!workflow) return notFound();
-  return ok({ workflow });
-}
-
-export async function deleteWorkflow(
-  event: APIGatewayProxyEventV2,
-  deps: WorkflowsDeps,
-): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  if (!auth.admin) return forbidden();
-  const name = pathParam(event, 'name');
-  if (!name) return badRequest('missing name');
-  if (!auth.org) return unauthorized();
-  const existing = await deps.repo.getWorkflow(orgScope(auth.org), name);
-  if (isBuiltin(existing)) {
-    return conflict(
-      `"${name}" is a canonical built-in workflow — remove it from catalog/workflows and ` +
-        `re-seed; it cannot be deleted via REST.`,
-    );
-  }
-  await deps.repo.deleteWorkflow(orgScope(auth.org), name);
-  return ok({ deleted: true });
-}
+export const resolveWorkflows = handlers.list;
+export const createWorkflow = handlers.create;
+export const getWorkflow = handlers.get;
+export const deleteWorkflow = handlers.remove;
+/** Promote is NOT admin-gated (any authed member may repoint TRUE). */
+export const promoteWorkflow = handlers.promote;
 
 /**
  * WORKFLOW RUNS (M5) — the live execution-status surface the Go executor reports
@@ -204,9 +86,9 @@ export async function createWorkflowRun(
   event: APIGatewayProxyEventV2,
   deps: WorkflowsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  if (!auth.org) return unauthorized();
+  const gate = await requireOrgCatalogAuth(event, deps.repo);
+  if ('error' in gate) return gate.error;
+  if (!gate.auth.org) return unauthorized();
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
 
@@ -215,7 +97,7 @@ export async function createWorkflowRun(
   const projectId = (body as { projectId?: unknown })?.projectId;
   if (typeof projectId !== 'string' || !projectId) return badRequest('missing projectId');
 
-  const workflow = await deps.repo.getWorkflow(orgScope(auth.org), name);
+  const workflow = await deps.repo.getWorkflow(orgScope(gate.auth.org), name);
   if (!workflow) return notFound();
 
   // Init one node entry per DAG node, all `pending`, so the web overlay has a
@@ -241,8 +123,8 @@ export async function getWorkflowRun(
   event: APIGatewayProxyEventV2,
   deps: WorkflowsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
+  const gate = await requireOrgCatalogAuth(event, deps.repo);
+  if ('error' in gate) return gate.error;
   const runId = pathParam(event, 'runId');
   const projectId = queryParam(event, 'projectId');
   if (!runId) return badRequest('missing runId');
@@ -257,8 +139,8 @@ export async function listWorkflowRuns(
   event: APIGatewayProxyEventV2,
   deps: WorkflowsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
+  const gate = await requireOrgCatalogAuth(event, deps.repo);
+  if ('error' in gate) return gate.error;
   const projectId = queryParam(event, 'projectId');
   if (!projectId) return badRequest('missing projectId');
   const runs = await deps.repo.listWorkflowRuns(projectId);
@@ -274,8 +156,8 @@ export async function updateWorkflowRunNode(
   event: APIGatewayProxyEventV2,
   deps: WorkflowsDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
+  const gate = await requireOrgCatalogAuth(event, deps.repo);
+  if ('error' in gate) return gate.error;
   const runId = pathParam(event, 'runId');
   const nodeId = pathParam(event, 'nodeId');
   if (!runId || !nodeId) return badRequest('missing runId or nodeId');
@@ -308,7 +190,6 @@ export async function updateWorkflowRunNode(
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: WorkflowsDeps = { repo: defaultRepo() };
   const method = event.requestContext.http.method;
-  const name = pathParam(event, 'name');
   const path = event.requestContext.http.path;
 
   // Run sub-routes (M5). Matched BEFORE the generic CRUD branches because they
@@ -321,10 +202,5 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     if (method === 'GET') return listWorkflowRuns(event, deps);
   }
 
-  if (method === 'POST' && path.endsWith('/promote')) return promoteWorkflow(event, deps);
-  if (method === 'POST') return createWorkflow(event, deps);
-  if (method === 'PUT') return createWorkflow(event, deps); // upsert
-  if (method === 'DELETE') return deleteWorkflow(event, deps);
-  if (method === 'GET' && name) return getWorkflow(event, deps);
-  return resolveWorkflows(event, deps);
+  return handlers.dispatch(event, deps);
 }

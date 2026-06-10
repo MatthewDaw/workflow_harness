@@ -19,20 +19,13 @@ const env: cdk.Environment = {
 // U4 — Cognito user pool + app client for HQ web users.
 const authStack = new AuthStack(app, 'AuthStack', { env });
 
-// NOTE: the OpenSearch Serverless `SearchStack` (the superseded fuzzy-Forge
-// vector index) is intentionally NOT synthesized here. Its network policy is
-// public-from-anywhere and it would otherwise deploy under `cdk deploy --all`.
-// The default Forge backend is the brute-force cosine fallback over DynamoDB;
-// `infra/lib/search-stack.ts` is kept on disk, unreferenced, for if a real
-// vector index is ever justified (U20). The skill-idea loop instead uses the
-// GA Amazon S3 Vectors `VectorsStack` below (no idle floor, no public policy).
-
 // U1 (skill-idea loop) — Amazon S3 Vectors: one vector bucket + a fixed `skills`
-// and `ideas` index (float32, 1024-dim, cosine), org-isolated via an `org`
+// and `ideas` index (float32, 1536-dim, cosine), org-isolated via an `org`
 // metadata filter, plus a least-privilege put/query managed policy the backend
 // Lambdas attach to. Independent of ApiStack at synth time (the role attachment
-// is wired from ApiStack in U3/U8). This is the GA replacement for the excluded
-// Classic SearchStack above.
+// is wired from ApiStack in U3/U8). The superseded OpenSearch Serverless
+// SearchStack (public network policy, idle-cost floor) is deliberately gone —
+// synth-app.test.ts asserts no app stack ever reintroduces it (U20).
 new VectorsStack(app, 'VectorsStack', { env });
 
 // U5 — backend API: DynamoDB single-table + HTTP API + WebSocket API. The HTTP

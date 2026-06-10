@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { ListSessions, Focus, NewSession, Rename, CloseSession } from '../wailsjs/go/main/App';
 import { daemon } from '../wailsjs/go/models';
+import { Envelope, KIND_SESSION_RENAME } from './events';
 
 export default function Sessions() {
   const [sessions, setSessions] = useState<daemon.SessInfo[]>([]);
@@ -17,17 +18,14 @@ export default function Sessions() {
     });
     // Auto-titling renames a session by emitting a session.rename event (not a
     // full session-list push), so patch the matching tab's name when one arrives.
-    const offRename = EventsOn(
-      'stream:event',
-      (env: { event?: { kind?: string; sessionId?: string; name?: string } }) => {
-        const ev = env?.event;
-        if (ev?.kind === 'session.rename' && ev.sessionId) {
-          setSessions((prev) =>
-            prev.map((s) => (s.id === ev.sessionId ? { ...s, name: ev.name ?? s.name } : s)),
-          );
-        }
-      },
-    );
+    const offRename = EventsOn('stream:event', (env: Envelope) => {
+      const ev = env?.event;
+      if (ev?.kind === KIND_SESSION_RENAME && ev.sessionId) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === ev.sessionId ? { ...s, name: ev.name ?? s.name } : s)),
+        );
+      }
+    });
     return () => {
       off();
       offRename();

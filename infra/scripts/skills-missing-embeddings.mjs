@@ -32,80 +32,15 @@
 //
 // Read-only: it fetches vectors + scans the table; it writes nothing. A non-empty
 // report exits 1 so it can gate a CI / cron check; clean exits 0.
-import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import path from 'node:path';
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
-
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
-
-/** The org-scope partition prefix the skill records live under (mirrors keys.ts). */
-const ORG_SCOPE_PREFIX = 'SCOPE#org#';
-
-function requireBackendDist() {
-  for (const rel of [
-    ['embeddings', 's3vectors.js'],
-    ['embeddings', 'bedrock.js'],
-    ['ws', 'streamConsumer.js'],
-    ['db', 'keys.js'],
-  ]) {
-    if (!existsSync(path.join(backendDist, ...rel))) {
-      console.error(
-        `[skills-missing-embeddings] missing ${path.join(backendDist, ...rel)} — run ` +
-          '`npm run build -w @harness/backend` first.',
-      );
-      process.exit(1);
-    }
-  }
-}
-
-/** Enumerate every org by scanning its META record (identical to reindex). */
-async function listOrgNames(doc, table) {
-  const names = [];
-  let ExclusiveStartKey;
-  do {
-    const res = await doc.send(
-      new ScanCommand({
-        TableName: table,
-        FilterExpression: 'SK = :meta AND begins_with(PK, :orgp)',
-        ExpressionAttributeValues: { ':meta': 'META', ':orgp': 'ORG#' },
-        ProjectionExpression: 'PK',
-        ExclusiveStartKey,
-      }),
-    );
-    for (const item of res.Items ?? []) {
-      if (typeof item.PK === 'string' && item.PK.startsWith('ORG#')) {
-        names.push(item.PK.slice('ORG#'.length));
-      }
-    }
-    ExclusiveStartKey = res.LastEvaluatedKey;
-  } while (ExclusiveStartKey);
-  return names;
-}
-
-/** List the LIVE skill records for one org (identical filter to reindex). */
-async function listLiveSkills(doc, table, org, isVersionSideRecord) {
-  const skills = [];
-  let ExclusiveStartKey;
-  do {
-    const res = await doc.send(
-      new ScanCommand({
-        TableName: table,
-        FilterExpression: 'PK = :pk AND begins_with(SK, :skp)',
-        ExpressionAttributeValues: { ':pk': `${ORG_SCOPE_PREFIX}${org}`, ':skp': 'SKILL#' },
-        ExclusiveStartKey,
-      }),
-    );
-    for (const item of res.Items ?? []) {
-      if (typeof item.SK !== 'string' || isVersionSideRecord(item.SK)) continue;
-      if (typeof item.name !== 'string') continue;
-      skills.push(item);
-    }
-    ExclusiveStartKey = res.LastEvaluatedKey;
-  } while (ExclusiveStartKey);
-  return skills;
-}
+import {
+  TABLE,
+  makeDocClient,
+  importBackendDist,
+  requireBackendDist,
+  listOrgNames,
+  listLiveSkills,
+} from './lib/common.mjs';
 
 /**
  * The pure probe core (dependency-injected so a unit test drives it with mocks).
@@ -190,7 +125,13 @@ export async function probeMissingEmbeddings(deps) {
 }
 
 async function main() {
-  requireBackendDist();
+  requireBackendDist(
+    'skills-missing-embeddings',
+    'embeddings/s3vectors.js',
+    'embeddings/bedrock.js',
+    'ws/streamConsumer.js',
+    'db/keys.js',
+  );
   const asJson = process.argv.slice(2).includes('--json');
 
   const { S3Vectors, SKILL_VECTOR_INDEX, skillVectorKey } = await importBackendDist(

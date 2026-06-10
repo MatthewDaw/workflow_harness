@@ -46,7 +46,6 @@ func (f *fakeClient) Rename(id, name string) error {
 }
 func (f *fakeClient) CloseSession(id string) error       { f.closes = append(f.closes, id); return nil }
 func (f *fakeClient) Shutdown() error                    { f.shutdowns++; return nil }
-func (f *fakeClient) Detach() error                      { return nil }
 func (f *fakeClient) Run() error                         { return nil }
 func (f *fakeClient) InitialSessions() []daemon.SessInfo { return f.sessions }
 

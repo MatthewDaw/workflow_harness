@@ -225,10 +225,16 @@ export class ApiStack extends cdk.Stack {
     }
 
     const M = apigwv2.HttpMethod;
-    // One shared HttpNoneAuthorizer reused across every public route (the
-    // canonical CDK pattern — it is a stateless no-op binding). Passing it on a
-    // route OVERRIDES the HTTP API's default JWT authorizer, making that route
-    // PUBLIC at the gateway so the claude+ HS256 device token reaches the Lambda.
+    // THE noAuth CONTRACT (stated once; routes below just reference it): passing
+    // this shared HttpNoneAuthorizer OVERRIDES the HTTP API's default Cognito JWT
+    // authorizer, making the route PUBLIC at the gateway. That is required
+    // wherever the claude+ wrapper's HS256 device token must reach the Lambda —
+    // the gateway JWT authorizer only accepts Cognito tokens and would 403 the
+    // device token before the handler runs. Every noAuth handler authenticates
+    // IN-HANDLER (Cognito JWT OR device token — resolvePrincipal /
+    // resolveOrgCatalogAuth / bearerAuth) and enforces its ownership/admin gate
+    // server-side, so opening the gateway does not weaken authorization. Routes
+    // without noAuth inherit the default JWT authorizer and stay Cognito-gated.
     const noAuth = new HttpNoneAuthorizer();
     const r = (
       routePath: string,
@@ -241,15 +247,11 @@ export class ApiStack extends cdk.Stack {
         path: routePath,
         methods,
         integration: new HttpLambdaIntegration(integrationId, fn),
-        // When omitted, the HTTP API's defaultAuthorizer (JWT) applies. Pass an
-        // HttpNoneAuthorizer to OVERRIDE the default and make a route PUBLIC.
         ...(authorizer ? { authorizer } : {}),
       });
 
     r('/projects', [M.GET, M.POST], projectsFn, 'Projects');
-    // GET is PUBLIC at the gateway (HttpNoneAuthorizer) so the claude+ wrapper's
-    // device token reaches the handler, which verifies it in-handler via
-    // resolvePrincipal (device token OR Cognito). DELETE stays Cognito-gated.
+    // GET is noAuth (device token; see contract above); DELETE stays Cognito-gated.
     r('/projects/{id}', [M.GET], projectsFn, 'ProjectByIdGet', noAuth);
     r('/projects/{id}', [M.DELETE], projectsFn, 'ProjectByIdDelete');
     r('/projects/{id}/requirements', [M.GET, M.PUT], projectsFn, 'ProjectRequirements');
@@ -272,11 +274,7 @@ export class ApiStack extends cdk.Stack {
     // `pathParam(event, 'projectId')` (NOT 'id', unlike the /projects/{id}
     // routes above), so the first segment param MUST be `{projectId}` — the
     // gateway route param name has to match what the handler reads exactly.
-    // PUBLIC at the gateway (HttpNoneAuthorizer) so the claude+ device token
-    // reaches projectsFn; the opt-in handler (projectForOptIn) authenticates the
-    // caller (Cognito JWT OR device token) and enforces the admin-or-owner gate
-    // server-side, so a developer can enable/disable catalog items on their own
-    // project straight from claude+.
+    // noAuth (see contract above); the handler enforces admin-or-owner.
     r('/projects/{projectId}/skills/{skillName}', [M.POST, M.DELETE], projectsFn, 'ProjectSkillOptIn', noAuth);
     r('/projects/{projectId}/agents/{agentName}', [M.POST, M.DELETE], projectsFn, 'ProjectAgentOptIn', noAuth);
     r('/projects/{projectId}/workflows/{workflowName}', [M.POST, M.DELETE], projectsFn, 'ProjectWorkflowOptIn', noAuth);
@@ -291,8 +289,7 @@ export class ApiStack extends cdk.Stack {
     // the WS management API (see the WS grant + WS_CALLBACK_URL wiring below).
     r('/sessions/{id}/control', [M.POST], sessionsFn, 'SessionControl');
 
-    // PUBLIC at the gateway (device token reaches the Lambda); the agents Lambda
-    // authenticates + admin-gates server-side, exactly like skills above.
+    // All agents routes are noAuth (see contract above); admin-gated server-side.
     r('/agents', [M.GET], agentsFn, 'AgentsGet', noAuth);
     r('/agents', [M.POST], agentsFn, 'AgentsPost', noAuth);
     r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName', noAuth);
@@ -305,9 +302,7 @@ export class ApiStack extends cdk.Stack {
     // Workflows mirror the agents catalog routes MINUS the bundle verbs
     // (members/dissolve) and the scope verb — a workflow is itself the
     // composition unit (no bundling in v1), so the surface is plain CRUD + the
-    // kind-generic promote verb. PUBLIC at the gateway (HttpNoneAuthorizer) so the
-    // claude+ device token reaches the Lambda; the workflows Lambda authenticates
-    // + admin-gates server-side, exactly like agents above. The project opt-in
+    // kind-generic promote verb. noAuth (see contract above). The project opt-in
     // route (/projects/{projectId}/workflows/{workflowName}) is NOT served here —
     // it is dispatched by the projects Lambda and registered with the other
     // /projects routes above (against projectsFn).
@@ -318,9 +313,7 @@ export class ApiStack extends cdk.Stack {
 
     // Workflow RUN status (M5) — the live execution surface the Go executor
     // reports to and the web Workflows tab polls. The run/node ids are path-tail
-    // segments dispatched inside the workflows Lambda (the agents promote/members
-    // precedent). Same HttpNoneAuthorizer + in-handler auth as the routes above so
-    // the executor's device token reaches the Lambda.
+    // segments dispatched inside the workflows Lambda. noAuth (executor device token).
     r('/workflows/{name}/runs', [M.GET, M.POST], workflowsFn, 'WorkflowRuns', noAuth);
     r('/workflows/{name}/runs/{runId}', [M.GET], workflowsFn, 'WorkflowRunById', noAuth);
     r(
@@ -331,13 +324,8 @@ export class ApiStack extends cdk.Stack {
       noAuth,
     );
 
-    // ALL skills routes are PUBLIC at the gateway (HttpNoneAuthorizer) so the
-    // claude+ wrapper's HS256 device token reaches the Lambda — the gateway JWT
-    // authorizer would reject HS256 outright. The skills Lambda authenticates
-    // in-handler (Cognito JWT OR device token via resolveOrgCatalogAuth) and
-    // enforces the admin gate SERVER-SIDE from the profile, so opening the gateway
-    // does not weaken catalog-write authorization. This is what lets /hq-add-skill
-    // author skills directly instead of round-tripping through the git seed.
+    // ALL skills routes are noAuth (see contract above) — this is what lets
+    // /hq-add-skill author skills directly instead of round-tripping the git seed.
     r('/skills', [M.GET], skillsFn, 'SkillsGet', noAuth);
     r('/skills', [M.POST], skillsFn, 'SkillsPost', noAuth);
     r('/skills/{name}', [M.GET, M.PUT, M.DELETE], skillsFn, 'SkillByName', noAuth);
@@ -348,23 +336,19 @@ export class ApiStack extends cdk.Stack {
     r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope', noAuth);
     // Promote (repoint the org-wide TRUE pointer) + fold an idea into a new
     // revision (skill-idea loop, U16). BOTH are the skills Lambda (the fold reuses
-    // `putNewVersion`/the built-in guard there) and BOTH are skill-edit gated
-    // server-side; `noAuth` so the claude+ device token reaches the handler.
+    // `putNewVersion`/the built-in guard there), skill-edit gated server-side.
     r('/skills/{name}/promote', [M.POST], skillsFn, 'SkillPromote', noAuth);
     r('/skills/{name}/ideas/{ideaId}/fold', [M.POST], skillsFn, 'SkillIdeaFold', noAuth);
     // Candidate learnings (skill-idea loop, U11): corroborated-only ideas a working
-    // session may surface when the skill loads. `noAuth` so the claude+ device token
-    // reaches the handler, which gates server-side (the gate is a security boundary).
+    // session may surface when the skill loads.
     r('/skills/{name}/candidate-learnings', [M.GET], ideasFn, 'SkillCandidateLearnings', noAuth);
     // All ideas (skill-idea loop, U13): EVERY idea for a skill — corroborated,
-    // uncorroborated, and folded history — for the Command HQ dropdown. Reuses the
-    // same `ideasFn`/bundle and `noAuth` device-token contract; the handler
-    // dispatches on the `/ideas` suffix.
+    // uncorroborated, and folded history — for the Command HQ dropdown; the
+    // handler dispatches on the `/ideas` suffix.
     r('/skills/{name}/ideas', [M.GET], ideasFn, 'SkillIdeas', noAuth);
     // Unassigned bin (skill-idea loop, U15): the org's new-skill backlog — topics
-    // the judge rejected from every candidate skill, with frequency. Reuses the
-    // same `ideasFn`/bundle and `noAuth` device-token contract. READ is open to
-    // any org member; the promote-to-skill action is admin-gated server-side.
+    // the judge rejected from every candidate skill, with frequency. READ is open
+    // to any org member; promote-to-skill is admin-gated server-side.
     r('/ideas/unassigned', [M.GET], ideasFn, 'IdeasUnassigned', noAuth);
     r(
       '/ideas/unassigned/{entryId}/promote-to-skill',
@@ -378,12 +362,9 @@ export class ApiStack extends cdk.Stack {
     // (members/dissolve) and the retired-by-design scope verb — the catalog is a
     // flat, org-only set (no bundles, no per-server tiering). NOTE: the project
     // opt-in route (/projects/{projectId}/mcp-servers/{name}) is NOT served by
-    // this mcpServersFn — it is dispatched by the projects Lambda's internal path
-    // router and is registered up with the other /projects routes above (against
-    // projectsFn, using the {projectId} first-segment param the opt-in handler
-    // reads). The routes below are the org-catalog CRUD only.
-    // PUBLIC at the gateway (device token reaches the Lambda); the mcp-servers
-    // Lambda authenticates + admin-gates server-side, exactly like skills above.
+    // this mcpServersFn — it is dispatched by the projects Lambda and registered
+    // with the other /projects routes above. Org-catalog CRUD only here; noAuth
+    // (see contract above).
     r('/mcp-servers', [M.GET], mcpServersFn, 'McpServersGet', noAuth);
     r('/mcp-servers', [M.POST], mcpServersFn, 'McpServersPost', noAuth);
     r('/mcp-servers/{name}', [M.GET, M.PUT, M.DELETE], mcpServersFn, 'McpServerByName', noAuth);
@@ -402,12 +383,8 @@ export class ApiStack extends cdk.Stack {
     r('/orgs/join', [M.POST], orgsFn, 'OrgsJoin');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
 
-    // Weekly routes accept EITHER a Cognito ID token (web) OR the claude+ wrapper
-    // device token. The default gateway authorizer only accepts Cognito JWTs and
-    // would 403 the device token before the handler runs, so we OVERRIDE it with
-    // HttpNoneAuthorizer and let the weekly handler verify the bearer token itself
-    // (rest/bearerAuth.ts: device token OR Cognito), still enforcing project
-    // ownership. This is what lets `/hq-weekly-update` publish from the PTY.
+    // Weekly routes are noAuth (see contract above; bearerAuth + project
+    // ownership in-handler) — this is what lets `/hq-weekly-update` publish from the PTY.
     r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly', noAuth);
     r(
       '/projects/{pid}/weekly/{week}',
@@ -424,18 +401,14 @@ export class ApiStack extends cdk.Stack {
       noAuth,
     );
 
-    // Memories route mirrors weekly: HttpNoneAuthorizer so the claude+ daemon's
-    // device token reaches the handler (the default JWT authorizer would 403 it
-    // before it runs). The handler verifies the bearer token itself (device OR
-    // Cognito) and scopes the reconcile to the caller's own author key, so a
-    // collaborator's daemon can sync memories to a project they do not own.
+    // Memories are noAuth (see contract above); the handler scopes the reconcile
+    // to the caller's own author key, so a collaborator's daemon can sync
+    // memories to a project they do not own.
     r('/projects/{pid}/memories', [M.GET, M.PUT], memoriesFn, 'ProjectMemories', noAuth);
 
     // ---- Device-auth (claude+ device-code login) ------------------------------
-    // start/poll are PUBLIC: the CLI hits them before it has any token. They must
-    // OVERRIDE the HTTP API's defaultAuthorizer (JWT) via HttpNoneAuthorizer.
-    // approve REQUIRES the JWT (a signed-in browser approves the device) — it
-    // inherits the default authorizer (no override).
+    // start/poll are noAuth: the CLI hits them before it has ANY token. approve
+    // requires the Cognito JWT (a signed-in browser approves the device).
     r('/device/start', [M.POST], deviceFn, 'DeviceStart', noAuth);
     r('/device/poll', [M.POST], deviceFn, 'DevicePoll', noAuth);
     r('/device/approve', [M.POST], deviceFn, 'DeviceApprove');

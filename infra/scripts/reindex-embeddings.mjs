@@ -33,94 +33,25 @@
 // version is persisted to a config record AND echoed as the operator action
 // (update the deployed Lambda's `BEDROCK_EMBEDDING_VERSION`), since the running
 // backend reads the active version from its environment.
-import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import path from 'node:path';
-import { PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  TABLE,
+  makeDocClient,
+  importBackendDist,
+  requireBackendDist,
+  listOrgNames,
+  listLiveSkills,
+} from './lib/common.mjs';
 
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
-
-/** The org-scope partition prefix the skill records live under (mirrors keys.ts). */
-const ORG_SCOPE_PREFIX = 'SCOPE#org#';
 /** The config record that records the active embedding version (post-swap). */
 const ACTIVE_VERSION_KEY = { PK: 'CONFIG#EMBEDDING', SK: 'ACTIVE_VERSION' };
-
-function requireBackendDist() {
-  for (const rel of [
-    ['embeddings', 'bedrock.js'],
-    ['embeddings', 's3vectors.js'],
-    ['ws', 'streamConsumer.js'],
-  ]) {
-    if (!existsSync(path.join(backendDist, ...rel))) {
-      console.error(
-        `[reindex-embeddings] missing ${path.join(backendDist, ...rel)} — run ` +
-          '`npm run build -w @harness/backend` first.',
-      );
-      process.exit(1);
-    }
-  }
-}
 
 /** Parse `--target <version>` (or env BEDROCK_EMBEDDING_VERSION) from argv. */
 function resolveTargetVersion(argv) {
   const i = argv.indexOf('--target');
   if (i !== -1 && argv[i + 1]) return argv[i + 1];
   return process.env.BEDROCK_EMBEDDING_VERSION;
-}
-
-/**
- * Enumerate every org by scanning for its META record (`PK = ORG#<name>`,
- * `SK = META`). Paginated so it survives a table larger than one scan page.
- * (Identical shape to seed-all-orgs.mjs `listOrgNames`.)
- */
-async function listOrgNames(doc, table) {
-  const names = [];
-  let ExclusiveStartKey;
-  do {
-    const res = await doc.send(
-      new ScanCommand({
-        TableName: table,
-        FilterExpression: 'SK = :meta AND begins_with(PK, :orgp)',
-        ExpressionAttributeValues: { ':meta': 'META', ':orgp': 'ORG#' },
-        ProjectionExpression: 'PK',
-        ExclusiveStartKey,
-      }),
-    );
-    for (const item of res.Items ?? []) {
-      if (typeof item.PK === 'string' && item.PK.startsWith('ORG#')) {
-        names.push(item.PK.slice('ORG#'.length));
-      }
-    }
-    ExclusiveStartKey = res.LastEvaluatedKey;
-  } while (ExclusiveStartKey);
-  return names;
-}
-
-/**
- * List the LIVE skill records for one org: items in `SCOPE#org#<org>` whose SK
- * begins `SKILL#` and is NOT a version side-record (`#r<N>` / `#TRUE`). Paginated.
- */
-async function listLiveSkills(doc, table, org, isVersionSideRecord) {
-  const skills = [];
-  let ExclusiveStartKey;
-  do {
-    const res = await doc.send(
-      new ScanCommand({
-        TableName: table,
-        FilterExpression: 'PK = :pk AND begins_with(SK, :skp)',
-        ExpressionAttributeValues: { ':pk': `${ORG_SCOPE_PREFIX}${org}`, ':skp': 'SKILL#' },
-        ExclusiveStartKey,
-      }),
-    );
-    for (const item of res.Items ?? []) {
-      if (typeof item.SK !== 'string' || isVersionSideRecord(item.SK)) continue;
-      if (typeof item.name !== 'string') continue;
-      skills.push(item);
-    }
-    ExclusiveStartKey = res.LastEvaluatedKey;
-  } while (ExclusiveStartKey);
-  return skills;
 }
 
 /**
@@ -182,7 +113,12 @@ export async function reindexAll(target, deps) {
 }
 
 async function main() {
-  requireBackendDist();
+  requireBackendDist(
+    'reindex-embeddings',
+    'embeddings/bedrock.js',
+    'embeddings/s3vectors.js',
+    'ws/streamConsumer.js',
+  );
   const target = resolveTargetVersion(process.argv.slice(2));
   if (!target) {
     console.error(

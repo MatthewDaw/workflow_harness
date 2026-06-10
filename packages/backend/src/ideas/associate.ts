@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { orgScope, type Idea, type IdeaSource, type UnassignedEntry } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
+import { envNumber } from '../lib/env.js';
 import { type OpenRouterEmbedder, getEmbedder } from '../embeddings/embed.js';
 import {
   SKILL_VECTOR_INDEX,
@@ -57,22 +58,21 @@ import { type IdeaWriter } from './synth.js';
  */
 
 /**
- * Pre-judge similarity floor (cosine similarity in [0,1]). A candidate skill
- * below this never reaches the judge (U9). Env overrideable for tuning against
- * real topics; conservative default kept here as a documented knob.
+ * Default pre-judge similarity floor (cosine similarity in [0,1]). A candidate
+ * skill below the floor never reaches the judge (U9). Conservative on purpose.
  */
-export const SIMILARITY_FLOOR = Number(process.env.ASSOCIATION_SIMILARITY_FLOOR ?? 0.5);
+export const SIMILARITY_FLOOR = 0.5;
 /** Default number of candidate skills to retrieve for the judge (top-k). */
-export const ASSOCIATION_TOP_K = Number(process.env.ASSOCIATION_TOP_K ?? 5);
+export const ASSOCIATION_TOP_K = 5;
 
-/** Resolve the configured similarity floor at call time (env overrideable). */
+/** The configured similarity floor (`ASSOCIATION_SIMILARITY_FLOOR`), read at call time. */
 function similarityFloor(): number {
-  return Number(process.env.ASSOCIATION_SIMILARITY_FLOOR ?? SIMILARITY_FLOOR);
+  return envNumber('ASSOCIATION_SIMILARITY_FLOOR', SIMILARITY_FLOOR);
 }
 
-/** Resolve the configured top-k at call time (env overrideable). */
+/** The configured top-k (`ASSOCIATION_TOP_K`), read at call time. */
 function topK(): number {
-  return Number(process.env.ASSOCIATION_TOP_K ?? ASSOCIATION_TOP_K);
+  return envNumber('ASSOCIATION_TOP_K', ASSOCIATION_TOP_K);
 }
 
 /**

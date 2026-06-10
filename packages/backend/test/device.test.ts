@@ -1,15 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { Repo } from '../src/db/repo.js';
 import { deviceApprove, devicePoll, deviceStart } from '../src/rest/device.js';
 import {
   approveDeviceAuthByUserCode,
   pollDeviceAuth,
   startDeviceAuth,
 } from '../src/auth/device.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
 /**
@@ -18,14 +14,10 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * approval of the human user_code.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
 
 beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
   process.env.DEVICE_TOKEN_SECRET = 'test-secret';
 });
 

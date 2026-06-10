@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { orgScope, type Skill } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import { createOrg, getMe, joinOrg, switchOrg } from '../src/rest/orgs.js';
 import { STARTER_BUNDLE_NAME } from '../src/seed/skills.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
 /**
@@ -15,15 +11,8 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * secret. Join failures use a single generic message (no org enumeration).
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 const ALICE = 'alice';
 const BOB = 'bob';

@@ -23,11 +23,6 @@ import {
 /** OpenRouter embedding output dimension; matches the S3 Vectors index (U1). */
 export const EMBEDDING_DIMENSION = 1536;
 
-/** Resolve the configured embedding model id (env overrideable). */
-function modelId(): string {
-  return embeddingModel();
-}
-
 /**
  * Resolve the ACTIVE embedding version stamp — the version every NEW embedding is
  * stamped with and the only version `queryTopK` will compare a query against (U5).
@@ -36,7 +31,7 @@ function modelId(): string {
  * id (the model IS the version).
  */
 export function activeEmbeddingVersion(): string {
-  return process.env.OPENROUTER_EMBEDDING_VERSION ?? modelId();
+  return process.env.OPENROUTER_EMBEDDING_VERSION ?? embeddingModel();
 }
 
 /** A stamped embedding: the vector plus the model + version it came from. */
@@ -68,7 +63,7 @@ export class OpenRouterEmbedder {
    * can route the failure to retry/DLQ rather than silently producing no vector.
    */
   async embed(text: string): Promise<Embedding> {
-    const model = modelId();
+    const model = embeddingModel();
     const vector = await openRouterEmbed(text, {
       model,
       ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
@@ -93,7 +88,7 @@ export function getEmbedder(): OpenRouterEmbedder {
   return defaultEmbedder;
 }
 
-/** Convenience: embed via the default embedder. */
+/** Convenience: embed via the default embedder (the stream consumer's default). */
 export function embed(text: string): Promise<Embedding> {
   return getEmbedder().embed(text);
 }

@@ -81,6 +81,78 @@ func TestProjectIDForMatchesHQOwnerRepoSlug(t *testing.T) {
 	}
 }
 
+// TestLoadCredentials proves the shared credentials reader parses the
+// "wsURL\ntoken\napiBase" file (CRLF tolerated), reports ok=false when the file
+// is absent, and leaves missing lines empty.
+func TestLoadCredentials(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	if _, ok := LoadCredentials(); ok {
+		t.Fatal("missing credentials file must yield ok=false")
+	}
+
+	dir := filepath.Join(home, ".claude-plus")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := "wss://hq.example/ws\r\ntok-123\r\nhttps://hq.example\r\n"
+	if err := os.WriteFile(filepath.Join(dir, "credentials"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, ok := LoadCredentials()
+	if !ok {
+		t.Fatal("LoadCredentials should succeed")
+	}
+	if c.WSURL != "wss://hq.example/ws" || c.Token != "tok-123" || c.APIBase != "https://hq.example" {
+		t.Fatalf("parsed = %+v", c)
+	}
+
+	// A two-line legacy file leaves APIBase empty.
+	if err := os.WriteFile(filepath.Join(dir, "credentials"), []byte("ws\ntok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, ok = LoadCredentials()
+	if !ok || c.APIBase != "" || c.Token != "tok" {
+		t.Fatalf("legacy file parsed = %+v ok=%v", c, ok)
+	}
+}
+
+// TestRepoRootFor proves the shared repo-root resolver walks up to the nearest
+// .git directory and falls back to the starting dir when there is none.
+func TestRepoRootFor(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := RepoRootFor(nested); got != root {
+		t.Errorf("RepoRootFor(nested) = %q, want %q", got, root)
+	}
+	// No .git anywhere up the tree: falls back to the given dir. Guard against a
+	// machine whose temp dir happens to live inside a git checkout.
+	bare := t.TempDir()
+	ancestorRepo := false
+	for d := filepath.Dir(bare); ; d = filepath.Dir(d) {
+		if fi, err := os.Stat(filepath.Join(d, ".git")); err == nil && fi.IsDir() {
+			ancestorRepo = true
+			break
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	if !ancestorRepo {
+		if got := RepoRootFor(bare); got != bare {
+			t.Errorf("RepoRootFor(bare) = %q, want %q", got, bare)
+		}
+	}
+}
+
 // TestEnsureConfigDirWritesManifest verifies EnsureConfigDir drops an
 // hq-project.json manifest whose projectId matches ProjectIDFor for the repo's
 // stubbed remote, so the launch path and tooling can read the id off disk.

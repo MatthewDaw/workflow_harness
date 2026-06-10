@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { corroborationCount, type Idea, type UnassignedEntry } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
+import { CORROBORATION_K } from '../ideas/corroborate.js';
 import { badRequest, defaultRepo, forbidden, ok, pathParam, unauthorized } from './runtime.js';
 import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
@@ -36,10 +37,12 @@ import { resolveOrgCatalogAuth } from './scopeauth.js';
 
 /**
  * Corroboration threshold: an idea must be backed by at least this many DISTINCT
- * sessions before it may surface in a working session. Documented default; the
- * gate (`corroborationCount(idea) >= CORROBORATION_K`) is enforced server-side.
+ * sessions before it may surface in a working session. The gate
+ * (`corroborationCount(idea) >= CORROBORATION_K`) is enforced server-side.
+ * Shared with the corroboration pipeline so the write-side count and this
+ * read-side gate can never disagree.
  */
-export const CORROBORATION_K = 2;
+export { CORROBORATION_K };
 
 /**
  * Cap on how many candidate learnings surface per skill. Honors the
@@ -125,9 +128,7 @@ export async function resolveSkillIdeas(
   event: APIGatewayProxyEventV2,
   deps: IdeasDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  // Same auth + org-scoping contract as candidate-learnings: accept the Cognito
-  // JWT or the claude+ device token, then scope by the PROFILE-driven effective
-  // org (never the raw token org) so an org-A read never sees org-B ideas.
+  // Same auth + org-scoping contract as candidate-learnings above.
   const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
 
@@ -180,9 +181,7 @@ export async function resolveUnassignedBin(
   event: APIGatewayProxyEventV2,
   deps: IdeasDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  // Same auth contract as the ideas reads: accept the Cognito JWT or the claude+
-  // device token, then scope by the PROFILE-driven effective org (never the raw
-  // token org) so an org-A read never sees org-B bin entries.
+  // Same auth + org-scoping contract as the ideas reads above.
   const principal = await resolvePrincipal(event);
   if (!principal) return unauthorized();
 

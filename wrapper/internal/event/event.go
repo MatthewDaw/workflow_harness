@@ -143,20 +143,11 @@ func SessionRenameWithSummary(sessionID, name, summary string) Event {
 	return Event{Kind: KindSessionRename, SessionID: sessionID, Name: name, Summary: summary}
 }
 
-// UserMsg builds a user.msg event.
-func UserMsg(sessionID string, tokens int64) Event {
-	return Event{Kind: KindUserMsg, SessionID: sessionID, Tokens: int64Ptr(tokens)}
-}
-
 // UserMsgText builds a user.msg event carrying the actual (already-truncated)
-// user-turn text alongside the token count.
+// user-turn text alongside the token count. Text may be empty (omitted on the
+// wire via omitempty).
 func UserMsgText(sessionID string, tokens int64, text string) Event {
 	return Event{Kind: KindUserMsg, SessionID: sessionID, Tokens: int64Ptr(tokens), Text: text}
-}
-
-// AssistantMsg builds an assistant.msg event.
-func AssistantMsg(sessionID string, tokens int64) Event {
-	return Event{Kind: KindAssistantMsg, SessionID: sessionID, Tokens: int64Ptr(tokens)}
 }
 
 // AssistantMsgText builds an assistant.msg event carrying the actual

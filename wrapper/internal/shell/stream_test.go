@@ -17,7 +17,7 @@ func TestStreamTabRendersFedEvents(t *testing.T) {
 	c := NewCompositor(s, "test")
 
 	c.FeedEvent(event.Envelope{Event: event.ToolCall("sess-1", "Read", "parse.go")})
-	c.FeedEvent(event.Envelope{Event: event.AssistantMsg("sess-1", 42)})
+	c.FeedEvent(event.Envelope{Event: event.AssistantMsgText("sess-1", 42, "")})
 
 	c.SetTab(2) // Stream
 	c.Render()

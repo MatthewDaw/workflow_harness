@@ -45,7 +45,7 @@ func TestEventBufferBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < maxRecentEvents+50; i++ {
-		d.PublishEvent(envWith("s", event.UserMsg("s", int64(i))))
+		d.PublishEvent(envWith("s", event.UserMsgText("s", int64(i), "")))
 	}
 	got := 0
 	d.AddEventSink("c", func(env event.Envelope) { got++ })

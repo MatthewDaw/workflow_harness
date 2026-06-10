@@ -12,7 +12,7 @@ import (
 func env(seq int64) event.Envelope {
 	return event.Envelope{
 		V: 1, InstanceID: "inst-0", Host: "matt@mbp", TS: 1717200000000 + seq, Seq: seq,
-		Event: event.UserMsg("a91f", 10),
+		Event: event.UserMsgText("a91f", 10, ""),
 	}
 }
 

@@ -1,13 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import {
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-  UpdateCommand,
-} from '@aws-sdk/lib-dynamodb';
-import { Repo } from '../src/db/repo.js';
+import { describe, expect, it } from 'vitest';
 import {
   approveDeviceAuth,
   pollDeviceAuth,
@@ -15,80 +6,18 @@ import {
   DEVICE_AUTH_TTL_MS,
 } from '../src/auth/device.js';
 import { signDeviceToken, verifyDeviceToken } from '../src/auth/verify.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
- * Offline auth tests. The Repo's DynamoDB calls are served by a small in-memory
- * table (via aws-sdk-client-mock) that honours the conditional writes the
- * device flow relies on, so the happy path and the "issued once" guarantee are
- * exercised end-to-end without AWS.
+ * Offline auth tests. The Repo's DynamoDB calls are served by the shared
+ * in-memory table (via aws-sdk-client-mock), which honours the conditional
+ * writes the device flow relies on, so the happy path and the "issued once"
+ * guarantee are exercised end-to-end without AWS.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 
 const SECRET = new TextEncoder().encode('test-device-secret-please-change');
-
-interface KeyShape {
-  PK: string;
-  SK: string;
-}
-const keyOf = (item: KeyShape): string => `${item.PK}::${item.SK}`;
-
-class ConditionalCheckFailed extends Error {
-  override name = 'ConditionalCheckFailedException';
-}
-
-/** Wire the mock to a stateful in-memory store with conditional-write support. */
-function installInMemoryTable(): Map<string, Record<string, unknown>> {
-  const store = new Map<string, Record<string, unknown>>();
-
-  ddbMock.on(PutCommand).callsFake((input) => {
-    const item = input.Item as Record<string, unknown> & KeyShape;
-    if (input.ConditionExpression?.includes('attribute_not_exists(PK)')) {
-      if (store.has(keyOf(item))) throw new ConditionalCheckFailed();
-    }
-    store.set(keyOf(item), { ...item });
-    return {};
-  });
-
-  ddbMock.on(GetCommand).callsFake((input) => {
-    const key = input.Key as KeyShape;
-    return { Item: store.get(keyOf(key)) };
-  });
-
-  ddbMock.on(UpdateCommand).callsFake((input) => {
-    const key = input.Key as KeyShape;
-    const existing = store.get(keyOf(key));
-    const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
-    const cond = input.ConditionExpression ?? '';
-    if (cond.includes('attribute_exists(PK)') && !existing) {
-      throw new ConditionalCheckFailed();
-    }
-    // We only ever guard on the status attribute: `#s = :pending|:approved`.
-    if (existing && cond.includes('#s =')) {
-      const guard = cond.includes(':pending') ? values[':pending'] : values[':approved'];
-      if (existing.status !== guard) throw new ConditionalCheckFailed();
-    }
-    const next = { ...(existing ?? key) };
-    if (values[':approved'] !== undefined && cond.includes(':pending')) {
-      next.status = 'approved';
-      next.userId = values[':u'];
-      next.org = values[':o'];
-    } else if (values[':consumed'] !== undefined) {
-      next.status = 'consumed';
-    }
-    store.set(keyOf(key), next);
-    return {};
-  });
-
-  return store;
-}
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable();
-});
 
 describe('device-code flow', () => {
   it('happy path: start -> poll pending -> approve -> poll returns token', async () => {

@@ -1,10 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { Idea, IdeaSource, UnassignedEntry } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
-import { signDeviceToken } from '../src/auth/verify.js';
+import { describe, expect, it } from 'vitest';
+import type { Idea, UnassignedEntry } from '@harness/shared';
 import {
   CANDIDATE_CAP,
   CORROBORATION_K,
@@ -16,8 +11,14 @@ import {
   resolveUnassignedBin,
 } from '../src/rest/ideas.js';
 import { handler as ideasHandler } from '../src/rest/ideas.js';
-import { installInMemoryTable } from './helpers/memtable.js';
-import { bodyOf, httpEvent } from './helpers/httpevent.js';
+import { memRepoHarness } from './helpers/memtable.js';
+import { bodyOf, deviceTokenEvent, httpEvent } from './helpers/httpevent.js';
+import {
+  ORG,
+  makeBinEntry as binEntry,
+  makeIdea as idea,
+  makeSource as source,
+} from './helpers/factories.js';
 
 /**
  * GET /skills/{name}/candidate-learnings (U11). The endpoint serves ONLY
@@ -27,60 +28,10 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * effective (PROFILE-driven) org, so an org-A read never sees org-B ideas.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
 
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
-
-const ORG = 'acme';
 const SKILL = 'reconcile';
-
-let seq = 0;
-function source(sessionId: string): IdeaSource {
-  return { sessionId, segmentId: `${sessionId}-seg`, seq: seq++, snippet: '' };
-}
-
-/**
- * An idea with `sessions` DISTINCT sessions. `segments` extra sources reuse the
- * FIRST session id, so they must NOT raise the corroboration count (the unit is
- * the distinct session, deduped across segments).
- */
-function idea(
-  ideaId: string,
-  opts: {
-    sessions: number;
-    status?: Idea['status'];
-    org?: string;
-    skillBaseName?: string;
-    updatedAt?: number;
-    extraSegmentsOnFirst?: number;
-    foldedIntoRev?: number;
-  },
-): Idea {
-  const sources: IdeaSource[] = [];
-  for (let i = 0; i < opts.sessions; i++) sources.push(source(`${ideaId}-sess-${i}`));
-  for (let i = 0; i < (opts.extraSegmentsOnFirst ?? 0); i++) {
-    // Reuse the first session id with a fresh segment — same session, more segments.
-    sources.push({ sessionId: `${ideaId}-sess-0`, segmentId: `extra-${i}`, seq: seq++, snippet: '' });
-  }
-  return {
-    ideaId,
-    skillBaseName: opts.skillBaseName ?? SKILL,
-    org: opts.org ?? ORG,
-    text: `lesson ${ideaId}`,
-    sources,
-    status: opts.status ?? 'open',
-    ...(opts.foldedIntoRev !== undefined ? { foldedIntoRev: opts.foldedIntoRev } : {}),
-    corroborationVersion: 0,
-    createdAt: 1,
-    updatedAt: opts.updatedAt ?? 1,
-  };
-}
 
 function getEvent(name: string, org = ORG, userId: string | null = 'matt') {
   return httpEvent({ method: 'GET', userId, org, path: { name } });
@@ -91,7 +42,7 @@ describe('GET /skills/{name}/candidate-learnings', () => {
     await repo.putIdea(idea('strong', { sessions: CORROBORATION_K })); // exactly K → included
     await repo.putIdea(idea('weak', { sessions: CORROBORATION_K - 1 })); // below K → excluded
     const res = await resolveCandidateLearnings(getEvent(SKILL), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings.map((i) => i.ideaId)).toEqual(['strong']);
   });
 
@@ -99,7 +50,7 @@ describe('GET /skills/{name}/candidate-learnings', () => {
     // One session, many segments: still 1 distinct session → below K, excluded.
     await repo.putIdea(idea('multiseg', { sessions: 1, extraSegmentsOnFirst: 5 }));
     const res = await resolveCandidateLearnings(getEvent(SKILL), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings).toEqual([]);
   });
 
@@ -107,7 +58,7 @@ describe('GET /skills/{name}/candidate-learnings', () => {
     await repo.putIdea(idea('open-one', { sessions: CORROBORATION_K }));
     await repo.putIdea(idea('folded-one', { sessions: CORROBORATION_K + 3, status: 'folded' }));
     const res = await resolveCandidateLearnings(getEvent(SKILL), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings.map((i) => i.ideaId)).toEqual(['open-one']);
   });
 
@@ -121,7 +72,7 @@ describe('GET /skills/{name}/candidate-learnings', () => {
     await repo.putIdea(idea('c4', { sessions: 4, updatedAt: 1 }));
     await repo.putIdea(idea('c3', { sessions: 3, updatedAt: 1 }));
     const res = await resolveCandidateLearnings(getEvent(SKILL), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     // Sorted strongest-first; the tie at 2 favors the fresher (c2-new before c2-old);
     // capped at CANDIDATE_CAP (5) so the weakest of the six (c2-old) is dropped.
     expect(CANDIDATE_CAP).toBe(5);
@@ -132,7 +83,7 @@ describe('GET /skills/{name}/candidate-learnings', () => {
     await repo.putIdea(idea('a', { sessions: 1 }));
     await repo.putIdea(idea('b', { sessions: 1 }));
     const res = await resolveCandidateLearnings(getEvent(SKILL), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings).toEqual([]);
   });
 
@@ -140,7 +91,7 @@ describe('GET /skills/{name}/candidate-learnings', () => {
     await repo.putIdea(idea('mine', { sessions: CORROBORATION_K, org: ORG }));
     await repo.putIdea(idea('theirs', { sessions: CORROBORATION_K + 2, org: 'other-org' }));
     const res = await resolveCandidateLearnings(getEvent(SKILL, ORG), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings.map((i) => i.ideaId)).toEqual(['mine']);
   });
 
@@ -151,7 +102,7 @@ describe('GET /skills/{name}/candidate-learnings', () => {
     await repo.putIdea(idea('in-profile-org', { sessions: CORROBORATION_K, org: 'profile-org' }));
     await repo.putIdea(idea('in-token-org', { sessions: CORROBORATION_K, org: ORG }));
     const res = await resolveCandidateLearnings(getEvent(SKILL, ORG), deps);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings.map((i) => i.ideaId)).toEqual(['in-profile-org']);
   });
 
@@ -167,24 +118,17 @@ describe('GET /skills/{name}/candidate-learnings', () => {
 });
 
 describe('candidate-learnings via device token (claude+ wrapper, noAuth route)', () => {
-  const SECRET = new TextEncoder().encode('test-device-secret');
-
-  beforeEach(() => {
-    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
-  });
-
   it('accepts the HS256 device token in-handler and gates server-side', async () => {
     await repo.putIdea(idea('strong', { sessions: CORROBORATION_K, org: ORG }));
     await repo.putIdea(idea('weak', { sessions: 1, org: ORG }));
-    const token = await signDeviceToken({ userId: 'matt', org: ORG }, { secret: SECRET });
-    const event = httpEvent({
+    const event = await deviceTokenEvent({
       method: 'GET',
-      userId: null, // no Cognito claims — only the bearer device token
-      headers: { authorization: `Bearer ${token}` },
+      userId: 'matt',
+      org: ORG,
       path: { name: SKILL },
     });
     const res = await ideasHandler(event);
-    const { learnings } = bodyOf<{ learnings: Idea[] }>(res as { body: string });
+    const { learnings } = bodyOf<{ learnings: Idea[] }>(res);
     expect(learnings.map((i) => i.ideaId)).toEqual(['strong']);
   });
 });
@@ -203,7 +147,7 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
     await repo.putIdea(idea('uncorroborated', { sessions: 1 }));
     await repo.putIdea(idea('folded', { sessions: CORROBORATION_K, status: 'folded', foldedIntoRev: 3 }));
     const res = await resolveSkillIdeas(getEvent(SKILL), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     expect(ideas.map((i) => i.ideaId).sort()).toEqual(['corroborated', 'folded', 'uncorroborated']);
   });
 
@@ -211,7 +155,7 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
     await repo.putIdea(idea('three', { sessions: 3, extraSegmentsOnFirst: 4 })); // extra segments do NOT raise the count
     await repo.putIdea(idea('one', { sessions: 1 }));
     const res = await resolveSkillIdeas(getEvent(SKILL), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     const byId = Object.fromEntries(ideas.map((i) => [i.ideaId, i.corroborationCount]));
     expect(byId).toEqual({ three: 3, one: 1 });
   });
@@ -225,7 +169,7 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
     await repo.putIdea(idea('c4', { sessions: 4, updatedAt: 1 }));
     await repo.putIdea(idea('c1', { sessions: 1, updatedAt: 1 }));
     const res = await resolveSkillIdeas(getEvent(SKILL), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     expect(ideas).toHaveLength(6); // CANDIDATE_CAP is 5; the all-ideas path is uncapped.
     expect(ideas.map((i) => i.ideaId)).toEqual(['c6', 'c5', 'c4', 'c2-new', 'c2-old', 'c1']);
   });
@@ -233,7 +177,7 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
   it('folded ideas carry foldedIntoRev and their status', async () => {
     await repo.putIdea(idea('done', { sessions: CORROBORATION_K, status: 'folded', foldedIntoRev: 7 }));
     const res = await resolveSkillIdeas(getEvent(SKILL), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     expect(ideas).toHaveLength(1);
     expect(ideas[0]).toMatchObject({ ideaId: 'done', status: 'folded', foldedIntoRev: 7 });
   });
@@ -241,7 +185,7 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
   it('carries provenance (sources) for the history view', async () => {
     await repo.putIdea(idea('p', { sessions: 2 }));
     const res = await resolveSkillIdeas(getEvent(SKILL), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     expect(ideas[0]!.sources).toHaveLength(2);
     expect(ideas[0]!.sources[0]).toMatchObject({ sessionId: 'p-sess-0', segmentId: 'p-sess-0-seg' });
   });
@@ -251,7 +195,7 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
     await repo.putIdea(idea('mine-folded', { sessions: 1, org: ORG, status: 'folded', foldedIntoRev: 2 }));
     await repo.putIdea(idea('theirs', { sessions: 9, org: 'other-org' }));
     const res = await resolveSkillIdeas(getEvent(SKILL, ORG), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     expect(ideas.map((i) => i.ideaId).sort()).toEqual(['mine-folded', 'mine-open']);
   });
 
@@ -260,7 +204,7 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
     await repo.putIdea(idea('in-profile-org', { sessions: 1, org: 'profile-org' }));
     await repo.putIdea(idea('in-token-org', { sessions: 1, org: ORG }));
     const res = await resolveSkillIdeas(getEvent(SKILL, ORG), deps);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     expect(ideas.map((i) => i.ideaId)).toEqual(['in-profile-org']);
   });
 
@@ -275,20 +219,17 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
   });
 
   it('dispatches the /ideas suffix to the all-ideas path via the handler (device token)', async () => {
-    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
-    const SECRET = new TextEncoder().encode('test-device-secret');
     await repo.putIdea(idea('open-one', { sessions: 1, org: ORG }));
     await repo.putIdea(idea('folded-one', { sessions: 1, org: ORG, status: 'folded', foldedIntoRev: 1 }));
-    const token = await signDeviceToken({ userId: 'matt', org: ORG }, { secret: SECRET });
-    const event = httpEvent({
+    const event = await deviceTokenEvent({
       method: 'GET',
-      userId: null,
+      userId: 'matt',
+      org: ORG,
       rawPath: `/skills/${SKILL}/ideas`,
-      headers: { authorization: `Bearer ${token}` },
       path: { name: SKILL },
     });
     const res = await ideasHandler(event);
-    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res as { body: string });
+    const { ideas } = bodyOf<{ ideas: IdeaWithCorroboration[] }>(res);
     // Both statuses returned — proves the handler routed to all-ideas, not the gated path.
     expect(ideas.map((i) => i.ideaId).sort()).toEqual(['folded-one', 'open-one']);
   });
@@ -304,30 +245,6 @@ describe('GET /skills/{name}/ideas (all ideas, U13)', () => {
  * (PROFILE-driven) org, so an org-A read never sees org-B bin entries.
  */
 describe('GET /ideas/unassigned (the org bin, U15)', () => {
-  function binEntry(
-    entryId: string,
-    opts: {
-      sessions: number;
-      org?: string;
-      updatedAt?: number;
-      extraSegmentsOnFirst?: number;
-    },
-  ): UnassignedEntry {
-    const sources: IdeaSource[] = [];
-    for (let i = 0; i < opts.sessions; i++) sources.push(source(`${entryId}-sess-${i}`));
-    for (let i = 0; i < (opts.extraSegmentsOnFirst ?? 0); i++) {
-      sources.push({ sessionId: `${entryId}-sess-0`, segmentId: `extra-${i}`, seq: seq++, snippet: '' });
-    }
-    return {
-      entryId,
-      org: opts.org ?? ORG,
-      text: `topic ${entryId}`,
-      sources,
-      createdAt: 1,
-      updatedAt: opts.updatedAt ?? 1,
-    };
-  }
-
   function binEvent(org = ORG, userId: string | null = 'matt') {
     return httpEvent({ method: 'GET', userId, org, rawPath: '/ideas/unassigned' });
   }
@@ -336,7 +253,7 @@ describe('GET /ideas/unassigned (the org bin, U15)', () => {
     await repo.putUnassigned(binEntry('a', { sessions: 3 }));
     await repo.putUnassigned(binEntry('b', { sessions: 1 }));
     const res = await resolveUnassignedBin(binEvent(), deps);
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     const byId = Object.fromEntries(entries.map((e) => [e.entryId, e.frequency]));
     expect(byId).toEqual({ a: 3, b: 1 });
   });
@@ -344,7 +261,7 @@ describe('GET /ideas/unassigned (the org bin, U15)', () => {
   it('counts the distinct SESSION, not segments, for frequency', async () => {
     await repo.putUnassigned(binEntry('multiseg', { sessions: 2, extraSegmentsOnFirst: 5 }));
     const res = await resolveUnassignedBin(binEvent(), deps);
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     expect(entries[0]!.frequency).toBe(2); // extra segments on the first session do NOT raise it
   });
 
@@ -353,7 +270,7 @@ describe('GET /ideas/unassigned (the org bin, U15)', () => {
     await repo.putUnassigned(binEntry('f2-new', { sessions: 2, updatedAt: 200 }));
     await repo.putUnassigned(binEntry('f5', { sessions: 5, updatedAt: 1 }));
     const res = await resolveUnassignedBin(binEvent(), deps);
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     expect(entries.map((e) => e.entryId)).toEqual(['f5', 'f2-new', 'f2-old']);
   });
 
@@ -361,7 +278,7 @@ describe('GET /ideas/unassigned (the org bin, U15)', () => {
     await repo.putUnassigned(binEntry('mine', { sessions: 1, org: ORG }));
     await repo.putUnassigned(binEntry('theirs', { sessions: 9, org: 'other-org' }));
     const res = await resolveUnassignedBin(binEvent(ORG), deps);
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     expect(entries.map((e) => e.entryId)).toEqual(['mine']);
   });
 
@@ -370,7 +287,7 @@ describe('GET /ideas/unassigned (the org bin, U15)', () => {
     await repo.putUnassigned(binEntry('in-profile-org', { sessions: 1, org: 'profile-org' }));
     await repo.putUnassigned(binEntry('in-token-org', { sessions: 1, org: ORG }));
     const res = await resolveUnassignedBin(binEvent(ORG), deps);
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     expect(entries.map((e) => e.entryId)).toEqual(['in-profile-org']);
   });
 
@@ -379,7 +296,7 @@ describe('GET /ideas/unassigned (the org bin, U15)', () => {
     await repo.putUnassigned(binEntry('a', { sessions: 1 }));
     const res = await resolveUnassignedBin(binEvent(), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     expect(entries.map((e) => e.entryId)).toEqual(['a']);
   });
 
@@ -389,18 +306,15 @@ describe('GET /ideas/unassigned (the org bin, U15)', () => {
   });
 
   it('dispatches the /ideas/unassigned path to the bin via the handler (device token)', async () => {
-    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
-    const SECRET = new TextEncoder().encode('test-device-secret');
     await repo.putUnassigned(binEntry('a', { sessions: 1, org: ORG }));
-    const token = await signDeviceToken({ userId: 'matt', org: ORG }, { secret: SECRET });
-    const event = httpEvent({
+    const event = await deviceTokenEvent({
       method: 'GET',
-      userId: null,
+      userId: 'matt',
+      org: ORG,
       rawPath: '/ideas/unassigned',
-      headers: { authorization: `Bearer ${token}` },
     });
     const res = await ideasHandler(event);
-    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res as { body: string });
+    const { entries } = bodyOf<{ entries: UnassignedEntryWithFrequency[] }>(res);
     expect(entries.map((e) => e.entryId)).toEqual(['a']);
   });
 });
@@ -430,7 +344,7 @@ describe('POST /ideas/unassigned/{entryId}/promote-to-skill (admin-gated action,
     await repo.putUnassigned(entry);
     const res = await actOnUnassignedEntry(actionEvent({ admin: true }), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const body = bodyOf<{ entryId: string; acknowledged: boolean }>(res as { body: string });
+    const body = bodyOf<{ entryId: string; acknowledged: boolean }>(res);
     expect(body).toEqual({ entryId: 'e-1', acknowledged: true });
   });
 

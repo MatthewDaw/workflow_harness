@@ -1,24 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Project } from '@harness/shared';
 import { Projects, normalizeRepoSlug, projectIdFor } from './Projects.js';
-import { renderWithProviders } from '../../test/testUtils.js';
+import { makeProject, renderWithProviders } from '../../test/testUtils.js';
 
-const PROJECT: Project = {
-  id: 'weekly-compass',
-  name: 'weekly-compass',
-  repo: 'gh/acme/weekly-compass',
-  ownerUserId: 'user-matt',
-  progressPct: 62,
-  liveSessionCount: 0,
-  enabledSkills: [],
-  enabledAgents: [],
-  enabledWorkflows: [],
-  enabledAgentBundles: [],
-  enabledBundles: [],
-  enabledMcpServers: [],
-};
+const PROJECT = makeProject({ progressPct: 62 });
 
 function renderProjects() {
   return renderWithProviders(<Projects />, {

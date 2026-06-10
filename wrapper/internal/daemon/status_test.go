@@ -12,8 +12,8 @@ func TestStatusAggregatesMessageTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.PublishEvent(envWith("s", event.UserMsg("s", 100)))
-	d.PublishEvent(envWith("s", event.AssistantMsg("s", 50)))
+	d.PublishEvent(envWith("s", event.UserMsgText("s", 100, "")))
+	d.PublishEvent(envWith("s", event.AssistantMsgText("s", 50, "")))
 	st := d.Status()
 	if st.Tokens != 150 {
 		t.Errorf("tokens = %d, want 150", st.Tokens)

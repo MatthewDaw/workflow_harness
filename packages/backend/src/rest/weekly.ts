@@ -1,7 +1,6 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { weeklyUpdateSchema, type WeeklyUpdate } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import type { Principal } from '../auth/verify.js';
 import { recomputeOrgRollup } from '../projections/rollupRepo.js';
 import {
   badRequest,
@@ -11,9 +10,8 @@ import {
   parseBodySafe,
   INVALID_JSON,
   pathParam,
-  unauthorized,
 } from './runtime.js';
-import { resolvePrincipal } from './bearerAuth.js';
+import { ownedProject } from './ownership.js';
 
 /**
  * REST: weekly updates (U11, store/serve in U4) — store + publish, scoped to
@@ -36,21 +34,13 @@ export interface WeeklyDeps {
   repo: Repo;
 }
 
-async function ownedProject(repo: Repo, principal: Principal, projectId: string): Promise<boolean> {
-  const project = await repo.getProject(projectId);
-  return Boolean(project && project.ownerUserId === principal.userId);
-}
-
 export async function listWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = await resolvePrincipal(event);
-  if (!principal) return unauthorized();
-  const pid = pathParam(event, 'pid');
-  if (!pid) return badRequest('missing project id');
-  if (!(await ownedProject(deps.repo, principal, pid))) return notFound();
-  const weeks = await deps.repo.listWeekly(pid);
+  const resolved = await ownedProject(event, deps.repo, 'pid');
+  if ('error' in resolved) return resolved.error;
+  const weeks = await deps.repo.listWeekly(resolved.project.id);
   return ok({ weeks });
 }
 
@@ -58,13 +48,11 @@ export async function getWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = await resolvePrincipal(event);
-  if (!principal) return unauthorized();
-  const pid = pathParam(event, 'pid');
+  const resolved = await ownedProject(event, deps.repo, 'pid');
+  if ('error' in resolved) return resolved.error;
   const week = pathParam(event, 'week');
-  if (!pid || !week) return badRequest('missing project or week');
-  if (!(await ownedProject(deps.repo, principal, pid))) return notFound();
-  const update = await deps.repo.getWeekly(pid, week);
+  if (!week) return badRequest('missing project or week');
+  const update = await deps.repo.getWeekly(resolved.project.id, week);
   if (!update) return notFound();
   return ok({ update });
 }
@@ -78,19 +66,17 @@ export async function putWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = await resolvePrincipal(event);
-  if (!principal) return unauthorized();
-  const pid = pathParam(event, 'pid');
+  const resolved = await ownedProject(event, deps.repo, 'pid');
+  if ('error' in resolved) return resolved.error;
   const week = pathParam(event, 'week');
-  if (!pid || !week) return badRequest('missing project or week');
-  if (!(await ownedProject(deps.repo, principal, pid))) return notFound();
+  if (!week) return badRequest('missing project or week');
 
   const body = parseBodySafe(event);
   if (body === INVALID_JSON) return badRequest('invalid JSON body');
   const parsed = weeklyUpdateSchema.safeParse({
     validated: false,
     ...(body as Record<string, unknown>),
-    projectId: pid,
+    projectId: resolved.project.id,
     isoWeek: week,
   });
   if (!parsed.success) return badRequest(parsed.error.message);
@@ -108,14 +94,13 @@ export async function publishWeekly(
   event: APIGatewayProxyEventV2,
   deps: WeeklyDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = await resolvePrincipal(event);
-  if (!principal) return unauthorized();
-  const pid = pathParam(event, 'pid');
+  const resolved = await ownedProject(event, deps.repo, 'pid');
+  if ('error' in resolved) return resolved.error;
+  const { principal } = resolved;
   const week = pathParam(event, 'week');
-  if (!pid || !week) return badRequest('missing project or week');
-  if (!(await ownedProject(deps.repo, principal, pid))) return notFound();
+  if (!week) return badRequest('missing project or week');
 
-  const existing = await deps.repo.getWeekly(pid, week);
+  const existing = await deps.repo.getWeekly(resolved.project.id, week);
   if (!existing) return notFound();
 
   const published: WeeklyUpdate = { ...existing, validated: true };

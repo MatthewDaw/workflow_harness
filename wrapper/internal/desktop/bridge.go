@@ -41,7 +41,6 @@ type attachClient interface {
 	Rename(sessID, name string) error
 	CloseSession(sessID string) error
 	Shutdown() error
-	Detach() error
 	Run() error
 	InitialSessions() []daemon.SessInfo
 }

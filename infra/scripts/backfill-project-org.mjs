@@ -13,21 +13,12 @@
 // Usage:
 //   SEED_DRY_RUN=1 node infra/scripts/backfill-project-org.mjs   # report only
 //   node infra/scripts/backfill-project-org.mjs                  # write
-import path from 'node:path';
-import { existsSync } from 'node:fs';
 import { GetCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
-
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
+import { TABLE, makeDocClient, importBackendDist, requireBackendDist } from './lib/common.mjs';
 
 const DRY_RUN = Boolean(process.env.SEED_DRY_RUN);
 
-if (!existsSync(path.join(backendDist, 'db', 'keys.js'))) {
-  console.error(
-    `[backfill-org] missing ${backendDist}/db/keys.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
+requireBackendDist('backfill-org', 'db/keys.js');
 const { userKey } = await importBackendDist('db', 'keys.js');
 
 const doc = makeDocClient();

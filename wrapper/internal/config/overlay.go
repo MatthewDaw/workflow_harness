@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// The isolated config root for claude+ inner sessions (U21), now PER-PROJECT.
+// The isolated config root for claude+ inner sessions, PER-PROJECT.
 //
 // claude+ launches its inner Claude with CLAUDE_CONFIG_DIR pointed at a config
 // root under a STABLE ~/.claude+ base, so the skills/agents/MCP bundled with the
@@ -29,7 +29,7 @@ import (
 //	                                  seeded once from ~/.claude; where re-login lands
 //	  roots/<projectSlug>/            PER-PROJECT root = a session's CLAUDE_CONFIG_DIR
 //	    skills/ agents/               scoped to THIS project's enabled set only
-//	    .claude.json                  mcpServers merged in by ApplyPulled (U-MCP-Target)
+//	    .claude.json                  mcpServers merged in by ApplyPulled
 //	    projects/                     this repo's transcripts/memory
 //	    .credentials.json settings.json
 //	                                  .credentials.json kept in sync with the BASE
@@ -65,7 +65,7 @@ var seededFiles = []seededFile{
 	{homeRel: ".claude.json", name: ".claude.json"},
 	{homeRel: filepath.Join(".claude", "settings.json"), name: "settings.json"},
 	// NOTE: ~/.claude/.mcp.json is no longer seeded — Claude reads MCP servers from
-	// <root>/.claude.json mcpServers (U-MCP-Target), not a separate .mcp.json file,
+	// <root>/.claude.json mcpServers, not a separate .mcp.json file,
 	// and the personal .claude.json (seeded above) already carries them.
 }
 
@@ -74,7 +74,7 @@ var seededFiles = []seededFile{
 // here: a credential the inner Claude refreshes in one project must reach the
 // others. `.claude.json` and `settings.json` are NOT here — they are seeded once
 // and then owned per-project (see seedOnceFiles), so a project's pulled MCP
-// servers (now merged into <root>/.claude.json mcpServers — U-MCP-Target) and its
+// servers (merged into <root>/.claude.json mcpServers) and its
 // own permissions/model/hooks settings never leak into another project.
 var authSyncFiles = []string{".credentials.json"}
 
@@ -220,10 +220,10 @@ func EnsureConfigDir(repoRoot string) (string, error) {
 	for _, sub := range []string{"skills", "agents"} {
 		_ = os.MkdirAll(filepath.Join(root, sub), 0o755)
 	}
-	// `.mcp.json` and `settings.json` are seeded ONCE from the base (the personal
-	// MCP servers / personal settings) so this project can own them: pulled HQ MCP
-	// servers and the per-project hooks block merged in afterwards are never
-	// clobbered on later spawns.
+	// `.claude.json` and `settings.json` are seeded ONCE from the base (the
+	// personal MCP servers / personal settings) so this project can own them:
+	// pulled HQ MCP servers and the per-project hooks block merged in afterwards
+	// are never clobbered on later spawns.
 	for _, name := range seedOnceFiles {
 		rp := filepath.Join(root, name)
 		if pathExists(rp) {

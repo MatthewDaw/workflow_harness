@@ -1,36 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 import { EventsOn } from '../wailsjs/runtime/runtime';
-
-// Event/Envelope shapes mirror internal/event (camelCase JSON). Hand-typed
-// because Wails generates models for bound-method types, not for event payloads.
-interface Ev {
-  kind: string;
-  sessionId: string;
-  name?: string;
-  tool?: string;
-  summary?: string;
-}
-interface Envelope {
-  ts: number;
-  seq: number;
-  event: Ev;
-}
+import {
+  Envelope,
+  Ev,
+  KIND_ASSISTANT_MSG,
+  KIND_SESSION_RENAME,
+  KIND_SESSION_START,
+  KIND_STATUS_CHANGE,
+  KIND_TOOL_CALL,
+  KIND_TOOL_RESULT,
+  KIND_USER_MSG,
+} from './events';
 
 function describe(e: Ev): string {
   switch (e.kind) {
-    case 'session.start':
+    case KIND_SESSION_START:
       return `${e.name ?? e.sessionId} started`;
-    case 'session.rename':
+    case KIND_SESSION_RENAME:
       return `renamed → ${e.name ?? ''}`;
-    case 'tool.call':
+    case KIND_TOOL_CALL:
       return `tool ${e.tool ?? ''}`;
-    case 'tool.result':
+    case KIND_TOOL_RESULT:
       return `result ${e.summary ?? ''}`;
-    case 'user.msg':
+    case KIND_USER_MSG:
       return 'user message';
-    case 'assistant.msg':
+    case KIND_ASSISTANT_MSG:
       return 'assistant message';
-    case 'status.change':
+    case KIND_STATUS_CHANGE:
       return 'status change';
     default:
       return e.kind;
@@ -72,8 +68,8 @@ export default function Stream() {
         <p style={{ opacity: 0.5 }}>No events yet</p>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0' }}>
-          {events.map((env, i) => (
-            <li key={i} style={{ padding: '2px 0', borderBottom: '1px solid #2a2a2a' }}>
+          {events.map((env) => (
+            <li key={env.seq} style={{ padding: '2px 0', borderBottom: '1px solid #2a2a2a' }}>
               <span style={{ color: '#6a9955' }}>{env.event.kind}</span>{' '}
               <span style={{ opacity: 0.7 }}>{describe(env.event)}</span>
             </li>

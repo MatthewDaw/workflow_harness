@@ -1,4 +1,5 @@
 import type { ScopeRef } from '@harness/shared';
+import { variantIdFor } from '@harness/shared';
 
 /**
  * Single-table key design for the `harness` table. Every entity is addressed by
@@ -176,10 +177,31 @@ export const scopePartition = (scope: ScopeRef): string => `SCOPE#${scopeId(scop
  */
 export type CatalogKind = 'SKILL' | 'AGENT' | 'MCPSERVER' | 'WORKFLOW';
 
-/** The variant-id infix shared by the revision SK and the DTO `variantId`. */
-export function variantInfix(baseName: string, repoId?: string, userId?: string): string {
-  if (!repoId && !userId) return baseName;
-  return `${baseName}#R#${repoId ?? ''}#U#${userId ?? ''}`;
+/**
+ * The variant-id infix shared by the revision SK and the DTO `variantId` — the
+ * same string `variantIdFor` mints, so the SK infix and the DTO id never drift.
+ */
+export const variantInfix = variantIdFor;
+
+/**
+ * Parse a `variantId` infix back into `{ repoId, userId }` (the inverse of
+ * `variantInfix`/`variantIdFor`). The base variant's id is just the `baseName`
+ * (→ no repo/user); a fork is `<baseName>#R#<repoId>#U#<userId>`. Returns `{}`
+ * for the base or an unrecognized id.
+ */
+export function parseVariantId(
+  baseName: string,
+  variantId: string,
+): { repoId?: string; userId?: string } {
+  if (variantId === baseName) return {};
+  const m = new RegExp(`^${baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#R#(.*)#U#(.*)$`).exec(
+    variantId,
+  );
+  if (!m) return {};
+  return {
+    repoId: m[1] ? m[1] : undefined,
+    userId: m[2] ? m[2] : undefined,
+  };
 }
 
 /** Revision row key: an immutable snapshot of one variant at revision `rev`. */
@@ -333,7 +355,7 @@ export const goldenCasePrefixForSkill = (
   skillBaseName: string,
 ): { PK: string; skPrefix: string } => ({
   PK: `SCOPE#org#${org}`,
-  // The trailing `#` after the baseName makes this an exact-family prefix.
+  // Trailing `#` = exact-family prefix (see ideaPrefixForSkill).
   skPrefix: `IDEAGOLD#${skillBaseName}#`,
 });
 

@@ -1,22 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { McpServer } from '@harness/shared';
 import { useGetMcpServersQuery, useGetMeQuery } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
-
-const ANY_AUTHOR = '__any__';
-
-function authorOf(s: { createdBy?: { name: string } }): string {
-  return s.createdBy?.name ?? 'Unknown';
-}
-
-/**
- * A one-line summary of where the server lives: the spawned command (stdio) or
- * the remote endpoint (http/sse). Mirrors the model badge on the agent card.
- */
-function summaryOf(s: McpServer): string {
-  return s.transport === 'stdio' ? [s.command, ...s.args].join(' ').trim() : s.url;
-}
+import { OverlayModal } from '../../components/OverlayModal.js';
+import { useAuthorFilter, AuthorSelect } from '../../components/AuthorFilter.js';
+import { authorOf, mcpSummary } from '../../lib/catalogUi.js';
 
 /**
  * MCP-server registry (collapsed model): a single flat org catalog, modeled on
@@ -29,14 +18,8 @@ export function McpServers() {
   const isAdmin = Boolean(me?.admin);
   const servers = data ?? [];
 
-  const [author, setAuthor] = useState<string>(ANY_AUTHOR);
-  const authors = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of servers) set.add(authorOf(s));
-    return [...set].sort();
-  }, [servers]);
-
-  const catalog = author === ANY_AUTHOR ? servers : servers.filter((s) => authorOf(s) === author);
+  const { author, setAuthor, authors, matches } = useAuthorFilter(servers, authorOf);
+  const catalog = servers.filter(matches);
 
   return (
     <div className="hq-pad" data-testid="mcp-servers-screen">
@@ -55,26 +38,15 @@ export function McpServers() {
           </Link>
         )}
       </div>
-      {authors.length > 1 && (
-        <div className="mb-3 flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-xs text-mut">
-            Author
-            <select
-              className="hq-btn normal-case"
-              data-testid="mcp-author-filter"
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-            >
-              <option value={ANY_AUTHOR}>any author</option>
-              {authors.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      )}
+      <AuthorSelect
+        author={author}
+        onChange={setAuthor}
+        authors={authors}
+        testid="mcp-author-filter"
+        hideWhenSingle
+        labelClassName="text-xs text-mut"
+        containerClassName="mb-3 flex items-center gap-3"
+      />
       {isLoading && <div className="text-mut">Loading MCP servers…</div>}
       {!isLoading && catalog.length === 0 && (
         <div className="hq-box text-mut" data-testid="mcp-empty">
@@ -91,7 +63,7 @@ export function McpServers() {
 }
 
 function McpServerCard({ server, isAdmin }: { server: McpServer; isAdmin: boolean }) {
-  const summary = summaryOf(server);
+  const summary = mcpSummary(server);
   return (
     <div className="hq-box bg-paper" data-testid={`mcp-card-${server.name}`}>
       <div className="flex justify-between">
@@ -179,74 +151,51 @@ function SecretMap({ map, testid }: { map: Record<string, string>; testid: strin
 
 /** Fullscreen overlay rendering an MCP server's full structured record. */
 function McpServerModal({ server, onClose }: { server: McpServer; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/50 p-4 sm:p-8"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`${server.name} MCP server`}
-      data-testid={`mcp-modal-${server.name}`}
-      onClick={onClose}
+    <OverlayModal
+      ariaLabel={`${server.name} MCP server`}
+      testid={`mcp-modal-${server.name}`}
+      closeTestid={`mcp-modal-close-${server.name}`}
+      onClose={onClose}
+      maxWidthClass="max-w-[700px]"
+      contentClassName="mt-3 min-h-0 flex-1 overflow-auto"
+      header={
+        <span className="flex items-center gap-2">
+          <b>{server.name}</b>
+          <Pill>{server.transport}</Pill>
+        </span>
+      }
     >
-      <div
-        className="hq-box mx-auto flex h-full w-full max-w-[700px] flex-col overflow-hidden bg-paper"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-odd pb-2">
-          <span className="flex items-center gap-2">
-            <b>{server.name}</b>
-            <Pill>{server.transport}</Pill>
-          </span>
-          <button
-            type="button"
-            className="hq-btn"
-            data-testid={`mcp-modal-close-${server.name}`}
-            onClick={onClose}
-          >
-            ✕ Close
-          </button>
-        </div>
-        <div className="mt-3 min-h-0 flex-1 overflow-auto">
-          <DetailRow label="Scope">
-            {server.scope.tier} · {server.scope.id}
+      <DetailRow label="Scope">
+        {server.scope.tier} · {server.scope.id}
+      </DetailRow>
+      {server.transport === 'stdio' ? (
+        <>
+          <DetailRow label="Command">
+            <code className="break-all">{server.command}</code>
           </DetailRow>
-          {server.transport === 'stdio' ? (
-            <>
-              <DetailRow label="Command">
-                <code className="break-all">{server.command}</code>
-              </DetailRow>
-              <DetailRow label="Args">
-                {server.args.length > 0 ? (
-                  <code className="break-all">{server.args.join(' ')}</code>
-                ) : (
-                  <span className="italic text-faint">none</span>
-                )}
-              </DetailRow>
-              <DetailRow label="Environment">
-                <SecretMap map={server.env} testid={`mcp-env-${server.name}`} />
-              </DetailRow>
-            </>
-          ) : (
-            <>
-              <DetailRow label="URL">
-                <code className="break-all">{server.url}</code>
-              </DetailRow>
-              <DetailRow label="Headers">
-                <SecretMap map={server.headers} testid={`mcp-headers-${server.name}`} />
-              </DetailRow>
-            </>
-          )}
-          <DetailRow label="Author">{authorOf(server)}</DetailRow>
-        </div>
-      </div>
-    </div>
+          <DetailRow label="Args">
+            {server.args.length > 0 ? (
+              <code className="break-all">{server.args.join(' ')}</code>
+            ) : (
+              <span className="italic text-faint">none</span>
+            )}
+          </DetailRow>
+          <DetailRow label="Environment">
+            <SecretMap map={server.env} testid={`mcp-env-${server.name}`} />
+          </DetailRow>
+        </>
+      ) : (
+        <>
+          <DetailRow label="URL">
+            <code className="break-all">{server.url}</code>
+          </DetailRow>
+          <DetailRow label="Headers">
+            <SecretMap map={server.headers} testid={`mcp-headers-${server.name}`} />
+          </DetailRow>
+        </>
+      )}
+      <DetailRow label="Author">{authorOf(server)}</DetailRow>
+    </OverlayModal>
   );
 }

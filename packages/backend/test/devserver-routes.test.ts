@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { ROUTES } from '../src/local/devServer.js';
 import { handler as skillsHandler } from '../src/rest/skills.js';
 import { handler as ideasHandler } from '../src/rest/ideas.js';
+import { handler as agentsHandler } from '../src/rest/agents.js';
+import { handler as projectsHandler } from '../src/rest/projects.js';
+import { handler as workflowsHandler } from '../src/rest/workflows.js';
 
 /**
  * Local dev-server route parity with the deployed API.
@@ -10,12 +13,12 @@ import { handler as ideasHandler } from '../src/rest/ideas.js';
  * table; `packages/backend/src/local/devServer.ts` re-implements it so `npm run
  * dev` serves the same paths. When an endpoint exists in the stack but not here,
  * a local request 404s and the SPA shows an empty state instead of data. This
- * test pins the ideas/skills surface so that drift is caught in CI, not in a
- * confused local session.
+ * test pins the ideas/skills, workflows, agent-verb, and project opt-in surfaces
+ * so that drift is caught in CI, not in a confused local session.
  *
  * Each case asserts the FIRST matching route (the dispatcher takes the first
  * hit, ordered most-specific-first) carries the handler module the stack routes
- * the path to — `ideasFn` (rest/ideas.ts) or `skillsFn` (rest/skills.ts).
+ * the path to.
  */
 
 function resolve(path: string): { handler: unknown; groups: Record<string, string> } {
@@ -25,7 +28,7 @@ function resolve(path: string): { handler: unknown; groups: Record<string, strin
   return { handler: hit.handler, groups: { ...(m.groups ?? {}) } };
 }
 
-describe('devServer ROUTES — ideas/skills parity with api-stack', () => {
+describe('devServer ROUTES — parity with api-stack', () => {
   // Path → the handler module api-stack.ts registers it against.
   const cases: Array<{ path: string; handler: unknown; params?: Record<string, string> }> = [
     { path: '/skills/auth-helper/candidate-learnings', handler: ideasHandler, params: { name: 'auth-helper' } },
@@ -44,6 +47,49 @@ describe('devServer ROUTES — ideas/skills parity with api-stack', () => {
       params: { name: 'auth-helper', ideaId: 'idea-9' },
     },
     { path: '/skills/auth-helper/promote', handler: skillsHandler, params: { name: 'auth-helper' } },
+
+    // Workflows family — api-stack routes all of these to workflowsFn.
+    { path: '/workflows', handler: workflowsHandler },
+    { path: '/workflows/deploy-train', handler: workflowsHandler, params: { name: 'deploy-train' } },
+    {
+      path: '/workflows/deploy-train/promote',
+      handler: workflowsHandler,
+      params: { name: 'deploy-train' },
+    },
+    { path: '/workflows/deploy-train/runs', handler: workflowsHandler, params: { name: 'deploy-train' } },
+    {
+      path: '/workflows/deploy-train/runs/run-1',
+      handler: workflowsHandler,
+      params: { name: 'deploy-train', runId: 'run-1' },
+    },
+    {
+      path: '/workflows/deploy-train/runs/run-1/nodes/node-2',
+      handler: workflowsHandler,
+      params: { name: 'deploy-train', runId: 'run-1', nodeId: 'node-2' },
+    },
+
+    // Project opt-ins for workflows/agent-bundles — projectsFn, with the exact
+    // param names projectForOptIn reads (projectId, not id).
+    {
+      path: '/projects/p1/workflows/deploy-train',
+      handler: projectsHandler,
+      params: { projectId: 'p1', workflowName: 'deploy-train' },
+    },
+    {
+      path: '/projects/p1/agent-bundles/review-crew',
+      handler: projectsHandler,
+      params: { projectId: 'p1', bundleName: 'review-crew' },
+    },
+
+    // Agent catalog verbs — agentsFn.
+    { path: '/agents/reviewer/promote', handler: agentsHandler, params: { name: 'reviewer' } },
+    { path: '/agents/review-crew/members', handler: agentsHandler, params: { name: 'review-crew' } },
+    {
+      path: '/agents/review-crew/members/reviewer',
+      handler: agentsHandler,
+      params: { name: 'review-crew', member: 'reviewer' },
+    },
+    { path: '/agents/review-crew/dissolve', handler: agentsHandler, params: { name: 'review-crew' } },
   ];
 
   for (const c of cases) {

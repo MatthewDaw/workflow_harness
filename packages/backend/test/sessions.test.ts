@@ -1,11 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { Envelope, Event, Project, SessionProjection } from '@harness/shared';
-import { Repo, type ConnectionRecord } from '../src/db/repo.js';
+import { type ConnectionRecord } from '../src/db/repo.js';
 import { STALE_WINDOW_MS, control, getSession, listSessions } from '../src/rest/sessions.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
 /**
@@ -13,15 +10,8 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * replay, and 404 for a non-owned session.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 const MATT = 'matt';
 const ALICE = 'alice';
@@ -68,7 +58,7 @@ describe('GET /sessions', () => {
     await repo.putSessionProjection(session('alice-live', 'p2', ALICE, 'active', now - 1000));
 
     const res = await listSessions(httpEvent({ method: 'GET', userId: MATT }), deps);
-    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
+    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res);
     expect(sessions.map((s) => s.sessionId)).toEqual(['live-1', 'idle-1']); // live first; alice excluded
   });
 
@@ -82,7 +72,7 @@ describe('GET /sessions', () => {
       httpEvent({ method: 'GET', userId: MATT, query: { live: 'true' } }),
       deps,
     );
-    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
+    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res);
     expect(sessions.map((s) => s.sessionId)).toEqual(['live-1']);
   });
 
@@ -101,7 +91,7 @@ describe('GET /sessions', () => {
       httpEvent({ method: 'GET', userId: MATT, query: { live: 'true' } }),
       deps,
     );
-    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
+    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res);
     expect(sessions.map((s) => s.sessionId)).toEqual(['fresh']);
   });
 
@@ -117,7 +107,7 @@ describe('GET /sessions', () => {
     );
 
     const res = await listSessions(httpEvent({ method: 'GET', userId: MATT }), deps);
-    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
+    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res);
     // Stale active sorts below the fresh live session despite both being "active".
     expect(sessions[0]!.sessionId).toBe('fresh-live');
   });
@@ -136,7 +126,7 @@ describe('GET /sessions', () => {
     await repo.putSessionProjection(session('fresh', 'p1', MATT, 'needs_input', now - 1000));
 
     const res = await listSessions(httpEvent({ method: 'GET', userId: MATT }), deps);
-    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res as { body: string });
+    const { sessions } = bodyOf<{ sessions: SessionProjection[] }>(res);
     const byId = new Map(sessions.map((s) => [s.sessionId, s.status]));
     expect(byId.get('ghost-active')).toBe('done'); // silent → shown as shut down
     expect(byId.get('ghost-idle')).toBe('done');
@@ -160,7 +150,7 @@ describe('GET /sessions/:id', () => {
     );
     expect(res).toMatchObject({ statusCode: 200 });
     const { session: s, events } = bodyOf<{ session: SessionProjection; events: Envelope[] }>(
-      res as { body: string },
+      res,
     );
     expect(s.sessionId).toBe('s-1');
     expect(events.map((e) => e.seq)).toEqual([0, 1]);

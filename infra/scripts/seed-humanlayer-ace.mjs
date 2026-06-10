@@ -13,13 +13,19 @@
 // Usage:
 //   SEED_ORG=<org> SEED_DRY_RUN=1 node infra/scripts/seed-humanlayer-ace.mjs   # report only
 //   SEED_ORG=<org> node infra/scripts/seed-humanlayer-ace.mjs                  # write to `harness`
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
+import {
+  repoRoot,
+  TABLE,
+  makeDocClient,
+  importBackendDist,
+  requireBackendDist,
+} from './lib/common.mjs';
+import { parseFrontmatter } from './lib/catalog.mjs';
 
 const skillsDir = path.join(repoRoot, 'catalog', 'skills');
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
 
@@ -60,40 +66,9 @@ const ACE_SKILLS = [
   'validate_plan',
 ];
 
-if (!existsSync(path.join(backendDist, 'seed', 'skills.js'))) {
-  console.error(
-    `[seed-hl-ace] missing ${backendDist}/seed/skills.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
+requireBackendDist('seed-hl-ace', 'seed/skills.js');
 const { buildSeedSkills } = await importBackendDist('seed', 'skills.js');
 const { skillKey } = await importBackendDist('db', 'keys.js');
-
-function parseFrontmatter(md) {
-  const lines = md.split(/\r?\n/);
-  if (lines[0]?.trim() !== '---') return { name: undefined, description: '' };
-  let name;
-  const descParts = [];
-  let inDesc = false;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === '---') break;
-    const top = /^([A-Za-z0-9_-]+):\s?(.*)$/.exec(line);
-    if (top && !line.startsWith(' ')) {
-      inDesc = false;
-      const [, key, value] = top;
-      if (key === 'name') name = value.trim();
-      else if (key === 'description') {
-        inDesc = true;
-        const v = value.trim();
-        if (v && v !== '>-' && v !== '>' && v !== '|' && v !== '|-') descParts.push(v);
-      }
-      continue;
-    }
-    if (inDesc && line.trim()) descParts.push(line.trim());
-  }
-  return { name, description: descParts.join(' ').trim() };
-}
 
 const files = [];
 for (const name of ACE_SKILLS) {

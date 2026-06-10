@@ -1,9 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import { orgScope, type Agent, type McpServer, type Project, type Skill } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import {
   disableProjectAgent,
   disableProjectAgentBundle,
@@ -15,7 +11,7 @@ import {
   enableProjectSkill,
   type ProjectsDeps,
 } from '../src/rest/projects.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
 /**
@@ -25,15 +21,8 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * enabledSkills; the admin-or-owner gate; 404 for catalog names that do not exist.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps: ProjectsDeps = { repo };
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 const MATT = 'matt';
 const ALICE = 'alice';
@@ -97,13 +86,13 @@ describe('POST /projects/:projectId/skills/:skillName', () => {
     const ev = ownerEvent({ method: 'POST', path: { projectId: PROJ, skillName: 'reconcile' } });
     const first = await enableProjectSkill(ev, deps);
     expect(first).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ project: Project }>(first as { body: string }).project.enabledSkills).toEqual([
+    expect(bodyOf<{ project: Project }>(first).project.enabledSkills).toEqual([
       'reconcile',
     ]);
 
     // Second add is a no-op (idempotent) — still a single entry.
     const second = await enableProjectSkill(ev, deps);
-    expect(bodyOf<{ project: Project }>(second as { body: string }).project.enabledSkills).toEqual([
+    expect(bodyOf<{ project: Project }>(second).project.enabledSkills).toEqual([
       'reconcile',
     ]);
   });
@@ -151,7 +140,7 @@ describe('DELETE /projects/:projectId/skills/:skillName', () => {
       ownerEvent({ method: 'DELETE', path: { projectId: PROJ, skillName: 'reconcile' } }),
       deps,
     );
-    expect(bodyOf<{ project: Project }>(res as { body: string }).project.enabledSkills).toEqual([
+    expect(bodyOf<{ project: Project }>(res).project.enabledSkills).toEqual([
       'forecast',
     ]);
   });
@@ -172,7 +161,7 @@ describe('POST /projects/:projectId/agents/:agentName (unions agent skills)', ()
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const updated = bodyOf<{ project: Project }>(res as { body: string }).project;
+    const updated = bodyOf<{ project: Project }>(res).project;
     expect(updated.enabledAgents).toEqual(['builder']);
     expect(updated.enabledSkills.sort()).toEqual(['a', 'b', 'c']);
   });
@@ -187,7 +176,7 @@ describe('POST /projects/:projectId/agents/:agentName (unions agent skills)', ()
       ownerEvent({ method: 'POST', path: { projectId: PROJ, agentName: 'builder' } }),
       deps,
     );
-    const updated = bodyOf<{ project: Project }>(res as { body: string }).project;
+    const updated = bodyOf<{ project: Project }>(res).project;
     expect(updated.enabledSkills.sort()).toEqual(['a', 'b']);
   });
 
@@ -210,13 +199,13 @@ describe('POST /projects/:projectId/mcp-servers/:name', () => {
     const first = await enableProjectMcpServer(ev, deps);
     expect(first).toMatchObject({ statusCode: 200 });
     expect(
-      bodyOf<{ project: Project }>(first as { body: string }).project.enabledMcpServers,
+      bodyOf<{ project: Project }>(first).project.enabledMcpServers,
     ).toEqual(['filesystem']);
 
     // Second add is a no-op (idempotent) — still a single entry.
     const second = await enableProjectMcpServer(ev, deps);
     expect(
-      bodyOf<{ project: Project }>(second as { body: string }).project.enabledMcpServers,
+      bodyOf<{ project: Project }>(second).project.enabledMcpServers,
     ).toEqual(['filesystem']);
   });
 
@@ -267,7 +256,7 @@ describe('DELETE /projects/:projectId/mcp-servers/:name', () => {
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    expect(bodyOf<{ project: Project }>(res as { body: string }).project.enabledMcpServers).toEqual(
+    expect(bodyOf<{ project: Project }>(res).project.enabledMcpServers).toEqual(
       ['weather'],
     );
   });
@@ -284,7 +273,7 @@ describe('DELETE /projects/:projectId/agents/:agentName (does NOT prune skills)'
       ownerEvent({ method: 'DELETE', path: { projectId: PROJ, agentName: 'builder' } }),
       deps,
     );
-    const updated = bodyOf<{ project: Project }>(res as { body: string }).project;
+    const updated = bodyOf<{ project: Project }>(res).project;
     expect(updated.enabledAgents).toEqual([]);
     // Skills brought by the agent are NOT pruned.
     expect(updated.enabledSkills.sort()).toEqual(['a', 'b']);
@@ -305,7 +294,7 @@ describe('POST /projects/:projectId/agent-bundles/:bundleName (enable a whole ag
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const updated = bodyOf<{ project: Project }>(res as { body: string }).project;
+    const updated = bodyOf<{ project: Project }>(res).project;
     expect(updated.enabledAgentBundles).toEqual(['squad']);
     expect(updated.enabledAgents.sort()).toEqual(['builder', 'reviewer']);
     expect(updated.enabledSkills.sort()).toEqual(['gh', 'kit']);
@@ -340,7 +329,7 @@ describe('DELETE /projects/:projectId/agent-bundles/:bundleName (disable a whole
       deps,
     );
     expect(res).toMatchObject({ statusCode: 200 });
-    const updated = bodyOf<{ project: Project }>(res as { body: string }).project;
+    const updated = bodyOf<{ project: Project }>(res).project;
     expect(updated.enabledAgentBundles).toEqual(['crew']);
     // reviewer removed (only squad had it); builder kept (still in crew).
     expect(updated.enabledAgents).toEqual(['builder']);

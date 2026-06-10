@@ -1,9 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { Skill } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import { resolveSkills } from '../src/rest/skills.js';
 import {
   assertBaseVariantOnly,
@@ -13,7 +9,7 @@ import {
   type SeedSkillFile,
 } from '../src/seed/skills.js';
 import { orgScope } from '@harness/shared';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 
 /**
@@ -22,14 +18,7 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * existing `resolveSkills` shows the bundle to any user in the org.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 const ORG = 'acme';
 // The `hq-*` files are product skills (bundle members); the non-`hq-` files are
@@ -144,6 +133,25 @@ describe('buildSeedSkills', () => {
     expect(userScoped.map((s) => s.name).sort()).toEqual(['compound-engineering', 'gstack']);
     for (const s of userScoped) {
       expect(s.scope).toEqual({ tier: 'user', id: GRANT });
+    }
+  });
+
+  it('drops a manifest member that has no matching skill file (no dangling members)', () => {
+    const records = buildSeedSkills(ORG, FILES, {
+      [STARTER_BUNDLE_NAME]: { description: 'x', members: ['hq-weekly-update', 'ghost-skill'] },
+    });
+    const bundle = records.find((r) => r.kind === 'bundle');
+    expect(bundle?.members).toEqual(['hq-weekly-update']);
+  });
+
+  it('with an empty manifest, no bundle and every skill is granted user-narrow', () => {
+    const records = buildSeedSkills(ORG, FILES, {}, 'grant-owner');
+    expect(records.filter((r) => r.kind === 'bundle')).toHaveLength(0);
+    const skills = records.filter((r) => r.kind === 'skill');
+    expect(skills).toHaveLength(FILES.length);
+    // No bundle => no org default => everything seeds at the grant owner scope.
+    for (const s of skills) {
+      expect(s.scope).toEqual({ tier: 'user', id: 'grant-owner' });
     }
   });
 });

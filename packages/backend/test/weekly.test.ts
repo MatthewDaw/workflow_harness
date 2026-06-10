@@ -1,13 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { Project, WeeklyUpdate } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import { getWeekly, publishWeekly, putWeekly } from '../src/rest/weekly.js';
 import { recomputeOrgRollup } from '../src/projections/rollupRepo.js';
-import { installInMemoryTable } from './helpers/memtable.js';
-import { bodyOf, httpEvent } from './helpers/httpevent.js';
+import { memRepoHarness } from './helpers/memtable.js';
+import { bodyOf, deviceTokenEvent, httpEvent } from './helpers/httpevent.js';
 
 /**
  * U4 REST: weekly updates are now store/serve for a client-posted report. PUT
@@ -17,15 +13,8 @@ import { bodyOf, httpEvent } from './helpers/httpevent.js';
  * report). Weekly is scoped to the project owner.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
+const { repo } = memRepoHarness();
 const deps = { repo };
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
 
 const MATT = 'matt';
 const ORG = 'acme';
@@ -81,7 +70,7 @@ describe('store + serve a posted report', () => {
     expect(res).toMatchObject({ statusCode: 200 });
 
     const served = await getWeekly(getEvent(MATT), deps);
-    const { update } = bodyOf<{ update: WeeklyUpdate }>(served as { body: string });
+    const { update } = bodyOf<{ update: WeeklyUpdate }>(served);
     expect(update.validated).toBe(false);
     expect(update.done).toBe('Shipped reconciliation and export.');
     expect(update.plan).toBe('Harden the importer; start the dashboard.');
@@ -136,7 +125,7 @@ describe('publish recomputes the org roll-up', () => {
 
     const res = await publishWeekly(publishEvent(MATT), deps);
     expect(res).toMatchObject({ statusCode: 200 });
-    const { update } = bodyOf<{ update: WeeklyUpdate }>(res as { body: string });
+    const { update } = bodyOf<{ update: WeeklyUpdate }>(res);
     expect(update.validated).toBe(true);
     expect(update.conformityScore).toBe(90);
     // Publish re-ran the roll-up: the linked SO reflects the project's progress.
@@ -154,24 +143,15 @@ describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () =>
   // The weekly routes use HttpNoneAuthorizer, so the PTY's device token arrives
   // as a raw `Authorization: Bearer` header (no jwt.claims). resolvePrincipal
   // must verify it (HS256, offline) and the request must succeed under ownership.
-  const SECRET = new TextEncoder().encode('test-device-secret');
-
-  beforeEach(() => {
-    process.env.DEVICE_TOKEN_SECRET = 'test-device-secret';
-  });
-
-  async function bearerPutEvent(userId: string, body: unknown) {
-    const { signDeviceToken } = await import('../src/auth/verify.js');
-    const token = await signDeviceToken({ userId, org: ORG }, { secret: SECRET });
-    return httpEvent({
+  const bearerPutEvent = (userId: string, body: unknown) =>
+    deviceTokenEvent({
       method: 'PUT',
-      userId: null, // no Cognito jwt claims — only the bearer header
+      userId,
+      org: ORG,
       rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
       path: { pid: PROJ, week: WEEK },
-      headers: { authorization: `Bearer ${token}` },
       body,
     });
-  }
 
   it('stores a posted report authenticated by a device token', async () => {
     await repo.putProject(project(MATT));

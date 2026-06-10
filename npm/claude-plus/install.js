@@ -1,4 +1,4 @@
-// install.js — resolves the per-platform prebuilt binary for claude+ (U18).
+// install.js — resolves the per-platform prebuilt binary for claude+.
 //
 // The platform-specific binary ships as an optionalDependency package named
 // `@claude-plus/<os>-<arch>` containing a single `claude-plus` executable. npm
@@ -28,6 +28,20 @@ function exeName() {
   return process.platform === 'win32' ? 'claude-plus.exe' : 'claude-plus';
 }
 
+// ensureExecutable repairs a missing exec bit on the resolved binary (npm can
+// drop it when unpacking). Guarded by a mode check so the common launch path is
+// a stat, not a chmod, and wrapped in try/catch so a read-only install location
+// never breaks launching an already-executable binary.
+function ensureExecutable(bin) {
+  if (process.platform === 'win32') return;
+  try {
+    const mode = fs.statSync(bin).mode;
+    if ((mode & 0o111) !== 0o111) fs.chmodSync(bin, 0o755);
+  } catch {
+    // best-effort: if the binary truly isn't executable, spawn will say so
+  }
+}
+
 // binaryPath returns the absolute path to the binary for the current platform.
 // It prefers the published per-platform optionalDependency package, and falls
 // back to a binary bundled directly in this package's bin/ directory (used by
@@ -43,7 +57,7 @@ function binaryPath() {
       const pkgJson = require.resolve(`${pkg}/package.json`);
       const bin = path.join(path.dirname(pkgJson), 'bin', exe);
       if (fs.existsSync(bin)) {
-        if (process.platform !== 'win32') fs.chmodSync(bin, 0o755);
+        ensureExecutable(bin);
         return bin;
       }
     } catch {
@@ -54,7 +68,7 @@ function binaryPath() {
   // 2) Local fallback: a binary bundled in this package (bin/<exe>).
   const local = path.join(__dirname, 'bin', exe);
   if (fs.existsSync(local)) {
-    if (process.platform !== 'win32') fs.chmodSync(local, 0o755);
+    ensureExecutable(local);
     return local;
   }
 

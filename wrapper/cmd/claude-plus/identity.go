@@ -4,9 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/workflow-harness/claude-plus/internal/config"
 )
 
 // wrapperIdentity is the signed-in identity shown in the status line, decoded
@@ -18,27 +18,16 @@ type wrapperIdentity struct {
 	Org  string // org the login was bound to (token `org` claim)
 }
 
-// loadIdentity reads ~/.claude-plus/credentials (line 2 = device token) and
-// decodes the JWT payload to recover the signed-in name + org. Returns ok=false
-// when there is no credentials file / token — i.e. the user is not logged in.
+// loadIdentity reads the device token from ~/.claude-plus/credentials (via
+// config.LoadCredentials) and decodes the JWT payload to recover the signed-in
+// name + org. Returns ok=false when there is no credentials file / token —
+// i.e. the user is not logged in.
 func loadIdentity() (id wrapperIdentity, ok bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	creds, ok := config.LoadCredentials()
+	if !ok || creds.Token == "" {
 		return wrapperIdentity{}, false
 	}
-	raw, err := os.ReadFile(filepath.Join(home, ".claude-plus", "credentials"))
-	if err != nil {
-		return wrapperIdentity{}, false
-	}
-	lines := strings.Split(string(raw), "\n")
-	if len(lines) < 2 {
-		return wrapperIdentity{}, false
-	}
-	token := strings.TrimSpace(lines[1])
-	if token == "" {
-		return wrapperIdentity{}, false
-	}
-	claims, err := decodeTokenClaims(token)
+	claims, err := decodeTokenClaims(creds.Token)
 	if err != nil || claims.Org == "" {
 		return wrapperIdentity{}, false
 	}

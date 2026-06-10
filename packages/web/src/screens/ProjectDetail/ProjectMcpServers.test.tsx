@@ -1,37 +1,21 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { McpServer, Project } from '@harness/shared';
+import type { McpServer } from '@harness/shared';
 import { ProjectMcpServers } from './ProjectMcpServers.js';
 import { ProjectLayout } from './ProjectLayout.js';
-import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
+import {
+  ORG,
+  lastMatching,
+  makeMcpServer,
+  makeProject,
+  renderWithProviders,
+} from '../../test/testUtils.js';
 
-const ORG = { tier: 'org', id: 'acme' } as const;
-
-const PROJECT: Project = {
-  id: 'weekly-compass',
-  name: 'weekly-compass',
-  repo: 'gh/acme/weekly-compass',
-  ownerUserId: 'user-matt',
-  progressPct: 0,
-  liveSessionCount: 0,
-  enabledSkills: [],
-  enabledBundles: [],
-  enabledAgents: [],
-  enabledWorkflows: [],
-  enabledAgentBundles: [],
-  enabledMcpServers: ['fs'],
-};
+const PROJECT = makeProject({ enabledMcpServers: ['fs'] });
 
 const SERVERS: McpServer[] = [
-  {
-    name: 'fs',
-    scope: ORG,
-    transport: 'stdio',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem'],
-    env: {},
-  },
+  makeMcpServer({ name: 'fs', args: ['-y', '@modelcontextprotocol/server-filesystem'] }),
   {
     name: 'linear',
     scope: ORG,

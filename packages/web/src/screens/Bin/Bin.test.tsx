@@ -75,7 +75,8 @@ describe('BinTable', () => {
     expect(screen.queryByTestId('bin-create-skill-a')).toBeNull();
 
     rerender(<BinTable entries={[entry({ entryId: 'a' })]} isAdmin />);
-    expect(screen.getByTestId('bin-create-skill-a')).toBeInTheDocument();
+    // The action is a disabled stub pointing at /skill-idea-iterate, not a no-op.
+    expect(screen.getByTestId('bin-create-skill-a')).toBeDisabled();
   });
 });
 
@@ -91,8 +92,8 @@ describe('Bin screen', () => {
     });
     await waitFor(() => expect(screen.getByTestId('bin-topic-a')).toHaveTextContent('Multi-region failover'));
     expect(screen.getByTestId('bin-frequency-a')).toHaveTextContent('2×');
-    // Admin sees the action.
-    expect(screen.getByTestId('bin-create-skill-a')).toBeInTheDocument();
+    // Admin sees the (disabled stub) action.
+    expect(screen.getByTestId('bin-create-skill-a')).toBeDisabled();
   });
 
   it('renders the empty state when the org bin is clear', async () => {

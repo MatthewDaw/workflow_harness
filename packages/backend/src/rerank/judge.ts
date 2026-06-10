@@ -1,3 +1,4 @@
+import { envNumber } from '../lib/env.js';
 import { type FetchLike, openRouterChat } from '../llm/openrouter.js';
 
 /**
@@ -31,16 +32,15 @@ import { type FetchLike, openRouterChat } from '../llm/openrouter.js';
 const MAX_TOKENS = 256;
 
 /**
- * Judge confidence bar (in [0,1]). A `best` pick whose confidence is BELOW this
- * routes to the unassigned bin (R6). Env overrideable for tuning against real
- * topics; conservative default kept here as a documented knob (the second of the
- * two thresholds, alongside U8's similarity floor).
+ * Default judge confidence bar (in [0,1]). A `best` pick whose confidence is
+ * BELOW the bar routes to the unassigned bin (R6) — the second of the two
+ * thresholds, alongside U8's similarity floor.
  */
-export const JUDGE_CONFIDENCE_BAR = Number(process.env.JUDGE_CONFIDENCE_BAR ?? 0.6);
+export const JUDGE_CONFIDENCE_BAR = 0.6;
 
-/** Resolve the configured judge confidence bar at call time (env overrideable). */
+/** The configured confidence bar (`JUDGE_CONFIDENCE_BAR`), read at call time. */
 export function judgeConfidenceBar(): number {
-  return Number(process.env.JUDGE_CONFIDENCE_BAR ?? JUDGE_CONFIDENCE_BAR);
+  return envNumber('JUDGE_CONFIDENCE_BAR', JUDGE_CONFIDENCE_BAR);
 }
 
 /** Resolve the configured rerank-judge model id (env overrideable; defaults to the chat model). */

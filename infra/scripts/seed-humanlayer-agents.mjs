@@ -14,11 +14,17 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { repoRoot, TABLE, makeDocClient, importBackendDist } from './lib/common.mjs';
+import {
+  repoRoot,
+  TABLE,
+  makeDocClient,
+  importBackendDist,
+  requireBackendDist,
+} from './lib/common.mjs';
+import { parseFrontmatter, readBundleManifest } from './lib/catalog.mjs';
 
 const agentsDir = path.join(repoRoot, '.claude', 'agents');
 const bundlesManifestPath = path.join(repoRoot, 'catalog', 'agents', 'bundles.json');
-const backendDist = path.join(repoRoot, 'packages', 'backend', 'dist');
 
 const ORG = process.env.SEED_ORG;
 
@@ -27,57 +33,9 @@ if (!ORG) {
   process.exit(1);
 }
 
-if (!existsSync(path.join(backendDist, 'seed', 'agents.js'))) {
-  console.error(
-    `[seed-hl-agents] missing ${backendDist}/seed/agents.js — run \`npm run build -w @harness/backend\` first.`,
-  );
-  process.exit(1);
-}
+requireBackendDist('seed-hl-agents', 'seed/agents.js');
 const { buildSeedAgents } = await importBackendDist('seed', 'agents.js');
 const { agentKey } = await importBackendDist('db', 'keys.js');
-
-// Frontmatter parser extended from seed-humanlayer-ace.mjs: also extracts
-// `tools` (CSV -> trimmed string[]) and `model`, plus the body (the prompt).
-function parseFrontmatter(md) {
-  const lines = md.split(/\r?\n/);
-  if (lines[0]?.trim() !== '---') {
-    return { name: undefined, description: '', tools: [], model: '', prompt: md };
-  }
-  let name;
-  let model = '';
-  let tools = [];
-  const descParts = [];
-  let inDesc = false;
-  let bodyStart = lines.length;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === '---') {
-      bodyStart = i + 1;
-      break;
-    }
-    const top = /^([A-Za-z0-9_-]+):\s?(.*)$/.exec(line);
-    if (top && !line.startsWith(' ')) {
-      inDesc = false;
-      const [, key, value] = top;
-      if (key === 'name') name = value.trim();
-      else if (key === 'model') model = value.trim();
-      else if (key === 'tools') {
-        tools = value
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean);
-      } else if (key === 'description') {
-        inDesc = true;
-        const v = value.trim();
-        if (v && v !== '>-' && v !== '>' && v !== '|' && v !== '|-') descParts.push(v);
-      }
-      continue;
-    }
-    if (inDesc && line.trim()) descParts.push(line.trim());
-  }
-  const prompt = lines.slice(bodyStart).join('\n').trim();
-  return { name, description: descParts.join(' ').trim(), tools, model, prompt };
-}
 
 // Discover the agent files (explicit *.md scan under .claude/agents).
 const mdFiles = existsSync(agentsDir)
@@ -95,8 +53,8 @@ if (mdFiles.length === 0) {
 const files = [];
 for (const file of mdFiles) {
   const md = path.join(agentsDir, file);
-  const raw = readFileSync(md, 'utf8');
-  const fm = parseFrontmatter(raw);
+  // Extended front matter: agents also carry `tools`/`model` and the body prompt.
+  const fm = parseFrontmatter(readFileSync(md, 'utf8'), { extended: true });
   const fallback = file.replace(/\.md$/, '');
   files.push({
     name: fm.name ?? fallback,
@@ -107,17 +65,11 @@ for (const file of mdFiles) {
   });
 }
 
-// Load the agent-bundle manifest (single source of truth for how seeded agents
-// are grouped, mirroring catalog/skills/bundles.json). Absent/invalid -> no bundles.
-let manifest = {};
-if (existsSync(bundlesManifestPath)) {
-  try {
-    manifest = JSON.parse(readFileSync(bundlesManifestPath, 'utf8'));
-  } catch (err) {
-    console.error(`[seed-hl-agents] failed to parse ${bundlesManifestPath}: ${err.message}`);
-    process.exit(1);
-  }
-}
+// The agent-bundle manifest (single source of truth for how seeded agents are
+// grouped, mirroring catalog/skills/bundles.json). Absent -> no bundles, silently.
+const manifest = readBundleManifest(bundlesManifestPath, 'seed-hl-agents', {
+  warnIfAbsent: false,
+});
 
 // buildSeedAgents: one org-scoped record per file (skills:[], system authorship),
 // plus one kind:'bundle' record per manifest entry.

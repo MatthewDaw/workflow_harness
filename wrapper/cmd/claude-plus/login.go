@@ -1,16 +1,14 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/workflow-harness/claude-plus/internal/config"
 	"github.com/workflow-harness/claude-plus/internal/daemon"
 )
 
@@ -62,7 +60,7 @@ func cmdLogin(args []string) error {
 		UserCode   string `json:"userCode"`
 		ExpiresAt  int64  `json:"expiresAt"`
 	}
-	if err := postJSON(client, apiBase+"/device/start", nil, &start); err != nil {
+	if err := config.DoJSON(client, http.MethodPost, apiBase+"/device/start", "", nil, &start, ""); err != nil {
 		return fmt.Errorf("start device login: %w", err)
 	}
 	if start.DeviceCode == "" || start.UserCode == "" {
@@ -89,8 +87,8 @@ func cmdLogin(args []string) error {
 			Status string `json:"status"`
 			Token  string `json:"token"`
 		}
-		if err := postJSON(client, apiBase+"/device/poll",
-			map[string]string{"deviceCode": start.DeviceCode}, &poll); err != nil {
+		if err := config.DoJSON(client, http.MethodPost, apiBase+"/device/poll", "",
+			map[string]string{"deviceCode": start.DeviceCode}, &poll, ""); err != nil {
 			return fmt.Errorf("poll device login: %w", err)
 		}
 		switch poll.Status {
@@ -154,34 +152,4 @@ func writeCredentials(wsURL, token, apiBase string) error {
 	}
 	body := wsURL + "\n" + token + "\n" + apiBase + "\n"
 	return os.WriteFile(filepath.Join(dir, "credentials"), []byte(body), 0o600)
-}
-
-// postJSON POSTs an optional JSON body and decodes a JSON response. A nil body
-// sends an empty POST. Non-2xx responses become errors.
-func postJSON(client *http.Client, url string, body any, dst any) error {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequest(http.MethodPost, url, rdr)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("content-type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); resp.Body.Close() }()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("%s", resp.Status)
-	}
-	if dst == nil {
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(dst)
 }

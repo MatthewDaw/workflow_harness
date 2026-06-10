@@ -604,46 +604,40 @@ export type McpTransport = z.infer<typeof mcpTransportSchema>;
  * bodies already use. This is a deliberate v1 simplification; KMS / env-ref
  * resolution is a documented follow-up. Never log these values.
  */
+/** Fields every transport branch shares (identity + scope + authorship + versioning). */
+const mcpServerBase = z
+  .object({
+    name: z.string().min(1),
+    /** Catalog scope. Org-only today, but kept as a full `scopeRefSchema` for
+     * parity with skills/agents (every existing org-scoped record validates). */
+    scope: scopeRefSchema,
+    /** Authorship stamp set on create; optional on read for back-compat. */
+    createdBy: createdBySchema.optional(),
+  })
+  .merge(versionFieldsSchema);
+
 export const mcpServerSchema = z.discriminatedUnion('transport', [
-  z
-    .object({
-      name: z.string().min(1),
-      /** Catalog scope. Org-only today, but kept as a full `scopeRefSchema` for
-       * parity with skills/agents (every existing org-scoped record validates). */
-      scope: scopeRefSchema,
-      transport: z.literal('stdio'),
-      /** The executable the daemon spawns for a local (stdio) server. */
-      command: z.string().min(1),
-      /** Arguments passed to `command`. Defaults to []. */
-      args: z.array(z.string()).default([]),
-      /** Environment variables for the subprocess (plaintext secrets — see note). */
-      env: z.record(z.string()).default({}),
-      /** Authorship stamp set on create; optional on read for back-compat. */
-      createdBy: createdBySchema.optional(),
-    })
-    .merge(versionFieldsSchema),
-  z
-    .object({
-      name: z.string().min(1),
-      scope: scopeRefSchema,
-      transport: z.literal('http'),
-      /** The remote endpoint URL the daemon connects to. */
-      url: z.string().url(),
-      /** Static request headers (plaintext secrets — see note). Defaults to {}. */
-      headers: z.record(z.string()).default({}),
-      createdBy: createdBySchema.optional(),
-    })
-    .merge(versionFieldsSchema),
-  z
-    .object({
-      name: z.string().min(1),
-      scope: scopeRefSchema,
-      transport: z.literal('sse'),
-      url: z.string().url(),
-      headers: z.record(z.string()).default({}),
-      createdBy: createdBySchema.optional(),
-    })
-    .merge(versionFieldsSchema),
+  mcpServerBase.extend({
+    transport: z.literal('stdio'),
+    /** The executable the daemon spawns for a local (stdio) server. */
+    command: z.string().min(1),
+    /** Arguments passed to `command`. Defaults to []. */
+    args: z.array(z.string()).default([]),
+    /** Environment variables for the subprocess (plaintext secrets — see note). */
+    env: z.record(z.string()).default({}),
+  }),
+  mcpServerBase.extend({
+    transport: z.literal('http'),
+    /** The remote endpoint URL the daemon connects to. */
+    url: z.string().url(),
+    /** Static request headers (plaintext secrets — see note). Defaults to {}. */
+    headers: z.record(z.string()).default({}),
+  }),
+  mcpServerBase.extend({
+    transport: z.literal('sse'),
+    url: z.string().url(),
+    headers: z.record(z.string()).default({}),
+  }),
 ]);
 export type McpServer = z.infer<typeof mcpServerSchema>;
 

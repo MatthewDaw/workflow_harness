@@ -1,23 +1,9 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { mcpServerSchema, orgScope, type McpServer } from '@harness/shared';
+import { mcpServerSchema } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import {
-  badRequest,
-  conflict,
-  created,
-  defaultRepo,
-  forbidden,
-  notFound,
-  ok,
-  parseBodySafe,
-  INVALID_JSON,
-  pathParam,
-  unauthorized,
-} from './runtime.js';
-import { isBuiltin, resolveOrgCatalogAuth } from './scopeauth.js';
-import { effectiveOrg } from './membership.js';
-import { resolvePrincipal } from './bearerAuth.js';
-import { withAuthorNames } from './authorNames.js';
+import { badRequest, defaultRepo, ok, pathParam } from './runtime.js';
+import { requireOrgCatalogAuth } from './scopeauth.js';
+import { makeCatalogHandlers } from './catalogResource.js';
 
 /**
  * REST: MCP servers — a single ORG catalog, modeled on skills minus bundles.
@@ -31,128 +17,33 @@ import { withAuthorNames } from './authorNames.js';
  *
  * MCP servers are FLAT: there is no bundle concept (no members/dissolve/scope
  * verbs). The record is a structured discriminated union on `transport`, not a
- * markdown body. Catalog writes are gated by `resolveOrgCatalogAuth` (device
- * token OR Cognito JWT, with server-side admin), exactly like skills/agents.
+ * markdown body.
  */
 
 export interface McpServersDeps {
   repo: Repo;
 }
 
-export async function resolveMcpServers(
-  event: APIGatewayProxyEventV2,
-  deps: McpServersDeps,
-): Promise<APIGatewayProxyResultV2> {
-  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer route).
-  const principal = await resolvePrincipal(event);
-  if (!principal) return unauthorized();
-  const org = (await effectiveOrg(event, deps.repo)) ?? principal.org;
-  if (!org) return ok({ mcpServers: [] });
+const handlers = makeCatalogHandlers({
+  kind: 'MCPSERVER',
+  schema: mcpServerSchema,
+  label: 'MCP server',
+  responseKey: 'mcpServer',
+  listKey: 'mcpServers',
+  seedHint: 'the repo',
+  repoOps: {
+    list: (repo, org, userId) => repo.listMcpServers(org, userId),
+    get: (repo, scope, name) => repo.getMcpServer(scope, name),
+    del: (repo, scope, name) => repo.deleteMcpServer(scope, name),
+  },
+});
 
-  // Pass the caller's userId so the merged org+user catalog is returned (a
-  // user-scoped server shadows an org-scoped one of the same name).
-  const all = await deps.repo.listMcpServers(org, principal.userId);
-  // Show the author's real name (their email) instead of the raw Cognito sub that
-  // claude+ device-token writes stamp into createdBy.name.
-  return ok({ mcpServers: await withAuthorNames(deps.repo, all) });
-}
-
-export async function createMcpServer(
-  event: APIGatewayProxyEventV2,
-  deps: McpServersDeps,
-): Promise<APIGatewayProxyResultV2> {
-  // Accept the gateway Cognito JWT OR a raw device token (HttpNoneAuthorizer
-  // route); admin is decided server-side from the profile so the device token
-  // (no role claim) can write.
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  if (!auth.admin) return forbidden();
-  if (!auth.org) return unauthorized();
-  const { principal, org } = auth;
-
-  const name = pathParam(event, 'name');
-  const body = parseBodySafe(event);
-  if (body === INVALID_JSON) return badRequest('invalid JSON body');
-
-  // Force org scope (ignore any client-supplied scope) and parse the rest.
-  const candidate = { ...(body as Record<string, unknown>), scope: orgScope(org) };
-  const parsed = mcpServerSchema.safeParse(candidate);
-  if (!parsed.success) return badRequest(parsed.error.message);
-  const server: McpServer = parsed.data;
-
-  // Canonical built-ins are owned by the git seed: reject an in-place write to the
-  // BASE variant (no repo/author). Forking (repoId + authorUserId) is still allowed.
-  const targetName = name ?? server.name;
-  const existing = await deps.repo.getMcpServer(orgScope(org), targetName);
-  if (isBuiltin(existing) && !server.repoId && !server.authorUserId) {
-    return conflict(
-      `"${targetName}" is a canonical built-in MCP server — fork it (set repoId + ` +
-        `authorUserId) or change it in the repo and re-seed; in-place writes are rejected.`,
-    );
-  }
-
-  if (name) {
-    // PUT /mcp-servers/:name — update; preserve the existing createdBy stamp.
-    server.createdBy = existing?.createdBy ?? server.createdBy;
-    server.baseName = existing?.baseName ?? server.baseName ?? name;
-  } else {
-    // POST — stamp authorship from the principal.
-    server.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
-    server.baseName = server.baseName ?? server.name;
-  }
-
-  // VERSIONING (KTD6): snapshot a revision + fork/advance the variant instead of
-  // clobbering; `putNewVersion` also upserts the live record under `mcpServerKey`.
-  const stamped = await deps.repo.putNewVersion('MCPSERVER', server, {
-    repoId: server.repoId,
-    authorUserId: server.authorUserId,
-  });
-  return name ? ok({ mcpServer: stamped }) : created({ mcpServer: stamped });
-}
-
-/**
- * POST /mcp-servers/:name/promote — repoint the org-wide TRUE variant for a
- * baseName. NOT admin-gated (any authed member). Body: `{ variantId, rev? }`.
- * Mirrors skills/agents promote: it ONLY repoints TRUE.
- */
-export async function promoteMcpServer(
-  event: APIGatewayProxyEventV2,
-  deps: McpServersDeps,
-): Promise<APIGatewayProxyResultV2> {
-  // Promote is NOT admin-gated (any authed org member may repoint TRUE), but it
-  // still accepts the device token via the shared resolver.
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  const name = pathParam(event, 'name');
-  if (!name) return badRequest('missing name');
-  if (!auth.org) return unauthorized();
-  const org = auth.org;
-
-  const body = parseBodySafe(event);
-  if (body === INVALID_JSON) return badRequest('invalid JSON body');
-  const variantId = (body as { variantId?: unknown })?.variantId;
-  if (typeof variantId !== 'string' || !variantId) return badRequest('missing variantId');
-  const revRaw = (body as { rev?: unknown })?.rev;
-  const rev = typeof revRaw === 'number' ? revRaw : undefined;
-
-  const pointer = { baseName: name, variantId, ...(rev !== undefined ? { rev } : {}) };
-  await deps.repo.setTrueVariant(orgScope(org), 'MCPSERVER', pointer);
-  return ok({ true: pointer });
-}
-
-export async function getMcpServer(
-  event: APIGatewayProxyEventV2,
-  deps: McpServersDeps,
-): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  const name = pathParam(event, 'name');
-  if (!name) return badRequest('missing name');
-  if (!auth.org) return notFound();
-  const server = await deps.repo.getMcpServer(orgScope(auth.org), name);
-  if (!server) return notFound();
-  return ok({ mcpServer: server });
-}
+export const resolveMcpServers = handlers.list;
+export const createMcpServer = handlers.create;
+export const getMcpServer = handlers.get;
+export const deleteMcpServer = handlers.remove;
+/** Promote is NOT admin-gated (any authed member may repoint TRUE). */
+export const promoteMcpServer = handlers.promote;
 
 /** Count the agents (in the org catalog) whose `mcpServers[]` references a server. */
 async function usageCount(repo: Repo, org: string, name: string): Promise<number> {
@@ -164,47 +55,20 @@ export async function getUsage(
   event: APIGatewayProxyEventV2,
   deps: McpServersDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
+  const gate = await requireOrgCatalogAuth(event, deps.repo);
+  if ('error' in gate) return gate.error;
   const name = pathParam(event, 'name');
   if (!name) return badRequest('missing name');
-  if (!auth.org) return ok({ name, count: 0 });
-  const count = await usageCount(deps.repo, auth.org, name);
+  if (!gate.auth.org) return ok({ name, count: 0 });
+  const count = await usageCount(deps.repo, gate.auth.org, name);
   return ok({ name, count });
-}
-
-export async function deleteMcpServer(
-  event: APIGatewayProxyEventV2,
-  deps: McpServersDeps,
-): Promise<APIGatewayProxyResultV2> {
-  const auth = await resolveOrgCatalogAuth(event, deps.repo);
-  if (!auth) return unauthorized();
-  if (!auth.admin) return forbidden();
-  const name = pathParam(event, 'name');
-  if (!name) return badRequest('missing name');
-  if (!auth.org) return unauthorized();
-  const existing = await deps.repo.getMcpServer(orgScope(auth.org), name);
-  if (isBuiltin(existing)) {
-    return conflict(
-      `"${name}" is a canonical built-in MCP server — remove it from the repo and ` +
-        `re-seed; it cannot be deleted via REST.`,
-    );
-  }
-  await deps.repo.deleteMcpServer(orgScope(auth.org), name);
-  return ok({ deleted: true });
 }
 
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const deps: McpServersDeps = { repo: defaultRepo() };
   const method = event.requestContext.http.method;
   const path = event.requestContext.http.path;
-  const name = pathParam(event, 'name');
 
   if (method === 'GET' && path.endsWith('/usage')) return getUsage(event, deps);
-  if (method === 'POST' && path.endsWith('/promote')) return promoteMcpServer(event, deps);
-  if (method === 'POST') return createMcpServer(event, deps);
-  if (method === 'PUT') return createMcpServer(event, deps);
-  if (method === 'DELETE') return deleteMcpServer(event, deps);
-  if (method === 'GET' && name) return getMcpServer(event, deps);
-  return resolveMcpServers(event, deps);
+  return handlers.dispatch(event, deps);
 }

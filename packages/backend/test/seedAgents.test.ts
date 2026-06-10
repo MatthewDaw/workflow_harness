@@ -1,11 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { describe, expect, it } from 'vitest';
 import type { Agent } from '@harness/shared';
-import { Repo } from '../src/db/repo.js';
 import { buildSeedAgents, seedAgents, type SeedAgentFile } from '../src/seed/agents.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * U3: org-scope seed for the subagents bundled with Command HQ + claude+. The
@@ -13,14 +9,7 @@ import { installInMemoryTable } from './helpers/memtable.js';
  * existing `listAgents` shows the agents to the org.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 const ORG = 'acme';
 // The 6 bundled subagents (frontmatter parsed into {name, description, tools,

@@ -4,7 +4,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,15 +147,20 @@ func capContent(s string) string {
 	return truncate(s, maxContentChars)
 }
 
-// tokenCount is a cheap heuristic (~4 chars/token) used only when the transcript
-// row carries no usage block (e.g. user turns). Server-side usage wins when
-// present.
-func tokenCount(text string) int64 {
-	if text == "" {
-		return 0
+// EstimateTokens is the cheap ~4-chars/token heuristic, shared by the event
+// stream (user turns carry no server usage block) and the daemon's topic-gate
+// turn-size accounting, so the two cannot drift. Any non-empty input estimates
+// at least 1 token; server-side usage wins when present.
+func EstimateTokens(parts ...string) int64 {
+	var n int64
+	nonEmpty := false
+	for _, p := range parts {
+		if p != "" {
+			nonEmpty = true
+		}
+		n += int64(len(p) / 4)
 	}
-	n := int64(len(text) / 4)
-	if n == 0 {
+	if n == 0 && nonEmpty {
 		n = 1
 	}
 	return n
@@ -202,6 +206,3 @@ func truncate(s string, n int) string {
 	}
 	return string(r[:n-1]) + "…"
 }
-
-// round2 rounds USD to cents to keep envelopes tidy.
-func round2(f float64) float64 { return math.Round(f*100) / 100 }

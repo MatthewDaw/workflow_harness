@@ -1,35 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Workflow } from '@harness/shared';
 import { useGetWorkflowsQuery } from '../../api/baseApi.js';
 import { Pill, ScreenHeader } from '../../components/primitives.js';
 import { WorkflowGraph } from '../../components/WorkflowGraph.js';
-
-const ANY_AUTHOR = '__any__';
-
-function authorOf(w: { createdBy?: { name: string } }): string {
-  return w.createdBy?.name ?? 'Unknown';
-}
+import { OverlayModal } from '../../components/OverlayModal.js';
+import { useAuthorFilter, AuthorSelect } from '../../components/AuthorFilter.js';
+import { authorOf } from '../../lib/catalogUi.js';
 
 /** Workflows registry (collapsed model): a single flat org catalog of DAGs. */
 export function Workflows() {
   const { data, isLoading } = useGetWorkflowsQuery();
   const workflows = data ?? [];
 
-  const [author, setAuthor] = useState<string>(ANY_AUTHOR);
-  const authors = useMemo(() => {
-    const set = new Set<string>();
-    for (const w of workflows) set.add(authorOf(w));
-    return [...set].sort();
-  }, [workflows]);
-
-  const visible = (w: Workflow): boolean => {
-    if (author !== ANY_AUTHOR && authorOf(w) !== author) return false;
-    return true;
-  };
+  const { author, setAuthor, authors, matches } = useAuthorFilter(workflows, authorOf);
 
   // Order is stable so the catalog stays steady (mirrors Agents/SkillCatalog).
-  const catalog = workflows.filter(visible);
+  const catalog = workflows.filter(matches);
 
   return (
     <div className="hq-pad" data-testid="workflows-screen">
@@ -47,22 +34,12 @@ export function Workflows() {
         </Link>
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-4 text-xs text-mut">
-        <label className="flex items-center gap-1.5">
-          Author
-          <select
-            className="hq-btn normal-case"
-            data-testid="workflow-author-filter"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-          >
-            <option value={ANY_AUTHOR}>any author</option>
-            {authors.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-        </label>
+        <AuthorSelect
+          author={author}
+          onChange={setAuthor}
+          authors={authors}
+          testid="workflow-author-filter"
+        />
       </div>
       {isLoading && <div className="text-mut">Loading workflows…</div>}
       <div className="grid grid-cols-3 gap-3.5" data-testid="workflow-catalog-grid">
@@ -144,50 +121,23 @@ function WorkflowGraphModal({
   workflow: Workflow;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/50 p-4 sm:p-8"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`${workflow.name} workflow`}
-      data-testid={`workflow-modal-${workflow.name}`}
-      onClick={onClose}
+    <OverlayModal
+      ariaLabel={`${workflow.name} workflow`}
+      testid={`workflow-modal-${workflow.name}`}
+      closeTestid={`workflow-modal-close-${workflow.name}`}
+      onClose={onClose}
+      header={
+        <span className="flex items-center gap-2">
+          <b>{workflow.name}</b>
+          <Pill>
+            {workflow.nodes.length} node{workflow.nodes.length === 1 ? '' : 's'}
+          </Pill>
+        </span>
+      }
     >
-      <div
-        className="hq-box mx-auto flex h-full w-full max-w-[900px] flex-col overflow-hidden bg-paper"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-odd pb-2">
-          <span className="flex items-center gap-2">
-            <b>{workflow.name}</b>
-            <Pill>
-              {workflow.nodes.length} node{workflow.nodes.length === 1 ? '' : 's'}
-            </Pill>
-          </span>
-          <button
-            type="button"
-            className="hq-btn"
-            data-testid={`workflow-modal-close-${workflow.name}`}
-            onClick={onClose}
-          >
-            ✕ Close
-          </button>
-        </div>
-        <div className="mt-2 min-h-0 flex-1 overflow-auto">
-          {workflow.description && (
-            <div className="mb-3 text-xs text-mut">{workflow.description}</div>
-          )}
-          <WorkflowGraph nodes={workflow.nodes} />
-        </div>
-      </div>
-    </div>
+      {workflow.description && <div className="mb-3 text-xs text-mut">{workflow.description}</div>}
+      <WorkflowGraph nodes={workflow.nodes} />
+    </OverlayModal>
   );
 }

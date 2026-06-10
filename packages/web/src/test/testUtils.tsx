@@ -99,6 +99,72 @@ const MATT: AuthUser = { userId: 'user-matt', username: 'matt', org: 'acme' };
 /** Default `GET /me` member so existing tests reach Objectives past the OrgGate. */
 const DEFAULT_ME: MeResponse = { userId: 'dev', name: 'Dev', org: 'gmail.com', admin: true };
 
+/** The org scope catalog fixtures live in — matches MATT's org. */
+export const ORG = { tier: 'org', id: 'acme' } as const;
+
+/** A connected project with every opt-in set empty; override what the test exercises. */
+export function makeProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: 'weekly-compass',
+    name: 'weekly-compass',
+    repo: 'gh/acme/weekly-compass',
+    ownerUserId: 'user-matt',
+    progressPct: 0,
+    liveSessionCount: 0,
+    enabledSkills: [],
+    enabledBundles: [],
+    enabledAgents: [],
+    enabledWorkflows: [],
+    enabledAgentBundles: [],
+    enabledMcpServers: [],
+    ...overrides,
+  };
+}
+
+export function makeSkill(overrides: Partial<Skill> = {}): Skill {
+  return {
+    name: 'gh',
+    scope: ORG,
+    kind: 'skill',
+    description: '',
+    source: 'local',
+    members: [],
+    body: '',
+    ...overrides,
+  };
+}
+
+export function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    name: 'builder',
+    scope: ORG,
+    kind: 'agent',
+    description: '',
+    model: 'claude-sonnet-4',
+    prompt: '',
+    skills: [],
+    tools: [],
+    mcpServers: [],
+    members: [],
+    ...overrides,
+  };
+}
+
+/** A local stdio server; tests needing http/sse keep explicit literals. */
+export function makeMcpServer(
+  overrides: Partial<Extract<McpServer, { transport: 'stdio' }>> = {},
+): McpServer {
+  return {
+    name: 'fs',
+    scope: ORG,
+    transport: 'stdio',
+    command: 'npx',
+    args: [],
+    env: {},
+    ...overrides,
+  };
+}
+
 /**
  * A `routes` override value: either a raw JSON body (served 200), or a
  * `{ status, body }` pair to drive non-200 paths. Wrapping in a function lets a

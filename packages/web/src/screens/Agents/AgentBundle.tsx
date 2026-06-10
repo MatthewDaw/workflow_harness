@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   useGetAgentsQuery,
@@ -8,6 +7,7 @@ import {
 } from '../../api/baseApi.js';
 import { ScreenHeader } from '../../components/primitives.js';
 import { SkillCombobox } from '../../components/SkillCombobox.js';
+import { DissolveControl } from '../../components/DissolveControl.js';
 import { AgentCard } from './Agents.js';
 
 /**
@@ -110,51 +110,9 @@ export function AgentBundle() {
           </div>
 
           <div className="hq-hr" />
-          <DissolveControl count={bundle.members.length} onConfirm={onDissolve} />
+          <DissolveControl count={bundle.members.length} noun="agent" onConfirm={onDissolve} />
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Dissolve is destructive — it ejects every member to standalone and removes the
- * bundle. Show the blast-radius (member count) and require a confirm click.
- */
-function DissolveControl({ count, onConfirm }: { count: number; onConfirm: () => void }) {
-  const [confirming, setConfirming] = useState(false);
-  if (!confirming) {
-    return (
-      <button
-        type="button"
-        className="hq-btn"
-        data-testid="dissolve-bundle"
-        onClick={() => setConfirming(true)}
-      >
-        ✕ Dissolve bundle
-      </button>
-    );
-  }
-  return (
-    <div className="hq-note" data-testid="dissolve-confirm">
-      Dissolving frees{' '}
-      <b data-testid="blast-radius">
-        {count} member{count === 1 ? '' : 's'}
-      </b>{' '}
-      back to standalone agents and removes the bundle.
-      <div className="mt-2 flex gap-2">
-        <button
-          type="button"
-          className="hq-btn hq-btn-pri"
-          data-testid="dissolve-confirm-btn"
-          onClick={onConfirm}
-        >
-          Confirm dissolve
-        </button>
-        <button type="button" className="hq-btn" onClick={() => setConfirming(false)}>
-          Cancel
-        </button>
-      </div>
     </div>
   );
 }

@@ -1,11 +1,9 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { reconcileMemoriesRequestSchema, type Memory } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import type { Principal } from '../auth/verify.js';
 import {
   badRequest,
   defaultRepo,
-  notFound,
   ok,
   parseBodySafe,
   INVALID_JSON,
@@ -13,6 +11,7 @@ import {
   unauthorized,
 } from './runtime.js';
 import { resolvePrincipal } from './bearerAuth.js';
+import { ownedProject } from './ownership.js';
 
 /**
  * REST: project memories — the per-user "Memories" tab (Project Details) fed by
@@ -34,27 +33,18 @@ export interface MemoriesDeps {
   repo: Repo;
 }
 
-async function ownedProject(repo: Repo, principal: Principal, projectId: string): Promise<boolean> {
-  const project = await repo.getProject(projectId);
-  return Boolean(project && project.ownerUserId === principal.userId);
-}
-
 /**
  * GET — the whole project's memories across ALL authors (one partition read). The
  * read is owner-gated (only the project owner sees the tab); the UI groups the
- * flat list by `userId`. 404 (not 403) for a non-owner avoids enumeration, the
- * same convention the weekly read uses.
+ * flat list by `userId`.
  */
 export async function listMemories(
   event: APIGatewayProxyEventV2,
   deps: MemoriesDeps,
 ): Promise<APIGatewayProxyResultV2> {
-  const principal = await resolvePrincipal(event);
-  if (!principal) return unauthorized();
-  const pid = pathParam(event, 'pid');
-  if (!pid) return badRequest('missing project id');
-  if (!(await ownedProject(deps.repo, principal, pid))) return notFound();
-  const memories = await deps.repo.listMemories(pid);
+  const resolved = await ownedProject(event, deps.repo, 'pid');
+  if ('error' in resolved) return resolved.error;
+  const memories = await deps.repo.listMemories(resolved.project.id);
   return ok({ memories });
 }
 

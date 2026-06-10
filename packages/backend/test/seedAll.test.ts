@@ -1,25 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { Repo } from '../src/db/repo.js';
+import { describe, expect, it } from 'vitest';
 import { buildSeedAll, seedAll } from '../src/seed/all.js';
 import { buildSeedMcpServers, seedMcpServers } from '../src/seed/mcpServers.js';
-import { installInMemoryTable } from './helpers/memtable.js';
+import { memRepoHarness } from './helpers/memtable.js';
 
 /**
  * U-Ver-Seed: the GENERAL org-wide seed now covers all THREE pillars — skills,
  * agents, AND MCP servers — version-aware (base variant rev 1) and idempotent.
  */
 
-const ddbMock = mockClient(DynamoDBDocumentClient);
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-1' }));
-const repo = new Repo(doc, 'harness-test');
-
-beforeEach(() => {
-  ddbMock.reset();
-  installInMemoryTable(ddbMock);
-});
+const { repo } = memRepoHarness();
 
 const ORG = 'acme';
 

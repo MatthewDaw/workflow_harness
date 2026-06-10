@@ -1,74 +1,32 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Agent, Project, Skill } from '@harness/shared';
+import type { Agent, Skill } from '@harness/shared';
 import { ProjectAgents } from './ProjectAgents.js';
-import { lastMatching, renderWithProviders } from '../../test/testUtils.js';
+import {
+  lastMatching,
+  makeAgent,
+  makeProject,
+  makeSkill,
+  renderWithProviders,
+} from '../../test/testUtils.js';
 
-const ORG = { tier: 'org', id: 'acme' } as const;
-
-const PROJECT: Project = {
-  id: 'weekly-compass',
-  name: 'weekly-compass',
-  repo: 'gh/acme/weekly-compass',
-  ownerUserId: 'user-matt',
-  progressPct: 0,
-  liveSessionCount: 0,
-  enabledSkills: [],
-  enabledAgents: ['reviewer'],
-  enabledWorkflows: [],
-  enabledAgentBundles: [],
-  enabledBundles: [],
-  enabledMcpServers: [],
-};
+const PROJECT = makeProject({ enabledAgents: ['reviewer'] });
 
 const SKILLS: Skill[] = [
-  {
-    name: 'gh',
-    scope: ORG,
-    kind: 'skill',
-    description: '',
-    source: 'built-in',
-    members: [],
-    body: '',
-  },
-  {
+  makeSkill({ name: 'gh', source: 'built-in' }),
+  makeSkill({
     name: 'kit',
-    scope: ORG,
     kind: 'bundle',
-    description: '',
     source: 'built-in',
     members: ['gh'],
     resolvedMembers: ['gh'],
-    body: '',
-  },
+  }),
 ];
 
 const AGENTS: Agent[] = [
-  {
-    name: 'builder',
-    scope: ORG,
-    description: '',
-    model: 'claude-sonnet-4',
-    kind: 'agent',
-    members: [],
-    prompt: '',
-    skills: ['kit'],
-    tools: [],
-    mcpServers: [],
-  },
-  {
-    name: 'reviewer',
-    scope: ORG,
-    description: '',
-    model: 'claude-opus-4',
-    kind: 'agent',
-    members: [],
-    prompt: '',
-    skills: [],
-    tools: [],
-    mcpServers: [],
-  },
+  makeAgent({ name: 'builder', skills: ['kit'] }),
+  makeAgent({ name: 'reviewer', model: 'claude-opus-4' }),
 ];
 
 describe('ProjectAgents (project opt-in)', () => {
