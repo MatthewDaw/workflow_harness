@@ -60,6 +60,34 @@ Family   { id, charter, router_prompt, agent_ids[] }
 
 Atomic insights are what make everything downstream possible: re-clustering, splitting, dedup, contradiction repair, per-insight fitness tracking, and **rollback** (disable a batch of insight IDs if validation fails).
 
+### What an agent is (R3 — evolved definition)
+
+Earlier shorthand treated an agent as "a directional prompt with privately registered skills" — a capability *container*. That fused three things better kept separate: identity, what it owns, and what it can reach. The current definition: **an agent is a specialist *lens* over its family's shared knowledge**, with four decoupled facets:
+
+- **Persona** — a thin base prompt (frozen family template + generated specialty section, §6) that fixes its role, domain, and *judgment*. Specialization lives primarily here: two agents handed identical retrieved insights reason differently because of it.
+- **Owned skill cluster** — the coherent insight group it owns (`skill_ids[]`). Ownership is for *bookkeeping*: the active cap, fitness accounting, retirement, split lineage, and the clean `SKILL.md` export. The cluster is also the agent's **retrieval prior**.
+- **Routing identity** — its `description` and taxonomy position, which the family router selects on.
+- **Retrieval policy** — own-skills-first (weighted, claims most of the token budget), with a **relevance-gated, budget-capped fallback to the rest of the family's active pool** for boundary tickets.
+
+Three invariants keep it a specialist, not a generalist:
+
+- **Ownership ≠ reachability.** An insight is owned by exactly one agent (for governance) but retrievable by any sibling in its family by relevance. The partition organizes; it does not blindfold. This corrects the earlier "retrieve only the agent's own active set" wording, which stranded jointly-needed knowledge at agent boundaries — e.g., an API-contract ticket needs both backend-limitation and frontend-UX insights, which live in different specialists.
+- **Specialization is a dial, not a wall** — the own-skills share of the retrieval budget. Tighten it and the specialist stays sharp; the fallback only fires when a cross-domain insight out-scores the in-domain margin (a genuine seam), so it is invisible on ordinary tickets.
+- **The agent stays thin.** Knowledge lives in retrieved insights, not the prompt; the persona carries role and judgment, not facts.
+
+**Why this does not bloat context:** injected context is bounded by the *token budget*, independent of pool size — a wider pool changes *which* insights are eligible (better candidates at a boundary), not *how many* are injected. Relevance gating means a normal specialist ticket retrieves the same focused own-domain set it always would. ANN over the whole family pool is the same cost as over a partition at this scale; the scope is the agent's *family* pool, never planner/verifier insights.
+
+### Boundary tickets: multi-persona refinement (R3)
+
+Some tickets are inherently cross-cutting — an API contract, a shared schema, an auth boundary — and are *negotiations between two legitimate lenses* (backend wants minimal coupling/load; frontend wants ergonomic responses), not just facts to merge in one head. Retrieval-with-fallback gets the *knowledge* to one agent, but a single persona may blend the perspectives into a bland compromise rather than a sharp negotiated result. The sanctioned answer is **rare, artifact-mediated, verifier-gated**:
+
+- **Trigger (rare by design):** a ticket is flagged cross-cutting only when routing is ambiguous *or* its retrieved insights span ≥2 agent clusters. The default path stays single-persona; this fires only at genuine seams.
+- **Mechanism = Ralph iterations over the shared artifact, never context-relay.** The primary persona owns the ticket, drafts/edits the artifact, and commits; at most **one or two** additional personas (those on the other side of the boundary) each read the *committed artifact* and refine it, committing in turn; the verifier gates. Agents communicate only through the durable work product. The failure mode MAST/Cognition condemn is *relayed context* ("let me explain what I was thinking"), not iterative refinement of a legible artifact — the same artifact-mediated principle as the plan→work→verify pipeline itself.
+- **Hard terminator (anti-thrash):** at most 1–2 cross-persona passes; the verifier's acceptance criteria arbitrate; the §7 no-progress tripwire catches oscillation (A simplifies, B re-complicates). An optional final reconciler pass converges a contested artifact.
+- **Composes with retrieval:** each pass uses prior+fallback retrieval to be competent in its lens; the multi-pass adds the second lens. This is *not* splitting a task across agents — one persona owns the ticket; the others are bounded consultations on the shared artifact.
+
+Phase 5 machinery (needs the router + the cross-cutting trigger); Plans 0–4 run single-persona.
+
 ### Structural insight schema (new in R2)
 
 Every insight is authored against a fixed structural template: **precondition / action-pattern / expected-outcome** (plus scope tag). This is the "meta-skill structural prior" from Library Drift — under it, explicit dedup machinery becomes largely unnecessary, because structurally homogeneous insights collide visibly. The reflector (§12) and any manual `add_idea` caller must emit this shape; the registration judge rejects free-prose insights.
@@ -68,7 +96,7 @@ Every insight is authored against a fixed structural template: **precondition / 
 
 The library breathes in both directions:
 
-- **Active cap:** each agent's *active* skill set is bounded (start ~50 skills; a tunable, not a principle — but the existence of a cap is a principle). Routing and retrieval operate only over the active set.
+- **Active cap:** each agent's *active* skill set is bounded (start ~50 skills; a tunable, not a principle — but the existence of a cap is a principle). Routing and retrieval operate only over **active-status** insights (active vs. dormant/quarantined). Note on *scope*: retrieval reaches the whole **family** active pool with an own-skills prior (§4 "What an agent is"), not just the agent's own partition — ownership is a governance/cap boundary, not a retrieval wall.
 - **Outcome-driven retirement:** insights/skills that stop earning retrievals-with-wins are demoted to a **dormant archive** — preserved, searchable, revivable, but out of the routed index. Admission of a new skill beyond the cap displaces the weakest incumbent (tournament admission).
 - Fitness pruning remains, but it is no longer the load-bearing defense; the cap is. Library *size*, not registration quality, is the empirically dominant failure mode.
 

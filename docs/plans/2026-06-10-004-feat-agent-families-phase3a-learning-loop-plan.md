@@ -26,7 +26,7 @@ Plans 0–3 built a library nothing reads, a pipeline that doesn't learn, and a 
 
 **Retrieval into pipeline prompts**
 
-- R2. Per-family retrieval query: planner = concatenated increment-request MSGs + Q&A transcript; worker = ticket text + ACs; verifier = ACs + latest typed-failure records. Queries embed with `search_query:`; skills rank by max member-insight cosine over the agent's **active** set.
+- R2. Per-family retrieval query: planner = concatenated increment-request MSGs + Q&A transcript; worker = ticket text + ACs; verifier = ACs + latest typed-failure records. Queries embed with `search_query:`; skills rank by max member-insight cosine. **Scope = the family's whole active pool with an own-skills prior** (not the agent's partition alone — ownership ≠ reachability, DESIGN §4 "What an agent is"): the working agent's own active skills are weighted up and claim most of the budget; siblings' insights enter only as a relevance-gated fallback for the remainder (the boundary-ticket case, e.g. an API contract needing both backend and frontend insights). In Phase 3a there is one generic agent per family, so own-pool = family-pool and this is a no-op seam; the prior/fallback split takes effect once agents split (Plan 5). The own-skills budget share is a config dial (start high — specialists stay sharp).
 - R3. Injection budget per session (~4k tokens, config): fill in rank order, drop whole skills (never truncate mid-skill), **log every drop** (truncation events are future split telemetry).
 - R4. Quarantined insights are retrievable only in `mode=trial` runs for their batch (the visibility-matrix exception is mode-keyed, not ambient).
 
