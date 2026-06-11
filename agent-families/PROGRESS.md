@@ -65,7 +65,7 @@ holds, and the full offline suite is green.
 QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not unit-number order.
 - [x] 007/U1 - Migration: greenfield schema + config section
 - [x] 007/U2 - Planner contract: ASSUME refactor, PROPOSAL artifact, ranked questions
-- [ ] 007/U3 - Provenance lint + assumption gate
+- [x] 007/U3 - Provenance lint + assumption gate
 - [x] 007/U4 - DEC extraction + DEC-coverage lint
 - [ ] 007/U5 - Degradation generator + blur cache + blur lint
 - [ ] 007/U5b - Human-as-founder trial (HUMAN STEP - manual, no production code)
