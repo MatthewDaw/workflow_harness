@@ -125,14 +125,56 @@ export class Repo {
     return parsed.success ? parsed.data : (res.Item as UserProfile);
   }
 
-  /** Upsert a user's full PROFILE record. */
+  /**
+   * Upsert a user's full PROFILE record. When the profile carries a
+   * `managerUserId`, the GSI1 keys are stamped so the user surfaces in that
+   * manager's `listReports` query; with no manager the keys are absent (a plain
+   * PutCommand overwrites the whole item, so dropping them removes the user from
+   * every manager's reports — KTD6).
+   */
   async putUser(profile: UserProfile): Promise<void> {
+    const index = k.managerReportIndex(profile.managerUserId, profile.userId);
     await this.doc.send(
       new PutCommand({
         TableName: this.table,
-        Item: { ...k.userKey(profile.userId), ...profile },
+        Item: { ...k.userKey(profile.userId), ...profile, ...(index ?? {}) },
       }),
     );
+  }
+
+  /**
+   * Set (or clear, with `null`) a user's manager edge (KTD6) without disturbing
+   * the rest of the profile (org membership, admin flags). Read-modify-write on
+   * the PROFILE so `putUser` re-stamps/strips the GSI1 reports index. Creates a
+   * bare profile if the user has none yet (a manager can be set before onboarding).
+   */
+  async setManager(userId: string, managerUserId: string | null): Promise<void> {
+    const existing = await this.getUser(userId);
+    await this.putUser({
+      ...(existing ?? {}),
+      userId,
+      managerUserId: managerUserId ?? undefined,
+    });
+  }
+
+  /**
+   * Every user whose `managerUserId` is `managerUserId` — the manager's team
+   * (KTD6). A single GSI1 query on the `MANAGER#<id>` partition (no table scan),
+   * mirroring `listProjectsForUser`. A manager with no reports → `[]`.
+   */
+  async listReports(managerUserId: string): Promise<UserProfile[]> {
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        IndexName: k.GSI1,
+        KeyConditionExpression: 'GSI1PK = :pk',
+        ExpressionAttributeValues: { ':pk': `MANAGER#${managerUserId}` },
+      }),
+    );
+    return (res.Items ?? []).map((item) => {
+      const parsed = userProfileSchema.safeParse(item);
+      return parsed.success ? parsed.data : (item as UserProfile);
+    });
   }
 
   /**
@@ -162,6 +204,9 @@ export class Repo {
       admin: adminOrgs.has(org),
       orgs: [...orgs],
       adminOrgs: [...adminOrgs],
+      // Preserve the manager edge across onboarding (create/join) — this object is
+      // built fresh, so without carrying it forward, joining an org would wipe it.
+      managerUserId: existing?.managerUserId,
     });
   }
 

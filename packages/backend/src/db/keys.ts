@@ -478,6 +478,23 @@ export const projectOwnerIndex = (
 });
 
 /**
+ * GSI1 attributes for a user PROFILE carrying a manager edge (KTD6), so a
+ * manager's reports are a single GSI1 query (`listReports`) rather than a table
+ * scan — mirroring `projectOwnerIndex`. Returns `undefined` when the user has no
+ * manager, signalling the GSI1 keys should be STRIPPED so the profile drops out
+ * of every manager's reports partition (an unmanaged user is in nobody's list).
+ * The `MANAGER#` partition prefix is distinct from `projectOwnerIndex`'s `USER#`,
+ * so the two never collide on the shared GSI1.
+ */
+export function managerReportIndex(
+  managerUserId: string | undefined,
+  userId: string,
+): { GSI1PK: string; GSI1SK: string } | undefined {
+  if (!managerUserId) return undefined;
+  return { GSI1PK: `MANAGER#${managerUserId}`, GSI1SK: `USER#${userId}` };
+}
+
+/**
  * GSI1 attributes for a live session. Returns undefined when the session is not
  * live, signalling that the GSI1 keys should be stripped so it drops out of the
  * live index.

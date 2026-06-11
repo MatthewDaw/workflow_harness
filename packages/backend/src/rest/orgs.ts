@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import {
   createOrgRequestSchema,
   joinOrgRequestSchema,
+  setManagerRequestSchema,
   switchOrgRequestSchema,
 } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
@@ -12,6 +13,7 @@ import {
   badRequest,
   created,
   defaultRepo,
+  forbidden,
   json,
   ok,
   parseBodySafe,
@@ -77,7 +79,38 @@ export async function getMe(
     // Every org the user can switch between (legacy single-org profiles read as a
     // one-element set so the switcher still works for them).
     orgs: profile?.orgs ?? (profile?.org ? [profile.org] : []),
+    // The caller's manager edge (KTD6), so the UI can offer the manager view to a
+    // user who has reports; omitted when unset.
+    managerUserId: profile?.managerUserId,
   });
+}
+
+/**
+ * POST /me/manager — set (or clear, with `managerUserId: null`) a manager edge
+ * (KTD6). A plain user may only set their OWN manager (the default target is the
+ * caller); an admin may target another `userId` to wire up a report on their
+ * behalf. A non-admin targeting someone else is a 403 — a user must not be able
+ * to make themselves another user's manager (or reassign a colleague's edge).
+ */
+export async function setManager(
+  event: APIGatewayProxyEventV2,
+  deps: OrgsDeps,
+): Promise<APIGatewayProxyResultV2> {
+  const principal = principalOf(event);
+  if (!principal) return unauthorized();
+
+  const body = parseBodySafe(event);
+  if (body === INVALID_JSON) return badRequest('invalid JSON body');
+  const parsed = setManagerRequestSchema.safeParse(body ?? {});
+  if (!parsed.success) return badRequest(validationMessage(parsed.error));
+  const { userId, managerUserId } = parsed.data;
+
+  // Default the target to the caller; only an admin may set another user's edge.
+  const target = userId ?? principal.userId;
+  if (target !== principal.userId && !isAdmin(event)) return forbidden();
+
+  await deps.repo.setManager(target, managerUserId);
+  return ok({ userId: target, managerUserId: managerUserId ?? null });
 }
 
 /**
@@ -191,6 +224,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.requestContext.http.path ?? event.rawPath ?? '';
 
   // Order matters: the more specific suffixes are checked before bare /orgs.
+  if (method === 'POST' && path.endsWith('/me/manager')) return setManager(event, deps);
   if (method === 'POST' && path.endsWith('/me/org')) return switchOrg(event, deps);
   if (method === 'POST' && path.endsWith('/join')) return joinOrg(event, deps);
   if (method === 'POST') return createOrg(event, deps);

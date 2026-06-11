@@ -38,6 +38,7 @@ const handlers = [
   'rest/objectives',
   'rest/weekly',
   'rest/weeklyTransitions',
+  'rest/weeklyManager',
   'rest/memories',
   'rest/device',
   'rest/dod',

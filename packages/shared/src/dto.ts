@@ -211,8 +211,29 @@ export const userProfileSchema = z.object({
   orgs: z.array(z.string()).optional(),
   /** The subset of `orgs` the user is an admin of (an org's creator). */
   adminOrgs: z.array(z.string()).optional(),
+  /**
+   * The user's manager (KTD6). A single, lightweight manager↔report edge (NOT a
+   * full org-chart): a manager's team is every user whose `managerUserId` is them
+   * (`repo.listReports`), which scopes the manager exception/divergence brief
+   * (U8). Complements `admin`/`adminOrgs` — it never replaces them.
+   */
+  managerUserId: z.string().min(1).optional(),
 });
 export type UserProfile = z.infer<typeof userProfileSchema>;
+
+/**
+ * Request body for `POST /me/manager` — set (or clear, with `null`) a user's
+ * manager edge. A plain user may only set their OWN manager (the path resolves
+ * the caller); an admin may target another `userId` on their behalf. `null`
+ * clears the edge (the user joins nobody's reports).
+ */
+export const setManagerRequestSchema = z.object({
+  /** The report whose manager is being set. Optional — defaults to the caller. */
+  userId: z.string().min(1).optional(),
+  /** The new manager's userId, or `null` to clear the edge. */
+  managerUserId: z.string().min(1).nullable(),
+});
+export type SetManagerRequest = z.infer<typeof setManagerRequestSchema>;
 
 /**
  * The PUBLIC org record returned to clients. The stored ORG item also carries a
@@ -238,6 +259,8 @@ export const meResponseSchema = z.object({
   admin: z.boolean().optional(),
   /** Every org the user belongs to, so the header can offer a switcher. */
   orgs: z.array(z.string()).default([]),
+  /** The caller's manager edge (KTD6), surfaced so the UI can offer the manager view. */
+  managerUserId: z.string().optional(),
 });
 export type MeResponse = z.infer<typeof meResponseSchema>;
 

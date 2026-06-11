@@ -178,6 +178,9 @@ export class ApiStack extends cdk.Stack {
     // The lifecycle transitions (lock / reconcile-start / reconcile-complete) are a
     // separate handler (U4) — reconcile-complete is transactional (KTD3).
     const weeklyTransitionsFn = makeFn('RestWeeklyTransitionsFn', 'rest_weeklyTransitions');
+    // The reports-scoped manager exception/divergence brief (U8) — a separate
+    // handler reading the manager edge (Dynamo) + the weekly relations/metrics (PG).
+    const weeklyManagerFn = makeFn('RestWeeklyManagerFn', 'rest_weeklyManager');
     const memoriesFn = makeFn('RestMemoriesFn', 'rest_memories');
     const deviceFn = makeFn('RestDeviceFn', 'rest_device');
     const dodFn = makeFn('RestDodFn', 'rest_dod');
@@ -196,6 +199,7 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(objectivesFn);
     grantReadWrite(weeklyFn);
     grantReadWrite(weeklyTransitionsFn);
+    grantReadWrite(weeklyManagerFn);
     grantReadWrite(memoriesFn);
     grantReadWrite(deviceFn);
     grantReadWrite(dodFn);
@@ -398,6 +402,9 @@ export class ApiStack extends cdk.Stack {
     // switches the active org among the ones the caller has already joined.
     r('/me', [M.GET], orgsFn, 'Me');
     r('/me/org', [M.POST], orgsFn, 'MeOrgSwitch');
+    // POST /me/manager sets/clears the caller's (or, for an admin, a report's)
+    // manager edge (KTD6) — the scope for the manager exception brief (U8).
+    r('/me/manager', [M.POST], orgsFn, 'MeManager');
     r('/orgs', [M.POST], orgsFn, 'Orgs');
     r('/orgs/join', [M.POST], orgsFn, 'OrgsJoin');
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
@@ -440,6 +447,11 @@ export class ApiStack extends cdk.Stack {
       'WeeklyReconcileComplete',
       noAuth,
     );
+
+    // The reports-scoped manager exception/divergence brief (U8) — noAuth (the
+    // handler resolves the principal via bearerAuth and scopes strictly by the
+    // caller's manager EDGE, KTD6); keyset-paginated for the 2000-record target.
+    r('/weekly/manager', [M.GET], weeklyManagerFn, 'WeeklyManager', noAuth);
 
     // Memories are noAuth (see contract above); the handler scopes the reconcile
     // to the caller's own author key, so a collaborator's daemon can sync
