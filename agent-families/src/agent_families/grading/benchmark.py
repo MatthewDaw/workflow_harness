@@ -749,6 +749,80 @@ def load_frozen_slice(*, verify: bool = True) -> tuple[ScenarioManifest, ...]:
     return manifests
 
 
+# --- generalized frozen-slice mechanism (plan-005 U1, R1) ---------------------
+
+
+@dataclass(frozen=True)
+class FrozenSlice:
+    """One held-out target's immutable micro-benchmark slice (plan-005 U1, R1).
+
+    The generalization of Plan 4's Kanboard-specific FROZEN_SLICE /
+    FROZEN_SLICE_HASH / :func:`load_frozen_slice` into a reusable instrument: the
+    benchmark suite (``grading.suite``) holds N of these, one per held-out
+    target, each pinning its own content hash so the frozen instrument cannot
+    silently drift (R1, same discipline as :data:`FROZEN_SLICE_HASH`). Kanboard's
+    slice is now simply one instance, :data:`KANBOARD_SLICE`; the Kanboard-named
+    module functions above are preserved verbatim for the Plan 4 contract.
+
+    A slice is must-tier only and holds :data:`FROZEN_SLICE_MIN`-
+    :data:`FROZEN_SLICE_MAX` scenarios (R1, inherited from R14); each scenario
+    parses as a :class:`ScenarioManifest` (the extra ``reference`` key — the
+    hand-verified expected verdict — is ignored by ``parse_manifest``).
+    """
+
+    name: str
+    scenarios: tuple[dict, ...]
+    expected_hash: str
+    min_size: int = FROZEN_SLICE_MIN
+    max_size: int = FROZEN_SLICE_MAX
+
+    def computed_hash(self) -> str:
+        """The content hash of the live slice (canonical-JSON SHA256)."""
+        return slice_hash(self.scenarios)
+
+    def verify(self) -> str:
+        """Assert the slice still matches its pinned hash; return the hash.
+
+        The guard a suite benchmark run asserts before measuring — a held-out
+        instrument that drifts measures nothing (R1). Raises with both hashes
+        for forensics, naming the target so a suite-wide mismatch is localizable.
+        """
+        actual = self.computed_hash()
+        if actual != self.expected_hash:
+            raise TargetEnvError(
+                f"frozen slice {self.name!r} hash mismatch (R1): the slice is"
+                f" immutable apparatus. expected {self.expected_hash}, got"
+                f" {actual}. If it was deliberately re-frozen, re-pin its hash"
+                " and re-run the hand-verification of its reference verdicts."
+            )
+        return actual
+
+    def manifests(self, *, verify: bool = True) -> tuple[ScenarioManifest, ...]:
+        """Parse the slice into manifests (R1). When ``verify`` (default),
+        asserts the immutability hash AND the size/must-tier invariant first."""
+        if verify:
+            self.verify()
+        if not self.min_size <= len(self.scenarios) <= self.max_size:
+            raise TargetEnvError(
+                f"frozen slice {self.name!r} must hold {self.min_size}-"
+                f"{self.max_size} must-tier scenarios (R1), got"
+                f" {len(self.scenarios)}"
+            )
+        manifests = tuple(parse_manifest(entry) for entry in self.scenarios)
+        off_tier = [m.scenario_id for m in manifests if m.tier != "must"]
+        if off_tier:
+            raise TargetEnvError(
+                f"frozen slice {self.name!r} is must-tier only (R1); off-tier"
+                f" scenarios: {off_tier}"
+            )
+        return manifests
+
+
+# Kanboard's slice, expressed through the generalized mechanism (R1). The suite
+# registry reuses this rather than re-authoring Kanboard's hand-verified slice.
+KANBOARD_SLICE = FrozenSlice("kanboard", FROZEN_SLICE, FROZEN_SLICE_HASH)
+
+
 # --- benchmark score and the excluded fitness channel -------------------------
 
 
@@ -833,8 +907,14 @@ def run_benchmark_episode(
     fitness_channel: ExcludedFitnessChannel | None = None,
     telemetry: HealTelemetry | None = None,
     persist: bool = True,
+    frozen_slice: FrozenSlice | None = None,
 ) -> BenchmarkScore:
     """Run one ``mode=benchmark`` mini-episode over the frozen slice (R14).
+
+    ``frozen_slice`` (plan-005 U1, R1) selects the held-out instrument: with the
+    default ``None`` the Kanboard micro-benchmark runs (the Plan 4 contract,
+    unchanged); a suite target passes its own :class:`FrozenSlice` so the suite
+    runner measures generalization across N held-out targets with one mechanism.
 
     A fixed-frontier episode: the frozen slice IS the frontier — no exploration,
     no planning, no idea generation. Each scenario executes on both DOMs through
@@ -855,7 +935,12 @@ def run_benchmark_episode(
     must carry both apps (``target`` and ``clone``) — the same dual-app contract
     settlement uses.
     """
-    manifests = load_frozen_slice()
+    if frozen_slice is None:
+        manifests = load_frozen_slice()
+        active_slice_hash = FROZEN_SLICE_HASH
+    else:
+        manifests = frozen_slice.manifests()
+        active_slice_hash = frozen_slice.expected_hash
     for app in ("target", "clone"):
         if app not in drivers:
             raise TargetEnvError(
@@ -909,7 +994,7 @@ def run_benchmark_episode(
         passed=passed,
         scoreable=len(scoreable),
         by_tier=by_tier,
-        slice_hash=FROZEN_SLICE_HASH,
+        slice_hash=active_slice_hash,
     )
     if store is not None and persist:
         store.set_meta(

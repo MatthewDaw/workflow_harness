@@ -1,0 +1,77 @@
+{
+  "_comment": "Seed manifest for the linkace held-out suite target (plan-005 U1, R1). Seeding is API-driven: the generic harness POSTs each entry to /api/v1/links with a headlessly-minted Bearer token. All cached target-side evidence and the LINKACE_SLICE reference verdicts are defined against THIS post-seed state — changing it is a deliberate, recorded apparatus migration, not an edit. URLs are never fetched, so they only need to be unique and stable. The titles match the LINKACE_SLICE scenarios (suite.py).",
+  "links": [
+    {
+      "url": "https://example.org/articles/sqlite-wal-mode",
+      "title": "SQLite WAL mode explained",
+      "description": "Write-ahead logging, checkpoints, and why bind mounts corrupt.",
+      "tags": ["databases", "sqlite"]
+    },
+    {
+      "url": "https://example.org/articles/django-orm-patterns",
+      "title": "Django ORM query patterns",
+      "description": "select_related, prefetch_related, and N+1 avoidance.",
+      "tags": ["python", "django"]
+    },
+    {
+      "url": "https://example.org/tools/playwright-tracing",
+      "title": "Playwright trace viewer",
+      "description": "Recording and replaying browser traces for debugging.",
+      "tags": ["testing", "browsers"]
+    },
+    {
+      "url": "https://example.org/articles/accessibility-tree",
+      "title": "The accessibility tree",
+      "description": "How browsers expose roles and accessible names to AT.",
+      "tags": ["browsers", "a11y"]
+    },
+    {
+      "url": "https://example.org/tools/uv-package-manager",
+      "title": "uv: fast Python packaging",
+      "description": "Lockfiles, frozen installs, and reproducible environments.",
+      "tags": ["python", "tooling"]
+    },
+    {
+      "url": "https://example.org/articles/docker-volume-semantics",
+      "title": "Docker named volumes vs bind mounts",
+      "description": "Lifecycle, drivers, and data persistence semantics.",
+      "tags": ["docker"]
+    },
+    {
+      "url": "https://example.org/articles/rest-pagination",
+      "title": "Pagination strategies for REST APIs",
+      "description": "Offset, cursor, and keyset pagination trade-offs.",
+      "tags": ["apis"]
+    },
+    {
+      "url": "https://example.org/articles/structured-llm-output",
+      "title": "Structured output from language models",
+      "description": "Schemas, retries, and typed failure envelopes.",
+      "tags": ["llm"]
+    },
+    {
+      "url": "https://example.org/articles/csrf-in-django",
+      "title": "CSRF protection in Django forms",
+      "description": "Tokens, cookies, and POST-only endpoints.",
+      "tags": ["django", "security"]
+    },
+    {
+      "url": "https://example.org/articles/raft-consensus",
+      "title": "Raft consensus, illustrated",
+      "description": "Leader election, log replication, and safety.",
+      "tags": ["distributed-systems"]
+    },
+    {
+      "url": "https://example.org/tools/sqlite-vec",
+      "title": "sqlite-vec vector search",
+      "description": "Embedding indexes inside a plain SQLite file.",
+      "tags": ["databases", "sqlite", "llm"]
+    },
+    {
+      "url": "https://example.org/articles/content-addressed-storage",
+      "title": "Content-addressed storage and image digests",
+      "description": "Why a sha256 digest pins what a tag cannot.",
+      "tags": ["docker", "supply-chain"]
+    }
+  ]
+}
