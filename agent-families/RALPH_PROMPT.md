@@ -6,7 +6,7 @@ of work well, leave the trail clean, and exit. The loop will run you again.
 
 ## Authoritative sources (read in this order, every iteration)
 1. `agent-families/PROGRESS.md` — the loop's memory. The unit manifest in it is
-   PRE-GENERATED and AUTHORITATIVE: 42 units across five plans. You may flip
+   PRE-GENERATED and AUTHORITATIVE: 57 units across six plans (42 core + Plan 007). You may flip
    checkboxes and statuses ONLY. Never add, remove, merge, or renumber unit lines.
 2. The plan you are currently inside (per PROGRESS), one of, in strict order:
    - `docs/plans/2026-06-10-001-feat-agent-families-phase0-library-core-plan.md`
@@ -14,6 +14,7 @@ of work well, leave the trail clean, and exit. The loop will run you again.
    - `docs/plans/2026-06-10-003-feat-agent-families-phase2-explorer-grader-plan.md`
    - `docs/plans/2026-06-10-004-feat-agent-families-phase3a-learning-loop-plan.md`
    - `docs/plans/2026-06-10-005-feat-agent-families-phase3b-training-at-scale-plan.md`
+   - `docs/plans/2026-06-10-007-feat-agent-families-greenfield-mode-plan.md` (queued; runs after 005)
 3. `docs/agent-families/DESIGN.md` — consult for rationale when a plan is ambiguous.
    The plans are authoritative for WHAT; the design for WHY.
 
@@ -69,7 +70,7 @@ of work well, leave the trail clean, and exit. The loop will run you again.
   under `## Blockers`, set the first line to `# Status: blocked`, exit. A human decides.
 - Quota exhausted: commit green state, note it, exit — the loop resumes later.
 
-## Completion (only after all 42 units are checked)
+## Completion (only after all 57 units are checked, including Plan 007)
 1. AUDIT: run a per-plan audit and write `agent-families/AUDIT.md` — for every unit:
    its Files exist, each listed Test scenario maps to an actual test (name them), its
    Verification re-confirmed. Any gap found → uncheck that unit, fix it in subsequent

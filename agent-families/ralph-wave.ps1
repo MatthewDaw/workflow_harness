@@ -34,10 +34,20 @@ $waves = @(
   ,@("004/U9")
   ,@("005/U1","005/U2","005/U3","005/U4","005/U5","005/U6")
   ,@("005/U7")
+  # --- Plan 007: Greenfield Mode (queued after 001-005). Waves follow the plan's DAG. ---
+  ,@("007/U1")
+  ,@("007/U2","007/U4","007/U10")
+  ,@("007/U3","007/U5","007/U13a")
+  ,@("007/U5b")
+  ,@("007/U6")
+  ,@("007/U7")
+  ,@("007/U8")
+  ,@("007/U9","007/U13b")
+  ,@("007/U11","007/U12")
 )
 
-function Unit-Done($u) { $p,$x = $u -split '/'; return ((Select-String -Path $progress -Pattern "^\- \[x\] $p/$x" -EA SilentlyContinue).Count -gt 0) }
-function Flip($u) { $p,$x = $u -split '/'; (Get-Content $progress) -replace "^\- \[ \] $p/$x","- [x] $p/$x" | Set-Content $progress; git add $progress | Out-Null; git commit -q -m "chore(agent-families): mark $u done" | Out-Null }
+function Unit-Done($u) { $p,$x = $u -split '/'; return ((Select-String -Path $progress -Pattern "^\- \[x\] $p/$x " -EA SilentlyContinue).Count -gt 0) }
+function Flip($u) { $p,$x = $u -split '/'; (Get-Content $progress) -replace "^\- \[ \] $p/$x ","- [x] $p/$x " | Set-Content $progress; git add $progress | Out-Null; git commit -q -m "chore(agent-families): mark $u done" | Out-Null }
 function Run-Worker($u,$dir) { $p,$x = $u -split '/'; & $worker -Unit $u -Dir $dir -Repo $repo *> (Join-Path $repo "ralph-logs\$p-$x.worker.txt"); return (Get-Content (Join-Path $repo "ralph-logs\$p-$x.result") -EA SilentlyContinue) }
 function Suite-Green { Push-Location (Join-Path $repo "agent-families"); uv run --frozen pytest -q *> (Join-Path $repo "ralph-logs\gate.txt"); $g = ($LASTEXITCODE -eq 0); Pop-Location; return $g }
 
@@ -52,6 +62,13 @@ foreach ($wave in $waves) {
   if (($wavePlan -eq "004" -or $wavePlan -eq "005") -and -not (Test-Path "agent-families\REVIEW-OK-$wavePlan.txt")) {
     Write-Host "=== REVIEW CHECKPOINT before Plan $wavePlan - pausing for human review. ==="
     Add-Content $progress "`n- REVIEW CHECKPOINT: paused before Plan $wavePlan (novel phase). To proceed: review the prior plan's units + their ## Conformance notes, then create agent-families\REVIEW-OK-$wavePlan.txt and relaunch ralph-wave.ps1."
+    break
+  }
+
+  # HUMAN STEP: 007/U5b is a manual human-as-founder trial (no production code) - the loop cannot do it.
+  if (($todo -contains "007/U5b") -and -not (Test-Path "agent-families\U5B-DONE.txt")) {
+    Write-Host "=== HUMAN STEP 007/U5b - pausing for the manual human-as-founder trial. ==="
+    Add-Content $progress "`n- HUMAN STEP: 007/U5b is a manual human-as-founder trial (no production code). Run it per the plan, record transcripts under docs/, flip 007/U5b to [x] in this file, create agent-families\U5B-DONE.txt, then relaunch ralph-wave.ps1."
     break
   }
 

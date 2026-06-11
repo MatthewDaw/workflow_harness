@@ -3,7 +3,7 @@
 
 This manifest is PRE-GENERATED from the five plans and is AUTHORITATIVE.
 Loop agents: flip checkboxes and statuses only. NEVER add, remove, merge,
-or renumber unit lines. 42 units total. A unit is `done` only when its
+or renumber unit lines. 57 units total (42 core + 15 greenfield, Plan 007). A unit is `done` only when its
 plan's Files exist, its Test scenarios are implemented, its Verification
 holds, and the full offline suite is green.
 
@@ -61,7 +61,25 @@ holds, and the full offline suite is green.
 - [ ] 005/U6 — Enforcement activation and annealing
 - [ ] 005/U7 — RealWorld calibration and scale e2e
 
-## Final milestone (after all 42 units, before COMPLETE)
+### Plan 007 - Greenfield Mode (docs/plans/2026-06-10-007-feat-agent-families-greenfield-mode-plan.md)
+QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not unit-number order.
+- [ ] 007/U1 - Migration: greenfield schema + config section
+- [ ] 007/U2 - Planner contract: ASSUME refactor, PROPOSAL artifact, ranked questions
+- [ ] 007/U3 - Provenance lint + assumption gate
+- [ ] 007/U4 - DEC extraction + DEC-coverage lint
+- [ ] 007/U5 - Degradation generator + blur cache + blur lint
+- [ ] 007/U5b - Human-as-founder trial (HUMAN STEP - manual, no production code)
+- [ ] 007/U6 - Founder answering, adjudication and acceptance session
+- [ ] 007/U7 - Episode world branch, workspace policy and rotation
+- [ ] 007/U8 - Decomposition join + elicitation metrics v1
+- [ ] 007/U9 - Stage A founder branches
+- [ ] 007/U10 - Provenance and world telemetry plumbing
+- [ ] 007/U13a - Kanboard registry pre-research (FEAT + DEC)
+- [ ] 007/U13b - Greenfield episode benchmark
+- [ ] 007/U11 - af induct <domain> researched-insight induction
+- [ ] 007/U12 - Define-chain seed batch
+
+## Final milestone (after all 57 units, before COMPLETE)
 - [ ] AUDIT — per-plan audit pass written to agent-families/AUDIT.md (every unit: Files exist, each Test scenario mapped to a test, Verification re-confirmed)
 - [ ] LIVE — one full episode against linkding; clone built (`npm run build && npm run preview`) and core flows verified via Playwright; score/cost/start-command recorded below
 - [ ] Plans 001–005 frontmatter flipped to `status: completed`
@@ -93,3 +111,5 @@ holds, and the full offline suite is green.
 ## Blockers
 
 - DRIVER: iteration 1 reverted (red suite)
+
+- REVIEW CHECKPOINT: paused before Plan 005 (novel phase). To proceed: review the prior plan's units + their ## Conformance notes, then create agent-families\REVIEW-OK-005.txt and relaunch ralph-wave.ps1.
