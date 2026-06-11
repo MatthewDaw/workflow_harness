@@ -61,7 +61,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -351,6 +351,31 @@ def build_lint_feedback_prompt(
     )
 
 
+# --- file-ownership data (R10 warn lint; promoted to enforcement in Plan 5) ------
+
+
+def file_ownership_conflicts(
+    ticket_files: Mapping[str, Sequence[str]],
+) -> dict[str, tuple[str, ...]]:
+    """Files claimed by more than one ticket — the file-ownership lint's datum.
+
+    Maps each contested file to the ticket ids that claim it, in first-seen
+    order (the order the warn lint renders). Empty when every file has a single
+    owner. In Phase 1 this datum was recorded as a *warning* with no consumer; in
+    Plan 5 the rehearsal wave scheduler promotes it to **enforcement** — two
+    tickets sharing a file are serialized into separate fan-out waves so their
+    one-shot artifacts can never conflict on merge (005 R8). Exposing it as one
+    named function keeps the lint and the scheduler reading the same definition.
+    """
+    owners: dict[str, list[str]] = {}
+    for ticket_id, files in ticket_files.items():
+        for file in files:
+            owners.setdefault(file, []).append(ticket_id)
+    return {
+        file: tuple(ids) for file, ids in owners.items() if len(ids) > 1
+    }
+
+
 # --- deterministic plan lints (R10) ----------------------------------------------
 
 
@@ -526,22 +551,22 @@ def lint_plan(plan: dict, msg_ids: set[str], *, size_budget: int) -> list[LintFi
                 )
             )
 
-    # file_ownership: WARN level in Phase 1 — recorded, never blocking.
-    owners: dict[str, list[str]] = {}
-    for ticket in tickets:
-        for file in ticket["files"]:
-            owners.setdefault(file, []).append(ticket["id"])
-    for file, owner_ids in owners.items():
-        if len(owner_ids) > 1:
-            findings.append(
-                LintFinding(
-                    LINT_FILE_OWNERSHIP,
-                    SEVERITY_WARN,
-                    f"file {file}",
-                    "each file owned by a single ticket",
-                    f"'{file}' is claimed by tickets: {', '.join(owner_ids)}",
-                )
+    # file_ownership: WARN level in Phase 1 — recorded, never blocking. The same
+    # datum is promoted to enforcement by Plan 5's rehearsal wave scheduler
+    # (file_ownership_conflicts is the shared definition).
+    conflicts = file_ownership_conflicts(
+        {ticket["id"]: ticket["files"] for ticket in tickets}
+    )
+    for file, owner_ids in conflicts.items():
+        findings.append(
+            LintFinding(
+                LINT_FILE_OWNERSHIP,
+                SEVERITY_WARN,
+                f"file {file}",
+                "each file owned by a single ticket",
+                f"'{file}' is claimed by tickets: {', '.join(owner_ids)}",
             )
+        )
     return findings
 
 

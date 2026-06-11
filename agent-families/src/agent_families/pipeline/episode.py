@@ -215,6 +215,14 @@ IncrementFn = Callable[[IncrementContext], RunResult]
 ResumeIncrementFn = Callable[[IncrementContext, int], RunResult]
 UatFn = Callable[[EpisodeContext, int, int, str], UatResultLike]
 SettleFn = Callable[[EpisodeContext], object]
+# The rehearsal pass (005 U2): post-convergence fan-out + the one-shot metric.
+# Receives (ctx, increment_index, run_id, increment_base_ref) — the base ref is
+# the workspace HEAD captured BEFORE the increment's worker ran (the
+# orchestrator-minted increment-base ref). Optional: when omitted the episode is
+# byte-identical to a no-rehearsal run. Its return is ignored — adopt-or-fallback
+# and metric persistence are the seam's own responsibility (rehearsal failure is
+# signal, never a loop, so it never blocks the episode).
+RehearsalFn = Callable[[EpisodeContext, int, int, str], object]
 
 
 @dataclass(frozen=True)
@@ -236,6 +244,7 @@ class EpisodeStages:
     reset_target_fn: Callable[[], None]
     settle_fn: SettleFn
     resume_increment_fn: ResumeIncrementFn | None = None
+    rehearsal_fn: RehearsalFn | None = None
 
 
 @dataclass(frozen=True)
@@ -273,6 +282,10 @@ class _EpisodeState:
     active_run_id: int | None = None
     carry_in_msg_ids: tuple[str, ...] = ()
     carry_in_ticket_ids: tuple[str, ...] = ()
+    # The workspace HEAD captured before the active increment's worker ran — the
+    # orchestrator-minted increment-base ref the rehearsal pass fans out from
+    # (005 U2). Persisted so a resumed increment rehearses from the same base.
+    increment_base_ref: str = ""
 
     def to_json(self) -> str:
         return json.dumps(
@@ -288,6 +301,7 @@ class _EpisodeState:
                 "active_run_id": self.active_run_id,
                 "carry_in_msg_ids": list(self.carry_in_msg_ids),
                 "carry_in_ticket_ids": list(self.carry_in_ticket_ids),
+                "increment_base_ref": self.increment_base_ref,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -318,6 +332,7 @@ class _EpisodeState:
             ),
             carry_in_msg_ids=tuple(data["carry_in_msg_ids"]),
             carry_in_ticket_ids=tuple(data["carry_in_ticket_ids"]),
+            increment_base_ref=data.get("increment_base_ref", ""),
         )
         if state.phase not in EPISODE_PHASES:
             raise EpisodeError(
@@ -564,6 +579,21 @@ def _drive(
                     carry_in_msg_ids=state.carry_in_msg_ids,
                     carry_in_ticket_ids=state.carry_in_ticket_ids,
                 )
+                if (
+                    stages.rehearsal_fn is not None
+                    and state.active_run_id is None
+                    and not state.increment_base_ref
+                ):
+                    # Capture the increment-base ref BEFORE the worker runs: the
+                    # converged-then-rehearse fan-out cuts its worktrees from
+                    # here (005 U2). Persisted so a resumed increment fans out
+                    # from the same base even though the worker has since moved
+                    # the workspace HEAD.
+                    from agent_families.pipeline.rehearsal import current_head
+
+                    state.increment_base_ref = current_head(workspace)
+                    _save_state(store, episode_id, state)
+
                 if state.active_run_id is not None:
                     if stages.resume_increment_fn is None:
                         raise EpisodeError(
@@ -619,6 +649,22 @@ def _drive(
                         else "partially-explored"
                     ),
                 )
+                if (
+                    result.status == "success"
+                    and stages.rehearsal_fn is not None
+                ):
+                    # Post-convergence rehearsal (005 U2): runs while the
+                    # workspace holds the converged artifact. Adopt-or-fallback +
+                    # metric persistence are the seam's own job; a rehearsal
+                    # failure is signal, never a loop, so it never blocks the
+                    # episode (a fallback leaves it equivalent to no rehearsal).
+                    _run_rehearsal(
+                        stages,
+                        ctx,
+                        increment_index,
+                        result.run_id,
+                        state.increment_base_ref,
+                    )
                 state.active_run_id = result.run_id
                 state.phase = "uat"
                 _save_state(store, episode_id, state)
@@ -650,6 +696,7 @@ def _drive(
             state.active_slice = ()
             state.active_msg_id = None
             state.active_msg_text = ""
+            state.increment_base_ref = ""
             _save_state(store, episode_id, state)
             logger.info(
                 "episode %d increment %d %s (escalated carry-in: %s)",
@@ -699,6 +746,41 @@ def _validate_increment_run(
             f" increment_index={run['increment_index']}), expected"
             f" ({episode_id}, {increment_index}) — create the run via"
             " Orchestrator.run(episode_id=..., increment_index=...)"
+        )
+
+
+def _run_rehearsal(
+    stages: EpisodeStages,
+    ctx: EpisodeContext,
+    increment_index: int,
+    run_id: int,
+    increment_base_ref: str,
+) -> None:
+    """Invoke the rehearsal seam after a converged increment (005 U2).
+
+    A rehearsal is additive measurement: §11 makes it *signal, never a loop* —
+    the converged artifact is always the fallback, so any failure (including an
+    unexpected one in the seam itself) must leave the episode exactly as a
+    no-rehearsal run. The seam owns adopt-or-fallback and metric persistence;
+    here we only guarantee it cannot abort the episode.
+    """
+    if not increment_base_ref:
+        logger.warning(
+            "episode increment %d converged but no increment-base ref was"
+            " captured; skipping rehearsal (it would have nothing to fan out"
+            " from)",
+            increment_index,
+        )
+        return
+    try:
+        stages.rehearsal_fn(ctx, increment_index, run_id, increment_base_ref)
+    except Exception:  # noqa: BLE001 — rehearsal failure must never block
+        logger.warning(
+            "rehearsal for episode %d increment %d raised; falling back to the"
+            " converged artifact (the episode advances unchanged)",
+            ctx.episode_id,
+            increment_index,
+            exc_info=True,
         )
 
 
