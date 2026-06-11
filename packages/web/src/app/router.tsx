@@ -9,6 +9,7 @@ import {
 } from '../screens/ProjectDetail/ProjectRequirements.js';
 import { DetailedRequirements } from '../screens/ProjectDetail/DetailedRequirements.js';
 import { ProjectWeekly } from '../screens/ProjectDetail/ProjectWeekly.js';
+import { WeeklyReconcile } from '../screens/ProjectDetail/WeeklyReconcile.js';
 import { ProjectMemories } from '../screens/ProjectDetail/ProjectMemories.js';
 import { ProjectSessions } from '../screens/ProjectDetail/ProjectSessions.js';
 import { ProjectAgents } from '../screens/ProjectDetail/ProjectAgents.js';
@@ -28,6 +29,7 @@ import { SkillBundle } from '../screens/Skills/SkillBundle.js';
 import { McpServers } from '../screens/McpServers/McpServers.js';
 import { McpServerEditor } from '../screens/McpServers/McpServerEditor.js';
 import { Weekly } from '../screens/Weekly/Weekly.js';
+import { ManagerBrief } from '../screens/Weekly/ManagerBrief.js';
 import { LinkDevice } from '../screens/LinkDevice/LinkDevice.js';
 import { Organizations } from '../screens/Organizations/Organizations.js';
 
@@ -52,6 +54,8 @@ export function AppRoutes() {
           <Route path="requirements/full" element={<ProjectRequirementsFull />} />
           <Route path="detailed-requirements" element={<DetailedRequirements />} />
           <Route path="weekly" element={<ProjectWeekly />} />
+          {/* U11: nested planned-vs-actual reconciliation for a RECONCILING week. */}
+          <Route path="weekly/reconcile" element={<WeeklyReconcile />} />
           <Route path="memories" element={<ProjectMemories />} />
           <Route path="sessions" element={<ProjectSessions />} />
           <Route path="skills" element={<ProjectSkills />} />
@@ -78,6 +82,10 @@ export function AppRoutes() {
         {/* Unassigned bin — the org's new-skill backlog (skill-idea loop, U15). */}
         <Route path="bin" element={<Bin />} />
         <Route path="weekly" element={<Weekly />} />
+        {/* U12: the reports-scoped manager exception/divergence brief. The nav
+            entry (AppShell) shows only when the caller has reports; the route is
+            always reachable and renders the empty "nothing needs you" state. */}
+        <Route path="weekly/manager" element={<ManagerBrief />} />
         <Route path="organizations" element={<Organizations />} />
         <Route path="link-device" element={<LinkDevice />} />
 

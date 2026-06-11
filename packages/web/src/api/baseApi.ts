@@ -9,7 +9,9 @@ import type {
   WorkflowRun,
   Skill,
   McpServer,
-  WeeklyUpdate,
+  WeeklyPlan,
+  WeeklyCommit,
+  OrphanReason,
   ScopeRef,
   ControlAction,
   DefinitionOfDone,
@@ -24,6 +26,64 @@ import type {
 
 // Re-exported for consumers that read memories through this module.
 export type { Memory } from '@harness/shared';
+// Re-exported so the weekly screens (U10–U12) read these straight off this module.
+export type { WeeklyPlan, WeeklyCommit, OrphanReason } from '@harness/shared';
+
+/**
+ * One week as the weekly endpoints serve it (U3): the lifecycle `plan` plus its
+ * itemized `commits`, already priority-sorted server-side. Both the list read
+ * (`getWeeks`) and the single-week read (`getWeek`) return this shape.
+ */
+export interface WeekView {
+  plan: WeeklyPlan;
+  commits: WeeklyCommit[];
+}
+
+/**
+ * One exception surfaced on a report's manager brief (U8) — the thing that needs
+ * the manager. Mirrors the backend `BriefException`; `kind` is a stable string so
+ * the UI can group/icon them.
+ */
+export interface BriefException {
+  kind:
+    | 'highest_leverage_not_started'
+    | 'oldest_carry'
+    | 'longest_starved_outcome'
+    | 'lock_failure';
+  detail: string;
+  commitId?: string;
+  supportingOutcomeId?: string;
+}
+
+/**
+ * A report's strategic-concentration signal (U17), reported as divergence from
+ * their declared posture. Mirrors the backend `ConcentrationSignal`.
+ */
+export interface ConcentrationSignal {
+  herfindahl: number;
+  nodes: number;
+  postureDivergence: number;
+}
+
+/** The manager-brief node for one report (U8). */
+export interface ReportBrief {
+  userId: string;
+  name?: string;
+  /** The report's most-recent week across their projects, or null when they have none. */
+  latestWeek: { projectId: string; isoWeek: string; status: WeeklyPlan['status'] } | null;
+  /** The exceptions needing the manager's attention; empty ⇒ "nothing needs you". */
+  exceptions: BriefException[];
+  concentration: ConcentrationSignal;
+}
+
+/**
+ * The reports-scoped exception/divergence brief (U8): the current page of report
+ * nodes plus the keyset `nextCursor` (absent on the last page).
+ */
+export interface ManagerBrief {
+  reports: ReportBrief[];
+  nextCursor?: string;
+}
 
 /**
  * RTK Query slice mirroring the backend REST surface. All DTOs come from
@@ -229,6 +289,7 @@ export const baseApi = createApi({
     'McpServer',
     'Variant',
     'Weekly',
+    'WeeklyCommit',
     'Docs',
     'Requirements',
     'Dod',
@@ -554,10 +615,31 @@ export const baseApi = createApi({
         providesTags: (_r, _e, name) => [{ type: 'McpServer', id: name }],
       }),
 
-      getWeekly: build.query<WeeklyUpdate[], string>({
+      /**
+       * Every week for a project (U3): each is a `{ plan, commits }` view, the
+       * commits priority-sorted server-side. The legacy prose `getWeekly` (a flat
+       * `WeeklyUpdate[]`) is gone — LOCK replaces publish and the report is now
+       * itemized (KTD1/KTD4). Tagged `Weekly`+`WeeklyCommit` so a commit write or a
+       * lifecycle transition refetches it.
+       */
+      getWeeks: build.query<WeekView[], string>({
         query: (projectId) => `projects/${projectId}/weekly`,
-        transformResponse: unwrapArray<WeeklyUpdate>('weeks'),
-        providesTags: ['Weekly'],
+        transformResponse: unwrapArray<WeekView>('weeks'),
+        providesTags: ['Weekly', 'WeeklyCommit'],
+      }),
+
+      /**
+       * One week (U3): the lifecycle `plan` plus its commits. A week never written
+       * to is a 404 server-side; RTK surfaces that as an error to the caller.
+       */
+      getWeek: build.query<WeekView, { projectId: string; isoWeek: string }>({
+        query: ({ projectId, isoWeek }) => `projects/${projectId}/weekly/${isoWeek}`,
+        transformResponse: unwrapOne<WeekView>('week'),
+        providesTags: (_r, _e, { isoWeek }) => [
+          'Weekly',
+          'WeeklyCommit',
+          { type: 'Weekly', id: isoWeek },
+        ],
       }),
 
       // ---- Two-tier requirements ----
@@ -778,35 +860,162 @@ export const baseApi = createApi({
         invalidatesTags: ['Agent'],
       }),
 
-      /** Store a weekly-update draft (free-form done/plan prose) for an iso week. */
-      putWeekly: build.mutation<
-        WeeklyUpdate,
+      // ---- Weekly commit lifecycle (U3/U4) ----
+      // The chess-layer fields (`category`/`priorityNumeric`) are DERIVED
+      // server-side (KTD4) — the client never authors them, so the create/update
+      // bodies below carry only the editable planned/actual fields. Every write
+      // invalidates `WeeklyCommit` (and `Weekly`) so the week view refetches.
+
+      /**
+       * Add a commit to a week's DRAFT plan (auto-created on first write). The
+       * server derives `category`/`priorityNumeric`; the client sends the title,
+       * the SO-or-orphan link (KTD10), and any informational `alsoAdvances`.
+       */
+      createCommit: build.mutation<
+        WeeklyCommit,
         {
           projectId: string;
           isoWeek: string;
-          done: string;
-          plan: string;
-          conformityScore?: number;
-          validated?: boolean;
+          title: string;
+          supportingOutcomeId?: string;
+          orphanReason?: OrphanReason;
+          alsoAdvances?: string[];
         }
       >({
         query: ({ projectId, isoWeek, ...body }) => ({
-          url: `projects/${projectId}/weekly/${isoWeek}`,
+          url: `projects/${projectId}/weekly/${isoWeek}/commits`,
+          method: 'POST',
+          body,
+        }),
+        transformResponse: unwrapOne<WeeklyCommit>('commit'),
+        invalidatesTags: (_r, _e, { isoWeek }) => [
+          'Weekly',
+          'WeeklyCommit',
+          { type: 'Weekly', id: isoWeek },
+        ],
+      }),
+
+      /**
+       * Edit a commit. During DRAFT this rewrites the planned fields (title, link,
+       * `alsoAdvances`); during RECONCILING it records the actual `status` +
+       * `actualOutcome`. The SO-or-orphan link is sent explicitly so an SO can be
+       * cleared (the server re-derives the chess fields).
+       */
+      updateCommit: build.mutation<
+        WeeklyCommit,
+        {
+          projectId: string;
+          isoWeek: string;
+          commitId: string;
+          title?: string;
+          supportingOutcomeId?: string | null;
+          orphanReason?: OrphanReason | null;
+          alsoAdvances?: string[];
+          status?: WeeklyCommit['status'];
+          actualOutcome?: string;
+        }
+      >({
+        query: ({ projectId, isoWeek, commitId, ...body }) => ({
+          url: `projects/${projectId}/weekly/${isoWeek}/commits/${commitId}`,
           method: 'PUT',
           body,
         }),
-        transformResponse: unwrapOne<WeeklyUpdate>('update'),
-        invalidatesTags: ['Weekly'],
+        transformResponse: unwrapOne<WeeklyCommit>('commit'),
+        invalidatesTags: (_r, _e, { isoWeek }) => [
+          'Weekly',
+          'WeeklyCommit',
+          { type: 'Weekly', id: isoWeek },
+        ],
       }),
 
-      /** Publish a weekly update: mark validated + feed the objective roll-up. */
-      publishWeekly: build.mutation<WeeklyUpdate, { projectId: string; isoWeek: string }>({
+      /** Remove a commit from a week's DRAFT plan. */
+      deleteCommit: build.mutation<
+        { deleted: string },
+        { projectId: string; isoWeek: string; commitId: string }
+      >({
+        query: ({ projectId, isoWeek, commitId }) => ({
+          url: `projects/${projectId}/weekly/${isoWeek}/commits/${commitId}`,
+          method: 'DELETE',
+        }),
+        invalidatesTags: (_r, _e, { isoWeek }) => [
+          'Weekly',
+          'WeeklyCommit',
+          { type: 'Weekly', id: isoWeek },
+        ],
+      }),
+
+      /**
+       * DRAFT → LOCKED (the new "publish"). The server re-checks the SO-or-orphan
+       * lock guard; a violation is a 409 carrying a structured `blockers[]` the
+       * editor reads to self-correct, surfaced to the caller via `.unwrap()`.
+       */
+      lockWeek: build.mutation<{ plan: WeeklyPlan }, { projectId: string; isoWeek: string }>({
         query: ({ projectId, isoWeek }) => ({
-          url: `projects/${projectId}/weekly/${isoWeek}/publish`,
+          url: `projects/${projectId}/weekly/${isoWeek}/lock`,
           method: 'POST',
         }),
-        transformResponse: unwrapOne<WeeklyUpdate>('update'),
-        invalidatesTags: ['Weekly', 'Objective'],
+        invalidatesTags: (_r, _e, { isoWeek }) => [
+          'Weekly',
+          'WeeklyCommit',
+          { type: 'Weekly', id: isoWeek },
+        ],
+      }),
+
+      /** LOCKED → RECONCILING. Opens the per-commit actual-fields path. */
+      startReconcile: build.mutation<{ plan: WeeklyPlan }, { projectId: string; isoWeek: string }>({
+        query: ({ projectId, isoWeek }) => ({
+          url: `projects/${projectId}/weekly/${isoWeek}/reconcile/start`,
+          method: 'POST',
+        }),
+        invalidatesTags: (_r, _e, { isoWeek }) => [
+          'Weekly',
+          'WeeklyCommit',
+          { type: 'Weekly', id: isoWeek },
+        ],
+      }),
+
+      /**
+       * RECONCILING → RECONCILED. On success the server carries incomplete commits
+       * into next week's DRAFT and recomputes the single-source roll-up (KTD3/KTD5),
+       * so this ALSO invalidates `Objective` — the Objectives screen's SO `pct`
+       * moves to the just-reconciled value. The response carries the carry-forward
+       * summary (`carriedTo`/`carriedCount`/`deepCarryNudge`).
+       */
+      completeReconcile: build.mutation<
+        {
+          plan: WeeklyPlan;
+          carriedTo: string;
+          carriedCount: number;
+          deepCarryNudge?: { commitId: string; carryDepth: number }[];
+        },
+        { projectId: string; isoWeek: string }
+      >({
+        query: ({ projectId, isoWeek }) => ({
+          url: `projects/${projectId}/weekly/${isoWeek}/reconcile/complete`,
+          method: 'POST',
+        }),
+        invalidatesTags: (_r, _e, { isoWeek }) => [
+          'Weekly',
+          'WeeklyCommit',
+          'Objective',
+          { type: 'Weekly', id: isoWeek },
+        ],
+      }),
+
+      /**
+       * The reports-scoped manager exception/divergence brief (U8), keyset-paginated
+       * over the caller's reports. A caller with no reports gets `{ reports: [] }`
+       * ("nothing needs you"). `cursor` follows `nextCursor` for the next page.
+       */
+      getManagerBrief: build.query<ManagerBrief, { limit?: number; cursor?: string } | void>({
+        query: (arg) => {
+          const params = new URLSearchParams();
+          if (arg && arg.limit !== undefined) params.set('limit', String(arg.limit));
+          if (arg && arg.cursor !== undefined) params.set('cursor', arg.cursor);
+          const qs = params.toString();
+          return `weekly/manager${qs ? `?${qs}` : ''}`;
+        },
+        providesTags: ['Weekly', 'WeeklyCommit'],
       }),
 
       /**
@@ -903,7 +1112,15 @@ export const {
   usePromoteSkillMutation,
   useGetMcpServersQuery,
   useGetMcpServerQuery,
-  useGetWeeklyQuery,
+  useGetWeeksQuery,
+  useGetWeekQuery,
+  useCreateCommitMutation,
+  useUpdateCommitMutation,
+  useDeleteCommitMutation,
+  useLockWeekMutation,
+  useStartReconcileMutation,
+  useCompleteReconcileMutation,
+  useGetManagerBriefQuery,
   useGetProjectDocsQuery,
   useGetProjectDocContentQuery,
   useGetProjectRequirementsQuery,
@@ -935,8 +1152,6 @@ export const {
   useAddAgentBundleMemberMutation,
   useRemoveAgentBundleMemberMutation,
   useDissolveAgentBundleMutation,
-  usePutWeeklyMutation,
-  usePublishWeeklyMutation,
   useSendControlMutation,
   useApproveDeviceMutation,
 } = baseApi;

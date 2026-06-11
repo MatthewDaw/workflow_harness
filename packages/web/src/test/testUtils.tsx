@@ -10,12 +10,12 @@ import type {
   Agent,
   Skill,
   McpServer,
-  WeeklyUpdate,
   DefinitionOfDone,
   Envelope,
   LearningRecord,
   Memory,
 } from '@harness/shared';
+import type { WeekView, ManagerBrief } from '../api/baseApi.js';
 import { makeStore, type AppStore } from '../app/store.js';
 import { AuthProvider } from '../auth/AuthProvider.js';
 import { createMockClient } from '../auth/mockClient.js';
@@ -77,7 +77,14 @@ export interface SeedData {
    */
   bin?: unknown[];
   mcpServers?: McpServer[];
-  weekly?: Record<string, WeeklyUpdate[]>;
+  /**
+   * Per-project weekly lifecycle data (U3), keyed by projectId — each entry is the
+   * `{ plan, commits }` week view the `GET …/weekly` (list) and `…/weekly/:week`
+   * (single) endpoints serve. The legacy prose `WeeklyUpdate[]` shape is gone.
+   */
+  weekly?: Record<string, WeekView[]>;
+  /** The reports-scoped manager brief (U8), served by `GET /weekly/manager`. */
+  managerBrief?: ManagerBrief;
   /** Detailed-requirements doc tree, keyed by projectId (U11). */
   docs?: Record<string, { path: string; title: string; completion: number }[]>;
   /** Doc markdown bodies, keyed by `${projectId}::${repoRelPath}` (U11). */
@@ -284,8 +291,33 @@ export function installFetchStub(seed: SeedData) {
       return json({ session, events: seed.sessionEvents?.[id] ?? [] });
     }
 
+    // The reports-scoped manager brief (U8). Served bare (the endpoint returns it
+    // directly), defaulting to the empty "nothing needs you" brief.
+    if (path === 'weekly/manager') return json(seed.managerBrief ?? { reports: [] });
+
+    // Weekly commit lifecycle (U3/U4). The list read returns `{ weeks }`; a single
+    // week returns `{ week }` (404 when absent). The commit writes + transitions
+    // echo back a minimal success body so the mutations resolve in tests (the
+    // cache invalidation, not the echoed row, drives a refetch).
+    const weekCommit = /^projects\/([^/]+)\/weekly\/([^/]+)\/commits(?:\/([^/]+))?$/.exec(path);
+    if (weekCommit) {
+      if (method === 'DELETE') return json({ deleted: weekCommit[3] ?? '' });
+      return json({ commit: { id: weekCommit[3] ?? 'commit-new' } });
+    }
+    if (/^projects\/[^/]+\/weekly\/[^/]+\/lock$/.test(path)) return json({ plan: {} });
+    if (/^projects\/[^/]+\/weekly\/[^/]+\/reconcile\/start$/.test(path)) return json({ plan: {} });
+    if (/^projects\/[^/]+\/weekly\/[^/]+\/reconcile\/complete$/.test(path))
+      return json({ plan: {}, carriedTo: '', carriedCount: 0 });
+
+    const week = /^projects\/([^/]+)\/weekly\/([^/]+)$/.exec(path);
+    if (week) {
+      const found = (seed.weekly?.[week[1]!] ?? []).find((w) => w.plan.isoWeek === week[2]);
+      if (!found) return json({ error: 'not found' }, 404);
+      return json({ week: found });
+    }
+
     const weekly = /^projects\/([^/]+)\/weekly$/.exec(path);
-    if (weekly) return json(seed.weekly?.[weekly[1]!] ?? []);
+    if (weekly) return json({ weeks: seed.weekly?.[weekly[1]!] ?? [] });
 
     const docContent = /^projects\/([^/]+)\/docs\/content$/.exec(path);
     if (docContent) {

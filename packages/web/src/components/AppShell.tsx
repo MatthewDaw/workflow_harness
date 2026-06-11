@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useAuth } from '../auth/AuthProvider.js';
+import { useGetManagerBriefQuery } from '../api/baseApi.js';
 import { wsConnect, wsDisconnect } from '../ws/liveActions.js';
 import type { RootState } from '../app/store.js';
 import { Emblem } from './Emblem.js';
@@ -28,6 +29,13 @@ export function AppShell() {
   const dispatch = useDispatch();
   const token = useSelector((s: RootState) => s.auth.idToken);
 
+  // The Manager Brief nav entry shows ONLY when the caller actually has reports
+  // (U12, KTD6) — the brief endpoint is scoped by the `managerUserId` edge, so a
+  // non-manager gets an empty `reports[]` and never sees the link.
+  const { data: brief } = useGetManagerBriefQuery(undefined, { skip: !user });
+  const hasReports = (brief?.reports.length ?? 0) > 0;
+  const nav = hasReports ? [...NAV, { to: '/weekly/manager', label: 'Manager Brief' }] : NAV;
+
   // Open the live WebSocket once the user is authenticated (H3). Without this the
   // socket never opens, so live watch/steer/counters never update. The token
   // rides the handshake query string so the WS authorizer accepts the connection.
@@ -52,7 +60,7 @@ export function AppShell() {
                 Command HQ
               </span>
             </span>
-            {NAV.map((item) => (
+            {nav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
