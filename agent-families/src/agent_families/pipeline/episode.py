@@ -215,6 +215,10 @@ IncrementFn = Callable[[IncrementContext], RunResult]
 ResumeIncrementFn = Callable[[IncrementContext, int], RunResult]
 UatFn = Callable[[EpisodeContext, int, int, str], UatResultLike]
 SettleFn = Callable[[EpisodeContext], object]
+# Post-convergence rehearsal pass (005 R5): re-execute the converged increment's
+# tickets as a one-shot fan-out, compute the one-shot metric, adopt-or-fallback.
+# (ctx, increment_index, run_id) -> the rehearsal result (ignored by the loop).
+RehearseFn = Callable[[EpisodeContext, int, int], object]
 
 
 @dataclass(frozen=True)
@@ -236,6 +240,13 @@ class EpisodeStages:
     reset_target_fn: Callable[[], None]
     settle_fn: SettleFn
     resume_increment_fn: ResumeIncrementFn | None = None
+    # Optional post-convergence rehearsal pass (005 R5). Omitted (None) leaves
+    # the episode byte-identical to a no-rehearsal run — the seam adds nothing
+    # until the run assembly wires the real fan-out in. Rehearsal failure is
+    # signal, never a loop (§11): its outcome never alters episode control flow,
+    # and a raised exception is logged and swallowed so the episode is left
+    # exactly as a no-rehearsal run would leave it.
+    rehearse_fn: RehearseFn | None = None
 
 
 @dataclass(frozen=True)
@@ -620,6 +631,23 @@ def _drive(
                     ),
                 )
                 state.active_run_id = result.run_id
+                # Post-convergence rehearsal (005 R5): the increment has
+                # converged (its run settled success|partial); the optional
+                # rehearsal pass re-executes the tickets one-shot for the
+                # autonomy metric. Its outcome never alters the episode (adopt is
+                # the rehearsal's own workspace decision); on fallback the episode
+                # is equivalent to a no-rehearsal run. A rehearsal error is signal
+                # for the reflector, never an episode failure — log and continue.
+                if stages.rehearse_fn is not None:
+                    try:
+                        stages.rehearse_fn(ctx, increment_index, result.run_id)
+                    except Exception:  # noqa: BLE001 - rehearsal never breaks the episode
+                        logger.exception(
+                            "episode %d increment %d rehearsal pass raised; the"
+                            " converged increment is unaffected (005 R5)",
+                            episode_id,
+                            increment_index,
+                        )
                 state.phase = "uat"
                 _save_state(store, episode_id, state)
 

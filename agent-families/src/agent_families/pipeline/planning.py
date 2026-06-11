@@ -545,6 +545,33 @@ def lint_plan(plan: dict, msg_ids: set[str], *, size_budget: int) -> list[LintFi
     return findings
 
 
+def file_ownership_conflicts(
+    tickets: Sequence[dict],
+) -> list[tuple[str, str]]:
+    """Ticket pairs that claim a shared file — the file-ownership lint, promoted.
+
+    In Phase 1 the file-ownership lint (:data:`LINT_FILE_OWNERSHIP`) is WARN-only
+    with no consumer by design (overlaps are recorded and the plan is accepted).
+    Plan 5 (005 R8) promotes it to **enforcement**: the rehearsal pass serializes
+    conflicting tickets into separate fan-out waves. This helper exposes the same
+    overlap computation the lint runs — keyed to the tickets' ids — so the wave
+    scheduler reads ownership conflicts straight from the plan without
+    re-deriving them. Each ``ticket`` is a plan-document ticket (``id`` + a
+    ``files`` list); pairs are ordered (a < b) and deduplicated; deterministic.
+    """
+    owners: dict[str, list[str]] = {}
+    for ticket in tickets:
+        for file in ticket.get("files", ()):
+            owners.setdefault(file, []).append(ticket["id"])
+    pairs: set[tuple[str, str]] = set()
+    for owner_ids in owners.values():
+        unique = sorted(set(owner_ids))
+        for i in range(len(unique)):
+            for j in range(i + 1, len(unique)):
+                pairs.add((unique[i], unique[j]))
+    return sorted(pairs)
+
+
 def _cycle_members(edges: dict[str, list[str]]) -> list[str]:
     """Kahn's algorithm over the (known-ref) dependency edges; returns the node
     ids left on cycles, empty when the graph is a DAG. Deterministic."""
