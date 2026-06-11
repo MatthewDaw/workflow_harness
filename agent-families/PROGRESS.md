@@ -73,7 +73,7 @@ QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not uni
 - [ ] 007/U7 - Episode world branch, workspace policy and rotation
 - [ ] 007/U8 - Decomposition join + elicitation metrics v1
 - [ ] 007/U9 - Stage A founder branches
-- [ ] 007/U10 - Provenance and world telemetry plumbing
+- [x] 007/U10 - Provenance and world telemetry plumbing
 - [ ] 007/U13a - Kanboard registry pre-research (FEAT + DEC)
 - [ ] 007/U13b - Greenfield episode benchmark
 - [ ] 007/U11 - af induct <domain> researched-insight induction
