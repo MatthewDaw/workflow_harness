@@ -7,10 +7,9 @@ import type {
 import { createHash } from 'node:crypto';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import type { AttributeValue } from '@aws-sdk/client-dynamodb';
-import { safeParseEnvelope, type Envelope, type Project, type Skill } from '@harness/shared';
+import { safeParseEnvelope, type Envelope, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { applyEvent } from './projection.js';
-import { recomputeOrgRollup } from '../projections/rollupRepo.js';
 import { defaultRepo } from './runtime.js';
 import { getDb } from '../db/pg/client.js';
 import type { PgDb } from '../db/pg/migrate.js';
@@ -49,14 +48,16 @@ import {
  *    projection using the SAME pure `applyEvent` the synchronous path uses. It is
  *    seq-guarded and conditional, so re-processing a record converges to exactly
  *    the same state the inline fold produced (idempotent; never regresses).
- *  - PROJECT records (PK `PROJ#…`, SK `META`) whose `progressPct` changed —
- *    recompute the org objective roll-up off the EXISTING `recomputeOrgRollup`
- *    pure logic, so "Streams drive roll-ups" actually holds.
  *
- * Everything else (connection records, listeners, device-auth, the roll-up's own
- * objective writes, projection writes, …) is irrelevant noise and skipped. The
- * handler is tolerant of malformed / partially-shaped records: a record it can't
- * interpret is logged and ignored rather than failing the batch.
+ * The objective roll-up is NO LONGER driven from a Dynamo PROJECT progress change
+ * (U6): its single source of truth is now reconciled weekly commits (KTD5), so the
+ * recompute runs in `/reconcile/complete` (`rest/weeklyTransitions.ts`), not here.
+ * The GitHub `progressPct → rollup` consumer is removed.
+ *
+ * Everything else (connection records, listeners, device-auth, project writes,
+ * the roll-up's own objective writes, projection writes, …) is irrelevant noise
+ * and skipped. The handler is tolerant of malformed / partially-shaped records: a
+ * record it can't interpret is logged and ignored rather than failing the batch.
  */
 
 export interface StreamConsumerDeps {
@@ -309,21 +310,6 @@ async function associateTopicEvent(
   return result;
 }
 
-/** True when a PROJECT META record's roll-up-relevant fields changed. */
-function projectProgressChanged(
-  oldImg: Record<string, unknown> | undefined,
-  newImg: Record<string, unknown> | undefined,
-): boolean {
-  if (!newImg) return false; // a delete contributes nothing to recompute
-  const before = oldImg?.progressPct;
-  const after = newImg.progressPct;
-  if (before !== after) return true;
-  // Re-pointing which Supporting Outcomes the project owns also moves roll-ups.
-  return (
-    JSON.stringify(oldImg?.supportingOutcomeIds) !== JSON.stringify(newImg.supportingOutcomeIds)
-  );
-}
-
 async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): Promise<void> {
   const ddb = record.dynamodb;
   if (!ddb) return;
@@ -352,21 +338,9 @@ async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): 
     return;
   }
 
-  // --- Project META record -> recompute the org objective roll-up. ---------
-  if (pk.startsWith('PROJ#') && sk === 'META') {
-    const newImg = decode(ddb.NewImage as Img);
-    const oldImg = decode(ddb.OldImage as Img);
-    if (!projectProgressChanged(oldImg, newImg)) return;
-    const project = newImg as (Project & { org?: string }) | undefined;
-    // `recomputeOrgRollup` is keyed by org (the objective tree lives in an
-    // `ORG#<org>` partition). The project item carries its owning `org` so the
-    // roll-up driver can resolve which org's tree to recompute; absent that we
-    // cannot place the project's progress into a tree, so we skip.
-    const org = typeof project?.org === 'string' ? project.org : undefined;
-    if (!org || !project?.id) return;
-    await recomputeOrgRollup(deps.db, deps.repo, org, [project.id]);
-    return;
-  }
+  // NOTE: the objective roll-up is no longer driven by a Dynamo PROJECT progress
+  // change (U6) — its single source of truth is reconciled weekly commits, so the
+  // recompute runs in `/reconcile/complete` (`rest/weeklyTransitions.ts`).
 
   // --- Skill record -> re-embed the skill into the org's vector index. -----
   // The live skill item is `SCOPE#org#<org>` / `SKILL#<name>`. The same prefix

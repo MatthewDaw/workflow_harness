@@ -1,14 +1,17 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { WeeklyCommit, WeeklyPlan, WeeklyStatus } from '@harness/shared';
+import type { WeeklyPlan, WeeklyStatus } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { getPlan, listWeekCommits, upsertPlan } from '../db/pg/weeklyRepo.js';
 import { weeklyCommits, weeklyPlans } from '../db/pg/schema.js';
-import { canTransition } from '../projections/weeklyLifecycle.js';
+import { canTransition, carryForwardCommits, nextIsoWeek } from '../projections/weeklyLifecycle.js';
+import { recomputeOrgRollup } from '../projections/rollupRepo.js';
+// Re-export the now-pure `nextIsoWeek` (moved to `weeklyLifecycle` in U5) so the
+// U4 transitions suite, which imports it from here, keeps resolving it.
+export { nextIsoWeek } from '../projections/weeklyLifecycle.js';
 import { conflict, defaultDb, defaultRepo, json, ok } from './runtime.js';
 import { ownedProject } from './ownership.js';
 import type { PgDb } from '../db/pg/migrate.js';
-import { and, eq } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
+import { and, eq, inArray } from 'drizzle-orm';
 
 /**
  * REST: weekly lifecycle transitions (U4). Each transition is its own endpoint;
@@ -48,39 +51,12 @@ interface Blocker {
 const blocked = (message: string, blockers: Blocker[]): APIGatewayProxyResultV2 =>
   json(409, { error: message, blockers });
 
-/**
- * Advance the next ISO week from `YYYY-Www`, rolling W52/W53 into the next year's
- * W01 (KTD3). The carry-forward clones land in this week's DRAFT.
- */
-export function nextIsoWeek(isoWeek: string): string {
-  const m = /^(\d{4})-W(\d{2})$/.exec(isoWeek);
-  if (!m) throw new Error(`malformed isoWeek: ${isoWeek}`);
-  const year = Number(m[1]);
-  const week = Number(m[2]);
-  // The number of ISO weeks in a year is 53 only when Jan 1 (or Dec 31) is a
-  // Thursday; otherwise 52. Use the ISO-week rule: a year has 53 weeks iff its
-  // last day (Dec 28 is always in the last ISO week) lands in week 53.
-  const weeksInYear = isoWeeksInYear(year);
-  if (week >= weeksInYear) return `${year + 1}-W01`;
-  return `${year}-W${String(week + 1).padStart(2, '0')}`;
-}
-
-/** The number of ISO weeks (52 or 53) in a given ISO-week-numbering year. */
-function isoWeeksInYear(year: number): number {
-  // The ISO rule: a year has 53 weeks iff Jan 1 is a Thursday, OR it is a leap
-  // year and Jan 1 is a Wednesday (then Dec 31 is a Thursday).
-  const jan1 = new Date(Date.UTC(year, 0, 1)).getUTCDay(); // Sun=0..Sat=6
-  const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-  if (jan1 === 4 || (isLeap && jan1 === 3)) return 53;
-  return 52;
-}
-
 /** Resolve the owned project + week path param, or the error response to return. */
 async function resolveWeek(
   event: APIGatewayProxyEventV2,
   deps: WeeklyTransitionsDeps,
 ): Promise<
-  | { projectId: string; week: string; plan: WeeklyPlan }
+  | { projectId: string; week: string; plan: WeeklyPlan; org: string }
   | { error: APIGatewayProxyResultV2 }
 > {
   const resolved = await ownedProject(event, deps.repo, 'pid');
@@ -89,7 +65,7 @@ async function resolveWeek(
   if (!week) return { error: json(400, { error: 'missing project or week' }) };
   const plan = await getPlan(deps.db, resolved.project.id, week);
   if (!plan) return { error: json(404, { error: 'not found' }) };
-  return { projectId: resolved.project.id, week, plan };
+  return { projectId: resolved.project.id, week, plan, org: resolved.principal.org };
 }
 
 /** Whether the transition `from -> to` is legal; a 409 otherwise (KTD2). */
@@ -158,30 +134,6 @@ export async function startReconcile(
 }
 
 /**
- * Clone a source commit into next week's DRAFT (KTD3): a fresh id, `isoWeek` set
- * to the next week, `status` reset to `planned`, `actualOutcome` cleared,
- * `carriedFromWeek` set, `carryDepth` incremented. Pure — the caller writes it.
- */
-function carryClone(source: WeeklyCommit, nextWeek: string): WeeklyCommit {
-  return {
-    id: randomUUID(),
-    projectId: source.projectId,
-    isoWeek: nextWeek,
-    title: source.title,
-    ...(source.supportingOutcomeId !== undefined
-      ? { supportingOutcomeId: source.supportingOutcomeId }
-      : {}),
-    ...(source.orphanReason !== undefined ? { orphanReason: source.orphanReason } : {}),
-    alsoAdvances: source.alsoAdvances,
-    category: source.category,
-    priorityNumeric: source.priorityNumeric,
-    status: 'planned',
-    carriedFromWeek: source.isoWeek,
-    carryDepth: source.carryDepth + 1,
-  };
-}
-
-/**
  * RECONCILING -> RECONCILED. Refuses while any commit is still `planned` (a 409
  * listing them). On success, in ONE transaction: stamps `RECONCILED` +
  * `reconciledAt`, clones every `planned`/`partial` commit into next week's DRAFT
@@ -196,7 +148,7 @@ export async function completeReconcile(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await resolveWeek(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { projectId, week, plan } = resolved;
+  const { projectId, week, plan, org } = resolved;
 
   const illegal = assertTransition(plan.status, 'RECONCILED');
   if (illegal) return illegal;
@@ -211,12 +163,13 @@ export async function completeReconcile(
   }
 
   const nextWeek = nextIsoWeek(week);
-  // Carry-forward seeds next week's DRAFT (KTD3): only incomplete items carry —
-  // `done`/`dropped` never do.
-  const toCarry = commits.filter((c) => c.status === 'partial');
-  const carried = toCarry.map((source) => carryClone(source, nextWeek));
+  // Carry-forward seeds next week's DRAFT (KTD3) — pure computation in U5's
+  // `carryForwardCommits`: only incomplete items (`planned`/`partial`) clone,
+  // each with `carryDepth + 1`; `done`/`dropped` never carry. (At this point the
+  // still-`planned` guard above has already passed, so in practice only `partial`
+  // commits remain to carry; the pure helper stays general.)
+  const { clones, sourceIds, deepCarryNudge } = carryForwardCommits(commits, nextWeek);
   const reconciledAt = Date.now();
-  const deepNudge = carried.filter((c) => c.carryDepth >= 3).map((c) => c.id);
 
   // ONE transaction: stamp the source plan + sources, ensure next week's DRAFT,
   // insert the clones. pglite runs this as a real transaction; the Neon HTTP
@@ -228,7 +181,7 @@ export async function completeReconcile(
       .set({ status: 'RECONCILED', reconciledAt })
       .where(and(eq(weeklyPlans.projectId, projectId), eq(weeklyPlans.isoWeek, week)));
 
-    if (carried.length > 0) {
+    if (clones.length > 0) {
       // Ensure next week's DRAFT plan exists (created if absent), never demoting
       // an already-advanced next week.
       const existingNext = await tx
@@ -242,15 +195,13 @@ export async function completeReconcile(
           .values({ projectId, isoWeek: nextWeek, status: 'DRAFT', posture: 'focus' });
       }
 
-      // Stamp each source with the week it carried TO, and insert the clone.
-      for (const source of toCarry) {
-        await tx
-          .update(weeklyCommits)
-          .set({ carriedToWeek: nextWeek })
-          .where(eq(weeklyCommits.id, source.id));
-      }
+      // Stamp each source with the week it carried TO, then insert the clones.
+      await tx
+        .update(weeklyCommits)
+        .set({ carriedToWeek: nextWeek })
+        .where(inArray(weeklyCommits.id, sourceIds));
       await tx.insert(weeklyCommits).values(
-        carried.map((c) => ({
+        clones.map((c) => ({
           id: c.id,
           projectId: c.projectId,
           isoWeek: c.isoWeek,
@@ -268,16 +219,22 @@ export async function completeReconcile(
         })),
       );
     }
-    // Roll-up + metric recompute (U6/U17) run here in the same transaction once
-    // those units land.
   });
+
+  // Single-source roll-up recompute (KTD5/U6): now that this week is RECONCILED,
+  // its reconciled commits are the SOURCE of every linked SO's completion. Run it
+  // AFTER the transaction commits so the just-stamped commits are visible to the
+  // gather (the Neon HTTP driver has no interactive transaction anyway; the
+  // recompute is idempotent, so a post-commit run is safe). An SO with no
+  // reconciled data stays 0% — the `progressPct` feed is gone.
+  await recomputeOrgRollup(deps.db, deps.repo, org, [projectId]);
 
   const nextPlan: WeeklyPlan = { ...plan, status: 'RECONCILED', reconciledAt };
   return ok({
     plan: nextPlan,
     carriedTo: nextWeek,
-    carriedCount: carried.length,
-    ...(deepNudge.length > 0 ? { deepCarryNudge: deepNudge } : {}),
+    carriedCount: clones.length,
+    ...(deepCarryNudge.length > 0 ? { deepCarryNudge } : {}),
   });
 }
 

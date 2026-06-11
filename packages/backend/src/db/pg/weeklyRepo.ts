@@ -1,5 +1,5 @@
-import { and, asc, eq, gt } from 'drizzle-orm';
-import type { WeeklyCommit, WeeklyPlan } from '@harness/shared';
+import { and, asc, desc, eq, gt, inArray, isNotNull } from 'drizzle-orm';
+import type { CommitOutcomeStatus, WeeklyCommit, WeeklyPlan } from '@harness/shared';
 import {
   projectsMirror,
   weeklyCommits,
@@ -204,6 +204,72 @@ export async function listWeekCommits(
   return rows
     .map(toCommit)
     .sort((a, b) => b.priorityNumeric - a.priorityNumeric || a.id.localeCompare(b.id));
+}
+
+// --- roll-up source: reconciled commit credits (U6) -------------------------
+
+/**
+ * One reconciled commit's leaf-credit input for the roll-up (KTD5/KTD9): its
+ * primary `supportingOutcomeId` (orphan commits are excluded) and its reconciled
+ * `status`. Matches `projections/rollup.ts`'s `CommitCredit` so the gather feeds
+ * the pure `recomputeRollup` directly.
+ */
+export interface ReconciledCommitCredit {
+  supportingOutcomeId: string;
+  status: CommitOutcomeStatus;
+}
+
+/**
+ * Gather the reconciled commit credits the single-source roll-up reads (KTD5,
+ * U6). For each given project we take ONLY its LATEST reconciled week (the
+ * "latest reconciled window") and, within it, only the commits carrying a primary
+ * `supporting_outcome_id` — orphan commits and `also_advances` secondaries never
+ * earn leaf credit (KTD9/KTD10). A project with no reconciled week contributes
+ * nothing (its SOs read 0% until a first reconciliation — the U6 `progressPct`
+ * removal). The GitHub `progressPct` feed is gone: this is the only roll-up input.
+ */
+export async function listReconciledCommitCredits(
+  db: PgDb,
+  projectIds: string[],
+): Promise<ReconciledCommitCredit[]> {
+  if (projectIds.length === 0) return [];
+
+  // The latest reconciled week per project (the "window"). A project's older
+  // reconciled weeks do NOT contribute — only its most-recent reconciled scope.
+  const reconciledPlans = await db
+    .select({ projectId: weeklyPlans.projectId, isoWeek: weeklyPlans.isoWeek })
+    .from(weeklyPlans)
+    .where(and(eq(weeklyPlans.status, 'RECONCILED'), inArray(weeklyPlans.projectId, projectIds)))
+    .orderBy(asc(weeklyPlans.projectId), desc(weeklyPlans.isoWeek));
+  const latestWeekByProject = new Map<string, string>();
+  for (const p of reconciledPlans) {
+    if (!latestWeekByProject.has(p.projectId)) latestWeekByProject.set(p.projectId, p.isoWeek);
+  }
+  if (latestWeekByProject.size === 0) return [];
+
+  // Pull every primary-SO-linked commit in those latest reconciled weeks.
+  const candidateProjects = [...latestWeekByProject.keys()];
+  const rows = await db
+    .select({
+      projectId: weeklyCommits.projectId,
+      isoWeek: weeklyCommits.isoWeek,
+      supportingOutcomeId: weeklyCommits.supportingOutcomeId,
+      status: weeklyCommits.status,
+    })
+    .from(weeklyCommits)
+    .where(
+      and(
+        inArray(weeklyCommits.projectId, candidateProjects),
+        isNotNull(weeklyCommits.supportingOutcomeId),
+      ),
+    );
+
+  return rows
+    .filter((r) => latestWeekByProject.get(r.projectId) === r.isoWeek)
+    .map((r) => ({
+      supportingOutcomeId: r.supportingOutcomeId as string,
+      status: r.status as CommitOutcomeStatus,
+    }));
 }
 
 // --- projects mirror (KTD7) -------------------------------------------------

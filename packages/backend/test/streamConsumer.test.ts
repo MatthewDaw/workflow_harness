@@ -170,7 +170,7 @@ describe('stream consumer — session projection backstop', () => {
   });
 });
 
-describe('stream consumer — objective roll-up driver', () => {
+describe('stream consumer — no longer drives the objective roll-up (U6)', () => {
   const ORG = 'acme';
 
   // Objectives are in Postgres now; a fresh pglite DB per test in this block.
@@ -202,45 +202,18 @@ describe('stream consumer — objective roll-up driver', () => {
     ...(progressPct === undefined ? {} : { progressPct }),
   });
 
-  it('recomputes the org roll-up when a project progress increases', async () => {
-    await seedTree();
-    // The stored project must be readable by recomputeOrgRollup.
-    await repo.putProject(baseProject(100));
-
-    await consume(streamEvent(projectRecord(baseProject(0), baseProject(100))), deps());
-
-    expect((await pgGetObjective(db, ORG,'so-a'))?.pct).toBe(100);
-    expect((await pgGetObjective(db, ORG,'out'))?.pct).toBe(50); // so-a 100, so-b 0
-    expect((await pgGetObjective(db, ORG,'rally'))?.pct).toBe(50);
-  });
-
-  it('skips recompute when no roll-up-relevant field changed', async () => {
+  it('a project progress change no longer drives the objective roll-up (single source is reconciled commits)', async () => {
     await seedTree();
     await repo.putProject(baseProject(100));
-    // Same progress + same SOs on both images: name-only churn -> no recompute.
-    const oldImg = { ...baseProject(100), name: 'old-name' };
-    const newImg = { ...baseProject(100), name: 'new-name' };
 
-    await consume(streamEvent(projectRecord(oldImg, newImg)), deps());
-
-    // No roll-up was driven, so the objective pct stays absent (unwritten).
-    expect((await pgGetObjective(db, ORG,'rally'))?.pct).toBeUndefined();
-  });
-
-  it('skips a project record carrying no org (cannot place into a tree)', async () => {
-    await seedTree();
-    const noOrg = {
-      id: 'p2',
-      name: 'p2',
-      repo: 'gh/x/y',
-      ownerUserId: 'matt',
-      liveSessionCount: 0,
-      progressPct: 100,
-    };
+    // The GitHub `progressPct → rollup` consumer is removed (U6): a project META
+    // change is now inert for objectives — no objective pct is written.
     await expect(
-      consume(streamEvent(projectRecord({ ...noOrg, progressPct: 0 }, noOrg)), deps()),
+      consume(streamEvent(projectRecord(baseProject(0), baseProject(100))), deps()),
     ).resolves.toMatchObject({ batchItemFailures: [] });
-    expect((await pgGetObjective(db, ORG,'rally'))?.pct).toBeUndefined();
+
+    expect((await pgGetObjective(db, ORG, 'so-a'))?.pct).toBeUndefined();
+    expect((await pgGetObjective(db, ORG, 'rally'))?.pct).toBeUndefined();
   });
 });
 

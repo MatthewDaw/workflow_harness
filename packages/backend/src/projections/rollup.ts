@@ -1,45 +1,69 @@
-import type { ObjectiveNode } from '@harness/shared';
+import type { CommitOutcomeStatus, ObjectiveNode } from '@harness/shared';
 
 /**
- * Objective roll-up projection (U10, re-pointed off tickets in U3).
+ * Objective roll-up projection (U10, re-pointed off tickets in U3; the roll-up
+ * SOURCE rewritten in U6).
  *
  * RCDO nodes form a tree (Rally Cry -> Defining Objective -> Outcome ->
  * Supporting Outcome) linked by `parentId`. Completion is computed bottom-up:
  *
- *  - A LEAF node's % is the stored `progressPct` of the project(s) that own it
- *    (a Project field, populated from GitHub `completion:` by a later unit;
- *    absent => 0). A leaf with no owning project is 0%.
- *  - An INTERNAL node's % is the mean of its children's rolled-up %.
+ *  - A LEAF node's % is the mean reconciled completion of the weekly COMMITS
+ *    hard-linked to it (KTD5): each commit contributes `done = 1.0`,
+ *    `partial = 0.5`, `planned`/`dropped = 0.0`; the leaf % is `100 ×` the mean
+ *    over its commits. A leaf with no reconciled commits is **0%** — there is no
+ *    GitHub `progressPct` fallback any more (removed in U6); an SO reads 0% until
+ *    its first reconciliation (intended).
+ *  - An INTERNAL node's % is the mean of its children's rolled-up % (unchanged).
  *
- * `recomputeRollup` is pure: it takes the full node set plus the linked work and
- * returns the same nodes with `pct` filled in. The Streams trigger gathers the
- * inputs from the Repo and persists the result, so the read path (`GET
- * /objectives`) just serves the cached tree.
+ * Only a commit's PRIMARY `supportingOutcomeId` earns leaf credit (KTD9): orphan
+ * commits (a typed `orphanReason`, no SO) and the informational `alsoAdvances`
+ * secondaries contribute NOTHING to any leaf.
+ *
+ * `recomputeRollup` is pure: it takes the full node set plus the reconciled
+ * commit credits and returns the same nodes with `pct` filled in. The transition
+ * path (`/reconcile/complete`) and the Streams trigger gather the inputs from the
+ * Repo and persist the result, so the read path (`GET /objectives`) just serves
+ * the cached tree.
  */
 
 /**
- * The progress a single project contributes to the Supporting Outcomes it owns.
- * `progressPct` is the project's stored completion (from GitHub `completion:`
- * frontmatter; undefined until a later read populates it). `supportingOutcomeIds`
- * are the leaf objective ids this project owns.
+ * A single reconciled commit's leaf-credit input: the PRIMARY Supporting Outcome
+ * it advances (KTD9) and its reconciled outcome `status`. Orphan commits and
+ * `alsoAdvances` secondaries are never represented here — only a primary SO link
+ * earns credit, so the gather (`rollupRepo`) filters them out before this point.
  */
-export interface ProjectProgress {
-  progressPct?: number;
-  supportingOutcomeIds: string[];
+export interface CommitCredit {
+  /** The PRIMARY Supporting Outcome this commit advances (KTD9). */
+  supportingOutcomeId: string;
+  /** The reconciled outcome — drives the credit weight (KTD5). */
+  status: CommitOutcomeStatus;
 }
 
 export interface RollupInput {
   nodes: ObjectiveNode[];
-  /** Project progress across the org, each owning zero or more Supporting Outcomes. */
-  projects: ProjectProgress[];
+  /** The reconciled commits whose primary SO links earn leaf credit (KTD5/KTD9). */
+  commits: CommitCredit[];
 }
 
-/** Completion (0..100) for the project progress linked to a single leaf node. */
-export function leafPct(nodeId: string, projects: ProjectProgress[]): number {
-  const owningProjects = projects.filter((p) => p.supportingOutcomeIds.includes(nodeId));
-  if (owningProjects.length === 0) return 0;
-  const samples = owningProjects.map((p) => p.progressPct ?? 0);
-  return samples.reduce((a, b) => a + b, 0) / samples.length;
+/** The roll-up credit weight a single reconciled commit contributes (KTD5). */
+function creditFor(status: CommitOutcomeStatus): number {
+  if (status === 'done') return 1;
+  if (status === 'partial') return 0.5;
+  return 0; // planned / dropped earn nothing
+}
+
+/**
+ * Completion (0..100) for a single leaf node — the mean reconciled completion of
+ * the weekly commits hard-linked to it (KTD5). `done = 1.0`, `partial = 0.5`,
+ * `planned`/`dropped = 0.0`; the leaf % is `100 ×` the mean over its commits.
+ * A leaf with no reconciled commits is **0%** (no `progressPct` fallback — the
+ * removal U6 regression-guards). Only the PRIMARY SO link counts (KTD9).
+ */
+export function leafPct(nodeId: string, commits: CommitCredit[]): number {
+  const own = commits.filter((c) => c.supportingOutcomeId === nodeId);
+  if (own.length === 0) return 0;
+  const total = own.reduce((sum, c) => sum + creditFor(c.status), 0);
+  return (total / own.length) * 100;
 }
 
 /**
@@ -48,7 +72,7 @@ export function leafPct(nodeId: string, projects: ProjectProgress[]): number {
  * simply ignored — they contribute to no node and are never fatal.
  */
 export function recomputeRollup(input: RollupInput): ObjectiveNode[] {
-  const { nodes, projects } = input;
+  const { nodes, commits } = input;
 
   const childrenOf = new Map<string, ObjectiveNode[]>();
   for (const n of nodes) {
@@ -72,7 +96,7 @@ export function recomputeRollup(input: RollupInput): ObjectiveNode[] {
     const children = childrenOf.get(node.id) ?? [];
     let pct: number;
     if (children.length === 0) {
-      pct = leafPct(node.id, projects);
+      pct = leafPct(node.id, commits);
     } else {
       pct = children.reduce((sum, c) => sum + pctFor(c), 0) / children.length;
     }
