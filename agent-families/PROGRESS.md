@@ -57,7 +57,7 @@ holds, and the full offline suite is green.
 - [x] 005/U2 — Rehearsal pass and one-shot metric
 - [x] 005/U3 — Improvement-tier grading
 - [x] 005/U4 — Family router and agent splitting
-- [ ] 005/U5 — Parallel episodes and batch merging
+- [x] 005/U5 — Parallel episodes and batch merging
 - [ ] 005/U6 — Enforcement activation and annealing
 - [ ] 005/U7 — RealWorld calibration and scale e2e
 
