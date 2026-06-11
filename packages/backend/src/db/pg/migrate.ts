@@ -77,6 +77,17 @@ const STATEMENTS: string[] = [
        CHECK (supporting_outcome_id IS NOT NULL OR orphan_reason IS NOT NULL)
    )`,
   `CREATE INDEX IF NOT EXISTS weekly_commits_week_idx ON weekly_commits (project_id, iso_week)`,
+  // Per-person reconciliation calibration (U19) — a trailing accumulation of a
+  // person's locked-vs-done rate the agent reads to right-size next week's proposal.
+  `CREATE TABLE IF NOT EXISTS calibrations (
+     user_id                   text PRIMARY KEY,
+     locked_count              integer NOT NULL DEFAULT 0,
+     done_count                integer NOT NULL DEFAULT 0,
+     rate                      real,
+     high_priority_first_count integer NOT NULL DEFAULT 0,
+     high_priority_total       integer NOT NULL DEFAULT 0,
+     updated_at                bigint
+   )`,
 ];
 
 /** Apply every schema statement idempotently. */

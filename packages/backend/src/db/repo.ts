@@ -46,6 +46,27 @@ import type { PgDb } from './pg/migrate.js';
 import { upsertProjectMirror } from './pg/weeklyRepo.js';
 
 /**
+ * Default retention window (days) for the append-only event/log stream (U20).
+ * After this many days an event's `ttl` lapses and DynamoDB TimeToLive reaps it.
+ */
+export const DEFAULT_EVENT_RETENTION_DAYS = 90;
+
+/**
+ * The configured event-stream retention window in days (U20). Read from the
+ * `EVENT_RETENTION_DAYS` env var (so deploy can tune it) and falling back to
+ * `DEFAULT_EVENT_RETENTION_DAYS`. A value of `0` (or a non-positive/invalid one)
+ * disables expiry entirely — `appendEvent` then omits `ttl` and events never
+ * expire.
+ */
+export function eventRetentionDays(): number {
+  const raw = process.env.EVENT_RETENTION_DAYS;
+  if (raw === undefined || raw === '') return DEFAULT_EVENT_RETENTION_DAYS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed);
+}
+
+/**
  * A live WebSocket connection in the registry. Daemon connections also carry the
  * `instanceId` they host (so control frames can be routed to them); web client
  * connections omit it.
@@ -399,13 +420,32 @@ export class Repo {
    * Append an event idempotently. Duplicate (sessionId, seq) is a no-op — the
    * conditional write fails and we swallow it, so replays after reconnect are
    * safe.
+   *
+   * The append-only log stream self-expires (U20/KTD11): a numeric epoch-SECONDS
+   * `ttl` attribute is stamped on the envelope item so DynamoDB TimeToLive reaps
+   * old events (the table-level TTL on `ttl` is already enabled in infra — the
+   * same attribute device-auth uses, so NO infra change). The retention window is
+   * `eventRetentionDays()` (env-configurable); a window of 0 disables expiry and
+   * the `ttl` is omitted so those events never expire. The "now" timestamp is
+   * supplied by the caller (the ingest handler) rather than read here, so this
+   * stays free of an ambient `Date.now()` in the pure-ish repo path; it falls back
+   * to the envelope's own `ts` (epoch ms) when not passed.
    */
-  async appendEvent(env: Envelope): Promise<{ stored: boolean }> {
+  async appendEvent(env: Envelope, opts: { nowMs?: number } = {}): Promise<{ stored: boolean }> {
+    const retentionDays = eventRetentionDays();
+    const ttl =
+      retentionDays > 0
+        ? Math.floor((opts.nowMs ?? env.ts) / 1000) + retentionDays * 86_400
+        : undefined;
     try {
       await this.doc.send(
         new PutCommand({
           TableName: this.table,
-          Item: { ...k.eventKey(env.event.sessionId, env.seq), ...env },
+          Item: {
+            ...k.eventKey(env.event.sessionId, env.seq),
+            ...env,
+            ...(ttl !== undefined ? { ttl } : {}),
+          },
           ConditionExpression: 'attribute_not_exists(PK)',
         }),
       );

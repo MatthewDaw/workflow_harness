@@ -4,6 +4,7 @@ import type { Repo } from '../db/repo.js';
 import { getPlan, listWeekCommits, upsertPlan } from '../db/pg/weeklyRepo.js';
 import { weeklyCommits, weeklyPlans } from '../db/pg/schema.js';
 import { canTransition } from '../projections/weeklyLifecycle.js';
+import { recordCalibration } from '../projections/calibration.js';
 import { conflict, defaultDb, defaultRepo, json, ok } from './runtime.js';
 import { ownedProject } from './ownership.js';
 import type { PgDb } from '../db/pg/migrate.js';
@@ -80,7 +81,7 @@ async function resolveWeek(
   event: APIGatewayProxyEventV2,
   deps: WeeklyTransitionsDeps,
 ): Promise<
-  | { projectId: string; week: string; plan: WeeklyPlan }
+  | { projectId: string; week: string; plan: WeeklyPlan; ownerUserId: string }
   | { error: APIGatewayProxyResultV2 }
 > {
   const resolved = await ownedProject(event, deps.repo, 'pid');
@@ -89,7 +90,12 @@ async function resolveWeek(
   if (!week) return { error: json(400, { error: 'missing project or week' }) };
   const plan = await getPlan(deps.db, resolved.project.id, week);
   if (!plan) return { error: json(404, { error: 'not found' }) };
-  return { projectId: resolved.project.id, week, plan };
+  return {
+    projectId: resolved.project.id,
+    week,
+    plan,
+    ownerUserId: resolved.principal.userId,
+  };
 }
 
 /** Whether the transition `from -> to` is legal; a 409 otherwise (KTD2). */
@@ -196,7 +202,7 @@ export async function completeReconcile(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await resolveWeek(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { projectId, week, plan } = resolved;
+  const { projectId, week, plan, ownerUserId } = resolved;
 
   const illegal = assertTransition(plan.status, 'RECONCILED');
   if (illegal) return illegal;
@@ -268,6 +274,11 @@ export async function completeReconcile(
         })),
       );
     }
+    // Reconciliation calibration (U19): accumulate this week's terminal commits
+    // into the owner's running locked-vs-done rate so the plan-anchored agent can
+    // right-size next week's proposal. Advisory — it never blocks. Runs in the
+    // same transaction as the reconcile (`tx` is the same PgDb shape).
+    await recordCalibration(tx as unknown as PgDb, ownerUserId, commits, reconciledAt);
     // Roll-up + metric recompute (U6/U17) run here in the same transaction once
     // those units land.
   });
