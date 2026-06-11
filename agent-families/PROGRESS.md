@@ -59,7 +59,7 @@ holds, and the full offline suite is green.
 - [x] 005/U4 — Family router and agent splitting
 - [x] 005/U5 — Parallel episodes and batch merging
 - [x] 005/U6 — Enforcement activation and annealing
-- [ ] 005/U7 — RealWorld calibration and scale e2e
+- [x] 005/U7 — RealWorld calibration and scale e2e
 
 ### Plan 007 - Greenfield Mode (docs/plans/2026-06-10-007-feat-agent-families-greenfield-mode-plan.md)
 QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not unit-number order.
