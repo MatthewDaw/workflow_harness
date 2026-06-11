@@ -38,6 +38,7 @@ from agent_families.pipeline.planning import (
     LINT_DAG_ACYCLIC,
     LINT_FILE_OWNERSHIP,
     LINT_REQ_COVERAGE,
+    LINT_REQ_PROVENANCE,
     LINT_REQ_SET,
     LINT_SIZE_BUDGET,
     PLAN_LINTS,
@@ -45,13 +46,17 @@ from agent_families.pipeline.planning import (
     PLANNER_PROMPT_SET_VERSION,
     SEVERITY_ERROR,
     SEVERITY_WARN,
+    AssumptionGateFinding,
     PlanFailed,
     PlanningError,
+    assumption_gate,
     build_lint_feedback_prompt,
     build_planner_prompt,
     check_plan_assumptions,
     chunk_spec,
+    k_effective,
     lint_plan,
+    lint_req_provenance,
     normalize_assumption,
     plan_report,
     rank_questions,
@@ -955,6 +960,155 @@ def test_planner_prompt_set_version_stamped_and_overridable(tmp_path):
     assert overridden["prompt_set_version"] == "ps-custom"
 
 
+# --- 007 U3: REQ-provenance lint + pre-increment assumption gate --------------------
+
+
+def test_provenance_lint_xor_source():
+    # MUST-test (007 U3): a REQ with BOTH source_msg and source_assume, or
+    # NEITHER, fails the lint; exactly one passes. Mirrors U1's trace_req DB
+    # CHECK at the plan-dict level.
+    run_id = 1
+    # exactly one (the clean valid plan, all source_msg) → passes
+    assert lint_req_provenance(valid_plan(run_id)) == []
+
+    # exactly one via source_assume → also passes
+    via_assume = valid_plan(run_id)
+    via_assume["requirements"][0]["source_assume"] = "A-x"
+    del via_assume["requirements"][0]["source_msg"]
+    assert lint_req_provenance(via_assume) == []
+
+    # BOTH → a single typed error on the offending REQ
+    both = valid_plan(run_id)
+    both["requirements"][0]["source_assume"] = "A-x"  # already has source_msg
+    findings = lint_req_provenance(both)
+    assert [f.lint for f in findings] == [LINT_REQ_PROVENANCE]
+    assert findings[0].severity == SEVERITY_ERROR
+    assert findings[0].location == "requirement REQ-1"
+    assert "both" in findings[0].observed
+
+    # NEITHER → an orphan REQ fails
+    neither = valid_plan(run_id)
+    del neither["requirements"][0]["source_msg"]
+    findings = lint_req_provenance(neither)
+    assert [f.lint for f in findings] == [LINT_REQ_PROVENANCE]
+    assert "neither" in findings[0].observed
+
+
+def test_provenance_lint_zero_assume_all_msg_plan_passes():
+    # the scenario's "zero-ASSUME all-MSG plan passes" — the brownfield shape is
+    # untouched by the new lint.
+    plan = valid_plan(7)
+    assert all("source_msg" in r and "source_assume" not in r
+               for r in plan["requirements"])
+    assert lint_req_provenance(plan) == []
+
+
+def test_run_planning_bounces_on_provenance_then_corrected(tmp_path):
+    # the provenance lint rides the Ralph loop through the plan_lint failure
+    # channel: a both-source REQ bounces iteration 1, the corrected plan lands
+    # on iteration 2 (lint feedback end-to-end, U3 Verification).
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    bad = valid_plan(run_id)
+    bad["requirements"][0]["source_assume"] = "A-x"  # both → provenance error
+    good = valid_plan(run_id)
+    result = plan_session(store, tmp_path, run_id, [bad, good], cap=3)
+    assert result.iterations == 2
+    recs = store.conn.execute(
+        "SELECT failure_kind, location FROM failure_records WHERE run_id = ?",
+        (run_id,),
+    ).fetchall()
+    assert any(
+        r["failure_kind"] == "plan_lint" and LINT_REQ_PROVENANCE in r["location"]
+        for r in recs
+    )
+
+
+def test_k_effective_caps_at_half_budget():
+    # MUST-test (007 U3, KTD7): k_effective = min(config_k, floor(budget/2)).
+    assert k_effective(2, 3) == 1            # budget 3 → floor(3/2)=1
+    assert k_effective(8, 10) == 5           # budget 10, config_k 8 → min(8,5)=5
+    assert k_effective(0, 100) == 0          # config_k 0 → gate never blocks
+    # the gate can NEVER consume the whole question budget, at any budget
+    for budget in range(0, 24):
+        assert k_effective(99, budget) <= budget // 2
+
+
+def test_gate_passes_when_no_top_risk_assume_is_open(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    plan["assumptions"] = [typed_assumption("auth is username-only", "high")]
+    plan_session(store, tmp_path, run_id, [plan])
+    # k_effective(2, 1) = min(2, 0) = 0 → tiny budget, the gate never blocks even
+    # with an open high-risk assumption
+    result = assumption_gate(store, run_id, config_k=2, question_budget=1)
+    assert result.k_effective == 0
+    assert result.passed
+    assert result.failures == ()
+
+
+def test_gate_bounces_unconfirmed_then_roundtrips(tmp_path):
+    # MUST-test (007 U3): an unconfirmed high-risk ASSUME bounces with a TYPED
+    # failure record; confirm → re-plan → passes (full round-trip).
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    plan["assumptions"] = [
+        typed_assumption("auth is username-only", "high", local_id="H"),
+        typed_assumption("bookmarks are private", "low", local_id="L"),
+    ]
+    plan_session(store, tmp_path, run_id, [plan])
+
+    # before confirmation the top-risk ASSUME is open → the gate bounces.
+    bounce = assumption_gate(store, run_id, config_k=1, question_budget=10)
+    assert bounce.k_effective == 1
+    assert not bounce.passed
+    # the riskiest assumption is the one demanded (risk-ranked top-k), not plan order
+    assert [f.assume_id for f in bounce.failures] == [f"ASSUME-r{run_id}-000"]
+    assert bounce.failures[0].risk_if_wrong == "high"
+    # TYPED record (the §7 shape), not a free string
+    assert isinstance(bounce.failures[0], AssumptionGateFinding)
+    assert bounce.failures[0].as_dict()["assume_id"] == f"ASSUME-r{run_id}-000"
+
+    # confirm it through the existing assumption-conversion flow — the elicitation
+    # round-trip — then re-run the gate (the host's "re-plan").
+    with store.transaction():
+        store.conn.execute(
+            "INSERT INTO trace_msg (id, content) VALUES (?, ?)",
+            ("MSG-confirm", "yes, username-only auth"),
+        )
+    check_plan_assumptions(
+        store,
+        run_id,
+        lambda q: _FakeAskOutcome(
+            "answered", answer="yes", answer_msg_id="MSG-confirm"
+        ),
+    )
+    cleared = assumption_gate(store, run_id, config_k=1, question_budget=10)
+    assert cleared.passed
+    assert cleared.failures == ()
+
+
+def test_gate_invalidated_assumption_also_bounces(tmp_path):
+    # "must be confirmed" — an invalidated top-risk assumption is not confirmed,
+    # so it bounces just like an open one (re-planning is exactly right when a
+    # load-bearing assumption was found false).
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    plan["assumptions"] = [typed_assumption("auth is username-only", "high")]
+    plan_session(store, tmp_path, run_id, [plan])
+    with store.transaction():
+        store.conn.execute(
+            "UPDATE trace_assume SET status = 'invalidated' WHERE id = ?",
+            (f"ASSUME-r{run_id}-000",),
+        )
+    result = assumption_gate(store, run_id, config_k=2, question_budget=10)
+    assert not result.passed
+    assert "invalidated" in result.failures[0].observed
+
+
 # --- ## Conformance (007 U2) --------------------------------------------------------
 #
 # U2 maps its Test scenarios to the tests above; the planner-contract refactor
@@ -988,3 +1142,46 @@ def test_planner_prompt_set_version_stamped_and_overridable(tmp_path):
 #     test_planner_prompt_set_version_stamped_and_overridable
 # - brownfield regression (behaviour identical except assumption shape): the
 #     whole pre-existing planning suite + tests/test_pipeline_e2e.py stay green.
+#
+# --- ## Conformance (007 U3) --------------------------------------------------------
+#
+# U3 ships two enforcement seams; the named MUST-tests (do not weaken) map 1:1 to
+# the unit's required acceptance tests, and the remaining scenarios to the tests
+# beside them:
+#
+# - test_k_effective_caps_at_half_budget — k_effective = min(config_k,
+#     floor(question_budget/2)) EXACTLY (budget 3 → k=1; budget 10, config_k 8 →
+#     k=5) and ≤ budget//2 at every budget: the gate can never consume the whole
+#     question budget (KTD7). [REQUIRED]
+# - test_provenance_lint_xor_source — a REQ with BOTH source_msg and
+#     source_assume, or NEITHER, fails lint_req_provenance; exactly one passes
+#     (mirrors U1's trace_req DB CHECK at the plan-dict level). [REQUIRED]
+# - test_gate_bounces_unconfirmed_then_roundtrips — an unconfirmed high-risk
+#     ASSUME bounces with a TYPED AssumptionGateFinding; confirm (via
+#     check_plan_assumptions) → re-run gate → passes (full round-trip). [REQUIRED]
+#
+# Supporting scenarios:
+# - Lint fixture pass + fail (orphan REQ) and zero-ASSUME all-MSG passes:
+#     test_provenance_lint_xor_source, test_provenance_lint_zero_assume_all_msg_plan_passes
+# - Lint feedback rides the Ralph loop (Verification: ambiguous spec exercises the
+#     lint end-to-end): test_run_planning_bounces_on_provenance_then_corrected
+# - Gate: confirmed/no-top-risk-open set passes; tiny budget never blocks:
+#     test_gate_passes_when_no_top_risk_assume_is_open, the cleared arm of the
+#     round-trip test; an invalidated top-risk assumption also bounces:
+#     test_gate_invalidated_assumption_also_bounces
+#
+# DEVIATIONS (smallest faithful adaptations, recorded for the reviewer):
+#  1. The provenance lint is a SEPARATE function (lint_req_provenance), beside —
+#     not inside — lint_plan / PLAN_LINTS, so the R10 lint list stays byte-stable
+#     (test_plan_lints_enumerate_the_r10_list unchanged). It is the "pure lint"
+#     half of U3's two-seam architecture; the gate is the orchestrator-seam half.
+#     run_planning merges its findings into the existing plan_lint failure channel.
+#  2. The gate emits a TYPED in-memory record (AssumptionGateFinding, the §7
+#     location/expected/observed shape) rather than a failure_records row: no
+#     "assumption_gate" FAILURE_KIND exists and adding one would drift the
+#     failure_records CHECK across already-migrated DBs (out of U3's wave scope).
+#     The gate is "not a plan lint", so it deliberately does not reuse the
+#     plan_lint kind. The host (the orchestrator/episode seam, wired by U7 which
+#     owns the episode world branch and the increment-execution seam) decides
+#     persistence and re-entry; U3 delivers the gate as a tested seam function,
+#     exactly as check_plan_assumptions is itself an orchestrator-bound seam.

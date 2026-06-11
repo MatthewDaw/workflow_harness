@@ -52,6 +52,18 @@ Phase 007 amendments (plan-007 U2 — greenfield-mode planner contract):
   ``source_assume`` instead of ``source_msg``; the trace_req DB CHECK enforces
   exactly-one at persistence (the plan-dict provenance lint is U3).
 
+Phase 007 amendments (plan-007 U3 — two enforcement seams for the ledger):
+
+- :func:`lint_req_provenance` (R2): a pure plan-dict lint enforcing the
+  exactly-one REQ provenance rule at the plan-output level (mirroring the
+  trace_req DB CHECK), wired into the Ralph loop through the ``plan_lint``
+  failure channel so the planner self-corrects before persistence fails.
+- :func:`assumption_gate` (KTD7/R2): the pre-increment gate — NOT a plan lint —
+  demanding the top ``k_effective`` riskiest ASSUMEs be ``confirmed``, where
+  ``k_effective = min(config_k, floor(question_budget / 2))`` so confirmations
+  can never consume the whole question budget. A bounce emits typed
+  :class:`AssumptionGateFinding` records; the host re-enters planning.
+
 The lint list (1:1 with R10, :data:`PLAN_LINTS`):
 
 - ``req_set`` — non-empty REQ extraction, unique REQ ids, valid MSG provenance
@@ -109,6 +121,14 @@ PLAN_LINTS = (
     LINT_SIZE_BUDGET,
     LINT_FILE_OWNERSHIP,
 )
+
+# The REQ-provenance lint (007 U3 / R2): NOT part of the R10 PLAN_LINTS list —
+# it is the "pure lint" seam of U3's two-seam lint architecture, a plan-dict
+# check that mirrors U1's trace_req exactly-one DB CHECK so the planner gets
+# typed Ralph feedback before persistence fails. Kept beside PLAN_LINTS (not
+# inside it) so the R10 list stays byte-stable; run_planning merges its findings
+# into the same plan_lint failure channel.
+LINT_REQ_PROVENANCE = "req_provenance"
 
 SEVERITY_ERROR = "error"
 SEVERITY_WARN = "warn"
@@ -686,6 +706,49 @@ def _cycle_members(edges: dict[str, list[str]]) -> list[str]:
     return [node for node in edges if indegree[node] > 0]
 
 
+# --- the REQ-provenance lint (007 U3 / R2; the pure-lint seam) ---------------------
+
+
+def lint_req_provenance(plan: dict) -> list[LintFinding]:
+    """Every REQ carries exactly one of ``source_msg`` / ``source_assume`` (007 U3).
+
+    REQ provenance is MSG-or-ASSUME (KTD2): a requirement traces to a source
+    message OR to a planner assumption, never both and never neither. This pure
+    plan-dict lint mirrors U1's ``trace_req`` exactly-one DB CHECK at the
+    plan-output level, so the planner receives typed Ralph feedback (via the
+    ``plan_lint`` failure channel in :func:`run_planning`) *before* the DB CHECK
+    would reject the insert — the same datum, an earlier and friendlier failure.
+
+    This is the "pure lint" half of U3's two-seam lint architecture; the
+    assumption gate (:func:`assumption_gate`) is the orchestrator-seam half.
+    Returns one :class:`LintFinding` per violating REQ; an empty list means every
+    requirement's provenance is well-formed (so a zero-ASSUME, all-MSG brownfield
+    plan passes unchanged).
+    """
+    findings: list[LintFinding] = []
+    for req in plan["requirements"]:
+        rid = req["id"]
+        has_msg = bool(req.get("source_msg"))
+        has_assume = bool(req.get("source_assume"))
+        if has_msg == has_assume:  # both present, or neither — the XOR violation
+            observed = (
+                "both source_msg and source_assume set"
+                if has_msg
+                else "neither source_msg nor source_assume set"
+            )
+            findings.append(
+                LintFinding(
+                    LINT_REQ_PROVENANCE,
+                    SEVERITY_ERROR,
+                    f"requirement {rid}",
+                    "exactly one of source_msg / source_assume"
+                    " (MSG-or-ASSUME provenance)",
+                    observed,
+                )
+            )
+    return findings
+
+
 # --- typed ASSUME / PROPOSAL contract helpers (007 U2) ----------------------------
 
 
@@ -1009,6 +1072,105 @@ def check_plan_assumptions(store: Store, run_id: int, ask) -> list[dict]:
     return records
 
 
+# --- the pre-increment assumption gate (007 U3 / R2; the orchestrator seam) --------
+
+# The gate's typed-failure label (the §7 location prefix). The gate is NOT a plan
+# lint and deliberately does not borrow the ``plan_lint`` failure-records kind:
+# it fires at a different seam (plan-accepted → increment-execute) and emits a
+# typed in-memory record the host re-plans on (see Deviations).
+GATE_LABEL = "assumption_gate"
+
+
+@dataclass(frozen=True)
+class AssumptionGateFinding:
+    """One top-risk ASSUME left unconfirmed at the gate (the §7 typed shape).
+
+    Mirrors :class:`LintFinding`'s location/expected/observed triple so the host
+    can render it through the same feedback channel, but it is a distinct type
+    because the gate is not a plan lint (007 KTD7).
+    """
+
+    assume_id: str
+    risk_if_wrong: str
+    location: str
+    expected: str
+    observed: str
+
+    def as_dict(self) -> dict:
+        return {
+            "assume_id": self.assume_id,
+            "risk_if_wrong": self.risk_if_wrong,
+            "location": self.location,
+            "expected": self.expected,
+            "observed": self.observed,
+        }
+
+
+@dataclass(frozen=True)
+class AssumptionGateResult:
+    """The gate's verdict: pass, or a typed bounce naming every unconfirmed top-k
+    ASSUME. ``k_effective`` is recorded so the host can log/telemeter the
+    budget-scaled threshold that was applied."""
+
+    passed: bool
+    k_effective: int
+    failures: tuple[AssumptionGateFinding, ...]
+
+
+def k_effective(config_k: int, question_budget: int) -> int:
+    """The gate's budget-scaled confirmation count (007 KTD7).
+
+    ``k_effective = min(config_k, floor(question_budget / 2))`` — confirmations
+    can never consume more than half the increment's question budget, so the
+    gate can never starve the elicitation it is meant to protect. With a tiny
+    budget (``< 2``) ``k_effective`` is ``0`` and the gate never blocks.
+    """
+    if config_k < 0:
+        raise PlanningError(f"gate k must be a non-negative count, got {config_k}")
+    if question_budget < 0:
+        raise PlanningError(
+            f"question_budget must be non-negative, got {question_budget}"
+        )
+    return min(config_k, question_budget // 2)
+
+
+def assumption_gate(
+    store: Store, run_id: int, *, config_k: int, question_budget: int
+) -> AssumptionGateResult:
+    """Gate increment execution on the top-risk assumptions being confirmed (007 KTD7).
+
+    Fires between plan acceptance and increment execution — the seam
+    :func:`check_plan_assumptions` already occupies post-persist — NOT as a plan
+    lint. The run's ASSUME ledger is ranked by risk through the
+    :func:`rank_questions` seam; the top ``k_effective`` riskiest assumptions
+    must each be ``confirmed``. Any of them still ``open`` (or ``invalidated``)
+    is a bounce: the result carries a typed :class:`AssumptionGateFinding` per
+    offender, and the host re-enters the planning Ralph loop (confirmations ride
+    the question budget through :func:`check_plan_assumptions`). ``k`` auto-scales
+    so the gate can never consume the whole budget (:func:`k_effective`).
+
+    ``config_k`` and ``question_budget`` are caller-supplied (the orchestrator
+    routes ``config_k`` from ``[greenfield] gate_k`` and ``question_budget`` from
+    the increment's question cap) — nothing is hardcoded here.
+    """
+    k = k_effective(config_k, question_budget)
+    ranked = rank_questions(load_assume_rows(store, run_id))
+    top = ranked[:k]
+    failures = tuple(
+        AssumptionGateFinding(
+            assume_id=row["id"],
+            risk_if_wrong=row["risk_if_wrong"],
+            location=f"{GATE_LABEL}: assumption {row['id']}",
+            expected="confirmed before increment execution"
+            " (top-risk assumptions, KTD7)",
+            observed=f"status '{row['status']}' (risk {row['risk_if_wrong']})",
+        )
+        for row in top
+        if row["status"] != ASSUME_STATUS_CONFIRMED
+    )
+    return AssumptionGateResult(passed=not failures, k_effective=k, failures=failures)
+
+
 # --- the planning Ralph loop (R10) --------------------------------------------------
 
 
@@ -1095,7 +1257,11 @@ def run_planning(
             script_path=script_path,
         )
         plan = result.output
+        # The R10 deterministic lints plus the U3 REQ-provenance lint (a separate
+        # seam, charged through the same plan_lint failure channel so the planner
+        # gets typed feedback before the trace_req DB CHECK fires at persistence).
         findings = lint_plan(plan, msg_ids, size_budget=size_budget)
+        findings = findings + lint_req_provenance(plan)
         errors = [f for f in findings if f.severity == SEVERITY_ERROR]
         warnings = tuple(f for f in findings if f.severity == SEVERITY_WARN)
         if not errors:
