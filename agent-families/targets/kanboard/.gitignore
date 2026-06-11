@@ -1,0 +1,12 @@
+# Pinned source checkout (plan-007 U13a): cloned at setup by
+# registry.ensure_source_checkout(repo_url=KANBOARD_REGISTRY_CONFIG.source_repo_url,
+# tag=KANBOARD_REGISTRY_CONFIG.source_tag) — git clone --depth 1 --branch v1.2.46 —
+# verified against the image pin (benchmark.KANBOARD_IMAGE_TAG/DIGEST). Never committed.
+source/
+
+# Live pre-research output (plan-007 U13a): FEAT+DEC evidence captures written by
+# registry.confirm_candidate / confirm_decision during the documented live
+# procedure. These are large, digest-stamped, host-specific artifacts produced on
+# a machine with Docker + a logged-in claude CLI + a Playwright browse executor —
+# regenerated, not committed (the committed artifact is the procedure in README.md).
+evidence/

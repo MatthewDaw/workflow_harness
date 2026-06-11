@@ -56,8 +56,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable
 
+# 007 U13a — the Kanboard source tag is the tag half of the second target's image
+# pin, whose canonical home is benchmark.py (KANBOARD_IMAGE_TAG/DIGEST + the
+# committed compose file). Importing it (rather than re-stating it) keeps a
+# single source of truth: a re-pin in benchmark.py propagates to pre-research.
+# No cycle: benchmark.py never reaches this module (registry is imported only by
+# frontier, which benchmark does not import).
+from agent_families.grading.benchmark import KANBOARD_IMAGE_TAG
 from agent_families.grading.target_env import (
     LINKDING_IMAGE_TAG,
     Runner,
@@ -76,16 +84,14 @@ logger = logging.getLogger(__name__)
 
 # --- pins and expectations -----------------------------------------------------
 
-SOURCE_REPO_URL = "https://github.com/sissbruecker/linkding.git"
-# The source tag is the tag half of the image pin (R9): image
-# sissbruecker/linkding:1.45.0@sha256:... <-> source tag v1.45.0. Re-pinning
-# either is a deliberate apparatus migration that re-runs pre-research.
-SOURCE_TAG = f"v{LINKDING_IMAGE_TAG}"
-
-# R8's expected linkding surface — plan-pinned verification values (protocol
-# constants for the documented live procedure, not behavior tunables).
-EXPECTED_AREA_COUNT = 18
-EXPECTED_BEHAVIOR_RANGE = (40, 60)
+# The per-target pre-research pins (source repo/tag + expected surface) used to
+# be linkding-only module constants here. 007 U13a lifted them into
+# :class:`TargetRegistryConfig` (defined below, after ``RegistryError``) so the
+# same machinery ports to a second target (Kanboard) — "port, don't fork". The
+# legacy names ``SOURCE_REPO_URL``/``SOURCE_TAG``/``EXPECTED_AREA_COUNT``/
+# ``EXPECTED_BEHAVIOR_RANGE`` survive as back-compat aliases to the linkding
+# config (also below), so every existing import and the linkding live procedure
+# stay byte-identical.
 
 # Stable behavior keys: permanent identity, FEAT-<key> forever (R9).
 _KEY_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -101,6 +107,128 @@ class RegistryError(Exception):
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# --- per-target pre-research config (007 U13a: de-pin off linkding) ---------------
+
+
+@dataclass(frozen=True)
+class TargetRegistryConfig:
+    """One target's pre-research envelope (007 U13a).
+
+    The registry pre-research machinery was linkding-pinned: ``SOURCE_REPO_URL``,
+    ``SOURCE_TAG``, ``EXPECTED_AREA_COUNT`` and ``EXPECTED_BEHAVIOR_RANGE`` were
+    module constants. U13a ports it to a second target (Kanboard) by lifting
+    those pins into a per-target config — same instruments, same
+    confirm-on-runtime discipline (R8/KTD1), a different source checkout and a
+    different expected surface. These are PROTOCOL constants for the documented
+    live procedure (the hand-check expectation), NOT behavior tunables, so they
+    live in code with provenance, never in ``thresholds.toml``.
+
+    ``source_tag`` is the tag half of the target's image digest pin (R9): a
+    drifted checkout enumerates a registry that silently diverges from the
+    running target, so the tag and the image digest are re-pinned together.
+    """
+
+    target: str
+    source_repo_url: str
+    source_tag: str
+    expected_area_count: int
+    expected_behavior_range: tuple[int, int]
+
+    def __post_init__(self) -> None:
+        if not self.target.strip():
+            raise RegistryError("TargetRegistryConfig.target must be non-empty")
+        if not self.source_repo_url.strip() or not self.source_tag.strip():
+            raise RegistryError(
+                f"target {self.target!r}: source_repo_url and source_tag must be"
+                " non-empty — they pin the source checkout to the image (R9)"
+            )
+        lo, hi = self.expected_behavior_range
+        if not 0 < lo <= hi:
+            raise RegistryError(
+                f"target {self.target!r}: expected_behavior_range"
+                f" {self.expected_behavior_range} must be a positive (lo, hi)"
+                " with lo <= hi"
+            )
+        if self.expected_area_count <= 0:
+            raise RegistryError(
+                f"target {self.target!r}: expected_area_count must be positive,"
+                f" got {self.expected_area_count}"
+            )
+
+
+# linkding — the Phase-2/3a training target. These ARE the values the module
+# constants always meant (image sissbruecker/linkding:1.45.0 <-> source tag
+# v1.45.0; ~18 areas / 40–60 testable behaviors, R8).
+LINKDING_REGISTRY_CONFIG = TargetRegistryConfig(
+    target="linkding",
+    source_repo_url="https://github.com/sissbruecker/linkding.git",
+    source_tag=f"v{LINKDING_IMAGE_TAG}",
+    expected_area_count=18,
+    expected_behavior_range=(40, 60),
+)
+
+# Kanboard — the held-out micro-benchmark target (plan-004 U4) and the greenfield
+# benchmark's parent target (KTD8). Its docker/boot machinery already exists in
+# benchmark.py; U13a ports pre-research onto it. Source tag = the tag half of
+# benchmark.KANBOARD_IMAGE_TAG (image kanboard/kanboard:v1.2.46 <-> source tag
+# v1.2.46).
+#
+# PROVENANCE — Kanboard's surface is materially larger than linkding's (KTD8):
+# projects, tasks, board columns/swimlanes, subtasks, comments, categories,
+# tags, users/roles, search, activity. ``expected_area_count`` /
+# ``expected_behavior_range`` below are ESTIMATES pending the live hand-check
+# (pending-docker per U13a Verification): the documented live procedure asserts
+# the minted count against ``expected_behavior_range`` and re-pins on a confirmed
+# miss. Open Question 7: if FEAT+DEC pre-research lands well above the
+# qualification band, scope the benchmark's founder model to a module slice
+# rather than re-stretching the band.
+KANBOARD_REGISTRY_CONFIG = TargetRegistryConfig(
+    target="kanboard",
+    source_repo_url="https://github.com/kanboard/kanboard.git",
+    source_tag=KANBOARD_IMAGE_TAG,
+    expected_area_count=26,
+    expected_behavior_range=(55, 95),
+)
+
+# The onboarded targets. Pre-research refuses an unknown target (a hard error in
+# :func:`registry_config_for`) — a target is onboarded deliberately, with its
+# source pin and expected surface, never defaulted to another target's numbers.
+TARGET_REGISTRY_CONFIGS: MappingProxyType = MappingProxyType(
+    {
+        LINKDING_REGISTRY_CONFIG.target: LINKDING_REGISTRY_CONFIG,
+        KANBOARD_REGISTRY_CONFIG.target: KANBOARD_REGISTRY_CONFIG,
+    }
+)
+
+
+def registry_config_for(target: str) -> TargetRegistryConfig:
+    """The per-target pre-research config (007 U13a).
+
+    Unknown targets are a hard error: pre-research onboarding (source pin +
+    expected surface) is deliberate, never silently defaulted to linkding's
+    numbers — that would enumerate against the wrong source and mis-key the
+    cached apparatus.
+    """
+    try:
+        return TARGET_REGISTRY_CONFIGS[target]
+    except KeyError:
+        raise RegistryError(
+            f"no registry pre-research config for target {target!r}; known"
+            f" targets: {sorted(TARGET_REGISTRY_CONFIGS)}. Onboard the target"
+            " (source pin + expected surface) before pre-research (007 U13a)."
+        ) from None
+
+
+# Back-compat module constants — the linkding pins these names have always meant.
+# 007 U13a lifted them into ``LINKDING_REGISTRY_CONFIG``; these aliases keep every
+# existing import (test_registry, test_decision_registry) and the linkding live
+# procedure byte-identical.
+SOURCE_REPO_URL = LINKDING_REGISTRY_CONFIG.source_repo_url
+SOURCE_TAG = LINKDING_REGISTRY_CONFIG.source_tag
+EXPECTED_AREA_COUNT = LINKDING_REGISTRY_CONFIG.expected_area_count
+EXPECTED_BEHAVIOR_RANGE = LINKDING_REGISTRY_CONFIG.expected_behavior_range
 
 
 # --- seams ----------------------------------------------------------------------
@@ -272,9 +400,9 @@ def candidates_from_output(output: dict) -> list[FeatureCandidate]:
     raw = output.get("candidates") or []
     if not raw:
         raise RegistryError(
-            "pre-research proposed zero candidates; the linkding surface is"
-            f" ~{EXPECTED_AREA_COUNT} areas (R8) — an empty enumeration is a"
-            " session failure, not a finding"
+            "pre-research proposed zero candidates; a real target has many"
+            " feature areas (R8) — an empty enumeration is a session failure,"
+            " not a finding"
         )
     candidates = [candidate_from_payload(p) for p in raw]
     seen: set[str] = set()
@@ -506,20 +634,30 @@ def grader_profile(
 
 
 def build_pre_research_prompt(
-    *, target: str, source_root: str | Path, ui_observations: str = ""
+    *,
+    target: str,
+    source_root: str | Path,
+    ui_observations: str = "",
+    config: TargetRegistryConfig | None = None,
 ) -> str:
     """The enumeration brief: source + ``urls.py`` routes + UI traversal.
 
     UI-traversal observations are gathered by the orchestrator over the
     browse channel and embedded as text — the session itself never browses.
+
+    The expected-surface numbers (area count + behavior range) are
+    per-target (007 U13a): resolved from ``config`` when supplied, else looked
+    up by ``target``. For ``target='linkding'`` this yields the historical
+    18-areas / 40–60-behaviors brief byte-for-byte.
     """
+    cfg = config or registry_config_for(target)
     ui_section = (
         "## UI traversal observations (captured on the running app)\n\n"
         f"{ui_observations.strip()}\n\n"
         if ui_observations.strip()
         else ""
     )
-    lo, hi = EXPECTED_BEHAVIOR_RANGE
+    lo, hi = cfg.expected_behavior_range
     return (
         f"You are the grader's registry pre-researcher for the target"
         f" '{target}'. Your working directory is the pinned source checkout"
@@ -528,7 +666,7 @@ def build_pre_research_prompt(
         " and the UI traversal observations below.\n\n"
         f"{ui_section}"
         "Rules:\n"
-        f"- Expect roughly {EXPECTED_AREA_COUNT} feature areas and between"
+        f"- Expect roughly {cfg.expected_area_count} feature areas and between"
         f" {lo} and {hi} testable behaviors for this target; substantially"
         " fewer means you missed areas, substantially more means you are"
         " splitting one behavior into UI micro-steps.\n"
@@ -1250,15 +1388,23 @@ def registry_rows(store: Store, target: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def registry_in_expected_range(store: Store, target: str) -> bool:
+def registry_in_expected_range(
+    store: Store, target: str, *, config: TargetRegistryConfig | None = None
+) -> bool:
     """R8's live-verification check: confirmed-behavior count within the
-    expected 40–60 range for the linkding surface."""
+    target's expected range.
+
+    The range is per-target (007 U13a): resolved from ``config`` when supplied,
+    else looked up by ``target`` — linkding stays 40–60, Kanboard carries its
+    own (larger) band. The documented live procedure asserts against this.
+    """
+    cfg = config or registry_config_for(target)
     row = store.conn.execute(
         "SELECT COUNT(*) AS n FROM trace_feat"
         " WHERE target = ? AND status = 'confirmed'",
         (target,),
     ).fetchone()
-    lo, hi = EXPECTED_BEHAVIOR_RANGE
+    lo, hi = cfg.expected_behavior_range
     return lo <= row["n"] <= hi
 
 
