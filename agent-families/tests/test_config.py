@@ -37,6 +37,15 @@ def test_shipped_template_loads_with_defaults():
     assert cfg.judge.bare is False
     assert cfg.lifecycle.active_cap == 50
     assert cfg.store.busy_timeout_ms >= 0
+    # Plan 007: the shipped template carries the [greenfield] section
+    assert 0.0 <= cfg.greenfield.drop_rate <= 1.0
+    assert 0.0 <= cfg.greenfield.blur_rate <= 1.0
+    assert cfg.greenfield.core_loop_n > 0
+    assert cfg.greenfield.rotation_fraction == pytest.approx(0.0)
+    assert cfg.greenfield.gate_k >= 0
+    assert cfg.greenfield.grace_window >= 0
+    assert cfg.greenfield.seed_occupancy_cap > 0
+    assert cfg.greenfield.benchmark_seed >= 0
 
 
 def test_minimal_valid_config_round_trips(tmp_path):
@@ -64,6 +73,85 @@ def test_minimal_valid_config_round_trips(tmp_path):
     )
     cfg = load_config(path)
     assert cfg.merge.cosine_threshold == pytest.approx(0.9)
+    # [greenfield] is optional — its absence falls back to documented defaults
+    assert cfg.greenfield.core_loop_n == 5
+    assert cfg.greenfield.rotation_fraction == pytest.approx(0.0)
+    assert cfg.greenfield.benchmark_seed == 1234
+
+
+# --- greenfield section: optional, validated when present (Plan 007 U1) ------
+
+
+_BASE_SECTIONS = """
+[embedding]
+model = "nomic-ai/nomic-embed-text-v1.5"
+dim = 768
+device = "cpu"
+[merge]
+cosine_threshold = 0.92
+[retrieval]
+ann_top_k = 10
+relevance_floor = 0.5
+[judge]
+model = "sonnet"
+max_retries = 3
+bare = false
+[lifecycle]
+active_cap = 50
+[store]
+busy_timeout_ms = 5000
+"""
+
+_GREENFIELD_OK = """
+[greenfield]
+drop_rate = 0.25
+blur_rate = 0.4
+core_loop_n = 6
+rotation_fraction = 0.25
+gate_k = 3
+grace_window = 4
+seed_occupancy_cap = 12
+benchmark_seed = 99
+"""
+
+
+def test_greenfield_section_loads_when_present(tmp_path):
+    path = _write(tmp_path, _BASE_SECTIONS + _GREENFIELD_OK)
+    cfg = load_config(path)
+    assert cfg.greenfield.drop_rate == pytest.approx(0.25)
+    assert cfg.greenfield.core_loop_n == 6
+    assert cfg.greenfield.rotation_fraction == pytest.approx(0.25)
+    assert cfg.greenfield.gate_k == 3
+    assert cfg.greenfield.seed_occupancy_cap == 12
+    assert cfg.greenfield.benchmark_seed == 99
+
+
+def test_greenfield_unknown_key_names_the_key(tmp_path):
+    path = _write(
+        tmp_path,
+        _BASE_SECTIONS + _GREENFIELD_OK + "bogus_greenfield_key = 1\n",
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "bogus_greenfield_key" in str(exc.value)
+
+
+def test_greenfield_out_of_range_drop_rate_errors(tmp_path):
+    path = _write(
+        tmp_path,
+        _BASE_SECTIONS + _GREENFIELD_OK.replace("drop_rate = 0.25", "drop_rate = 1.5"),
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "drop_rate" in str(exc.value)
+
+
+def test_greenfield_partial_section_missing_key_errors(tmp_path):
+    """When present, the section is fully validated — a missing key is an error."""
+    path = _write(tmp_path, _BASE_SECTIONS + "[greenfield]\ndrop_rate = 0.2\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config(path)
+    assert "greenfield" in str(exc.value)
 
 
 # --- unknown key errors with the key named ---------------------------------

@@ -51,13 +51,18 @@ import pytest
 
 import agent_families.store as store_mod
 from agent_families.store import (
+    ASSUME_RISKS,
+    ASSUME_STATUSES,
     BATCH_VERDICTS,
+    DEC_STATUSES,
     EPISODE_STATUSES,
     EPISODE_TERMINAL_STATUSES,
     FAILURE_KINDS,
     FEAT_STATUSES,
     FITNESS_EVENT_KINDS,
+    FOUNDER_KNOWLEDGE_STATES,
     FRONTIER_STATUSES,
+    INSIGHT_PROVENANCES,
     QA_OUTCOMES,
     RUN_ACCEPTANCE,
     RUN_MODES,
@@ -68,7 +73,9 @@ from agent_families.store import (
     SPAN_FINAL_STATUSES,
     STATUSES,
     TICKET_STATUSES,
+    VALIDATION_CLASSES,
     WORKFLOW_STATUSES,
+    WORLDS,
     Store,
     StoreError,
 )
@@ -114,6 +121,15 @@ EXPECTED_TABLES = {
     "fitness_events",
     "workflows",
     "batch_validations",
+    # Greenfield mode (plan 007 U1)
+    "trace_dec",
+    "trace_msg_dec_mentions",
+    "trace_assume",
+    "trace_proposal",
+    "trace_proposal_adjudication",
+    "founder_blur_cache",
+    "founder_models",
+    "founder_knowledge",
 }
 
 
@@ -160,7 +176,7 @@ def test_schema_creates_idempotently(tmp_path):
         versions = s.conn.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
-        assert [r["version"] for r in versions] == [1, 2, 3, 4]
+        assert [r["version"] for r in versions] == [1, 2, 3, 4, 5]
     # a fresh connection over the same file is also a no-op
     with Store(db) as s2:
         s2.migrate()
@@ -462,7 +478,9 @@ def test_traceability_tables_accept_valid_chain(store):
         )
         c.execute("INSERT INTO trace_msg VALUES ('MSG-1', 'asked about admin areas')")
         c.execute("INSERT INTO trace_msg_mentions VALUES ('MSG-1', 'FEAT-1')")
-        c.execute("INSERT INTO trace_req VALUES ('REQ-1', 'MSG-1')")
+        c.execute(
+            "INSERT INTO trace_req (id, source_msg_id) VALUES ('REQ-1', 'MSG-1')"
+        )
         c.execute(
             "INSERT INTO trace_tkt (id, increment_id) VALUES ('TKT-1', 'INC-1')"
         )
@@ -505,7 +523,9 @@ def test_traceability_links_constrained(store):
             "INSERT INTO trace_chk VALUES ('CHK-9', 'AC-404', 'fail', 'cmd', '')"
         )
     with pytest.raises(sqlite3.IntegrityError):
-        store.conn.execute("INSERT INTO trace_req VALUES ('REQ-9', 'MSG-404')")
+        store.conn.execute(
+            "INSERT INTO trace_req (id, source_msg_id) VALUES ('REQ-9', 'MSG-404')"
+        )
     # span index exists over the ticket link
     indexes = {
         r["name"]
@@ -552,14 +572,14 @@ def test_phase1_migration_applies_on_phase0_db_without_data_loss(tmp_path, monke
         )
     monkeypatch.undo()
     with Store(db) as s:
-        s.migrate()  # applies v2 (and v3) on top
+        s.migrate()  # applies v2 (and v3+) on top
         versions = [
             r["version"]
             for r in s.conn.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
         ]
-        assert versions == [1, 2, 3, 4]
+        assert versions == [1, 2, 3, 4, 5]
         assert EXPECTED_TABLES <= _table_names(s)
         # Phase 0 rows survive untouched
         assert s.get_insight(insight)["status"] == "active"
@@ -810,7 +830,9 @@ def test_ledger_entries_reference_spans_chks_and_failures(store):
     store.insert_span("SPAN-l", run_id=run_id, ticket_id=ticket)
     with store.transaction():
         store.conn.execute("INSERT INTO trace_msg VALUES ('MSG-l', 'p')")
-        store.conn.execute("INSERT INTO trace_req VALUES ('REQ-l', 'MSG-l')")
+        store.conn.execute(
+            "INSERT INTO trace_req (id, source_msg_id) VALUES ('REQ-l', 'MSG-l')"
+        )
         store.conn.execute("INSERT INTO trace_ac VALUES ('AC-l', 'TKT-1', 'REQ-l')")
         store.conn.execute(
             "INSERT INTO trace_chk VALUES ('CHK-l', 'AC-l', 'pass', 'npm test', '')"
@@ -910,7 +932,7 @@ def test_phase2_migration_applies_on_phase1_db_without_data_loss(tmp_path, monke
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
         ]
-        assert versions == [1, 2, 3, 4]
+        assert versions == [1, 2, 3, 4, 5]
         assert EXPECTED_TABLES <= _table_names(s)
         # Phase 0/1 rows survive untouched; new columns backfill their defaults
         assert s.get_insight(insight)["episode_id"] is None
@@ -1227,7 +1249,7 @@ def test_phase3a_migration_applies_on_phase2_db_without_data_loss(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
         ]
-        assert versions == [1, 2, 3, 4]
+        assert versions == [1, 2, 3, 4, 5]
         assert EXPECTED_TABLES <= _table_names(s)
         # pre-Phase-3a episodes backfill mode='training' with a NULL epoch
         ep = s.get_episode(episode)
@@ -1456,3 +1478,340 @@ def test_lineage_seam_columns_present(store):
     assert store.conn.execute(
         "SELECT routing_decisions FROM agents WHERE id = ?", (agent,)
     ).fetchone()["routing_decisions"] == 128
+
+
+# --- Greenfield schema migration (plan 007 U1: R1, R2, R7, R10) --------------
+#
+# ## Conformance (plan 007 U1 test scenarios → tests)
+#
+# - fresh store has all greenfield tables; migration preserves counts and
+#   backfills provenance/world →
+#   ``test_greenfield_migration_applies_on_phase3b_db_without_data_loss``
+# - re-running migrations is a no-op (idempotent) →
+#   ``test_schema_creates_idempotently`` (versions == [1, 2, 3, 4, 5])
+# - a REQ insert with both or neither source fails the CHECK; exactly one passes →
+#   ``test_trace_req_source_xor_check``
+# - trace_msg_dec_mentions FK rejects an unminted DEC →
+#   ``test_msg_dec_mentions_fk_rejects_unminted_dec``
+# - DEC identity discipline (id immutable, never deleted, status enum) →
+#   ``test_trace_dec_append_only_discipline``
+# - episodes.world enum + brownfield default →
+#   ``test_episode_world_enum_and_default``
+# - new greenfield tables round-trip →
+#   ``test_greenfield_tables_roundtrip``
+# - batches.validation_class enum + general default →
+#   ``test_batch_validation_class_enum_and_default``
+
+
+def test_greenfield_migration_applies_on_phase3b_db_without_data_loss(
+    tmp_path, monkeypatch
+):
+    """Migration v5 upgrades a v1..v4 database in place, idempotently, and
+    backfills insight provenance from batch labels + episode world to brownfield.
+    """
+    db = tmp_path / "library.db"
+    with Store(db) as s:
+        monkeypatch.setattr(store_mod, "MIGRATIONS", store_mod.MIGRATIONS[:4])
+        s.migrate()  # Phase 0 + 1 + 2 + 3a schema only
+        versions = [
+            r["version"]
+            for r in s.conn.execute("SELECT version FROM schema_migrations").fetchall()
+        ]
+        assert versions == [1, 2, 3, 4]
+        episode = s.create_episode("linkding", "sha256:abc", 0)
+        # a reflector-mined insight and a hand-entered one, distinguished only by
+        # their batch label (the explicit backfill predicate)
+        reflect_batch = s.ensure_batch("reflect-ep7")
+        manual_batch = s.ensure_batch("session-2026-06-10")
+        reflected = _add_insight(s, "mined", batch_id=reflect_batch)
+        manual = _add_insight(s, "by-hand", batch_id=manual_batch)
+        # the v1 trace_req shape (two positional columns) still holds pre-rebuild
+        s.conn.execute("INSERT INTO trace_msg VALUES ('MSG-keep', 'keep me')")
+        s.conn.execute(
+            "INSERT INTO trace_req (id, source_msg_id) VALUES ('REQ-keep', 'MSG-keep')"
+        )
+        req_count_before = _count(s, "trace_req")
+    monkeypatch.undo()
+    with Store(db) as s:
+        s.migrate()  # applies v5 on top
+        s.migrate()  # second run applies nothing
+        versions = [
+            r["version"]
+            for r in s.conn.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        ]
+        assert versions == [1, 2, 3, 4, 5]
+        assert EXPECTED_TABLES <= _table_names(s)
+        # provenance backfilled from the batch label predicate
+        assert s.get_insight(reflected)["provenance"] == "reflector"
+        assert s.get_insight(manual)["provenance"] == "manual"
+        # episode world defaults to brownfield on pre-007 rows
+        assert s.get_episode(episode)["world"] == "brownfield"
+        # the trace_req rebuild preserved the row and its FK still resolves
+        assert _count(s, "trace_req") == req_count_before
+        kept = s.conn.execute(
+            "SELECT * FROM trace_req WHERE id = 'REQ-keep'"
+        ).fetchone()
+        assert kept["source_msg_id"] == "MSG-keep"
+        assert kept["source_assume_id"] is None
+        # the inbound FKs (trace_tkt_covers, trace_ac → trace_req) survived intact
+        assert s.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_trace_req_source_xor_check(store):
+    """007 KTD2: every REQ traces to exactly one of a MSG or an ASSUME."""
+    store.conn.execute("INSERT INTO trace_msg VALUES ('MSG-x', 'a question')")
+    run_id = store.create_run("spec.md", 0)
+    store.conn.execute(
+        "INSERT INTO trace_assume (id, run_id, claim) VALUES ('ASSUME-x', ?, 'c')",
+        (run_id,),
+    )
+    # MSG-sourced REQ passes
+    store.conn.execute(
+        "INSERT INTO trace_req (id, source_msg_id) VALUES ('REQ-msg', 'MSG-x')"
+    )
+    # ASSUME-sourced REQ passes
+    store.conn.execute(
+        "INSERT INTO trace_req (id, source_assume_id) VALUES ('REQ-asm', 'ASSUME-x')"
+    )
+    # neither source fails the exactly-one CHECK
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute("INSERT INTO trace_req (id) VALUES ('REQ-none')")
+    # both sources fail the exactly-one CHECK
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO trace_req (id, source_msg_id, source_assume_id)"
+            " VALUES ('REQ-both', 'MSG-x', 'ASSUME-x')"
+        )
+    # both REQ rows persisted; the source-FKs are still enforced
+    assert _count(store, "trace_req") == 2
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO trace_req (id, source_assume_id)"
+            " VALUES ('REQ-bad', 'ASSUME-404')"
+        )
+
+
+def test_msg_dec_mentions_fk_rejects_unminted_dec(store):
+    """007 KTD1: an unminted DEC is unmentionable mechanically (per-kind FK)."""
+    store.conn.execute("INSERT INTO trace_msg VALUES ('MSG-d', 'how are deletes?')")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO trace_msg_dec_mentions VALUES ('MSG-d', 'DEC-unminted')"
+        )
+    # confirmation mints the row; only then is it mentionable
+    store.conn.execute(
+        "INSERT INTO trace_dec (id, target, digest, category, description,"
+        " evidence_ref) VALUES ('DEC-1', 'linkding', 'sha256:abc', 'deletion',"
+        " 'soft delete with 30-day purge', 'runtime-ref')"
+    )
+    store.conn.execute(
+        "INSERT INTO trace_msg_dec_mentions VALUES ('MSG-d', 'DEC-1')"
+    )
+    assert _count(store, "trace_msg_dec_mentions") == 1
+
+
+def test_trace_dec_append_only_discipline(store):
+    """007 KTD1: DEC follows the FEAT identity discipline."""
+    store.conn.execute(
+        "INSERT INTO trace_dec (id, target, digest, category, description,"
+        " evidence_ref) VALUES ('DEC-2', 'linkding', 'sha256:abc', 'auth',"
+        " 'session-cookie + role enum', 'runtime-ref')"
+    )
+    row = store.conn.execute(
+        "SELECT * FROM trace_dec WHERE id = 'DEC-2'"
+    ).fetchone()
+    assert row["status"] == "confirmed"
+    assert row["category"] == "auth"
+    # ids are append-only; rows are never deleted (deprecate instead)
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute("UPDATE trace_dec SET id = 'DEC-3' WHERE id = 'DEC-2'")
+    with pytest.raises(sqlite3.IntegrityError, match="never deleted"):
+        store.conn.execute("DELETE FROM trace_dec WHERE id = 'DEC-2'")
+    store.conn.execute(
+        "UPDATE trace_dec SET status = 'deprecated' WHERE id = 'DEC-2'"
+    )
+    assert store.conn.execute(
+        "SELECT status FROM trace_dec WHERE id = 'DEC-2'"
+    ).fetchone()["status"] == "deprecated"
+    # id-prefix + status enum backstop raw writes
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO trace_dec (id, evidence_ref) VALUES ('XDEC-1', 'r')"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "UPDATE trace_dec SET status = 'removed' WHERE id = 'DEC-2'"
+        )
+    assert set(DEC_STATUSES) == {"confirmed", "deprecated"}
+
+
+def test_episode_world_enum_and_default(store):
+    """007 KTD6: world is brownfield by default and CHECK-constrained."""
+    default = store.create_episode("linkding", "sha256:abc", 0)
+    assert store.get_episode(default)["world"] == "brownfield"
+    for world in WORLDS:
+        store.conn.execute(
+            "UPDATE episodes SET world = ? WHERE id = ?", (world, default)
+        )
+        assert store.get_episode(default)["world"] == world
+    assert set(WORLDS) == {
+        "brownfield", "greenfield_backtranslated", "greenfield_pure"
+    }
+    # world is a separate axis from mode — both coexist on one episode
+    bench = store.create_episode("kanboard", "sha256:def", 0, mode="benchmark")
+    store.conn.execute(
+        "UPDATE episodes SET world = 'greenfield_backtranslated' WHERE id = ?",
+        (bench,),
+    )
+    row = store.get_episode(bench)
+    assert row["mode"] == "benchmark"
+    assert row["world"] == "greenfield_backtranslated"
+    with pytest.raises(sqlite3.IntegrityError):  # world enum backstops raw writes
+        store.conn.execute(
+            "UPDATE episodes SET world = 'hybrid' WHERE id = ?", (default,)
+        )
+
+
+def test_batch_validation_class_enum_and_default(store):
+    """007 KTD5: validation_class tags the substrate-routing channel."""
+    batch = store.ensure_batch("greenfield-batch")
+    row = store.conn.execute(
+        "SELECT validation_class FROM batches WHERE id = ?", (batch,)
+    ).fetchone()
+    assert row["validation_class"] == "general"  # backfill default
+    for vc in VALIDATION_CLASSES:
+        store.conn.execute(
+            "UPDATE batches SET validation_class = ? WHERE id = ?", (vc, batch)
+        )
+        assert store.conn.execute(
+            "SELECT validation_class FROM batches WHERE id = ?", (batch,)
+        ).fetchone()["validation_class"] == vc
+    assert set(VALIDATION_CLASSES) == {"code", "elicitation", "general"}
+    assert set(INSIGHT_PROVENANCES) == {
+        "manual", "reflector", "researched", "seeded"
+    }
+    with pytest.raises(sqlite3.IntegrityError):  # enum backstops raw writes
+        store.conn.execute(
+            "UPDATE batches SET validation_class = 'mixed' WHERE id = ?", (batch,)
+        )
+
+
+def test_greenfield_tables_roundtrip(store):
+    """007 KTD2/3/4: assume ledger, proposals + adjudication, founder model."""
+    episode = store.create_episode("linkding", "sha256:abc", 0)
+    run_id = store.create_run("inc", 0, episode_id=episode, increment_index=1)
+    store.conn.execute("INSERT INTO trace_msg VALUES ('MSG-c', 'confirmed it')")
+    # assumption ledger: typed risk + status, keyed by run
+    store.conn.execute(
+        "INSERT INTO trace_assume (id, run_id, claim, basis, risk_if_wrong,"
+        " cheapest_test, status, confirmed_by_msg) VALUES ('ASSUME-1', ?,"
+        " 'users want tags', 'common in this domain', 'high', 'ask the founder',"
+        " 'confirmed', 'MSG-c')",
+        (run_id,),
+    )
+    assume = store.conn.execute(
+        "SELECT * FROM trace_assume WHERE id = 'ASSUME-1'"
+    ).fetchone()
+    assert assume["risk_if_wrong"] == "high"
+    assert assume["status"] == "confirmed"
+    assert assume["confirmed_by_msg"] == "MSG-c"
+    assert set(ASSUME_RISKS) == {"low", "med", "high"}
+    assert set(ASSUME_STATUSES) == {"open", "confirmed", "invalidated"}
+    with pytest.raises(sqlite3.IntegrityError):  # risk enum
+        store.conn.execute(
+            "INSERT INTO trace_assume (id, run_id, claim, risk_if_wrong)"
+            " VALUES ('ASSUME-bad', ?, 'c', 'critical')",
+            (run_id,),
+        )
+    # typed proposal linked to the assumption it resolves
+    store.conn.execute(
+        "INSERT INTO trace_proposal (id, run_id, topic, options_json,"
+        " recommended, linked_assume_id) VALUES ('PROP-1', ?, 'tag model',"
+        " '[\"flat\", \"hierarchical\"]', 'flat', 'ASSUME-1')",
+        (run_id,),
+    )
+    prop = store.conn.execute(
+        "SELECT * FROM trace_proposal WHERE id = 'PROP-1'"
+    ).fetchone()
+    assert prop["recommended"] == "flat"
+    assert prop["linked_assume_id"] == "ASSUME-1"
+    # a proposal with no linked assumption is legal
+    store.conn.execute(
+        "INSERT INTO trace_proposal (id, run_id, topic) VALUES ('PROP-2', ?, 't')",
+        (run_id,),
+    )
+    # stored adjudication verdict mapping a proposal to a DEC ref
+    store.conn.execute(
+        "INSERT INTO trace_dec (id, evidence_ref) VALUES ('DEC-adj', 'ref')"
+    )
+    store.conn.execute(
+        "INSERT INTO trace_proposal_adjudication (proposal_or_msg_id, ref_kind,"
+        " ref_id, verdict, confidence, checker_meta, created_at)"
+        " VALUES ('PROP-1', 'dec', 'DEC-adj', 'match', 0.91, '{}', 'now')"
+    )
+    adj = store.conn.execute(
+        "SELECT * FROM trace_proposal_adjudication WHERE proposal_or_msg_id = 'PROP-1'"
+    ).fetchone()
+    assert adj["ref_kind"] == "dec"
+    assert adj["confidence"] == pytest.approx(0.91)
+    with pytest.raises(sqlite3.IntegrityError):  # ref_kind enum
+        store.conn.execute(
+            "INSERT INTO trace_proposal_adjudication (proposal_or_msg_id,"
+            " ref_kind, ref_id, verdict, created_at)"
+            " VALUES ('PROP-1', 'epic', 'X', 'v', 'now')"
+        )
+    # founder model: blur cache (target-side) → knowledge row referencing it
+    blur = store.conn.execute(
+        "INSERT INTO founder_blur_cache (target, ref_kind, ref_id, entry_digest,"
+        " seed, params_hash, prompt_set_version, blur_text, lint_verdict)"
+        " VALUES ('linkding', 'feat', 'FEAT-1', 'sha256:e', 7, 'ph1', 'ps1',"
+        " 'items get cleaned up eventually', 'pass')"
+    ).lastrowid
+    store.conn.execute(
+        "INSERT INTO founder_models (episode_id, target, seed, params_hash,"
+        " goal_statement) VALUES (?, 'linkding', 7, 'ph1', 'save links for later')",
+        (episode,),
+    )
+    store.conn.execute(
+        "INSERT INTO founder_knowledge (episode_id, ref_kind, ref_id, state,"
+        " blur_id) VALUES (?, 'feat', 'FEAT-1', 'blurred', ?)",
+        (episode, blur),
+    )
+    fk = store.conn.execute(
+        "SELECT * FROM founder_knowledge WHERE episode_id = ?", (episode,)
+    ).fetchone()
+    assert fk["state"] == "blurred"
+    assert fk["blur_id"] == blur
+    assert set(FOUNDER_KNOWLEDGE_STATES) == {"intact", "blurred", "dropped"}
+    with pytest.raises(sqlite3.IntegrityError):  # state enum
+        store.conn.execute(
+            "INSERT INTO founder_knowledge (episode_id, ref_kind, ref_id, state)"
+            " VALUES (?, 'feat', 'FEAT-1', 'vague')",
+            (episode,),
+        )
+    # the blur cache is uniquely keyed (target, ref, digest, seed, params, prompt)
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO founder_blur_cache (target, ref_kind, ref_id,"
+            " entry_digest, seed, params_hash, prompt_set_version)"
+            " VALUES ('linkding', 'feat', 'FEAT-1', 'sha256:e', 7, 'ph1', 'ps1')"
+        )
+    # founder_models PK is the episode (one model per episode)
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO founder_models (episode_id, target, seed, params_hash)"
+            " VALUES (?, 'linkding', 7, 'ph1')",
+            (episode,),
+        )
+    # settlement reports gained the elicitation-metrics block (defaulted)
+    store.conn.execute(
+        "INSERT INTO settlement_reports (episode_id, report_json, created_at)"
+        " VALUES (?, '{}', 'now')",
+        (episode,),
+    )
+    assert store.conn.execute(
+        "SELECT elicitation_metrics_json FROM settlement_reports WHERE episode_id = ?",
+        (episode,),
+    ).fetchone()["elicitation_metrics_json"] == "{}"

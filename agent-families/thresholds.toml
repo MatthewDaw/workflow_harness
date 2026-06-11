@@ -67,3 +67,43 @@ active_cap = 50
 # BEGIN IMMEDIATE writers block up to this long rather than failing immediately.
 # PROVENANCE: default backstop. TUNING METRIC: lifecycle-op contention under load.
 busy_timeout_ms = 5000
+
+[greenfield]
+# Plan 007 greenfield-mode tunables: the founder simulator's degradation severity,
+# the assumption gate, the world-rotation fraction, and the induction/seed policy.
+# This section is OPTIONAL — a config without it loads with these same defaults
+# (config.py:_GREENFIELD_DEFAULTS) so brownfield-only setups predating Plan 007
+# keep working. Every default here is Phase-0-provisional (no paper): calibrate
+# against the pilot greenfield episode before the rotation leaves 0.0 (KTD6).
+#
+# Fraction of non-core registry refs the founder is fully ignorant of (state
+# `dropped`). PROVENANCE: provisional. TUNING METRIC: elicitation recovery-rate
+# signal-to-noise across benchmark runs (KTD3).
+drop_rate = 0.2
+# Fraction degraded to a vague cached blur (state `blurred`, JTBD-level prose).
+# PROVENANCE: provisional. TUNING METRIC: blur-leak rate vs recoverable signal (KTD3).
+blur_rate = 0.3
+# "Core-loop" size: the top-N JTBD-linked FEATs the stratification guard protects
+# (≥1 stays intact; guard-protected items are excluded from recovery denominators).
+# PROVENANCE: provisional. TUNING METRIC: guard false-protection rate (KTD3).
+core_loop_n = 5
+# Share of scheduled episodes drawn as greenfield once Phase D lands. Held at 0.0
+# until a measured pilot episode (the economics gate, KTD6) — never flip blind.
+# PROVENANCE: KTD6 (0.0 until pilot). TUNING METRIC: greenfield cost-per-episode.
+rotation_fraction = 0.0
+# Assumption-gate k: top-k open high-risk ASSUMEs must be confirmed before
+# increment 1. Auto-scaled at runtime to min(gate_k, floor(question_budget/2))
+# (KTD7) so confirmations can never consume the whole budget.
+# PROVENANCE: KTD7. TUNING METRIC: elicitation starvation at annealed budgets.
+gate_k = 2
+# Grace window (episodes) a seeded/researched insight cannot displace or be
+# displaced before facing the normal fitness tournament (KTD9 probation).
+# PROVENANCE: KTD9. TUNING METRIC: seeded-insight survival vs ossification.
+grace_window = 3
+# Active-occupancy cap for the Define-chain seed batch; the remainder register
+# dormant. PROVENANCE: KTD9 (~15). TUNING METRIC: seeded vs mined fitness (U10).
+seed_occupancy_cap = 15
+# Fixed seed pinning the benchmark founder model (KTD8 — the seed alone does not
+# pin the model; a registry/prompt-set change is an instrument event).
+# PROVENANCE: KTD8 pinned artifact. TUNING METRIC: gauge-R&R repeatability.
+benchmark_seed = 1234

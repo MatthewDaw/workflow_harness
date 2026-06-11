@@ -140,6 +140,34 @@ WORKFLOW_STATUSES = ("live", "dead")
 # Batch-validation verdicts (004 R1/R15-R17).
 BATCH_VERDICTS = ("promote", "revert")
 
+# --- Plan 007 (greenfield mode) state vocabularies ---------------------------
+
+# DEC registry rows follow the FEAT identity discipline (007 KTD1): confirmed on
+# runtime, deprecated never deleted.
+DEC_STATUSES = ("confirmed", "deprecated")
+
+# Assumption-ledger rows (007 KTD2): the planner's typed assumptions, promoted
+# from plan-document strings to queryable rows keyed by run_id.
+ASSUME_STATUSES = ("open", "confirmed", "invalidated")
+ASSUME_RISKS = ("low", "med", "high")
+
+# The episode `world` axis (007 KTD6) — orthogonal to `mode`. `greenfield_pure`
+# is reserved (unused in this plan); default is `brownfield`.
+WORLDS = ("brownfield", "greenfield_backtranslated", "greenfield_pure")
+
+# Insight provenance (007 KTD5): manual hand-entry, reflector-mined, researched
+# via the induction door, or hand-seeded. Backfilled from batch labels.
+INSIGHT_PROVENANCES = ("manual", "reflector", "researched", "seeded")
+
+# Batch validation-class (007 KTD5): the tag validate.py's substrate routing
+# reads — code → frozen benchmark, elicitation → both, general → both.
+VALIDATION_CLASSES = ("code", "elicitation", "general")
+
+# Founder-model knowledge rows (007 KTD3): each registry ref the founder either
+# knows plainly, knows vaguely (cached blur), or has never thought about.
+FOUNDER_REF_KINDS = ("feat", "dec")
+FOUNDER_KNOWLEDGE_STATES = ("intact", "blurred", "dropped")
+
 _STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in STATUSES)
 _RUN_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_STATUSES)
 _TICKET_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in TICKET_STATUSES)
@@ -157,6 +185,14 @@ _RUN_MODE_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_MODES)
 _FITNESS_KIND_SQL_ENUM = ", ".join(f"'{s}'" for s in FITNESS_EVENT_KINDS)
 _WORKFLOW_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in WORKFLOW_STATUSES)
 _BATCH_VERDICT_SQL_ENUM = ", ".join(f"'{s}'" for s in BATCH_VERDICTS)
+_DEC_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in DEC_STATUSES)
+_ASSUME_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in ASSUME_STATUSES)
+_ASSUME_RISK_SQL_ENUM = ", ".join(f"'{s}'" for s in ASSUME_RISKS)
+_WORLD_SQL_ENUM = ", ".join(f"'{s}'" for s in WORLDS)
+_INSIGHT_PROVENANCE_SQL_ENUM = ", ".join(f"'{s}'" for s in INSIGHT_PROVENANCES)
+_VALIDATION_CLASS_SQL_ENUM = ", ".join(f"'{s}'" for s in VALIDATION_CLASSES)
+_FOUNDER_REF_KIND_SQL_ENUM = ", ".join(f"'{s}'" for s in FOUNDER_REF_KINDS)
+_FOUNDER_STATE_SQL_ENUM = ", ".join(f"'{s}'" for s in FOUNDER_KNOWLEDGE_STATES)
 
 
 class StoreError(Exception):
@@ -735,11 +771,193 @@ ALTER TABLE skills ADD COLUMN parent_skill_id INTEGER REFERENCES skills(id);
 ALTER TABLE skills ADD COLUMN split_snapshot_id INTEGER REFERENCES snapshots(id);
 """
 
+# Plan 007 U1 (greenfield mode): the schema spine the founder simulator, decision
+# registry, assumption ledger, typed proposals, provenance, and world axis hang
+# off. Backfill-safe over a Phase 0-3b database — every change is a brand-new
+# table, an ADD COLUMN (nullable or defaulted), or the documented trace_req
+# rename-copy-drop rebuild (precedent: trace_span v2 at _SCHEMA_V2). trace_req is
+# referenced by trace_tkt_covers and trace_ac (minted in v1); `legacy_alter_table`
+# is toggled ON across the rename so the child FKs keep pointing at `trace_req`
+# (the rebuilt table) rather than being rewritten to the dropped temp table.
+_SCHEMA_V5 = f"""
+-- Decision registry (007 KTD1): a sibling of trace_feat extracted in the same
+-- pre-research pass. FEAT identity discipline as the template — digest stamp,
+-- append-only id, never deleted (deprecate instead). `category` keys into the
+-- probe-question taxonomy; `evidence_ref` is the runtime confirmation.
+CREATE TABLE trace_dec (
+    id           TEXT PRIMARY KEY CHECK (id LIKE 'DEC-%'),
+    target       TEXT,
+    digest       TEXT,
+    category     TEXT NOT NULL DEFAULT '',
+    description  TEXT NOT NULL DEFAULT '',
+    evidence_ref TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'confirmed'
+                 CHECK (status IN ({_DEC_STATUS_SQL_ENUM}))
+);
+
+CREATE TRIGGER trg_trace_dec_id_immutable
+BEFORE UPDATE OF id ON trace_dec
+BEGIN
+    SELECT RAISE(ABORT,
+        'DEC ids are append-only: never renumbered or reused (007 KTD1)');
+END;
+
+CREATE TRIGGER trg_trace_dec_no_delete
+BEFORE DELETE ON trace_dec
+BEGIN
+    SELECT RAISE(ABORT,
+        'DEC rows are never deleted: flip status to deprecated (007 KTD1)');
+END;
+
+-- DEC mentions (007 KTD1): a sibling of trace_msg_mentions with its own FK, so
+-- the per-kind FK integrity guarantee is preserved and existing consumers churn
+-- zero. An unminted DEC is unmentionable mechanically (the FK rejects it).
+CREATE TABLE trace_msg_dec_mentions (
+    msg_id TEXT NOT NULL REFERENCES trace_msg(id),
+    dec_id TEXT NOT NULL REFERENCES trace_dec(id),
+    PRIMARY KEY (msg_id, dec_id)
+);
+
+-- Assumption ledger (007 KTD2): the planner's typed assumptions as queryable
+-- rows, keyed by run_id (Phase-B toy-spec runs have no episode; episode is
+-- derivable through runs.episode_id when present). `check_plan_assumptions` is
+-- subsumed onto these rows in U2; the plan-document records become a view.
+CREATE TABLE trace_assume (
+    id              TEXT PRIMARY KEY CHECK (id LIKE 'ASSUME-%'),
+    run_id          INTEGER REFERENCES runs(id),
+    claim           TEXT NOT NULL,
+    basis           TEXT NOT NULL DEFAULT '',
+    risk_if_wrong   TEXT NOT NULL DEFAULT 'med'
+                    CHECK (risk_if_wrong IN ({_ASSUME_RISK_SQL_ENUM})),
+    cheapest_test   TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ({_ASSUME_STATUS_SQL_ENUM})),
+    confirmed_by_msg TEXT REFERENCES trace_msg(id)
+);
+CREATE INDEX idx_trace_assume_run ON trace_assume(run_id);
+
+-- Typed PROPOSAL artifact (007 KTD4/R10): the planner contract gains proposals;
+-- they are legal but unexercised until Phase D. options_json holds the option
+-- list; linked_assume_id optionally ties a proposal to the assumption it resolves.
+CREATE TABLE trace_proposal (
+    id               TEXT PRIMARY KEY CHECK (id LIKE 'PROP-%'),
+    run_id           INTEGER REFERENCES runs(id),
+    topic            TEXT NOT NULL DEFAULT '',
+    options_json     TEXT NOT NULL DEFAULT '[]',
+    recommended      TEXT NOT NULL DEFAULT '',
+    linked_assume_id TEXT REFERENCES trace_assume(id)
+);
+CREATE INDEX idx_trace_proposal_run ON trace_proposal(run_id);
+
+-- Stored adjudication verdicts (007 KTD4): the grader-side founder session maps
+-- each proposal/question to registry refs as an explicit, stored micro-judgment
+-- (oracle-check shape). Settlement and Stage A look these up; nothing
+-- text-matches at settlement time. Low-confidence rows route to the review queue.
+CREATE TABLE trace_proposal_adjudication (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposal_or_msg_id TEXT NOT NULL,
+    ref_kind          TEXT NOT NULL CHECK (ref_kind IN ({_FOUNDER_REF_KIND_SQL_ENUM})),
+    ref_id            TEXT NOT NULL,
+    verdict           TEXT NOT NULL,
+    confidence        REAL,
+    checker_meta      TEXT NOT NULL DEFAULT '{{}}',
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX idx_proposal_adjudication_ref
+    ON trace_proposal_adjudication(ref_kind, ref_id);
+
+-- Founder blur cache (007 KTD3): blur prose is cached TARGET-side, not
+-- episode-side — identical (registry digest, seed, params, prompt) yields
+-- byte-identical blur forever, so prose variance stays out of benchmark and
+-- validation runs. lint_verdict records the entailment-lint outcome.
+CREATE TABLE founder_blur_cache (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    target             TEXT NOT NULL,
+    ref_kind           TEXT NOT NULL CHECK (ref_kind IN ({_FOUNDER_REF_KIND_SQL_ENUM})),
+    ref_id             TEXT NOT NULL,
+    entry_digest       TEXT NOT NULL,
+    seed               INTEGER NOT NULL,
+    params_hash        TEXT NOT NULL,
+    prompt_set_version TEXT NOT NULL DEFAULT '',
+    blur_text          TEXT NOT NULL DEFAULT '',
+    lint_verdict       TEXT NOT NULL DEFAULT '',
+    UNIQUE (target, ref_kind, ref_id, entry_digest, seed, params_hash,
+            prompt_set_version)
+);
+
+-- Founder model (007 KTD3): one per greenfield episode. goal_statement ("what I
+-- want this product to do for me") derives from the JTBD-level registry summary,
+-- is always intact, and now has a home. params_hash pins the degradation params.
+CREATE TABLE founder_models (
+    episode_id     INTEGER PRIMARY KEY REFERENCES episodes(id),
+    target         TEXT NOT NULL,
+    seed           INTEGER NOT NULL,
+    params_hash    TEXT NOT NULL,
+    goal_statement TEXT NOT NULL DEFAULT ''
+);
+
+-- Founder knowledge (007 KTD3): the seeded degradation log — every registry ref
+-- the founder is intact / blurred / dropped on. blur_id points at the cached
+-- prose when state = blurred. Knowledge degrades; truthfulness never does.
+CREATE TABLE founder_knowledge (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL REFERENCES episodes(id),
+    ref_kind   TEXT NOT NULL CHECK (ref_kind IN ({_FOUNDER_REF_KIND_SQL_ENUM})),
+    ref_id     TEXT NOT NULL,
+    state      TEXT NOT NULL CHECK (state IN ({_FOUNDER_STATE_SQL_ENUM})),
+    blur_id    INTEGER REFERENCES founder_blur_cache(id)
+);
+CREATE INDEX idx_founder_knowledge_episode ON founder_knowledge(episode_id);
+
+-- The episode `world` axis (007 KTD6) — NOT mode. Runs/spans inherit world
+-- through episode_id (no new columns on them). Pre-007 episodes backfill
+-- 'brownfield' via the default.
+ALTER TABLE episodes ADD COLUMN world TEXT NOT NULL DEFAULT 'brownfield'
+    CHECK (world IN ({_WORLD_SQL_ENUM}));
+
+-- Insight provenance (007 KTD5): backfill predicate is explicit — batches
+-- labelled 'reflect-ep%' are the reflector's (stage_b convention); everything
+-- else is manual. researched/seeded are set going forward by af induct / the
+-- seed loader.
+ALTER TABLE insights ADD COLUMN provenance TEXT NOT NULL DEFAULT 'manual'
+    CHECK (provenance IN ({_INSIGHT_PROVENANCE_SQL_ENUM}));
+UPDATE insights SET provenance = 'reflector'
+    WHERE batch_id IN (SELECT id FROM batches WHERE label LIKE 'reflect-ep%');
+
+-- Batch validation-class (007 KTD5): the substrate-routing tag. Pre-007 batches
+-- backfill 'general' (both substrates).
+ALTER TABLE batches ADD COLUMN validation_class TEXT NOT NULL DEFAULT 'general'
+    CHECK (validation_class IN ({_VALIDATION_CLASS_SQL_ENUM}));
+
+-- Elicitation metrics block (007 KTD4/R5): settlement's world-keyed metrics ride
+-- alongside the existing report_json.
+ALTER TABLE settlement_reports
+    ADD COLUMN elicitation_metrics_json TEXT NOT NULL DEFAULT '{{}}';
+
+-- trace_req rebuild (007 KTD2): relax source_msg_id NOT NULL, add source_assume_id,
+-- and enforce exactly-one source at insert time (DB CHECK — earlier, simpler
+-- failure than a lint; the U3 lint catches it at the planner-output level first).
+-- legacy_alter_table keeps trace_tkt_covers/trace_ac FKs bound to `trace_req`.
+PRAGMA legacy_alter_table=ON;
+ALTER TABLE trace_req RENAME TO trace_req_phase4;
+CREATE TABLE trace_req (
+    id               TEXT PRIMARY KEY CHECK (id LIKE 'REQ-%'),
+    source_msg_id    TEXT REFERENCES trace_msg(id),
+    source_assume_id TEXT REFERENCES trace_assume(id),
+    CHECK ((source_msg_id IS NOT NULL) + (source_assume_id IS NOT NULL) = 1)
+);
+INSERT INTO trace_req (id, source_msg_id)
+    SELECT id, source_msg_id FROM trace_req_phase4;
+DROP TABLE trace_req_phase4;
+PRAGMA legacy_alter_table=OFF;
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
     (4, _SCHEMA_V4),
+    (5, _SCHEMA_V5),
 )
 
 
@@ -784,19 +1002,31 @@ class Store:
             "SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations"
         ).fetchone()
         current = row["v"]
-        for version, ddl in MIGRATIONS:
-            if version <= current:
-                continue
-            # executescript would implicitly COMMIT a transaction opened via
-            # transaction(), so the DDL + version stamp travel as one script
-            # with the transaction inside it.
-            self.conn.executescript(
-                "BEGIN IMMEDIATE;\n"
-                f"{ddl}\n"
-                "INSERT INTO schema_migrations (version, applied_at)"
-                f" VALUES ({int(version)}, '{_utcnow()}');\n"
-                "COMMIT;"
-            )
+        # Foreign keys OFF for the duration of the migration loop, per SQLite's
+        # documented table-rebuild procedure (lang_altertable.html §7). A
+        # rename-copy-drop rebuild of a *referenced* table (trace_req in v5, with
+        # trace_tkt_covers/trace_ac children) otherwise has its child FK
+        # references rewritten to the dropped temp table when foreign_keys is ON
+        # — even with legacy_alter_table. The pragma is a no-op inside a
+        # transaction, so it must be toggled here, between the per-migration
+        # executescripts (the connection is autocommit). Always restored to ON.
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            for version, ddl in MIGRATIONS:
+                if version <= current:
+                    continue
+                # executescript would implicitly COMMIT a transaction opened via
+                # transaction(), so the DDL + version stamp travel as one script
+                # with the transaction inside it.
+                self.conn.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    f"{ddl}\n"
+                    "INSERT INTO schema_migrations (version, applied_at)"
+                    f" VALUES ({int(version)}, '{_utcnow()}');\n"
+                    "COMMIT;"
+                )
+        finally:
+            self.conn.execute("PRAGMA foreign_keys = ON")
 
     # --- transactions --------------------------------------------------------
 

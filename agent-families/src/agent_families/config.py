@@ -14,7 +14,9 @@ from pathlib import Path
 
 DEFAULT_CONFIG_FILENAME = "thresholds.toml"
 
-_KNOWN_SECTIONS = ("embedding", "merge", "retrieval", "judge", "lifecycle", "store")
+_KNOWN_SECTIONS = (
+    "embedding", "merge", "retrieval", "judge", "lifecycle", "store", "greenfield"
+)
 
 
 class ConfigError(Exception):
@@ -57,6 +59,40 @@ class StoreConfig:
 
 
 @dataclass(frozen=True)
+class GreenfieldConfig:
+    """Plan 007 greenfield-mode tunables (founder degradation, gate, induction).
+
+    The section is OPTIONAL: a thresholds.toml without ``[greenfield]`` loads with
+    these documented defaults (the loader still fail-fasts on unknown keys or
+    out-of-range values WHEN the section is present). Phases A–C are
+    world-independent, so brownfield configs predating this plan keep working.
+    """
+
+    drop_rate: float
+    blur_rate: float
+    core_loop_n: int
+    rotation_fraction: float
+    gate_k: int
+    grace_window: int
+    seed_occupancy_cap: int
+    benchmark_seed: int
+
+
+# Defaults applied when [greenfield] is absent (Phase-0-provisional — no paper;
+# calibrate against pilot episodes per KTD3/KTD7/KTD9). Mirrors thresholds.toml.
+_GREENFIELD_DEFAULTS = GreenfieldConfig(
+    drop_rate=0.2,
+    blur_rate=0.3,
+    core_loop_n=5,
+    rotation_fraction=0.0,
+    gate_k=2,
+    grace_window=3,
+    seed_occupancy_cap=15,
+    benchmark_seed=1234,
+)
+
+
+@dataclass(frozen=True)
 class Config:
     embedding: EmbeddingConfig
     merge: MergeConfig
@@ -64,6 +100,9 @@ class Config:
     judge: JudgeConfig
     lifecycle: LifecycleConfig
     store: StoreConfig
+    # Defaulted (last field) so callers constructing a Config directly without a
+    # greenfield section keep working; load_config always passes it explicitly.
+    greenfield: GreenfieldConfig = _GREENFIELD_DEFAULTS
 
 
 # --- parsing helpers -------------------------------------------------------
@@ -186,6 +225,39 @@ def load_config(path: str | Path) -> Config:
     _non_negative_int("store", "busy_timeout_ms", busy_timeout_ms)
     _reject_extra(sto, "store")
 
+    # [greenfield] is optional (Plan 007): absent → documented defaults; present →
+    # every key validated, unknown keys rejected, out-of-range values rejected.
+    greenfield = _GREENFIELD_DEFAULTS
+    if "greenfield" in data:
+        grn = _require_table(data, "greenfield")
+        drop_rate = _take(grn, "greenfield", "drop_rate", float)
+        _unit_interval("greenfield", "drop_rate", drop_rate)
+        blur_rate = _take(grn, "greenfield", "blur_rate", float)
+        _unit_interval("greenfield", "blur_rate", blur_rate)
+        core_loop_n = _take(grn, "greenfield", "core_loop_n", int)
+        _positive_int("greenfield", "core_loop_n", core_loop_n)
+        rotation_fraction = _take(grn, "greenfield", "rotation_fraction", float)
+        _unit_interval("greenfield", "rotation_fraction", rotation_fraction)
+        gate_k = _take(grn, "greenfield", "gate_k", int)
+        _non_negative_int("greenfield", "gate_k", gate_k)
+        grace_window = _take(grn, "greenfield", "grace_window", int)
+        _non_negative_int("greenfield", "grace_window", grace_window)
+        seed_occupancy_cap = _take(grn, "greenfield", "seed_occupancy_cap", int)
+        _positive_int("greenfield", "seed_occupancy_cap", seed_occupancy_cap)
+        benchmark_seed = _take(grn, "greenfield", "benchmark_seed", int)
+        _non_negative_int("greenfield", "benchmark_seed", benchmark_seed)
+        _reject_extra(grn, "greenfield")
+        greenfield = GreenfieldConfig(
+            drop_rate=drop_rate,
+            blur_rate=blur_rate,
+            core_loop_n=core_loop_n,
+            rotation_fraction=rotation_fraction,
+            gate_k=gate_k,
+            grace_window=grace_window,
+            seed_occupancy_cap=seed_occupancy_cap,
+            benchmark_seed=benchmark_seed,
+        )
+
     return Config(
         embedding=EmbeddingConfig(model=model, dim=dim, device=device),
         merge=MergeConfig(cosine_threshold=cosine_threshold),
@@ -195,4 +267,5 @@ def load_config(path: str | Path) -> Config:
         judge=JudgeConfig(model=judge_model, max_retries=max_retries, bare=bare),
         lifecycle=LifecycleConfig(active_cap=active_cap),
         store=StoreConfig(busy_timeout_ms=busy_timeout_ms),
+        greenfield=greenfield,
     )
