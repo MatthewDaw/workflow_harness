@@ -46,7 +46,7 @@ holds, and the full offline suite is green.
 - [x] 004/U2 — Retrieval into prompts
 - [ ] 004/U3 — Run-scoped working memory
 - [x] 004/U4 — Kanboard onboarding + frozen micro-benchmark
-- [ ] 004/U5 — Reflector Stage A
+- [x] 004/U5 — Reflector Stage A
 - [ ] 004/U6 — Reflector Stage B and batch formation
 - [ ] 004/U7 — Validation and promotion
 - [ ] 004/U8 — Ratchet and skill split
