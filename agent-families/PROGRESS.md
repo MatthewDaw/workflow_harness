@@ -49,7 +49,7 @@ holds, and the full offline suite is green.
 - [x] 004/U5 — Reflector Stage A
 - [x] 004/U6 — Reflector Stage B and batch formation
 - [x] 004/U7 — Validation and promotion
-- [ ] 004/U8 — Ratchet and skill split
+- [x] 004/U8 — Ratchet and skill split
 - [ ] 004/U9 — Learning-cycle e2e
 
 ### Plan 005 — Phase 3b: Training at Scale (docs/plans/2026-06-10-005-feat-agent-families-phase3b-training-at-scale-plan.md)
