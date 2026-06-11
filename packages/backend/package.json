@@ -15,12 +15,18 @@
     "@aws-sdk/lib-dynamodb": "^3.693.0",
     "@aws-sdk/util-dynamodb": "^3.693.0",
     "@harness/shared": "*",
+    "@neondatabase/serverless": "^1.1.0",
     "@types/aws-lambda": "^8.10.161",
     "aws-jwt-verify": "^5.1.1",
+    "drizzle-orm": "^0.45.2",
     "jose": "^6.2.3",
+    "pg": "^8.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "aws-sdk-client-mock": "^4.1.0"
+    "@electric-sql/pglite": "^0.5.1",
+    "@types/pg": "^8.20.0",
+    "aws-sdk-client-mock": "^4.1.0",
+    "drizzle-kit": "^0.31.10"
   }
 }

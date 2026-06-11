@@ -74,7 +74,7 @@ The PRD wants every weekly commitment to map to a Supporting Outcome through a c
 ## Key Technical Decisions
 
 ### KTD7 — Persistence split: Postgres for the strategic-execution domain, DynamoDB for the operational domain
-The enforced SO link is a foreign key, the roll-up is a commit↔objective join, the manager roll-up and PRD metrics are `GROUP BY` aggregates, and `reconcile/complete` wants a transaction (stamp N source commits + insert N clones atomically). All of that is native in Postgres and awkward in Dynamo (fan-out reads, app-level integrity, no aggregation). So **objectives, `weekly_plans`, `weekly_commits`, and a slim `projects` mirror** move to Postgres. The **event/log stream, sessions, memories, skills/catalog, and device-auth stay on DynamoDB** — append-heavy, key-addressed, single-partition reads where Dynamo wins. Objectives move too (not just weekly) because they are the FK target of the SO link and a join partner in the roll-up. Infra: **Aurora Serverless v2 + the RDS Data API** (HTTP — no VPC wiring for the existing Lambdas), credentials in Secrets Manager (mirroring the device-token-secret pattern at `api-stack.ts:95`). Query layer: a typed TS client (**Drizzle or Kysely** — see Open Questions) with SQL migrations standing in for Flyway. The `projects` mirror (id, org, owner, name) is synced on project write so manager joins never reach back into Dynamo.
+The enforced SO link is a foreign key, the roll-up is a commit↔objective join, the manager roll-up and PRD metrics are `GROUP BY` aggregates, and `reconcile/complete` wants a transaction (stamp N source commits + insert N clones atomically). All of that is native in Postgres and awkward in Dynamo (fan-out reads, app-level integrity, no aggregation). So **objectives, `weekly_plans`, `weekly_commits`, and a slim `projects` mirror** move to Postgres. The **event/log stream, sessions, memories, skills/catalog, and device-auth stay on DynamoDB** — append-heavy, key-addressed, single-partition reads where Dynamo wins. Objectives move too (not just weekly) because they are the FK target of the SO link and a join partner in the roll-up. **Datastore: Neon serverless Postgres** (free tier, scales to zero — preserves the stack's zero-idle-cost ethos that Aurora would break) via its **HTTP driver** (`@neondatabase/serverless` / Drizzle `neon-http`), so the Lambdas need **no VPC wiring** (the property that originally made the RDS Data API attractive, without the standing cost). The Neon connection string lives in Secrets Manager and is injected as a Lambda env var (mirroring the device-token-secret pattern at `api-stack.ts:95`) — no Aurora cluster, no VPC, no Data API. **Query layer: Drizzle** (schema + migrations in one typed place — the Flyway stand-in). **Tests:** `pglite` (in-process WASM Postgres) so the repo layer runs in vitest with no live database; dev can use a local Docker Postgres or a Neon dev branch. The `projects` mirror (id, org, owner, name) is synced on project write so manager joins never reach back into Dynamo.
 
 ### KTD1 — Two relations: `weekly_plans` (the week) + `weekly_commits` (the items)
 `weekly_plans` is keyed `(project_id, iso_week)` and carries lifecycle `status`, transition timestamps, and the declared concentration `posture`. `weekly_commits` has a surrogate `id`, an FK to its plan, an FK to its Supporting Outcome (`supporting_outcome_id` — nullable only when `orphan_reason` is set, enforced by a CHECK), the derived `category`/`priority`, the reconciliation `status` + `actual_outcome`, and carry provenance (`carried_from_week`, `carried_to_week`, `carry_depth`). Replaces the Dynamo overloaded-SK design entirely.
@@ -204,24 +204,24 @@ Sessions, the event/log stream (now with a `ttl` attribute — KTD11), memories,
 
 ## Phase 0 — Postgres foundation
 
-Stand up Aurora + the query layer and move objectives onto Postgres before any weekly relation references them. Highest-risk infra; lands first.
+Stand up the Neon Postgres connection + Drizzle query layer and move objectives onto Postgres before any weekly relation references them. Highest-risk piece; lands first.
 
 **Success Criteria**
-- *Automated:* a migration creates the schema in a test/ephemeral Postgres; objectives repo unit tests pass against Postgres; the objectives REST suite passes repointed to Postgres; `cdk synth` includes the Aurora cluster + Data API.
-- *Manual:* deploy the cluster to a sandbox; confirm a Lambda reads/writes objectives via the Data API with no VPC attachment; confirm the Objectives screen renders unchanged off Postgres.
+- *Automated:* a migration creates the schema in a `pglite` (in-process) Postgres; objectives repo unit tests pass against pglite; the objectives REST suite passes repointed to Postgres; `cdk synth` succeeds with the Neon-connection secret + env wired (no Aurora/VPC resources).
+- *Manual (user-side — requires a deploy):* create a Neon project, set its connection string in Secrets Manager; deploy; confirm a Lambda reaches Neon over the HTTP driver (no VPC) and the Objectives screen renders unchanged off Postgres.
 
 *Pause for human confirmation before Phase 1.*
 
-### U15. Aurora Serverless v2 + RDS Data API + typed query layer
+### U15. Neon Postgres connection + Drizzle query layer
 
-- **Goal:** A reachable Postgres with a typed TS client and migration runner, wired into the Lambda stack.
+- **Goal:** A reachable Postgres with a typed Drizzle client and migration runner, wired into the Lambda stack — no VPC, no cluster.
 - **Requirements:** R7 (enabler), R6 (enabler).
 - **Dependencies:** none.
-- **Files:** `infra/lib/api-stack.ts` (Aurora Serverless v2 cluster, `enableDataApi`, DB credentials Secret, grant Data-API + secret-read to the handler Lambdas, inject cluster ARN + secret ARN as env); `packages/backend/src/db/pg/client.ts` *(new)*; `packages/backend/src/db/pg/migrate.ts` *(new)*; `infra/scripts/` migration hook.
-- **Approach:** Mirror the device-token Secret pattern (`api-stack.ts:95`) for DB creds. Use the RDS Data API (HTTP) so no VPC/security-group plumbing touches the existing Lambdas. Pick Drizzle or Kysely (Open Questions) — both support the Data API driver. `client.ts` exposes a thin `query`/`transaction` API the repos consume; `migrate.ts` applies ordered SQL migrations (the Flyway stand-in) and is invoked in CI/deploy before handler cutover.
-- **Patterns to follow:** the Secrets-Manager dynamic-reference + `commonEnv` injection already in `api-stack.ts`; the esbuild bundle/`fromAsset` Lambda packaging.
-- **Test scenarios:** *Happy path:* `migrate` against an ephemeral Postgres creates all tables; `client.query` round-trips a row. *Edge:* re-running `migrate` is idempotent (no-op on an up-to-date schema). *Error:* a failed migration aborts without partial apply (transactional DDL where supported). *Integration:* a bundled Lambda reaches the cluster via the Data API using only the injected ARNs (no VPC).
-- **Verification:** `cdk synth` shows the cluster + Data API; a Lambda performs a round-trip query in the sandbox.
+- **Files:** `infra/lib/api-stack.ts` (a Secrets-Manager secret `command-hq/neon-database-url` + inject its value as the `DATABASE_URL` Lambda env via the dynamic-reference path used for the device-token secret — no Aurora/VPC resources); `packages/backend/src/db/pg/client.ts` *(new)*; `packages/backend/src/db/pg/migrate.ts` *(new)*; `packages/backend/src/db/pg/migrations/` *(new)*; `packages/backend/package.json` (add `drizzle-orm`, `@neondatabase/serverless`, `pg`; dev `drizzle-kit`, `@electric-sql/pglite`).
+- **Approach:** `client.ts` builds a Drizzle instance, selecting the driver by env: the **Neon HTTP driver** (`drizzle-orm/neon-http`) in Lambda from `DATABASE_URL` (HTTP — no VPC/security-group plumbing), and a **pglite** instance in tests (`drizzle-orm/pglite`) so the suite needs no live DB. The secret carries the full Neon connection URL (mirroring the device-token-secret dynamic reference at `api-stack.ts:95`). `migrate.ts` applies the ordered SQL files in `migrations/` (the Flyway stand-in) via `drizzle-kit`-generated SQL; it runs in CI/deploy before handler cutover and is also callable against pglite in tests.
+- **Patterns to follow:** the Secrets-Manager dynamic-reference + `commonEnv` injection already in `api-stack.ts:95,122`; the esbuild bundle/`fromAsset` Lambda packaging (ensure the Neon driver bundles).
+- **Test scenarios:** *Happy path:* `migrate` against a fresh pglite creates all tables; a `client` insert+select round-trips. *Edge:* re-running `migrate` is idempotent (no-op on an up-to-date schema). *Error:* a malformed migration aborts without partial apply. *Integration:* the same `client` API works over both the pglite and Neon-HTTP drivers (driver-selection is the only difference).
+- **Verification:** `cdk synth` succeeds with the Neon secret + `DATABASE_URL` env wired and no Aurora/VPC resources; `migrate` + a round-trip pass against pglite in vitest.
 
 ### U16. Migrate objectives (RCDO tree) to Postgres
 
@@ -498,7 +498,7 @@ Plan-anchored agent, calibration feedback, legacy migration, event-stream TTL.
 
 ## Open Questions (resolve during implementation)
 
-1. **Query layer (U15):** Drizzle vs. Kysely for the RDS Data API. Both work; pick on migration ergonomics + Data-API driver maturity. Default: Drizzle (schema + migrations in one place).
+1. **Datastore + query layer (U15):** ~~Aurora vs. alternatives; Drizzle vs. Kysely~~ — **resolved: Neon serverless Postgres (free tier, scales to zero) + Drizzle, with pglite for tests** (KTD7). Chosen as the cheapest option that preserves the stack's zero-idle-cost and no-VPC properties.
 2. **WSJF weighting source (KTD4/U6):** where the RCDO `weight` and "behind-ness" come from — an explicit `weight` column on objectives (added in U16) vs. derived from tree depth. Default: explicit `weight` column, default 1.0.
 3. **Declared-posture granularity (KTD8/U17):** is `posture` per-week, per-project, or per-person-quarter? Default: per-week on the plan (simplest); revisit if it's too noisy.
 4. **Manager scope vs. admin (KTD6/U8):** do admins also get an org-wide brief alongside the reports-scoped one? Default: reports-scoped only for v1; admin org-wide is a flag if needed.
