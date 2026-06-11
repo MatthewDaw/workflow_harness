@@ -302,6 +302,82 @@ and the claude CLI logged in on the subscription. The docker-required tests
 the live full episode chains those pieces with the explorer sessions. Record the observed
 score, cost, and the clone's start command under `## Probe findings` in PROGRESS.md.
 
+## Phase 3a: closing the learning loop (plan 004)
+
+Phase 3a is where the system finally **learns from its own episodes**. Plans 0–3 built
+a library nothing read, a pipeline that did not learn, and a grader whose findings a
+human turned into ideas. Phase 3a wires the loop end to end:
+
+1. **Retrieval into prompts** (`library/retrieval.py`) makes the library consequential —
+   the planner/worker/verifier each embed a per-family query, rank the family's active
+   skills by max member-insight cosine, and inject a budget-bounded, whole-skill section
+   into their prompt.
+2. **Run-scoped working memory** (`pipeline/runmemory.py`) gives within-episode learning:
+   a verifier-pass induces a typed workflow that later workers retrieve (ranked above the
+   library), and survives to nomination only if its source ticket is UAT-accepted and
+   unimplicated in any failed scenario.
+3. **The automated reflector** (`reflector/`) replaces the human. **Stage A**
+   (`stage_a.py`) attributes each failed scenario deterministically over the `af trace
+   chain` join — the LLM is consulted only for two narrow micro-judgments, never as the
+   attributor — and sinks explorer/grader faults to instrument-health records. **Stage B**
+   (`stage_b.py`) clusters the failures and runs one stingy, counterfactual reflection per
+   cluster (0–1 ideas, explicit no-lesson permission, a per-episode budget), registering
+   survivors as a quarantined batch through the Phase 0 `add_idea` gauntlet.
+4. **Validation and promotion** (`validate.py`) is the gate that keeps a plausible-but-wrong
+   lesson out by default: an optional failed-slice **trial replay** (diagnostic only) plus
+   a **required benchmark gate** against a held-out **Kanboard** micro-benchmark
+   (`grading/benchmark.py`, `targets/kanboard/`) that is never trained on. **Benchmark wins
+   all conflicts.** During the bootstrap regime a human **co-signs** every promote; reverts
+   are default-deny and need no human action. Promote/revert flows through the single-writer
+   queue.
+5. **Ratchet and the first self-reorganization** (`maintenance.py`): settlement writes the
+   append-only fitness log (retrieval = rendered, win = done-and-unimplicated, loss =
+   causal-blame-only; trial/benchmark events land in a separate channel the ratchet never
+   reads), then a post-promotion maintenance pass retires persistent losers, runs the cap
+   tournament, and splits oversized skills.
+
+### Why Kanboard onboards here
+
+The required validation check is unimplementable without a **held-out second target**:
+non-regression on the training target (linkding) measures memorization, not
+generalization. So Kanboard onboards in Phase 3a — pinned by digest, seeded through the
+target-generic Phase 2 harness — and its frozen 12–20 must-tier scenario slice (fixed
+frontier, fixed seed, `mode=benchmark`) is the instrument the ratchet reads. Replicate
+benchmark episodes at an unchanged snapshot quantify the benchmark-instrument σ the
+bootstrap revert threshold consumes.
+
+### The offline learning-cycle e2e
+
+`tests/test_e2e_learning.py` drives the **whole loop on fixtures** — a planted training
+failure → Stage A attribution → Stage B batch → trial replay + benchmark gate + bootstrap
+co-sign → promote → the *next* episode's planner retrieval provably injects the learned
+insight → settlement fitness + maintenance. It runs offline (zero quota, no Docker, no
+`claude`): the benchmark/replay episodes are typed results, the placement judge is a
+record/replay fixture, and the embedder is a directional fake so the cosine that links the
+learned insight to the next query is real. The revert arm proves the mirror image — a
+benchmark regression leaves the follow-up prompt byte-identical to its bare form.
+
+### The live learning cycle (manual, not CI)
+
+Running one **live** cycle is the documented procedure that demonstrates "the loop closes
+on a real target." Prerequisites: Docker Desktop (the pinned linkding *and* Kanboard
+stacks — `targets/linkding/`, `targets/kanboard/`), Playwright (the dual-app drivers), and
+the claude CLI logged in on the **subscription**. The cycle, end to end:
+
+1. **Train** — run one real linkding episode (the Phase 2 live procedure), settle it.
+2. **Reflect** — run Stage A then Stage B over the settled episode; the reflector produces
+   a quarantined batch with full provenance (`af episode report`, `af trace chain`).
+3. **Benchmark** — run the held-out **Kanboard** micro-benchmark mini-episode at the
+   candidate snapshot (`mode=benchmark`); it must not regress.
+4. **Co-sign** — in the bootstrap regime a human reviews the decision and **co-signs** the
+   promote (a revert needs no co-sign).
+5. **Promote** — the batch promotes through the queue; the next episode's retrieval injects
+   the new insight.
+
+Record the observed **score, cost** (reflection + validation are new spend, metered as
+separate line items via Phase 1's cost fields), and the clone's start command under
+`## Probe findings` in PROGRESS.md before Plan 5 begins.
+
 ## Layout
 
 ```text
