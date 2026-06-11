@@ -44,7 +44,7 @@ holds, and the full offline suite is green.
 ### Plan 004 — Phase 3a: Close the Learning Loop (docs/plans/2026-06-10-004-feat-agent-families-phase3a-learning-loop-plan.md)
 - [x] 004/U1 — Schema spine migration
 - [x] 004/U2 — Retrieval into prompts
-- [ ] 004/U3 — Run-scoped working memory
+- [x] 004/U3 — Run-scoped working memory
 - [x] 004/U4 — Kanboard onboarding + frozen micro-benchmark
 - [x] 004/U5 — Reflector Stage A
 - [ ] 004/U6 — Reflector Stage B and batch formation
