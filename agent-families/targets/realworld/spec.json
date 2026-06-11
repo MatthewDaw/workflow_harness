@@ -1,0 +1,81 @@
+{
+  "_comment": "The published-spec-derived CALIBRATION slice for RealWorld/Conduit (plan-005 U7, R4). Each scenario carries a `reference` verdict DERIVED FROM THE PUBLISHED SPEC (not our inference) — the independent ground truth the grader's own verdict is Gauge-R&R'd against. The pre-screen (Approach): execute the slice once against the pinned implementation, hand-adjudicate every spec/implementation divergence, and mark deviating behaviors `screen: exclude` with a rationale so TARGET error never lands in the grader's calibration number (the Gauge-R&R denominator is the screened set only). Re-pinning the implementation re-runs the pre-screen — a recorded apparatus migration, not an edit. Offline, tests/test_e2e_scale.py synthesizes the target observation per scenario and grades it with grading.scenarios.check_post_assertion (the real deterministic grader primitive), then quantifies grader-vs-spec agreement.",
+  "version": 1,
+  "spec_source": "https://github.com/gothinkster/realworld (the RealWorld API + frontend spec; Conduit reference implementation)",
+  "target": "realworld",
+  "archetype": "articles",
+  "scenarios": [
+    {
+      "scenario_id": "RW-global-feed/global-feed",
+      "feat_id": "FEAT-RW-global-feed",
+      "title": "The global feed lists published articles",
+      "post_assertion": { "kind": "node_present", "role": "link", "name": "Calibrating a grader against a published spec" },
+      "reference": "pass",
+      "screen": "include",
+      "screen_rationale": "Spec: the home page Global Feed lists articles newest-first; the implementation matches."
+    },
+    {
+      "scenario_id": "RW-article-view/article-view",
+      "feat_id": "FEAT-RW-article-view",
+      "title": "Opening an article shows its title",
+      "post_assertion": { "kind": "node_present", "role": "heading", "name": "Calibrating a grader against a published spec" },
+      "reference": "pass",
+      "screen": "include",
+      "screen_rationale": "Spec: the article page renders the article body under its title heading; the implementation matches."
+    },
+    {
+      "scenario_id": "RW-sign-in/sign-in-reachable",
+      "feat_id": "FEAT-RW-sign-in",
+      "title": "The sign-in page is reachable",
+      "post_assertion": { "kind": "node_present", "role": "button", "name": "Sign in" },
+      "reference": "pass",
+      "screen": "include",
+      "screen_rationale": "Spec: an unauthenticated user can reach the Sign in form; the implementation matches."
+    },
+    {
+      "scenario_id": "RW-popular-tags/popular-tags",
+      "feat_id": "FEAT-RW-popular-tags",
+      "title": "The popular-tags sidebar lists seeded tags",
+      "post_assertion": { "kind": "node_present", "role": "link", "name": "calibration" },
+      "reference": "pass",
+      "screen": "include",
+      "screen_rationale": "Spec: the home sidebar lists popular tags as filter links; the implementation matches."
+    },
+    {
+      "scenario_id": "RW-nested-comment-replies/nested-replies",
+      "feat_id": "FEAT-RW-nested-comment-replies",
+      "title": "Nested comment replies are NOT supported",
+      "post_assertion": { "kind": "node_present", "role": "button", "name": "Reply to comment" },
+      "reference": "fail",
+      "screen": "include",
+      "screen_rationale": "Spec: comments are a flat list — nested/threaded replies are explicitly out of scope, so a faithful grader checking for a reply control must return fail. The implementation correctly lacks it."
+    },
+    {
+      "scenario_id": "RW-emoji-reactions/emoji-reactions",
+      "feat_id": "FEAT-RW-emoji-reactions",
+      "title": "Emoji reactions on articles are NOT supported",
+      "post_assertion": { "kind": "node_present", "role": "button", "name": "React with emoji" },
+      "reference": "fail",
+      "screen": "include",
+      "screen_rationale": "Spec: articles support favorites only, never emoji reactions — an unsupported feature a faithful grader returns fail on. The implementation correctly lacks it."
+    },
+    {
+      "scenario_id": "RW-article-date-format/date-format",
+      "feat_id": "FEAT-RW-article-date-format",
+      "title": "Article date renders in the spec's long format",
+      "post_assertion": { "kind": "node_present", "role": "text", "name": "January 1, 2024" },
+      "reference": "pass",
+      "screen": "exclude",
+      "screen_rationale": "PRE-SCREEN DIVERGENCE: the spec shows article dates in 'Month D, YYYY' format, but this pinned implementation renders ISO 8601 ('2024-01-01'). The grader cannot match the spec-derived node, but the miss is a TARGET deviation, not a grader fault — excluded from the Gauge-R&R denominator (R4)."
+    },
+    {
+      "scenario_id": "RW-pagination/numbered-pagination",
+      "feat_id": "FEAT-RW-pagination",
+      "title": "The feed offers numbered pagination controls",
+      "post_assertion": { "kind": "node_present", "role": "link", "name": "2" },
+      "reference": "pass",
+      "screen": "exclude",
+      "screen_rationale": "PRE-SCREEN DIVERGENCE: the spec specifies numbered pagination (page links 1, 2, 3…), but this pinned implementation uses infinite scroll and renders no page-number links. A TARGET deviation, not a grader fault — excluded from the Gauge-R&R denominator (R4)."
+    }
+  ]
+}
