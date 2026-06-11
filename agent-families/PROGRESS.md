@@ -53,7 +53,7 @@ holds, and the full offline suite is green.
 - [x] 004/U9 — Learning-cycle e2e
 
 ### Plan 005 — Phase 3b: Training at Scale (docs/plans/2026-06-10-005-feat-agent-families-phase3b-training-at-scale-plan.md)
-- [ ] 005/U1 — Benchmark suite and epochs
+- [x] 005/U1 — Benchmark suite and epochs
 - [ ] 005/U2 — Rehearsal pass and one-shot metric
 - [ ] 005/U3 — Improvement-tier grading
 - [ ] 005/U4 — Family router and agent splitting
