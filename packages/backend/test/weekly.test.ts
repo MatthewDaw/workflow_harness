@@ -1,28 +1,31 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Project, WeeklyUpdate } from '@harness/shared';
-import { getWeekly, publishWeekly, putWeekly } from '../src/rest/weekly.js';
-import { recomputeOrgRollup } from '../src/projections/rollupRepo.js';
+import type { Project, WeeklyCommit, WeeklyPlan } from '@harness/shared';
 import {
-  getObjective as pgGetObjective,
-  putObjective as pgPutObjective,
-} from '../src/db/pg/objectivesRepo.js';
+  createCommit,
+  deleteCommit,
+  getWeekly,
+  listWeekly,
+  updateCommit,
+} from '../src/rest/weekly.js';
+import { putObjective as pgPutObjective } from '../src/db/pg/objectivesRepo.js';
+import { upsertPlan } from '../src/db/pg/weeklyRepo.js';
 import type { PgDb } from '../src/db/pg/migrate.js';
 import { memRepoHarness } from './helpers/memtable.js';
 import { makePgliteDb } from './helpers/pgharness.js';
 import { bodyOf, deviceTokenEvent, httpEvent } from './helpers/httpevent.js';
 
 /**
- * U4 REST: weekly updates are now store/serve for a client-posted report. PUT
- * stores the report (free-form `done`/`plan` summaries + a never-blocking
- * `conformityScore`); re-store overwrites; publish marks validated and recomputes
- * the org roll-up (which derives completion from project progress, not the
- * report). Weekly is scoped to the project owner.
+ * U3 REST: itemized weekly commit CRUD + week read (Postgres-backed). A commit
+ * carries EITHER a Supporting Outcome OR a typed orphan reason (KTD10); the
+ * chess-layer `category`/`priorityNumeric` are DERIVED server-side (KTD4) and
+ * client-sent values are ignored. Planned fields freeze at LOCK — create/update/
+ * delete on a non-DRAFT week is a 409. Weekly is scoped to the project owner.
  */
 
 const { repo } = memRepoHarness();
 
-// Objectives live in Postgres (KTD7/U16): a fresh pglite DB per test, injected
-// into the weekly deps so publish's roll-up recompute writes to it.
+// Objectives + weekly relations live in Postgres (KTD7): a fresh pglite DB per
+// test, injected into the weekly deps.
 let db: PgDb;
 beforeEach(async () => {
   db = await makePgliteDb();
@@ -38,14 +41,39 @@ function project(owner: string): Project {
   return { id: PROJ, name: PROJ, repo: 'gh/acme/wc', ownerUserId: owner, liveSessionCount: 0 };
 }
 
-function putEvent(userId: string, body: unknown) {
+async function seedSo(id: string): Promise<void> {
+  await pgPutObjective(db, { id, org: ORG, level: 'supporting_outcome', title: id });
+}
+
+function createEvent(userId: string, body: unknown) {
+  return httpEvent({
+    method: 'POST',
+    userId,
+    org: ORG,
+    rawPath: `/projects/${PROJ}/weekly/${WEEK}/commits`,
+    path: { pid: PROJ, week: WEEK },
+    body,
+  });
+}
+
+function updateEvent(userId: string, cid: string, body: unknown) {
   return httpEvent({
     method: 'PUT',
     userId,
     org: ORG,
-    rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
-    path: { pid: PROJ, week: WEEK },
+    rawPath: `/projects/${PROJ}/weekly/${WEEK}/commits/${cid}`,
+    path: { pid: PROJ, week: WEEK, cid },
     body,
+  });
+}
+
+function deleteEvent(userId: string, cid: string) {
+  return httpEvent({
+    method: 'DELETE',
+    userId,
+    org: ORG,
+    rawPath: `/projects/${PROJ}/weekly/${WEEK}/commits/${cid}`,
+    path: { pid: PROJ, week: WEEK, cid },
   });
 }
 
@@ -59,145 +87,249 @@ function getEvent(userId: string) {
   });
 }
 
-function publishEvent(userId: string) {
+function listEvent(userId: string) {
   return httpEvent({
-    method: 'POST',
+    method: 'GET',
     userId,
     org: ORG,
-    rawPath: `/projects/${PROJ}/weekly/${WEEK}/publish`,
-    path: { pid: PROJ, week: WEEK },
+    rawPath: `/projects/${PROJ}/weekly`,
+    path: { pid: PROJ },
   });
 }
 
-describe('store + serve a posted report', () => {
-  it('stores a report (validated false) and serves it back via GET', async () => {
+describe('create + serve itemized commits', () => {
+  it('creates an SO commit and an orphan commit; the week auto-DRAFTs; GET returns both with derived chess fields', async () => {
     await repo.putProject(project(MATT));
-    const res = await putWeekly(
-      putEvent(MATT, {
-        done: 'Shipped reconciliation and export.',
-        plan: 'Harden the importer; start the dashboard.',
-        conformityScore: 82,
+    await seedSo('so-a');
+
+    const r1 = await createCommit(
+      createEvent(MATT, { title: 'Ship reconciliation', supportingOutcomeId: 'so-a' }),
+      deps(),
+    );
+    expect(r1).toMatchObject({ statusCode: 201 });
+    const r2 = await createCommit(
+      createEvent(MATT, { title: 'Patch the incident', orphanReason: 'Incident' }),
+      deps(),
+    );
+    expect(r2).toMatchObject({ statusCode: 201 });
+
+    const served = await getWeekly(getEvent(MATT), deps());
+    const { week } = bodyOf<{ week: { plan: WeeklyPlan; commits: WeeklyCommit[] } }>(served);
+    // The week was auto-created as DRAFT on first commit write.
+    expect(week.plan.status).toBe('DRAFT');
+    expect(week.commits).toHaveLength(2);
+
+    const linked = week.commits.find((c) => c.supportingOutcomeId === 'so-a')!;
+    expect(linked.category).toBe('Delivery'); // derived (U6 refines)
+    expect(typeof linked.priorityNumeric).toBe('number');
+
+    const orphan = week.commits.find((c) => c.orphanReason === 'Incident')!;
+    // An orphan commit's reason IS its category (KTD10/KTD4).
+    expect(orphan.category).toBe('Incident');
+  });
+
+  it('lists every week with its commits', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    await createCommit(createEvent(MATT, { title: 'A', supportingOutcomeId: 'so-a' }), deps());
+
+    const res = await listWeekly(listEvent(MATT), deps());
+    const { weeks } = bodyOf<{ weeks: { plan: WeeklyPlan; commits: WeeklyCommit[] }[] }>(res);
+    expect(weeks).toHaveLength(1);
+    expect(weeks[0]!.plan.isoWeek).toBe(WEEK);
+    expect(weeks[0]!.commits).toHaveLength(1);
+  });
+
+  it('ignores client-sent category/priority in favour of the derived values', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    const res = await createCommit(
+      createEvent(MATT, {
+        title: 'Forge the fields',
+        supportingOutcomeId: 'so-a',
+        category: 'Strategic',
+        priorityNumeric: 9999,
       }),
       deps(),
     );
-    expect(res).toMatchObject({ statusCode: 200 });
-
-    const served = await getWeekly(getEvent(MATT), deps());
-    const { update } = bodyOf<{ update: WeeklyUpdate }>(served);
-    expect(update.validated).toBe(false);
-    expect(update.done).toBe('Shipped reconciliation and export.');
-    expect(update.plan).toBe('Harden the importer; start the dashboard.');
-    expect(update.conformityScore).toBe(82); // conformity round-trips
+    const { commit } = bodyOf<{ commit: WeeklyCommit }>(res);
+    expect(commit.category).toBe('Delivery'); // not the client's 'Strategic'
+    expect(commit.priorityNumeric).not.toBe(9999); // not the client's number
   });
+});
 
-  it('re-store overwrites the week', async () => {
+describe('SO-or-orphan + dangling-SO enforcement', () => {
+  it('rejects a commit with neither an SO nor an orphan reason (400)', async () => {
     await repo.putProject(project(MATT));
-    await putWeekly(putEvent(MATT, { done: 'first', plan: 'a' }), deps());
-    await putWeekly(putEvent(MATT, { done: 'second', plan: 'b', conformityScore: 50 }), deps());
-    const stored = await repo.getWeekly(PROJ, WEEK);
-    expect(stored?.done).toBe('second');
-    expect(stored?.plan).toBe('b');
-    expect(stored?.conformityScore).toBe(50);
-  });
-
-  it('a report without a conformity score stores and serves without one', async () => {
-    await repo.putProject(project(MATT));
-    await putWeekly(putEvent(MATT, { done: 'work', plan: 'more work' }), deps());
-    const stored = await repo.getWeekly(PROJ, WEEK);
-    expect(stored?.conformityScore).toBeUndefined();
-  });
-
-  it('rejects a malformed body (out-of-range conformity score)', async () => {
-    await repo.putProject(project(MATT));
-    const res = await putWeekly(putEvent(MATT, { done: 'x', conformityScore: 150 }), deps());
+    const res = await createCommit(createEvent(MATT, { title: 'Floating work' }), deps());
     expect(res).toMatchObject({ statusCode: 400 });
   });
 
-  it('404s for a non-owner', async () => {
-    await repo.putProject(project('alice'));
+  it('rejects a dangling supportingOutcomeId (400)', async () => {
+    await repo.putProject(project(MATT));
+    const res = await createCommit(
+      createEvent(MATT, { title: 'Link to nothing', supportingOutcomeId: 'so-missing' }),
+      deps(),
+    );
+    expect(res).toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('planned fields freeze at LOCK', () => {
+  it('409s a create when the week is LOCKED', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    const locked: WeeklyPlan = { projectId: PROJ, isoWeek: WEEK, status: 'LOCKED', posture: 'focus' };
+    await upsertPlan(db, locked);
+
+    const res = await createCommit(
+      createEvent(MATT, { title: 'Too late', supportingOutcomeId: 'so-a' }),
+      deps(),
+    );
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+
+  it('409s an update when the week is LOCKED', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    // Create while DRAFT, then lock.
+    const created = await createCommit(
+      createEvent(MATT, { title: 'Editable', supportingOutcomeId: 'so-a' }),
+      deps(),
+    );
+    const { commit } = bodyOf<{ commit: WeeklyCommit }>(created);
+    await upsertPlan(db, { projectId: PROJ, isoWeek: WEEK, status: 'LOCKED', posture: 'focus' });
+
+    const res = await updateCommit(updateEvent(MATT, commit.id, { title: 'Edited' }), deps());
+    expect(res).toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe('update + delete', () => {
+  it('updates a commit title during DRAFT', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    const created = await createCommit(
+      createEvent(MATT, { title: 'Original', supportingOutcomeId: 'so-a' }),
+      deps(),
+    );
+    const { commit } = bodyOf<{ commit: WeeklyCommit }>(created);
+
+    const res = await updateCommit(updateEvent(MATT, commit.id, { title: 'Renamed' }), deps());
+    expect(res).toMatchObject({ statusCode: 200 });
+    const { commit: updated } = bodyOf<{ commit: WeeklyCommit }>(res);
+    expect(updated.title).toBe('Renamed');
+  });
+
+  it('re-derives the category when an SO commit becomes an orphan', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    const created = await createCommit(
+      createEvent(MATT, { title: 'Switcheroo', supportingOutcomeId: 'so-a' }),
+      deps(),
+    );
+    const { commit } = bodyOf<{ commit: WeeklyCommit }>(created);
+    expect(commit.category).toBe('Delivery');
+
+    const res = await updateCommit(
+      updateEvent(MATT, commit.id, { supportingOutcomeId: null, orphanReason: 'Exploration' }),
+      deps(),
+    );
+    const { commit: updated } = bodyOf<{ commit: WeeklyCommit }>(res);
+    expect(updated.supportingOutcomeId).toBeUndefined();
+    expect(updated.orphanReason).toBe('Exploration');
+    expect(updated.category).toBe('Exploration');
+  });
+
+  it('404s a DELETE for a missing commit', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    // Make the DRAFT plan exist so the freeze check passes through to the lookup.
+    await createCommit(createEvent(MATT, { title: 'A', supportingOutcomeId: 'so-a' }), deps());
+
+    const res = await deleteCommit(deleteEvent(MATT, 'does-not-exist'), deps());
+    expect(res).toMatchObject({ statusCode: 404 });
+  });
+
+  it('deletes a commit during DRAFT', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    const created = await createCommit(
+      createEvent(MATT, { title: 'Doomed', supportingOutcomeId: 'so-a' }),
+      deps(),
+    );
+    const { commit } = bodyOf<{ commit: WeeklyCommit }>(created);
+
+    const res = await deleteCommit(deleteEvent(MATT, commit.id), deps());
+    expect(res).toMatchObject({ statusCode: 200 });
+
+    const served = await getWeekly(getEvent(MATT), deps());
+    const { week } = bodyOf<{ week: { commits: WeeklyCommit[] } }>(served);
+    expect(week.commits).toHaveLength(0);
+  });
+});
+
+describe('week read edge cases', () => {
+  it('404s GET for a week that has never been written', async () => {
+    await repo.putProject(project(MATT));
     const res = await getWeekly(getEvent(MATT), deps());
     expect(res).toMatchObject({ statusCode: 404 });
   });
 });
 
-describe('publish recomputes the org roll-up', () => {
-  it('flips validated and recomputes objective % from project progress', async () => {
-    // The project owns SO-a and reports 75% complete (the GitHub-sourced number).
-    await repo.putProject({
-      ...project(MATT),
-      progressPct: 75,
-      supportingOutcomeIds: ['so-a'],
-    } as Project & { supportingOutcomeIds: string[] });
-    await pgPutObjective(db, { id: 'so-a', org: ORG, level: 'supporting_outcome', title: 'SO A' });
-
-    // Establish a baseline cached %.
-    await recomputeOrgRollup(db, repo, ORG, [PROJ]);
-    expect((await pgGetObjective(db, ORG, 'so-a'))?.pct).toBe(75);
-
-    await putWeekly(putEvent(MATT, { done: 'shipped', plan: 'next', conformityScore: 90 }), deps());
-
-    const res = await publishWeekly(publishEvent(MATT), deps());
-    expect(res).toMatchObject({ statusCode: 200 });
-    const { update } = bodyOf<{ update: WeeklyUpdate }>(res);
-    expect(update.validated).toBe(true);
-    expect(update.conformityScore).toBe(90);
-    // Publish re-ran the roll-up: the linked SO reflects the project's progress.
-    expect((await pgGetObjective(db, ORG, 'so-a'))?.pct).toBe(75);
-  });
-
-  it('404s publish for a missing week', async () => {
-    await repo.putProject(project(MATT));
-    const res = await publishWeekly(publishEvent(MATT), deps());
-    expect(res).toMatchObject({ statusCode: 404 });
-  });
-});
-
-describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () => {
-  // The weekly routes use HttpNoneAuthorizer, so the PTY's device token arrives
-  // as a raw `Authorization: Bearer` header (no jwt.claims). resolvePrincipal
-  // must verify it (HS256, offline) and the request must succeed under ownership.
-  const bearerPutEvent = (userId: string, body: unknown) =>
-    deviceTokenEvent({
-      method: 'PUT',
-      userId,
-      org: ORG,
-      rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
-      path: { pid: PROJ, week: WEEK },
-      body,
-    });
-
-  it('stores a posted report authenticated by a device token', async () => {
-    await repo.putProject(project(MATT));
-    const res = await putWeekly(
-      await bearerPutEvent(MATT, { done: 'via device token', plan: 'x' }),
+describe('auth', () => {
+  it('404s a non-owner (no enumeration)', async () => {
+    await repo.putProject(project('alice'));
+    await seedSo('so-a');
+    const res = await createCommit(
+      createEvent(MATT, { title: 'Sneaky', supportingOutcomeId: 'so-a' }),
       deps(),
     );
-    expect(res).toMatchObject({ statusCode: 200 });
-    const stored = await repo.getWeekly(PROJ, WEEK);
-    expect(stored?.done).toBe('via device token');
+    expect(res).toMatchObject({ statusCode: 404 });
   });
 
   it('401s when there is neither jwt claims nor a bearer token', async () => {
     await repo.putProject(project(MATT));
-    const res = await putWeekly(
+    const res = await createCommit(
       httpEvent({
-        method: 'PUT',
+        method: 'POST',
         userId: null,
+        rawPath: `/projects/${PROJ}/weekly/${WEEK}/commits`,
         path: { pid: PROJ, week: WEEK },
-        rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
-        body: { done: 'x', plan: 'y' },
+        body: { title: 'x', orphanReason: 'KTLO' },
       }),
       deps(),
     );
     expect(res).toMatchObject({ statusCode: 401 });
   });
 
-  it('404s a device token whose user does not own the project (no enumeration)', async () => {
+  it('creates a commit authenticated by a device token', async () => {
     await repo.putProject(project(MATT));
-    const res = await putWeekly(
-      await bearerPutEvent('someone-else', { done: 'x', plan: 'y' }),
-      deps(),
-    );
+    await seedSo('so-a');
+    const event = await deviceTokenEvent({
+      method: 'POST',
+      userId: MATT,
+      org: ORG,
+      rawPath: `/projects/${PROJ}/weekly/${WEEK}/commits`,
+      path: { pid: PROJ, week: WEEK },
+      body: { title: 'via device token', supportingOutcomeId: 'so-a' },
+    });
+    const res = await createCommit(event, deps());
+    expect(res).toMatchObject({ statusCode: 201 });
+  });
+
+  it('404s a device token whose user does not own the project', async () => {
+    await repo.putProject(project(MATT));
+    await seedSo('so-a');
+    const event = await deviceTokenEvent({
+      method: 'POST',
+      userId: 'someone-else',
+      org: ORG,
+      rawPath: `/projects/${PROJ}/weekly/${WEEK}/commits`,
+      path: { pid: PROJ, week: WEEK },
+      body: { title: 'x', supportingOutcomeId: 'so-a' },
+    });
+    const res = await createCommit(event, deps());
     expect(res).toMatchObject({ statusCode: 404 });
   });
 });

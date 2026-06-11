@@ -175,6 +175,9 @@ export class ApiStack extends cdk.Stack {
     const mcpServersFn = makeFn('RestMcpServersFn', 'rest_mcpServers');
     const objectivesFn = makeFn('RestObjectivesFn', 'rest_objectives');
     const weeklyFn = makeFn('RestWeeklyFn', 'rest_weekly');
+    // The lifecycle transitions (lock / reconcile-start / reconcile-complete) are a
+    // separate handler (U4) — reconcile-complete is transactional (KTD3).
+    const weeklyTransitionsFn = makeFn('RestWeeklyTransitionsFn', 'rest_weeklyTransitions');
     const memoriesFn = makeFn('RestMemoriesFn', 'rest_memories');
     const deviceFn = makeFn('RestDeviceFn', 'rest_device');
     const dodFn = makeFn('RestDodFn', 'rest_dod');
@@ -192,6 +195,7 @@ export class ApiStack extends cdk.Stack {
     grantReadWrite(mcpServersFn);
     grantReadWrite(objectivesFn);
     grantReadWrite(weeklyFn);
+    grantReadWrite(weeklyTransitionsFn);
     grantReadWrite(memoriesFn);
     grantReadWrite(deviceFn);
     grantReadWrite(dodFn);
@@ -399,20 +403,41 @@ export class ApiStack extends cdk.Stack {
     r('/objectives/{id}', [M.GET, M.DELETE], objectivesFn, 'ObjectiveById');
 
     // Weekly routes are noAuth (see contract above; bearerAuth + project
-    // ownership in-handler) — this is what lets `/hq-weekly-update` publish from the PTY.
-    r('/projects/{pid}/weekly', [M.GET, M.PUT], weeklyFn, 'Weekly', noAuth);
+    // ownership in-handler) — this is what lets `/hq-weekly-update` drive the
+    // commit lifecycle from the PTY. The itemized commit CRUD (U3) replaces the
+    // legacy prose store/serve; the lifecycle transitions live on
+    // `/projects/{pid}/weekly/{week}/...` (U4).
+    r('/projects/{pid}/weekly', [M.GET], weeklyFn, 'Weekly', noAuth);
+    r('/projects/{pid}/weekly/{week}', [M.GET], weeklyFn, 'WeeklyByWeek', noAuth);
     r(
-      '/projects/{pid}/weekly/{week}',
-      [M.GET, M.PUT],
+      '/projects/{pid}/weekly/{week}/commits',
+      [M.POST],
       weeklyFn,
-      'WeeklyByWeek',
+      'WeeklyCommits',
       noAuth,
     );
     r(
-      '/projects/{pid}/weekly/{week}/publish',
-      [M.POST],
+      '/projects/{pid}/weekly/{week}/commits/{cid}',
+      [M.PUT, M.DELETE],
       weeklyFn,
-      'WeeklyPublish',
+      'WeeklyCommitById',
+      noAuth,
+    );
+    // Lifecycle transitions (U4) — each transition is its own POST; `canTransition`
+    // (KTD2) gates legality (409), and reconcile-complete is transactional (KTD3).
+    r('/projects/{pid}/weekly/{week}/lock', [M.POST], weeklyTransitionsFn, 'WeeklyLock', noAuth);
+    r(
+      '/projects/{pid}/weekly/{week}/reconcile/start',
+      [M.POST],
+      weeklyTransitionsFn,
+      'WeeklyReconcileStart',
+      noAuth,
+    );
+    r(
+      '/projects/{pid}/weekly/{week}/reconcile/complete',
+      [M.POST],
+      weeklyTransitionsFn,
+      'WeeklyReconcileComplete',
       noAuth,
     );
 

@@ -37,6 +37,7 @@ const handlers = [
   'rest/mcpServers',
   'rest/objectives',
   'rest/weekly',
+  'rest/weeklyTransitions',
   'rest/memories',
   'rest/device',
   'rest/dod',

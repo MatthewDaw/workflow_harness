@@ -17,7 +17,12 @@ let repo: Repo | undefined;
 export function defaultRepo(): Repo {
   if (!repo) {
     docClient ??= DynamoDBDocumentClient.from(new DynamoDBClient({}));
-    repo = new Repo(docClient);
+    // Wire the Postgres handle when `DATABASE_URL` is present (prod/deploy) so the
+    // project write keeps the slim `projects` mirror in sync (KTD7/U2). When it is
+    // absent (local/legacy paths), the Repo degrades to Dynamo-only — `getDb`
+    // throws without the URL, so we only reach for it when the env is set.
+    const pgDb = process.env.DATABASE_URL ? getDb() : undefined;
+    repo = new Repo(docClient, undefined, pgDb);
   }
   return repo;
 }

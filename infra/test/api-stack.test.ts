@@ -208,22 +208,33 @@ describe('ApiStack', () => {
     }
   });
 
-  test('scopes the weekly routes under /projects/{pid} (rest_weekly)', () => {
+  test('scopes the weekly commit routes under /projects/{pid} (rest_weekly, U3)', () => {
     // The weekly handler requires a `pid` path param; the routes must be
-    // project-scoped (not the bare /weekly registrations).
+    // project-scoped (not the bare /weekly registrations). U3 replaces the legacy
+    // prose store/serve + publish with itemized commit CRUD (the week reads are
+    // GET-only; the lifecycle transitions land in U4).
     for (const routeKey of [
       'GET /projects/{pid}/weekly',
-      'PUT /projects/{pid}/weekly',
       'GET /projects/{pid}/weekly/{week}',
-      'PUT /projects/{pid}/weekly/{week}',
-      'POST /projects/{pid}/weekly/{week}/publish',
+      'POST /projects/{pid}/weekly/{week}/commits',
+      'PUT /projects/{pid}/weekly/{week}/commits/{cid}',
+      'DELETE /projects/{pid}/weekly/{week}/commits/{cid}',
+      // Lifecycle transitions (U4) — each transition is its own POST.
+      'POST /projects/{pid}/weekly/{week}/lock',
+      'POST /projects/{pid}/weekly/{week}/reconcile/start',
+      'POST /projects/{pid}/weekly/{week}/reconcile/complete',
     ]) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
         RouteKey: routeKey,
       });
     }
-    // The old bare /weekly routes must be gone.
-    for (const routeKey of ['GET /weekly', 'POST /weekly/{week}/publish']) {
+    // The legacy prose-blob routes (PUT week + publish) are gone (U3).
+    for (const routeKey of [
+      'GET /weekly',
+      'PUT /projects/{pid}/weekly',
+      'PUT /projects/{pid}/weekly/{week}',
+      'POST /projects/{pid}/weekly/{week}/publish',
+    ]) {
       const routes = template.findResources('AWS::ApiGatewayV2::Route', {
         Properties: { RouteKey: routeKey },
       });

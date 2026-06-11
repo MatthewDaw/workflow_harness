@@ -42,6 +42,8 @@ import {
 } from '@harness/shared';
 import * as k from './keys.js';
 import { flattenBundle } from '../catalog/bundles.js';
+import type { PgDb } from './pg/migrate.js';
+import { upsertProjectMirror } from './pg/weeklyRepo.js';
 
 /**
  * A live WebSocket connection in the registry. Daemon connections also carry the
@@ -95,6 +97,13 @@ export class Repo {
   constructor(
     private readonly doc: DynamoDBDocumentClient,
     private readonly table: string = k.tableName(),
+    /**
+     * Optional Postgres handle (KTD7). When present, `putProject` also syncs the
+     * slim `projects` mirror so the Postgres-side manager joins + `listProjectsForOrg`
+     * (U2) stay in step with Dynamo. Absent in tests/paths that never touch the
+     * strategic-execution domain, so the project write degrades to Dynamo-only.
+     */
+    private readonly pgDb?: PgDb,
   ) {}
 
   // --- Users (profiles) + org membership ---------------------------------
@@ -216,6 +225,19 @@ export class Repo {
         Item: { ...k.projectKey(p.id), ...p, ...k.projectOwnerIndex(p.ownerUserId, p.id) },
       }),
     );
+    // Sync the slim Postgres mirror (id/org/owner/name only — KTD7/U2) so the
+    // relational manager joins + `listProjectsForOrg` agree with Dynamo. Skipped
+    // when no Postgres handle is wired, or when the project has no org (the mirror
+    // requires one — back-compat projects without an org never appear in an
+    // org-scoped listing anyway).
+    if (this.pgDb && p.org) {
+      await upsertProjectMirror(this.pgDb, {
+        id: p.id,
+        org: p.org,
+        ownerUserId: p.ownerUserId,
+        name: p.name,
+      });
+    }
   }
 
   async getProject(projectId: string): Promise<Project | undefined> {

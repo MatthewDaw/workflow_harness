@@ -10,9 +10,10 @@ import type * as schema from './schema.js';
  * Lambda) and the pglite driver (in tests).
  *
  * This deliberately uses idempotent DDL rather than versioned drizzle-kit
- * migrations while the schema is a single table; when `weekly_plans`/
- * `weekly_commits` land (U2) and columns start changing, this graduates to
- * ordered, versioned migration files. See the plan's U15/U2.
+ * migrations: every statement is `CREATE … IF NOT EXISTS` (table, index) or a
+ * CHECK declared inline in its table, so applying the whole list on a populated
+ * database is a no-op. When columns start *changing* (not just being added), this
+ * graduates to ordered, versioned migration files. See the plan's U15/U2.
  */
 
 /**
@@ -35,6 +36,47 @@ const STATEMENTS: string[] = [
      pct_cache  real,
      PRIMARY KEY (org, id)
    )`,
+  // The slim projects mirror (KTD7) — synced from the Dynamo project-write path.
+  `CREATE TABLE IF NOT EXISTS projects_mirror (
+     id              text PRIMARY KEY,
+     org             text NOT NULL,
+     owner_user_id   text NOT NULL,
+     name            text NOT NULL
+   )`,
+  // `listProjectsForOrg` is WHERE org = ? ORDER BY id — keyset pagination (R7/R10).
+  `CREATE INDEX IF NOT EXISTS projects_mirror_org_idx ON projects_mirror (org, id)`,
+  // The week itself (KTD1) — lifecycle status + declared posture + transition stamps.
+  `CREATE TABLE IF NOT EXISTS weekly_plans (
+     project_id     text NOT NULL,
+     iso_week       text NOT NULL,
+     status         text NOT NULL DEFAULT 'DRAFT',
+     posture        text NOT NULL DEFAULT 'focus',
+     locked_at      bigint,
+     reconciled_at  bigint,
+     PRIMARY KEY (project_id, iso_week)
+   )`,
+  // The itemized commits (KTD1). The SO-or-orphan CHECK (KTD10) is the DB-level
+  // half of the invariant the Zod refinement + the lock guard also enforce: a
+  // commit must carry EITHER a supporting_outcome_id OR an orphan_reason.
+  `CREATE TABLE IF NOT EXISTS weekly_commits (
+     id                     text PRIMARY KEY,
+     project_id             text NOT NULL,
+     iso_week               text NOT NULL,
+     title                  text NOT NULL,
+     supporting_outcome_id  text,
+     orphan_reason          text,
+     also_advances          text[] NOT NULL DEFAULT '{}',
+     category               text NOT NULL,
+     priority_numeric       real NOT NULL,
+     status                 text NOT NULL DEFAULT 'planned',
+     actual_outcome         text,
+     carried_from_week      text,
+     carried_to_week        text,
+     carry_depth            integer NOT NULL DEFAULT 0,
+     CONSTRAINT weekly_commits_so_or_orphan
+       CHECK (supporting_outcome_id IS NOT NULL OR orphan_reason IS NOT NULL)
+   )`,
+  `CREATE INDEX IF NOT EXISTS weekly_commits_week_idx ON weekly_commits (project_id, iso_week)`,
 ];
 
 /** Apply every schema statement idempotently. */

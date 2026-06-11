@@ -757,10 +757,12 @@ export const orgConfigSchema = z.object({
 export type OrgConfig = z.infer<typeof orgConfigSchema>;
 
 /**
- * A weekly update is a client-generated report posted to HQ (KTD4). The
- * `/weekly-update` skill, running in claude+, reads the week's git diff,
- * interviews the user on next-week goals, computes a never-blocking conformity
- * score, and POSTs this shape. HQ stores and serves it; it never generates it.
+ * @deprecated The legacy two-state prose weekly report (KTD4). Superseded by the
+ * itemized weekly-commit lifecycle (`weeklyPlanSchema` + `weeklyCommitSchema`
+ * below). Kept ONLY so the legacy-migration unit (U14) and any straggler reader
+ * can still parse the old `{ done, plan, conformityScore, validated }` records
+ * already stored on Dynamo; new writes go through the commit lifecycle. Do not
+ * extend.
  *
  *  - `done` is a free-form summary of what shipped this week (prose, not items).
  *  - `plan` is a free-form summary of next week's intended work.
@@ -775,7 +777,151 @@ export const weeklyUpdateSchema = z.object({
   conformityScore: z.number().min(0).max(100).optional(),
   validated: z.boolean().default(false),
 });
+/** @deprecated See {@link weeklyUpdateSchema}. */
 export type WeeklyUpdate = z.infer<typeof weeklyUpdateSchema>;
+
+// --- Weekly commit lifecycle (weekly-commit-lifecycle, U1) ------------------
+//
+// The PRD's structured weekly commit lifecycle that REPLACES the prose blob
+// above. Two relations (KTD1): a `weekly_plan` (the week — `(projectId, isoWeek)`,
+// carrying lifecycle `status` + declared concentration `posture`) and N
+// `weekly_commit` items (each hard-linked to a Supporting Outcome OR carrying a
+// typed `orphanReason` — KTD10). The "chess layer" (`category` + `priorityNumeric`)
+// is DERIVED server-side (KTD4), not client-authored. The lifecycle is a full
+// state machine (KTD2): DRAFT -> LOCKED -> RECONCILING -> RECONCILED.
+
+/**
+ * The weekly plan lifecycle (KTD2). Each transition is its own server endpoint
+ * guarded by `canTransition`; an illegal transition is a 409. "Carry Forward" is
+ * the OUTPUT of `/reconcile/complete`, not a fifth persistent state.
+ *  - `DRAFT`       — editable; add / edit / delete commits.
+ *  - `LOCKED`      — committed for the week (the new "publish"); planned fields frozen.
+ *  - `RECONCILING` — recording per-commit actual status + outcome.
+ *  - `RECONCILED`  — closed; carry-forward + roll-up/metrics recompute have run.
+ */
+export const WEEKLY_STATUSES = ['DRAFT', 'LOCKED', 'RECONCILING', 'RECONCILED'] as const;
+export const weeklyStatusSchema = z.enum(WEEKLY_STATUSES);
+export type WeeklyStatus = z.infer<typeof weeklyStatusSchema>;
+
+/**
+ * The DERIVED chess-layer category (KTD4). Computed server-side from the plan
+ * implementation-unit + the linked SO's RCDO position — clients don't author it;
+ * an override that contradicts the derived value is flagged, not silently taken.
+ * Vocabulary is SHARED with the orphan reasons (KTD10): the orphan subset is
+ * `KTLO | Incident | Exploration | ExternalAsk`, and the linked-work additions are
+ * `Delivery | Strategic`. An orphan commit's reason IS its category.
+ */
+export const COMMIT_CATEGORIES = [
+  'KTLO',
+  'Incident',
+  'Exploration',
+  'ExternalAsk',
+  'Delivery',
+  'Strategic',
+] as const;
+export const commitCategorySchema = z.enum(COMMIT_CATEGORIES);
+export type CommitCategory = z.infer<typeof commitCategorySchema>;
+
+/**
+ * The typed orphan lane (KTD10). A commit must carry EITHER a
+ * `supportingOutcomeId` OR one of these reasons; "neither" is rejected (mirrors
+ * the DB CHECK + the lock guard). The set is the subset of {@link COMMIT_CATEGORIES}
+ * that can stand alone without an SO link — an orphan commit's reason is its
+ * category. A recurring orphan reason is the trigger to add a new Supporting
+ * Outcome.
+ */
+export const ORPHAN_REASONS = ['KTLO', 'Incident', 'Exploration', 'ExternalAsk'] as const;
+export const orphanReasonSchema = z.enum(ORPHAN_REASONS);
+export type OrphanReason = z.infer<typeof orphanReasonSchema>;
+
+/**
+ * The reconciliation outcome of a single commit (planned-vs-actual). `planned`
+ * is the pre-reconciliation default; the others are terminal. Roll-up credit
+ * (KTD5): `done = 1.0`, `partial = 0.5`, `planned`/`dropped = 0.0`. Carry-forward
+ * (KTD3) clones `planned`/`partial` into next week; `dropped`/`done` never carry.
+ */
+export const COMMIT_OUTCOME_STATUSES = ['planned', 'done', 'partial', 'dropped'] as const;
+export const commitOutcomeStatusSchema = z.enum(COMMIT_OUTCOME_STATUSES);
+export type CommitOutcomeStatus = z.infer<typeof commitOutcomeStatusSchema>;
+
+/**
+ * The week's declared concentration posture (KTD8). The Strategic Concentration
+ * Index is reported as DIVERGENCE from this declared intent, so legitimate
+ * breadth is never punished: `focus` expects high concentration, `explore` low.
+ */
+export const POSTURES = ['focus', 'explore'] as const;
+export const postureSchema = z.enum(POSTURES);
+export type Posture = z.infer<typeof postureSchema>;
+
+/** An ISO-week string, e.g. `2026-W23`. */
+export const isoWeekSchema = z.string().regex(/^\d{4}-W\d{2}$/);
+
+/**
+ * One itemized weekly commit (KTD1). It carries EITHER a primary
+ * `supportingOutcomeId` (the FK that drives ALL roll-up + concentration math —
+ * KTD9) OR a typed `orphanReason` (KTD10) — enforced by the refinement below,
+ * mirroring the DB CHECK. `alsoAdvances` is an OPTIONAL, INFORMATIONAL list of
+ * secondary SO ids that surface in the leverage/manager view but NEVER split
+ * roll-up credit (KTD9). `category` + `priorityNumeric` are present on the record
+ * but DERIVED server-side (KTD4) — clients don't author them; the override path
+ * is U10. Carry provenance (KTD3): `carriedFromWeek` / `carriedToWeek` / `carryDepth`.
+ */
+export const weeklyCommitSchema = z
+  .object({
+    id: z.string().min(1),
+    projectId: z.string().min(1),
+    isoWeek: isoWeekSchema,
+    title: z.string().min(1),
+    /** Primary SO link — drives ALL roll-up + concentration math. Null only when
+     * `orphanReason` is set (enforced by the refinement). */
+    supportingOutcomeId: z.string().optional(),
+    /** Typed non-link (KTD10). Required when there is no `supportingOutcomeId`. */
+    orphanReason: orphanReasonSchema.optional(),
+    /** Informational secondary SO ids; never split roll-up credit (KTD9). */
+    alsoAdvances: z.array(z.string()).default([]),
+    /** DERIVED server-side (KTD4); not client-authored. */
+    category: commitCategorySchema,
+    /** DERIVED WSJF-from-the-tree leverage (KTD4); the commit list self-sorts by it. */
+    priorityNumeric: z.number(),
+    status: commitOutcomeStatusSchema.default('planned'),
+    /** Free-form actual result recorded during reconciliation. */
+    actualOutcome: z.string().optional(),
+    /** Set on a carried clone: the week it was carried FROM (KTD3). */
+    carriedFromWeek: isoWeekSchema.optional(),
+    /** Stamped on the SOURCE when it is carried forward: the week it was carried TO. */
+    carriedToWeek: isoWeekSchema.optional(),
+    /** How many times this line has carried; `>= 3` raises a decompose/kill nudge. */
+    carryDepth: z.number().int().nonnegative().default(0),
+  })
+  .superRefine((c, ctx) => {
+    // KTD10: a commit must carry EITHER a primary SO link OR a typed orphan
+    // reason — "neither" is rejected (mirrors the DB CHECK + the lock guard).
+    if (!c.supportingOutcomeId && !c.orphanReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['supportingOutcomeId'],
+        message: 'a commit must have a supportingOutcomeId or an orphanReason',
+      });
+    }
+  });
+export type WeeklyCommit = z.infer<typeof weeklyCommitSchema>;
+
+/**
+ * The weekly plan — the week itself (KTD1), keyed `(projectId, isoWeek)`. Carries
+ * the lifecycle `status`, the declared concentration `posture`, and the transition
+ * timestamps stamped by the lifecycle endpoints.
+ */
+export const weeklyPlanSchema = z.object({
+  projectId: z.string().min(1),
+  isoWeek: isoWeekSchema,
+  status: weeklyStatusSchema.default('DRAFT'),
+  posture: postureSchema.default('focus'),
+  /** Epoch-ms stamped on DRAFT -> LOCKED. */
+  lockedAt: z.number().int().nonnegative().optional(),
+  /** Epoch-ms stamped on RECONCILING -> RECONCILED. */
+  reconciledAt: z.number().int().nonnegative().optional(),
+});
+export type WeeklyPlan = z.infer<typeof weeklyPlanSchema>;
 
 /**
  * A pending device-authorization record for the wrapper's device-code login.
