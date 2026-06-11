@@ -45,10 +45,11 @@ Legend: `U# {primary files}`
 === BARRIER ===
 
 ## Plan 005 — Training at Scale
-- W21: `U1 {suite.py, curriculum.py}` || `U3 {improvement.py}`
-- W22: `U2 {rehearsal.py}` || `U4 {router.py, agent_split.py}`
-- W23: `U5 {scheduler.py}` || `U6 {enforcement.py}`
-- W24: `U7 {targets/realworld/, test_e2e_scale.py}`  # integration, solo
+# U1-U6 depend ONLY on Plan 0-4 units (none on each other) and are file-disjoint -> 3-wide.
+# Only U7 (scale e2e) needs all of them. Grouped to keep correlated-failure risk low.
+- W21: `U3 {improvement.py}` || `U4 {router.py, agent_split.py, retrieval.py}` || `U6 {enforcement.py}`
+- W22: `U1 {suite.py, curriculum.py, benchmark.py}` || `U2 {rehearsal.py +episode.py}` || `U5 {scheduler.py +target_env.py}`
+- W23: `U7 {targets/realworld/, test_e2e_scale.py}`  # integration, solo (needs U1-U6)
 === FINAL: AUDIT + LIVE milestone ===
 
 ## Notes
