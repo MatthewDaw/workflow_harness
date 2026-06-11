@@ -90,9 +90,13 @@ describe('ProjectWeekly — DRAFT editor (U10)', () => {
     expect(screen.queryByText('Older week commit')).not.toBeInTheDocument();
   });
 
-  it('shows the empty state when there are no weeks', async () => {
+  it('offers the add-commit form even when there are no weeks (bootstrap)', async () => {
     renderWeekly([]);
-    expect(await screen.findByText('No weekly update yet')).toBeInTheDocument();
+    // No week exists yet, but the editor must be reachable so the first commit
+    // auto-creates the DRAFT week (U3) — otherwise the only way to start a week
+    // is the agent skill, which strands UI-only users.
+    expect(await screen.findByTestId('add-commit-form')).toBeInTheDocument();
+    expect(screen.getByTestId('lock-week')).toBeInTheDocument();
   });
 
   // ---- U10: add a commit with an SO → derived category/priority render; lock enabled

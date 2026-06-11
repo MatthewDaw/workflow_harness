@@ -261,7 +261,9 @@ export function ProjectWeekly() {
     [latest],
   );
 
-  const isDraft = latest?.plan.status === 'DRAFT';
+  // No week yet is treated as DRAFT-able: adding the first commit auto-creates
+  // the DRAFT plan server-side (U3), so the editor must be reachable from empty.
+  const isDraft = !latest || latest.plan.status === 'DRAFT';
   const blockers = useMemo(() => lockBlockers(commits), [commits]);
 
   // A fresh 409 supersedes a stale one; once the week's commits change the
@@ -289,7 +291,7 @@ export function ProjectWeekly() {
       />
       <div className="mb-2.5 flex items-center justify-between">
         <div className="text-mut flex items-center gap-2">
-          {latest ? `Week ${latest.plan.isoWeek}` : 'No weekly update yet'}
+          {latest ? `Week ${latest.plan.isoWeek}` : `Week ${isoWeek} — new (add a commit to start)`}
           {latest && (
             <Pill variant={latest.plan.status === 'RECONCILED' ? 'good' : 'idle'}>
               {latest.plan.status.toLowerCase()}
@@ -308,11 +310,11 @@ export function ProjectWeekly() {
 
       {isLoading && <div className="text-mut">Loading…</div>}
 
-      {latest && (
+      {(latest || isDraft) && (
         <div className="hq-box bg-paper">
           <div className="flex items-center justify-between">
             <b>This week's commits</b>
-            {latest.plan.status === 'RECONCILING' && (
+            {latest?.plan.status === 'RECONCILING' && (
               <button
                 type="button"
                 className="hq-btn"
@@ -325,7 +327,7 @@ export function ProjectWeekly() {
           </div>
 
           {commits.length === 0 ? (
-            <p className="mt-1.5 text-[12.5px] text-mut">No commits yet.</p>
+            <p className="mt-1.5 text-[12.5px] text-mut">No commits yet — add your first one below.</p>
           ) : (
             <ul className="mt-1.5 list-none p-0">
               {commits.map((c) => (
@@ -370,7 +372,7 @@ export function ProjectWeekly() {
             </>
           )}
 
-          {!isDraft && latest.plan.status !== 'RECONCILING' && (
+          {latest && !isDraft && latest.plan.status !== 'RECONCILING' && (
             <p className="mt-2 text-[12.5px] text-mut" data-testid="readonly-note">
               This week is {latest.plan.status.toLowerCase()} — commits are read-only.
             </p>
