@@ -66,11 +66,13 @@ from agent_families.lifecycle import (
     revive_insight,
     revive_skill,
     skills_created_by_reverted_batches,
+    stamp_insight_provenance,
 )
 from agent_families.pipeline import PipelineError, add_idea
 from agent_families.rendering import Renderer, RenderingError
 from agent_families.store import (
     DEFAULT_DB_FILENAME,
+    INSIGHT_PROVENANCES,
     STATUSES,
     Store,
     StoreError,
@@ -384,6 +386,13 @@ def _cmd_add_idea(args: argparse.Namespace) -> int:
                 f"  provenance: episode={args.episode} scenario={args.scenario}"
                 f" ticket={args.ticket}"
             )
+        # Insight provenance (007 KTD5): default `manual` for a hand-entered idea;
+        # `researched`/`seeded` enter through `af induct` / the seed loader. Stamped
+        # only on a fresh registration, for the same reason as the evidence refs.
+        if result.code == "registered":
+            stamp_insight_provenance(store, result.insight_id, args.provenance)
+            if args.provenance != "manual":
+                print(f"  insight provenance: {args.provenance}")
     return 0
 
 
@@ -953,6 +962,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--ticket", help="provenance: evidence TKT id (optional, 003 R27)"
+    )
+    p.add_argument(
+        "--provenance",
+        choices=INSIGHT_PROVENANCES,
+        default="manual",
+        help="insight provenance (007 KTD5; default: manual)",
     )
 
     p = sub("promote", _cmd_promote)

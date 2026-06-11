@@ -96,6 +96,13 @@ Test-scenario / invariant (plan-004 U8) -> test:
 - property: any maintenance sequence preserves insights-never-deleted,
   vec-rows-untouched, membership-changes-snapshot-keyed:
   ``test_maintenance_preserves_invariants``
+
+Required acceptance test / invariant (plan-007 U10) -> test (in
+``tests/test_provenance_telemetry.py``):
+
+- ``test_provenance_world_fitness_grouping`` — the fitness table groups correctly
+  by provenance × world (world joined via ``fitness_events.episode_id ->
+  episodes.world``). [enforced by :func:`provenance_world_fitness`]
 """
 
 from __future__ import annotations
@@ -105,7 +112,7 @@ import struct
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
-from agent_families.store import Store
+from agent_families.store import RUN_MODES, Store
 from agent_families.vecindex import VEC_TABLE
 
 # --- tunables (caller-supplied, carried defaults; PROVENANCE per DESIGN §17) -----
@@ -330,6 +337,89 @@ def _training_retrievals(
         insight_id, snapshot_id=snapshot_id, mode="training"
     )
     return counts["retrieval"]
+
+
+# --- provenance × world fitness telemetry (007 U10, KTD5/KTD9) -------------------
+#
+# KTD9's named decision telemetry: group the fitness log by (insight provenance,
+# episode world) so "wins greenfield, loses brownfield" is a queryable FACT, not
+# an inference — one shared library serves every family by retrieval, and per-batch
+# rollback attribution is gone by the time SPC curves show a cross-world
+# regression. World is joined via ``fitness_events.episode_id -> episodes.world``
+# (no world column on fitness rows, 007 KTD6); events with no episode (standalone
+# training runs, which have no founder) bucket under ``brownfield``. The trigger
+# this serves — researched/seeded insights that lose to mined insights over M
+# episodes shrink the induction pass to cold-start-only — reads off this table.
+
+
+@dataclass(frozen=True)
+class ProvenanceWorldFitness:
+    """One (provenance, world) fitness bucket over the event log (007 U10)."""
+
+    provenance: str
+    world: str
+    retrievals: int
+    wins: int
+    losses: int
+
+    @property
+    def net(self) -> int:
+        """The ratchet's fitness scalar for this bucket: ``wins - losses``."""
+        return self.wins - self.losses
+
+
+def provenance_world_fitness(
+    store: Store,
+    *,
+    snapshot_id: int | None = None,
+    mode: str = "training",
+) -> list[ProvenanceWorldFitness]:
+    """The fitness log grouped by insight provenance × episode world (007 U10).
+
+    ``mode`` selects the channel (default the ratchet's ``training`` channel, so
+    validation traffic stays out, R19); ``snapshot_id`` bounds events to
+    ``snapshot_id <= S`` when given. World is joined through
+    ``fitness_events.episode_id``; a NULL episode buckets under ``brownfield``.
+    Rows are ordered by (provenance, world) for stable, eyeballable output.
+    """
+    if mode not in RUN_MODES:
+        raise MaintenanceError(
+            f"unknown run mode '{mode}' (expected one of {RUN_MODES})"
+        )
+    sql = (
+        "SELECT i.provenance AS provenance,"
+        " COALESCE(e.world, 'brownfield') AS world,"
+        " f.kind AS kind, COUNT(*) AS n"
+        " FROM fitness_events f"
+        " JOIN insights i ON i.id = f.insight_id"
+        " LEFT JOIN episodes e ON e.id = f.episode_id"
+        " WHERE f.mode = ?"
+    )
+    params: list[object] = [mode]
+    if snapshot_id is not None:
+        sql += " AND f.snapshot_id <= ?"
+        params.append(int(snapshot_id))
+    # Group by the COALESCE expression, NOT the `world` alias: SQLite binds a bare
+    # `world` in GROUP BY to the episodes.world column (NULL for a standalone run),
+    # which would split NULL-episode events into their own group before the
+    # COALESCE buckets them under 'brownfield'.
+    sql += " GROUP BY i.provenance, COALESCE(e.world, 'brownfield'), f.kind"
+
+    buckets: dict[tuple[str, str], dict[str, int]] = {}
+    for row in store.conn.execute(sql, params).fetchall():
+        key = (row["provenance"], row["world"])
+        counts = buckets.setdefault(key, {"retrieval": 0, "win": 0, "loss": 0})
+        counts[row["kind"]] = row["n"]
+    return [
+        ProvenanceWorldFitness(
+            provenance=provenance,
+            world=world,
+            retrievals=counts["retrieval"],
+            wins=counts["win"],
+            losses=counts["loss"],
+        )
+        for (provenance, world), counts in sorted(buckets.items())
+    ]
 
 
 # --- ratchet: outcome-driven retirement (R20, DESIGN §4) ------------------------

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent_families.store import Store
+from agent_families.store import INSIGHT_PROVENANCES, VALIDATION_CLASSES, Store
 
 # Statuses retire() may flip to retired. `dormant` is included for
 # forward-compatibility although no Phase 0 operation produces it.
@@ -291,3 +291,102 @@ def skills_created_by_reverted_batches(store: Store) -> tuple[int, ...]:
         " ORDER BY s.id ASC"
     ).fetchall()
     return tuple(r["id"] for r in rows)
+
+
+# --- Plan 007 U10: provenance & validation-class stamps (KTD5) ------------------
+#
+# ``insights.provenance`` and ``batches.validation_class`` (007 U1) are *metadata*
+# columns, NOT active-set state: stamping one moves no insight between
+# active/quarantined/dormant, so these writes do NOT flow through the promotion
+# queue and mint NO snapshot (unlike every operation above). They live here
+# because batch/insight stamping is the lifecycle concern that owns it — the
+# reflector's label-derived auto-stamp at registration, and the human's
+# ``af add-idea --provenance``. The connection is autocommit (isolation_level=None),
+# so each single-statement UPDATE commits on its own, matching ``ensure_batch``.
+
+# Reflector batches are labelled ``reflect-ep%`` (the stage_b.py convention); this
+# is the exact predicate U1's migration backfills provenance on.
+REFLECTOR_BATCH_LABEL_PREFIX = "reflect-ep"
+
+
+def provenance_for_batch_label(batch_label: str) -> str:
+    """The provenance a batch's insights carry by its label convention (007 KTD5).
+
+    ``reflect-ep%`` → ``reflector`` (the stage_b convention U1 backfills on);
+    everything else → ``manual``. ``researched``/``seeded`` are set explicitly by
+    their loaders (``af induct`` / the seed batch), never inferred from a label.
+    """
+    return (
+        "reflector"
+        if batch_label.startswith(REFLECTOR_BATCH_LABEL_PREFIX)
+        else "manual"
+    )
+
+
+def _check_provenance(provenance: str) -> None:
+    if provenance not in INSIGHT_PROVENANCES:
+        raise LifecycleError(
+            f"unknown provenance '{provenance}'"
+            f" (expected one of {INSIGHT_PROVENANCES})"
+        )
+
+
+def stamp_insight_provenance(
+    store: Store, insight_id: int, provenance: str
+) -> None:
+    """Stamp one insight's provenance (007 KTD5) — ``af add-idea --provenance``.
+
+    A metadata write; mints no snapshot. Raises if the insight is unknown so a bad
+    ref fails loudly rather than silently no-op'ing.
+    """
+    _check_provenance(provenance)
+    cur = store.conn.execute(
+        "UPDATE insights SET provenance = ? WHERE id = ?", (provenance, insight_id)
+    )
+    if cur.rowcount == 0:
+        raise LifecycleError(f"insight {insight_id} does not exist")
+
+
+def auto_stamp_batch_provenance(
+    store: Store, batch_label: str, provenance: str | None = None
+) -> tuple[int, ...]:
+    """Stamp every insight in a batch with ``provenance`` (007 KTD5).
+
+    With ``provenance=None`` the value is derived from the batch label — the
+    reflector auto-stamp (``reflect-ep%`` → ``reflector``). Returns the stamped
+    insight ids (empty if the batch has none yet). A metadata write; no snapshot.
+    """
+    if provenance is None:
+        provenance = provenance_for_batch_label(batch_label)
+    _check_provenance(provenance)
+    batch_id = _batch_id(store, batch_label)
+    rows = store.conn.execute(
+        "SELECT id FROM insights WHERE batch_id = ? ORDER BY id ASC", (batch_id,)
+    ).fetchall()
+    ids = tuple(r["id"] for r in rows)
+    if ids:
+        store.conn.execute(
+            "UPDATE insights SET provenance = ? WHERE batch_id = ?",
+            (provenance, batch_id),
+        )
+    return ids
+
+
+def set_batch_validation_class(
+    store: Store, batch_label: str, validation_class: str
+) -> None:
+    """Set a batch's validation-class routing tag at registration (007 KTD5).
+
+    The tag ``validate.py``'s substrate routing reads (``code``/``elicitation``/
+    ``general``). A metadata write; mints no snapshot.
+    """
+    if validation_class not in VALIDATION_CLASSES:
+        raise LifecycleError(
+            f"unknown validation_class '{validation_class}'"
+            f" (expected one of {VALIDATION_CLASSES})"
+        )
+    batch_id = _batch_id(store, batch_label)
+    store.conn.execute(
+        "UPDATE batches SET validation_class = ? WHERE id = ?",
+        (validation_class, batch_id),
+    )
