@@ -1,0 +1,29 @@
+# privatebin held-out suite target (plan-005 U1, R1/R2 — the generalization suite).
+#
+# PrivateBin is a held-out BENCHMARK target: the encrypted-paste archetype — a
+# stack/feature shape absent from the training pool, exercising the grader on a
+# different surface. It is NEVER trained on (curriculum.HELD_OUT; the held-out
+# constraint is enforced both ways — see shaarli's compose header).
+#
+# Image pinned BY DIGEST (R9). suite.py carries the same pin; the generic
+# SuiteTargetEnv refuses setup on disagreement or a mismatched RepoDigest. The
+# digest is a PLACEHOLDER pending live resolution (no network/docker on this
+# host); re-pinning is a deliberate apparatus migration, not an edit.
+#
+# - named volume, NEVER a Windows bind mount (R5)
+# - host port 8083, disjoint from linkding=9090, clone=4173, kanboard=8081,
+#   shaarli=8082 by construction (suite.SUITE_PORTS asserts it)
+# - readiness is suite.py polling GET / for the "PrivateBin" marker
+name: agent-families-privatebin
+
+services:
+  privatebin:
+    image: privatebin/nginx-fpm-alpine:1.7.4@sha256:c1d2e3f405061728293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f02
+    ports:
+      - "8083:8080"
+    volumes:
+      - privatebin_data:/srv/data
+    restart: unless-stopped
+
+volumes:
+  privatebin_data:

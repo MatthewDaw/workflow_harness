@@ -1,0 +1,12 @@
+{
+  "_comment": "Seed manifest for the shaarli held-out suite target (plan-005 U1, R1). Shaarli is the bookmarks archetype, a held-out instance distinct from the training target linkding. Seeding is live/docker-required (the generic SuiteTargetEnv drives Shaarli's REST API headlessly); the frozen suite slice's hand-verified verdicts are defined against THIS post-seed state, so changing it is a recorded apparatus migration, not an edit. Offline the manifest is shape-validated only.",
+  "archetype": "bookmarks",
+  "stack": "php",
+  "items": [
+    { "title": "Agent Families design notes", "url": "https://example.test/design", "tags": ["design", "agents"] },
+    { "title": "Control charts for held-out benchmarks", "url": "https://example.test/spc", "tags": ["spc", "benchmark"] },
+    { "title": "Rotation curriculum reference", "url": "https://example.test/curriculum", "tags": ["curriculum"] },
+    { "title": "Generalization vs memorization", "url": "https://example.test/generalize", "tags": ["benchmark", "generalize"] },
+    { "title": "Docker-boot qualification rule", "url": "https://example.test/qualify", "tags": ["qualify", "docker"] }
+  ]
+}

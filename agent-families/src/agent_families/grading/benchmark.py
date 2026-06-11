@@ -728,25 +728,47 @@ def verify_slice_hash(slice_: Sequence[dict] = FROZEN_SLICE) -> str:
     return actual
 
 
-def load_frozen_slice(*, verify: bool = True) -> tuple[ScenarioManifest, ...]:
-    """Parse the frozen slice into manifests (R14). When ``verify`` (default),
-    asserts the immutability hash AND the 12-20 must-tier size/tier invariant
-    first."""
+def load_named_slice(
+    slice_: Sequence[dict], expected_hash: str, *, verify: bool = True
+) -> tuple[ScenarioManifest, ...]:
+    """Parse ANY frozen slice into must-tier manifests (plan-005 U1 R1).
+
+    The generalization of :func:`load_frozen_slice`: the same immutability +
+    size + tier invariants the Kanboard micro-benchmark enforces, applied to any
+    held-out suite target's frozen slice (``expected_hash`` is that slice's own
+    pinned content hash). One mechanism, N instances — the Plan 5 suite reuses
+    this so a frozen instrument that silently drifts can never measure nothing,
+    on any target.
+    """
     if verify:
-        verify_slice_hash()
-    if not FROZEN_SLICE_MIN <= len(FROZEN_SLICE) <= FROZEN_SLICE_MAX:
+        actual = slice_hash(slice_)
+        if actual != expected_hash:
+            raise TargetEnvError(
+                "frozen suite slice hash mismatch (R1): the slice is immutable"
+                f" apparatus. expected {expected_hash}, got {actual}. If the"
+                " slice was deliberately re-frozen, re-pin its hash and re-run"
+                " the hand-verification of its reference verdicts."
+            )
+    if not FROZEN_SLICE_MIN <= len(slice_) <= FROZEN_SLICE_MAX:
         raise TargetEnvError(
             f"frozen slice must hold {FROZEN_SLICE_MIN}-{FROZEN_SLICE_MAX}"
-            f" must-tier scenarios (R14), got {len(FROZEN_SLICE)}"
+            f" must-tier scenarios (R1/R14), got {len(slice_)}"
         )
-    manifests = tuple(parse_manifest(entry) for entry in FROZEN_SLICE)
+    manifests = tuple(parse_manifest(entry) for entry in slice_)
     off_tier = [m.scenario_id for m in manifests if m.tier != "must"]
     if off_tier:
         raise TargetEnvError(
-            f"the frozen micro-benchmark is must-tier only (R14); off-tier"
+            f"the frozen micro-benchmark is must-tier only (R1/R14); off-tier"
             f" scenarios: {off_tier}"
         )
     return manifests
+
+
+def load_frozen_slice(*, verify: bool = True) -> tuple[ScenarioManifest, ...]:
+    """Parse the Kanboard frozen slice into manifests (R14). When ``verify``
+    (default), asserts the immutability hash AND the 12-20 must-tier size/tier
+    invariant first."""
+    return load_named_slice(FROZEN_SLICE, FROZEN_SLICE_HASH, verify=verify)
 
 
 # --- benchmark score and the excluded fitness channel -------------------------
@@ -833,6 +855,8 @@ def run_benchmark_episode(
     fitness_channel: ExcludedFitnessChannel | None = None,
     telemetry: HealTelemetry | None = None,
     persist: bool = True,
+    manifests: Sequence[ScenarioManifest] | None = None,
+    slice_hash_pin: str | None = None,
 ) -> BenchmarkScore:
     """Run one ``mode=benchmark`` mini-episode over the frozen slice (R14).
 
@@ -854,8 +878,21 @@ def run_benchmark_episode(
     ``KanboardTarget.reset_to_seed``; offline fakes pass a no-op). ``drivers``
     must carry both apps (``target`` and ``clone``) — the same dual-app contract
     settlement uses.
+
+    ``manifests`` is the plan-005 U1 generalization seam: when ``None`` (default)
+    the runner loads the Kanboard frozen slice (existing behavior); the held-out
+    benchmark suite passes its target's own frozen slice manifests plus the
+    matching ``slice_hash_pin`` so the produced score stamps which instrument
+    measured it. One runner, N held-out targets.
     """
-    manifests = load_frozen_slice()
+    if manifests is None:
+        manifests = load_frozen_slice()
+        slice_hash_pin = FROZEN_SLICE_HASH
+    elif slice_hash_pin is None:
+        raise TargetEnvError(
+            "a caller-supplied benchmark slice must pass its slice_hash_pin so"
+            " the score stamps which frozen instrument produced it (R1)"
+        )
     for app in ("target", "clone"):
         if app not in drivers:
             raise TargetEnvError(
@@ -909,7 +946,7 @@ def run_benchmark_episode(
         passed=passed,
         scoreable=len(scoreable),
         by_tier=by_tier,
-        slice_hash=FROZEN_SLICE_HASH,
+        slice_hash=slice_hash_pin,
     )
     if store is not None and persist:
         store.set_meta(

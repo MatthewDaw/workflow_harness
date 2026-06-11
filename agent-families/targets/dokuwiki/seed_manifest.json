@@ -1,0 +1,11 @@
+{
+  "_comment": "Seed manifest for the dokuwiki held-out suite target (plan-005 U1, R1). DokuWiki is the flat-file wiki archetype. Live seeding is docker-required (the generic SuiteTargetEnv drives the page-edit/XML-RPC path headlessly). The frozen suite slice's hand-verified verdicts are defined against THIS post-seed state. Offline the manifest is shape-validated only.",
+  "archetype": "wiki",
+  "stack": "php",
+  "items": [
+    { "title": "start", "body": "Welcome to the held-out wiki target." },
+    { "title": "benchmark", "body": "The generalization instrument, control-charted." },
+    { "title": "rotation", "body": "Deterministic per epoch seed." },
+    { "title": "curriculum", "body": "linkding plus pool candidates passing the docker-boot check." }
+  ]
+}
