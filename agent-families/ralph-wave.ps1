@@ -32,8 +32,7 @@ $waves = @(
   ,@("004/U7")
   ,@("004/U8")
   ,@("004/U9")
-  ,@("005/U3","005/U4","005/U6")
-  ,@("005/U1","005/U2","005/U5")
+  ,@("005/U1","005/U2","005/U3","005/U4","005/U5","005/U6")
   ,@("005/U7")
 )
 
@@ -78,29 +77,33 @@ foreach ($wave in $waves) {
   }
   $procs | ForEach-Object { $_.proc.WaitForExit() }
 
-  $results = @{}; $ok = $true
-  foreach ($pc in $procs) { $r = Get-Content (Join-Path $repo ("ralph-logs\" + ($pc.unit -replace '/','-') + ".result")) -EA SilentlyContinue; $results[$pc.unit] = $r; if (-not $r -or $r -eq "FAILED") { $ok = $false } }
-
-  $merged = $false
-  if ($ok) {
-    Write-Host "  both green; cherry-picking disjoint commits"
-    $picked = $true
-    foreach ($pc in $procs) { git cherry-pick $results[$pc.unit] 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Host "  cherry-pick conflict on $($pc.unit) - aborting wave"; git cherry-pick --abort 2>$null | Out-Null; git reset --hard $base | Out-Null; $picked = $false; break } }
-    if ($picked -and (Suite-Green)) { foreach ($u in $todo) { Flip $u }; $merged = $true; Write-Host "  PARALLEL wave merged + green" }
-    elseif ($picked) { Write-Host "  merged suite red - reverting to serial"; git reset --hard $base | Out-Null }
+  # PARTIAL MERGE: cherry-pick every unit that built green (disjoint -> clean); only the
+  # rest (build-failed or cherry-pick-conflict) serialize. One bad unit no longer nukes the wave.
+  $serialize = @()
+  $picked = @()
+  foreach ($pc in $procs) {
+    $r = Get-Content (Join-Path $repo ("ralph-logs\" + ($pc.unit -replace '/','-') + ".result")) -EA SilentlyContinue
+    if ($r -and $r -ne "FAILED") {
+      git cherry-pick $r 2>&1 | Out-Null
+      if ($LASTEXITCODE -eq 0) { $picked += $pc.unit; Write-Host "  picked $($pc.unit)" }
+      else { git cherry-pick --abort 2>$null | Out-Null; $serialize += $pc.unit; Write-Host "  cherry-pick conflict $($pc.unit) -> serial" }
+    } else { $serialize += $pc.unit; Write-Host "  build failed $($pc.unit) -> serial" }
+  }
+  # gate the merged successes together; if the union is red, revert them and serialize all
+  if ($picked.Count -gt 0) {
+    if (Suite-Green) { foreach ($u in $picked) { Flip $u }; Write-Host "  merged $($picked.Count) green: $($picked -join ', ')" }
+    else { Write-Host "  merged suite red - reverting picked, serializing"; git reset --hard $base | Out-Null; $serialize = @($picked) + $serialize }
   }
   # cleanup worktrees
   foreach ($pc in $procs) { git worktree remove --force $pc.wt 2>$null | Out-Null; Remove-Item -Recurse -Force $pc.wt -EA SilentlyContinue }
-
-  if (-not $merged) {
-    Write-Host "  SERIAL FALLBACK for wave"
-    $failed = $false
-    foreach ($u in $todo) {
-      if (Unit-Done $u) { continue }
-      $r = Run-Worker $u $repo
-      if ($r -and $r -ne "FAILED" -and (Suite-Green)) { Flip $u } else { Write-Host "  serial $u failed"; "`n# Status: blocked" | Add-Content $progress; "`n- BLOCKED: $u failed in serial fallback" | Add-Content $progress; $failed = $true; break }
-    }
-    if ($failed) { break }
+  # serial fallback only for the units that did not cleanly merge
+  $bail = $false
+  foreach ($u in $serialize) {
+    if (Unit-Done $u) { continue }
+    Write-Host "  SERIAL: $u"
+    $r = Run-Worker $u $repo
+    if ($r -and $r -ne "FAILED" -and (Suite-Green)) { Flip $u } else { Write-Host "  serial $u failed"; $c = Get-Content $progress; $c[0] = "# Status: blocked"; $c | Set-Content $progress; "`n- BLOCKED: $u failed in serial fallback" | Add-Content $progress; $bail = $true; break }
   }
+  if ($bail) { break }
 }
 Write-Host "=== wave driver exit. done: $((Select-String -Path $progress -Pattern '^\- \[x\]').Count)/42  $(Get-Date -Format o) ==="
