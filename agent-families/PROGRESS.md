@@ -66,7 +66,7 @@ QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not uni
 - [x] 007/U1 - Migration: greenfield schema + config section
 - [x] 007/U2 - Planner contract: ASSUME refactor, PROPOSAL artifact, ranked questions
 - [ ] 007/U3 - Provenance lint + assumption gate
-- [ ] 007/U4 - DEC extraction + DEC-coverage lint
+- [x] 007/U4 - DEC extraction + DEC-coverage lint
 - [ ] 007/U5 - Degradation generator + blur cache + blur lint
 - [ ] 007/U5b - Human-as-founder trial (HUMAN STEP - manual, no production code)
 - [ ] 007/U6 - Founder answering, adjudication and acceptance session
