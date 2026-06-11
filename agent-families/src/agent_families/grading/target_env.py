@@ -47,7 +47,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -82,6 +82,20 @@ PORT_TABLE: MappingProxyType = MappingProxyType(
 # the committed local-harness contract (they appear verbatim in the compose
 # file), not secrets and not tunables.
 COMPOSE_SERVICE = "linkding"
+
+# The base compose project name for the single static stack (R7). One concurrent
+# episode keeps this name; parallel episodes namespace off it (see
+# :func:`episode_namespace`). Docker scopes containers/networks/volumes by the
+# project name, so a distinct project name per episode is the isolation boundary.
+DEFAULT_COMPOSE_PROJECT = "agent-families"
+
+# Per-episode port stride (plan-005 U5, R15): a parallel episode's service ports
+# are the static table's ports offset by ``slot * stride``. The stride is a
+# behavior tunable (caller-supplied per the U3/U6 precedent); the carried default
+# leaves generous headroom between adjacent slots' windows and is wide enough
+# that, paired with the disjointness assertion in :func:`episode_namespace`, no
+# two concurrent slots ever share a host port.
+DEFAULT_PORT_STRIDE = 100
 SUPERUSER_NAME = "admin"
 SUPERUSER_PASSWORD = "agent-families-admin"  # noqa: S105 - committed harness cred
 API_TOKEN_NAME = "agent-families-harness"
@@ -205,6 +219,118 @@ class TargetEnvConfig:
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
+
+
+# --- per-episode environment isolation (plan-005 U5, R15) ----------------------
+
+
+class NamespaceCollisionError(TargetEnvError):
+    """Two parallel-episode namespaces collide on a host port (R15).
+
+    Raised by construction when the requested stride/slot combination would map
+    two services to the same host port — the disjointness invariant the parallel
+    scheduler relies on (one in-flight stack per episode, never colliding) must
+    not silently degrade.
+    """
+
+
+@dataclass(frozen=True)
+class EpisodeNamespace:
+    """One parallel episode's isolated docker environment (R15).
+
+    The Phase 1/2 seam this activates: :class:`LinkdingTarget` owns exactly one
+    static stack (the compose project name + the static :data:`PORT_TABLE`).
+    Running N episodes at once means N stacks, so each episode gets its own
+    compose **project name** (docker's container/network/volume namespace) and a
+    disjoint **port window** (the static ports offset by ``slot * stride``).
+    Disjointness is verified, not assumed (:class:`NamespaceCollisionError`).
+
+    ``slot`` is the small reusable lane index (0..N-1) the scheduler hands out;
+    two concurrently-running episodes always hold different slots, so their
+    namespaces are disjoint by construction.
+    """
+
+    slot: int
+    project_name: str
+    ports: Mapping[str, int]
+
+    def port(self, service: str) -> int:
+        """The host port this episode exposes ``service`` on."""
+        try:
+            return self.ports[service]
+        except KeyError as exc:
+            raise TargetEnvError(
+                f"namespace for slot {self.slot} has no port for service"
+                f" {service!r}; known services: {sorted(self.ports)}"
+            ) from exc
+
+    @property
+    def compose_args(self) -> tuple[str, ...]:
+        """The ``-p <project>`` prefix that scopes a ``docker compose`` call to
+        this episode's stack (the live binding passes it through
+        :meth:`LinkdingTarget._compose`)."""
+        return ("-p", self.project_name)
+
+
+def episode_namespace(
+    slot: int,
+    *,
+    base_project: str = DEFAULT_COMPOSE_PROJECT,
+    port_table: Mapping[str, int] = PORT_TABLE,
+    port_stride: int = DEFAULT_PORT_STRIDE,
+) -> EpisodeNamespace:
+    """Derive the disjoint compose project + port window for episode ``slot``.
+
+    Slot 0 keeps the static table verbatim (the single-episode degenerate case is
+    byte-identical to the pre-parallel harness); slot k offsets every service port
+    by ``k * port_stride``. The project name carries the slot so docker scopes the
+    stacks apart. The result's ports are checked pairwise-disjoint against the
+    base window before returning.
+    """
+    if slot < 0:
+        raise TargetEnvError(f"episode slot must be >= 0, got {slot}")
+    if port_stride <= 0:
+        raise TargetEnvError(f"port_stride must be positive, got {port_stride}")
+    if not port_table:
+        raise TargetEnvError("port_table must name at least one service")
+    project_name = base_project if slot == 0 else f"{base_project}-ep{slot}"
+    ports = {
+        service: base_port + slot * port_stride
+        for service, base_port in port_table.items()
+    }
+    # Disjointness within this namespace: two services must not land on one port
+    # (a small stride against widely-separated base ports is the risk).
+    if len(set(ports.values())) != len(ports):
+        raise NamespaceCollisionError(
+            f"slot {slot} maps two services to the same host port with stride"
+            f" {port_stride}: {ports} — widen the stride or the base port table"
+        )
+    return EpisodeNamespace(
+        slot=slot, project_name=project_name, ports=MappingProxyType(dict(ports))
+    )
+
+
+def assert_namespaces_disjoint(namespaces: Sequence[EpisodeNamespace]) -> None:
+    """Verify a set of concurrent namespaces share no project name or host port
+    (R15). The parallel scheduler calls this on its in-flight set so a stride
+    misconfiguration fails loud rather than letting two stacks fight over a port."""
+    seen_ports: dict[int, tuple[int, str]] = {}
+    seen_projects: dict[str, int] = {}
+    for ns in namespaces:
+        if ns.project_name in seen_projects:
+            raise NamespaceCollisionError(
+                f"compose project {ns.project_name!r} is shared by slots"
+                f" {seen_projects[ns.project_name]} and {ns.slot}"
+            )
+        seen_projects[ns.project_name] = ns.slot
+        for service, host_port in ns.ports.items():
+            if host_port in seen_ports:
+                other_slot, other_service = seen_ports[host_port]
+                raise NamespaceCollisionError(
+                    f"host port {host_port} is claimed by slot {other_slot}"
+                    f" ({other_service}) and slot {ns.slot} ({service})"
+                )
+            seen_ports[host_port] = (ns.slot, service)
 
 
 # --- seed manifest --------------------------------------------------------------
