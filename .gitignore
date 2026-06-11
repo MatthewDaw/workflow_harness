@@ -13,6 +13,9 @@ coverage/
 .env
 .env.*
 !.env.example
+# Production web build config — PUBLIC client values (compiled into the bundle),
+# required so the SPA reaches the real API Gateway instead of falling back to /api.
+!packages/web/.env.production
 
 # CDK
 infra/cdk.out/
