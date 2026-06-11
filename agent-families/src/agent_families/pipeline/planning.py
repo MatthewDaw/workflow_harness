@@ -285,6 +285,7 @@ def build_planner_prompt(
     size_budget: int,
     *,
     carry_in: Sequence[tuple[str, str]] = (),
+    injected_skills: str = "",
 ) -> str:
     """The hardcoded Phase 1 planner prompt over the synthesized MSG listing.
 
@@ -292,7 +293,15 @@ def build_planner_prompt(
     from the previous increment — bug REQs are extracted from them with full
     MSG provenance and their tickets tagged ``kind: "bug"``, prepended before
     the new work.
+
+    ``injected_skills`` (004 R2/R3): the retrieved library section
+    (library.retrieval.render_injection_section). Empty by default — when empty
+    the prompt is byte-identical to its pre-retrieval form, so the assembly seam
+    adds nothing until a caller wires retrieval in.
     """
+    injection_block = (
+        f"\n\n{injected_skills}\n" if injected_skills else ""
+    )
     carry_block = (
         "\n\nUAT feedback from the previous increment (carry-in): extract a"
         " requirement from each feedback message below (source_msg = its MSG"
@@ -320,7 +329,7 @@ def build_planner_prompt(
         " to a requirement id the ticket covers).\n"
         "- assumptions: anything the spec leaves ambiguous that you decided"
         " rather than asked about, as plain strings (empty array if none)."
-        f"{carry_block}\n\n"
+        f"{carry_block}{injection_block}\n\n"
         f"Source messages:\n{msg_block}"
     )
 

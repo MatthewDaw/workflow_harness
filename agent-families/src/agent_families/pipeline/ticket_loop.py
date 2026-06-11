@@ -201,12 +201,17 @@ def ticket_document(store: Store, run_id: int, ticket_id: str) -> dict:
 # --- prompts (deterministic, hardcoded per Phase 1; no volatile data) -----------
 
 
-def build_worker_prompt(ticket: dict, ledger: str) -> str:
+def build_worker_prompt(
+    ticket: dict, ledger: str, *, injected_skills: str = ""
+) -> str:
     files = ", ".join(ticket["files"]) if ticket["files"] else "(unassigned)"
     acs = "\n".join(
         f"- {ac['id']}: {ac['text']}".rstrip(": ")
         for ac in ticket["acceptance_criteria"]
     )
+    # 004 R2/R3: the retrieved library section (empty by default → byte-identical
+    # to the pre-retrieval prompt; the assembly seam is inert until wired).
+    injection_block = f"{injected_skills}\n\n" if injected_skills else ""
     return (
         "You are the worker implementing exactly one ticket inside its"
         " workspace (your working directory).\n"
@@ -218,15 +223,19 @@ def build_worker_prompt(ticket: dict, ledger: str) -> str:
         " commands; do not touch files owned by other tickets. When you stop,"
         " emit structured output with a 'summary' of what you changed and"
         " why.\n\n"
+        f"{injection_block}"
         f"Ticket ledger (prior iterations, read-only):\n{ledger}"
     )
 
 
-def build_verifier_prompt(ticket: dict, base_url: str | None) -> str:
+def build_verifier_prompt(
+    ticket: dict, base_url: str | None, *, injected_skills: str = ""
+) -> str:
     acs = "\n".join(
         f"- {ac['id']}: {ac['text']}".rstrip(": ")
         for ac in ticket["acceptance_criteria"]
     )
+    injection_block = f"{injected_skills}\n" if injected_skills else ""
     server_line = (
         f"The dev server is already running at {base_url} — drive it for"
         " browser checks; never start or stop it yourself.\n"
@@ -239,6 +248,7 @@ def build_verifier_prompt(ticket: dict, base_url: str | None) -> str:
         " the worker's own unit-test results.\n"
         f"Ticket {ticket['id']}: {ticket['title']}\n"
         f"Acceptance criteria:\n{acs}\n"
+        f"{injection_block}"
         f"{server_line}"
         "Emit structured output: 'verdict' (pass only if every check passed)"
         " and 'checks' with AT LEAST ONE entry per acceptance criterion."
