@@ -48,7 +48,7 @@ holds, and the full offline suite is green.
 - [x] 004/U4 — Kanboard onboarding + frozen micro-benchmark
 - [x] 004/U5 — Reflector Stage A
 - [x] 004/U6 — Reflector Stage B and batch formation
-- [ ] 004/U7 — Validation and promotion
+- [x] 004/U7 — Validation and promotion
 - [ ] 004/U8 — Ratchet and skill split
 - [ ] 004/U9 — Learning-cycle e2e
 
