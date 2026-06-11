@@ -6,7 +6,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json && node --env-file-if-exists=.env.local dist/local/devServer.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate:pg": "node dist/scripts/migratePg.js"
   },
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1058.0",

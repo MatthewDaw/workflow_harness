@@ -5,6 +5,9 @@ dist/
 packages/*/src/**/*.js
 packages/*/src/**/*.d.ts
 packages/*/src/**/*.js.map
+# ...except Vite's hand-authored ambient client types — required for `tsc` on
+# @harness/web (import.meta.env.VITE_*), so a fresh checkout/CI typechecks.
+!packages/web/src/vite-env.d.ts
 coverage/
 .DS_Store
 .env
