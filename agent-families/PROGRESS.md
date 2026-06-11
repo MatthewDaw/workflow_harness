@@ -64,7 +64,7 @@ holds, and the full offline suite is green.
 ### Plan 007 - Greenfield Mode (docs/plans/2026-06-10-007-feat-agent-families-greenfield-mode-plan.md)
 QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not unit-number order.
 - [x] 007/U1 - Migration: greenfield schema + config section
-- [ ] 007/U2 - Planner contract: ASSUME refactor, PROPOSAL artifact, ranked questions
+- [x] 007/U2 - Planner contract: ASSUME refactor, PROPOSAL artifact, ranked questions
 - [ ] 007/U3 - Provenance lint + assumption gate
 - [ ] 007/U4 - DEC extraction + DEC-coverage lint
 - [ ] 007/U5 - Degradation generator + blur cache + blur lint
