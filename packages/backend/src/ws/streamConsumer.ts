@@ -12,6 +12,8 @@ import type { Repo } from '../db/repo.js';
 import { applyEvent } from './projection.js';
 import { recomputeOrgRollup } from '../projections/rollupRepo.js';
 import { defaultRepo } from './runtime.js';
+import { getDb } from '../db/pg/client.js';
+import type { PgDb } from '../db/pg/migrate.js';
 import { orgFromScopePartition, isVersionSideRecord } from '../db/keys.js';
 import { embed as defaultEmbed, type Embedding } from '../embeddings/embed.js';
 import {
@@ -59,6 +61,8 @@ import {
 
 export interface StreamConsumerDeps {
   repo: Repo;
+  /** Postgres client — the objective roll-up driven by a PROJECT progress change lives here (KTD7/U16). */
+  db: PgDb;
   /**
    * Skill-embedding dependencies (U3). A SKILL# write re-embeds the skill's
    * desc+body via `embed` and upserts the vector to the org's skill index via
@@ -360,7 +364,7 @@ async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): 
     // cannot place the project's progress into a tree, so we skip.
     const org = typeof project?.org === 'string' ? project.org : undefined;
     if (!org || !project?.id) return;
-    await recomputeOrgRollup(deps.repo, org, [project.id]);
+    await recomputeOrgRollup(deps.db, deps.repo, org, [project.id]);
     return;
   }
 
@@ -423,4 +427,5 @@ export async function consume(
   return { batchItemFailures };
 }
 
-export const handler: DynamoDBStreamHandler = (event) => consume(event, { repo: defaultRepo() });
+export const handler: DynamoDBStreamHandler = (event) =>
+  consume(event, { repo: defaultRepo(), db: getDb() });

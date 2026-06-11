@@ -3,6 +3,7 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import type { Principal } from '../auth/verify.js';
 import { Repo } from '../db/repo.js';
+import { getDb, type Db } from '../db/pg/client.js';
 
 /**
  * Shared runtime wiring for the REST (HTTP API) handlers. Mirrors `ws/runtime`:
@@ -19,6 +20,16 @@ export function defaultRepo(): Repo {
     repo = new Repo(docClient);
   }
   return repo;
+}
+
+/**
+ * The Postgres (Neon) Drizzle client for the strategic-execution domain
+ * (objectives + weekly — KTD7). Symmetric with `defaultRepo`: handlers take it as
+ * a dep and tests inject a pglite instance instead, so nothing here touches the
+ * network. Lazy + process-cached inside `getDb`.
+ */
+export function defaultDb(): Db {
+  return getDb();
 }
 
 /**

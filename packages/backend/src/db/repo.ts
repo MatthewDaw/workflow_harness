@@ -16,7 +16,6 @@ import type {
   LearningRecord,
   McpServer,
   Memory,
-  ObjectiveNode,
   Project,
   ScopeRef,
   SessionProjection,
@@ -1234,35 +1233,11 @@ export class Repo {
     return flattenBundle({ members: agent.skills }, byName);
   }
 
-  // --- Objectives + weekly updates ---------------------------------------
-
-  async putObjective(o: ObjectiveNode): Promise<void> {
-    await this.doc.send(
-      new PutCommand({ TableName: this.table, Item: { ...k.objectiveKey(o.org, o.id), ...o } }),
-    );
-  }
-
-  async getObjective(org: string, id: string): Promise<ObjectiveNode | undefined> {
-    const res = await this.doc.send(
-      new GetCommand({ TableName: this.table, Key: k.objectiveKey(org, id) }),
-    );
-    return res.Item as ObjectiveNode | undefined;
-  }
-
-  async deleteObjective(org: string, id: string): Promise<void> {
-    await this.doc.send(new DeleteCommand({ TableName: this.table, Key: k.objectiveKey(org, id) }));
-  }
-
-  async listObjectives(org: string): Promise<ObjectiveNode[]> {
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.table,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: { ':pk': `ORG#${org}`, ':sk': 'RCDO#' },
-      }),
-    );
-    return (res.Items ?? []) as ObjectiveNode[];
-  }
+  // --- Weekly updates ----------------------------------------------------
+  //
+  // Objectives moved OUT of DynamoDB to Postgres (KTD7/U16) — see
+  // `db/pg/objectivesRepo.ts`. The legacy Dynamo `RCDO#` items are read exactly
+  // once by `db/pg/migrateObjectives.ts` (a Scan) and then are dead.
 
   // --- Org Definition of Done (plan-mapping feature 1) -------------------
   //

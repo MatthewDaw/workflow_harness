@@ -1,10 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { ObjectiveNode, Project } from '@harness/shared';
 import { createObjective, getObjective, listObjectives } from '../src/rest/objectives.js';
 import { buildTree, leafPct, recomputeRollup } from '../src/projections/rollup.js';
 import type { ProjectProgress } from '../src/projections/rollup.js';
 import { recomputeOrgRollup } from '../src/projections/rollupRepo.js';
+import {
+  getObjective as pgGetObjective,
+  putObjective as pgPutObjective,
+} from '../src/db/pg/objectivesRepo.js';
+import type { PgDb } from '../src/db/pg/migrate.js';
 import { memRepoHarness } from './helpers/memtable.js';
+import { makePgliteDb } from './helpers/pgharness.js';
 import { bodyOf, httpEvent } from './helpers/httpevent.js';
 import type { ObjectiveTreeNode } from '../src/projections/rollup.js';
 
@@ -12,10 +18,20 @@ import type { ObjectiveTreeNode } from '../src/projections/rollup.js';
  * U10 REST: objectives + roll-up. CRUD (admin), tree assembly, and bottom-up
  * roll-up propagation from project completion (the GitHub-sourced `progressPct`
  * stored on the project that owns each Supporting Outcome).
+ *
+ * Objectives now live in Postgres (KTD7/U16): a fresh pglite DB per test holds
+ * the RCDO tree, while the Dynamo mem-repo still holds projects + profiles. The
+ * roll-up is the cross-store seam — objectives from `db`, project progress from
+ * `repo`.
  */
 
 const { repo } = memRepoHarness();
-const deps = { repo };
+
+let db: PgDb;
+beforeEach(async () => {
+  db = await makePgliteDb();
+});
+const deps = () => ({ repo, db });
 
 const ORG = 'acme';
 const MATT = 'matt';
@@ -31,9 +47,8 @@ function progress(progressPct: number, supportingOutcomeIds: string[]): ProjectP
 }
 
 /**
- * Persist a project with the given completion + owned Supporting Outcomes. The
- * extra `supportingOutcomeIds` ride along on the stored item (a later GitHub
- * read unit populates them from framing); the roll-up reads them back.
+ * Persist a project with the given completion + owned Supporting Outcomes (Dynamo).
+ * The roll-up reads `progressPct` + `supportingOutcomeIds` back off the project.
  */
 async function putProjectProgress(progressPct: number, soIds: string[]): Promise<void> {
   await repo.putProject({
@@ -47,12 +62,12 @@ async function putProjectProgress(progressPct: number, soIds: string[]): Promise
   } as Project & { supportingOutcomeIds: string[] });
 }
 
-/** A small RCDO tree: rally -> outcome -> two supporting outcomes (leaves). */
+/** A small RCDO tree in Postgres: rally -> outcome -> two supporting outcomes (leaves). */
 async function seedTree(): Promise<void> {
-  await repo.putObjective(node('rally', 'rally_cry'));
-  await repo.putObjective(node('out', 'outcome', 'rally'));
-  await repo.putObjective(node('so-a', 'supporting_outcome', 'out'));
-  await repo.putObjective(node('so-b', 'supporting_outcome', 'out'));
+  await pgPutObjective(db, node('rally', 'rally_cry'));
+  await pgPutObjective(db, node('out', 'outcome', 'rally'));
+  await pgPutObjective(db, node('so-a', 'supporting_outcome', 'out'));
+  await pgPutObjective(db, node('so-b', 'supporting_outcome', 'out'));
 }
 
 describe('pure roll-up', () => {
@@ -110,16 +125,16 @@ describe('Streams-triggered org roll-up', () => {
     await putProjectProgress(0, ['so-a']);
 
     // Initially nothing done.
-    await recomputeOrgRollup(repo, ORG, [PROJ]);
-    expect((await repo.getObjective(ORG, 'rally'))?.pct).toBe(0);
+    await recomputeOrgRollup(db, repo, ORG, [PROJ]);
+    expect((await pgGetObjective(db, ORG, 'rally'))?.pct).toBe(0);
 
     // The project reports 100% complete on so-a; recompute.
     await putProjectProgress(100, ['so-a']);
-    await recomputeOrgRollup(repo, ORG, [PROJ]);
+    await recomputeOrgRollup(db, repo, ORG, [PROJ]);
 
-    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(100);
-    expect((await repo.getObjective(ORG, 'out'))?.pct).toBe(50); // so-a 100, so-b 0
-    expect((await repo.getObjective(ORG, 'rally'))?.pct).toBe(50);
+    expect((await pgGetObjective(db, ORG, 'so-a'))?.pct).toBe(100);
+    expect((await pgGetObjective(db, ORG, 'out'))?.pct).toBe(50); // so-a 100, so-b 0
+    expect((await pgGetObjective(db, ORG, 'rally'))?.pct).toBe(50);
   });
 
   it('a project with no stored progress leaves its SO at 0%', async () => {
@@ -133,8 +148,8 @@ describe('Streams-triggered org roll-up', () => {
       supportingOutcomeIds: ['so-a'],
     } as Project & { supportingOutcomeIds: string[] });
 
-    await recomputeOrgRollup(repo, ORG, [PROJ]);
-    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(0);
+    await recomputeOrgRollup(db, repo, ORG, [PROJ]);
+    expect((await pgGetObjective(db, ORG, 'so-a'))?.pct).toBe(0);
   });
 });
 
@@ -142,9 +157,9 @@ describe('REST objectives', () => {
   it('GET /objectives returns the tree with cached roll-ups', async () => {
     await seedTree();
     await putProjectProgress(100, ['so-a']);
-    await recomputeOrgRollup(repo, ORG, [PROJ]);
+    await recomputeOrgRollup(db, repo, ORG, [PROJ]);
 
-    const res = await listObjectives(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps);
+    const res = await listObjectives(httpEvent({ method: 'GET', userId: MATT, org: ORG }), deps());
     const { tree } = bodyOf<{ tree: ObjectiveTreeNode[] }>(res as { body: string });
     expect(tree[0]!.id).toBe('rally');
     expect(tree[0]!.pct).toBe(50);
@@ -153,7 +168,7 @@ describe('REST objectives', () => {
   it('POST /objectives requires admin and forces the caller org', async () => {
     const nonAdmin = await createObjective(
       httpEvent({ method: 'POST', userId: MATT, org: ORG, body: node('r', 'rally_cry') }),
-      deps,
+      deps(),
     );
     expect(nonAdmin).toMatchObject({ statusCode: 403 });
 
@@ -165,17 +180,17 @@ describe('REST objectives', () => {
         admin: true,
         body: { id: 'r', level: 'rally_cry', title: 'R', org: 'evil-corp' },
       }),
-      deps,
+      deps(),
     );
     expect(admin).toMatchObject({ statusCode: 201 });
-    expect(await repo.getObjective(ORG, 'r')).toBeDefined(); // org forced to acme
+    expect(await pgGetObjective(db, ORG, 'r')).toBeDefined(); // org forced to acme
   });
 
   it('GET /objectives/:id returns the node without a linked-tickets fan-out', async () => {
     await seedTree();
     const res = await getObjective(
       httpEvent({ method: 'GET', userId: MATT, org: ORG, path: { id: 'so-a' } }),
-      deps,
+      deps(),
     );
     const body = bodyOf<{ node: ObjectiveNode; linkedTickets?: unknown }>(res as { body: string });
     expect(body.node.id).toBe('so-a');

@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { Project, WeeklyUpdate } from '@harness/shared';
 import { getWeekly, publishWeekly, putWeekly } from '../src/rest/weekly.js';
 import { recomputeOrgRollup } from '../src/projections/rollupRepo.js';
+import {
+  getObjective as pgGetObjective,
+  putObjective as pgPutObjective,
+} from '../src/db/pg/objectivesRepo.js';
+import type { PgDb } from '../src/db/pg/migrate.js';
 import { memRepoHarness } from './helpers/memtable.js';
+import { makePgliteDb } from './helpers/pgharness.js';
 import { bodyOf, deviceTokenEvent, httpEvent } from './helpers/httpevent.js';
 
 /**
@@ -14,7 +20,14 @@ import { bodyOf, deviceTokenEvent, httpEvent } from './helpers/httpevent.js';
  */
 
 const { repo } = memRepoHarness();
-const deps = { repo };
+
+// Objectives live in Postgres (KTD7/U16): a fresh pglite DB per test, injected
+// into the weekly deps so publish's roll-up recompute writes to it.
+let db: PgDb;
+beforeEach(async () => {
+  db = await makePgliteDb();
+});
+const deps = () => ({ repo, db });
 
 const MATT = 'matt';
 const ORG = 'acme';
@@ -65,11 +78,11 @@ describe('store + serve a posted report', () => {
         plan: 'Harden the importer; start the dashboard.',
         conformityScore: 82,
       }),
-      deps,
+      deps(),
     );
     expect(res).toMatchObject({ statusCode: 200 });
 
-    const served = await getWeekly(getEvent(MATT), deps);
+    const served = await getWeekly(getEvent(MATT), deps());
     const { update } = bodyOf<{ update: WeeklyUpdate }>(served);
     expect(update.validated).toBe(false);
     expect(update.done).toBe('Shipped reconciliation and export.');
@@ -79,8 +92,8 @@ describe('store + serve a posted report', () => {
 
   it('re-store overwrites the week', async () => {
     await repo.putProject(project(MATT));
-    await putWeekly(putEvent(MATT, { done: 'first', plan: 'a' }), deps);
-    await putWeekly(putEvent(MATT, { done: 'second', plan: 'b', conformityScore: 50 }), deps);
+    await putWeekly(putEvent(MATT, { done: 'first', plan: 'a' }), deps());
+    await putWeekly(putEvent(MATT, { done: 'second', plan: 'b', conformityScore: 50 }), deps());
     const stored = await repo.getWeekly(PROJ, WEEK);
     expect(stored?.done).toBe('second');
     expect(stored?.plan).toBe('b');
@@ -89,20 +102,20 @@ describe('store + serve a posted report', () => {
 
   it('a report without a conformity score stores and serves without one', async () => {
     await repo.putProject(project(MATT));
-    await putWeekly(putEvent(MATT, { done: 'work', plan: 'more work' }), deps);
+    await putWeekly(putEvent(MATT, { done: 'work', plan: 'more work' }), deps());
     const stored = await repo.getWeekly(PROJ, WEEK);
     expect(stored?.conformityScore).toBeUndefined();
   });
 
   it('rejects a malformed body (out-of-range conformity score)', async () => {
     await repo.putProject(project(MATT));
-    const res = await putWeekly(putEvent(MATT, { done: 'x', conformityScore: 150 }), deps);
+    const res = await putWeekly(putEvent(MATT, { done: 'x', conformityScore: 150 }), deps());
     expect(res).toMatchObject({ statusCode: 400 });
   });
 
   it('404s for a non-owner', async () => {
     await repo.putProject(project('alice'));
-    const res = await getWeekly(getEvent(MATT), deps);
+    const res = await getWeekly(getEvent(MATT), deps());
     expect(res).toMatchObject({ statusCode: 404 });
   });
 });
@@ -115,26 +128,26 @@ describe('publish recomputes the org roll-up', () => {
       progressPct: 75,
       supportingOutcomeIds: ['so-a'],
     } as Project & { supportingOutcomeIds: string[] });
-    await repo.putObjective({ id: 'so-a', org: ORG, level: 'supporting_outcome', title: 'SO A' });
+    await pgPutObjective(db, { id: 'so-a', org: ORG, level: 'supporting_outcome', title: 'SO A' });
 
     // Establish a baseline cached %.
-    await recomputeOrgRollup(repo, ORG, [PROJ]);
-    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(75);
+    await recomputeOrgRollup(db, repo, ORG, [PROJ]);
+    expect((await pgGetObjective(db, ORG, 'so-a'))?.pct).toBe(75);
 
-    await putWeekly(putEvent(MATT, { done: 'shipped', plan: 'next', conformityScore: 90 }), deps);
+    await putWeekly(putEvent(MATT, { done: 'shipped', plan: 'next', conformityScore: 90 }), deps());
 
-    const res = await publishWeekly(publishEvent(MATT), deps);
+    const res = await publishWeekly(publishEvent(MATT), deps());
     expect(res).toMatchObject({ statusCode: 200 });
     const { update } = bodyOf<{ update: WeeklyUpdate }>(res);
     expect(update.validated).toBe(true);
     expect(update.conformityScore).toBe(90);
     // Publish re-ran the roll-up: the linked SO reflects the project's progress.
-    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(75);
+    expect((await pgGetObjective(db, ORG, 'so-a'))?.pct).toBe(75);
   });
 
   it('404s publish for a missing week', async () => {
     await repo.putProject(project(MATT));
-    const res = await publishWeekly(publishEvent(MATT), deps);
+    const res = await publishWeekly(publishEvent(MATT), deps());
     expect(res).toMatchObject({ statusCode: 404 });
   });
 });
@@ -157,7 +170,7 @@ describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () =>
     await repo.putProject(project(MATT));
     const res = await putWeekly(
       await bearerPutEvent(MATT, { done: 'via device token', plan: 'x' }),
-      deps,
+      deps(),
     );
     expect(res).toMatchObject({ statusCode: 200 });
     const stored = await repo.getWeekly(PROJ, WEEK);
@@ -174,7 +187,7 @@ describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () =>
         rawPath: `/projects/${PROJ}/weekly/${WEEK}`,
         body: { done: 'x', plan: 'y' },
       }),
-      deps,
+      deps(),
     );
     expect(res).toMatchObject({ statusCode: 401 });
   });
@@ -183,7 +196,7 @@ describe('device-token bearer auth (claude+ wrapper, no Cognito gateway)', () =>
     await repo.putProject(project(MATT));
     const res = await putWeekly(
       await bearerPutEvent('someone-else', { done: 'x', plan: 'y' }),
-      deps,
+      deps(),
     );
     expect(res).toMatchObject({ statusCode: 404 });
   });

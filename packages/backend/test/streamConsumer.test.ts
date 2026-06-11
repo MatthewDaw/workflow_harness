@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import type { DynamoDBRecord, DynamoDBStreamEvent } from 'aws-lambda';
 import type { Envelope, Event, Idea, ObjectiveNode, Project, Skill } from '@harness/shared';
@@ -24,7 +24,13 @@ import {
   type VectorItem,
 } from '../src/embeddings/s3vectors.js';
 import * as k from '../src/db/keys.js';
+import {
+  getObjective as pgGetObjective,
+  putObjective as pgPutObjective,
+} from '../src/db/pg/objectivesRepo.js';
+import type { PgDb } from '../src/db/pg/migrate.js';
 import { memRepoHarness } from './helpers/memtable.js';
+import { makePgliteDb } from './helpers/pgharness.js';
 
 /**
  * U5/U10 Streams backstop: a DynamoDB-stream record for an appended event must
@@ -35,8 +41,14 @@ import { memRepoHarness } from './helpers/memtable.js';
 
 const { repo } = memRepoHarness();
 
+// Objectives live in Postgres (KTD7/U16). Only the roll-up driver block needs a
+// real DB; it installs a fresh pglite instance per test via its own beforeEach.
+// Other blocks never reach the PROJECT-META → recompute path, so `db` stays
+// unset (and unused) for them.
+let db: PgDb;
+
 function deps(): StreamConsumerDeps {
-  return { repo };
+  return { repo, db };
 }
 
 const SESSION = 's-1';
@@ -161,15 +173,20 @@ describe('stream consumer — session projection backstop', () => {
 describe('stream consumer — objective roll-up driver', () => {
   const ORG = 'acme';
 
+  // Objectives are in Postgres now; a fresh pglite DB per test in this block.
+  beforeEach(async () => {
+    db = await makePgliteDb();
+  });
+
   function node(id: string, level: ObjectiveNode['level'], parentId?: string): ObjectiveNode {
     return { id, org: ORG, level, title: id, parentId };
   }
 
   async function seedTree(): Promise<void> {
-    await repo.putObjective(node('rally', 'rally_cry'));
-    await repo.putObjective(node('out', 'outcome', 'rally'));
-    await repo.putObjective(node('so-a', 'supporting_outcome', 'out'));
-    await repo.putObjective(node('so-b', 'supporting_outcome', 'out'));
+    await pgPutObjective(db, node('rally', 'rally_cry'));
+    await pgPutObjective(db, node('out', 'outcome', 'rally'));
+    await pgPutObjective(db, node('so-a', 'supporting_outcome', 'out'));
+    await pgPutObjective(db, node('so-b', 'supporting_outcome', 'out'));
   }
 
   const baseProject = (
@@ -192,9 +209,9 @@ describe('stream consumer — objective roll-up driver', () => {
 
     await consume(streamEvent(projectRecord(baseProject(0), baseProject(100))), deps());
 
-    expect((await repo.getObjective(ORG, 'so-a'))?.pct).toBe(100);
-    expect((await repo.getObjective(ORG, 'out'))?.pct).toBe(50); // so-a 100, so-b 0
-    expect((await repo.getObjective(ORG, 'rally'))?.pct).toBe(50);
+    expect((await pgGetObjective(db, ORG,'so-a'))?.pct).toBe(100);
+    expect((await pgGetObjective(db, ORG,'out'))?.pct).toBe(50); // so-a 100, so-b 0
+    expect((await pgGetObjective(db, ORG,'rally'))?.pct).toBe(50);
   });
 
   it('skips recompute when no roll-up-relevant field changed', async () => {
@@ -207,7 +224,7 @@ describe('stream consumer — objective roll-up driver', () => {
     await consume(streamEvent(projectRecord(oldImg, newImg)), deps());
 
     // No roll-up was driven, so the objective pct stays absent (unwritten).
-    expect((await repo.getObjective(ORG, 'rally'))?.pct).toBeUndefined();
+    expect((await pgGetObjective(db, ORG,'rally'))?.pct).toBeUndefined();
   });
 
   it('skips a project record carrying no org (cannot place into a tree)', async () => {
@@ -223,7 +240,7 @@ describe('stream consumer — objective roll-up driver', () => {
     await expect(
       consume(streamEvent(projectRecord({ ...noOrg, progressPct: 0 }, noOrg)), deps()),
     ).resolves.toMatchObject({ batchItemFailures: [] });
-    expect((await repo.getObjective(ORG, 'rally'))?.pct).toBeUndefined();
+    expect((await pgGetObjective(db, ORG,'rally'))?.pct).toBeUndefined();
   });
 });
 

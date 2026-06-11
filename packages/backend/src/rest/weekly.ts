@@ -4,6 +4,7 @@ import type { Repo } from '../db/repo.js';
 import { recomputeOrgRollup } from '../projections/rollupRepo.js';
 import {
   badRequest,
+  defaultDb,
   defaultRepo,
   notFound,
   ok,
@@ -12,6 +13,7 @@ import {
   pathParam,
 } from './runtime.js';
 import { ownedProject } from './ownership.js';
+import type { PgDb } from '../db/pg/migrate.js';
 
 /**
  * REST: weekly updates (U11, store/serve in U4) — store + publish, scoped to
@@ -32,6 +34,8 @@ import { ownedProject } from './ownership.js';
 
 export interface WeeklyDeps {
   repo: Repo;
+  /** Postgres client — the objective roll-up that publish drives lives here (KTD7/U16). */
+  db: PgDb;
 }
 
 export async function listWeekly(
@@ -110,6 +114,7 @@ export async function publishWeekly(
   // caller's projects so the recompute sees all their stored progress.
   const projects = await deps.repo.listProjectsForUser(principal.userId);
   await recomputeOrgRollup(
+    deps.db,
     deps.repo,
     principal.org,
     projects.map((p) => p.id),
@@ -119,7 +124,7 @@ export async function publishWeekly(
 }
 
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
-  const deps: WeeklyDeps = { repo: defaultRepo() };
+  const deps: WeeklyDeps = { repo: defaultRepo(), db: defaultDb() };
   const method = event.requestContext.http.method;
   const path = event.requestContext.http.path;
   const week = pathParam(event, 'week');

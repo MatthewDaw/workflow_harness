@@ -118,6 +118,18 @@ export class ApiStack extends cdk.Stack {
       'command-hq/openrouter-api-key',
     );
 
+    // The Neon serverless-Postgres connection URL for the strategic-execution
+    // domain (objectives + weekly — KTD7/U16). Neon is an external managed
+    // Postgres reached over its HTTP driver, so there is NO Aurora cluster, VPC,
+    // or security group here — just the connection string, injected as
+    // DATABASE_URL via the same dynamic-reference path as the device-token secret.
+    // Created/populated out-of-band in Secrets Manager; CDK references it by name.
+    const neonDbSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'NeonDatabaseUrl',
+      'command-hq/neon-database-url',
+    );
+
     // ---- Lambda scaffolding ---------------------------------------------------
     const commonEnv: Record<string, string> = {
       HARNESS_TABLE: this.table.tableName,
@@ -130,6 +142,9 @@ export class ApiStack extends cdk.Stack {
       DEVICE_TOKEN_SECRET: deviceTokenSecret.secretValue.unsafeUnwrap(),
       // The skill-idea loop's model calls (OpenRouter chat + embeddings) read this.
       OPENROUTER_API_KEY: openRouterSecret.secretValue.unsafeUnwrap(),
+      // The strategic-execution Postgres (Neon) connection URL — objectives +
+      // weekly handlers and the stream consumer read this via `db/pg/client.ts`.
+      DATABASE_URL: neonDbSecret.secretValue.unsafeUnwrap(),
     };
 
     const makeFn = (id: string, bundleKey: string): lambda.Function =>
