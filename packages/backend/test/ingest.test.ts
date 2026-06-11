@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import type { Envelope, Event } from '@harness/shared';
-import { type ConnectionRecord } from '../src/db/repo.js';
+import {
+  DEFAULT_EVENT_RETENTION_DAYS,
+  eventRetentionDays,
+  type ConnectionRecord,
+} from '../src/db/repo.js';
 import { ingest, type EventDeps } from '../src/ws/event.js';
 import { connect } from '../src/ws/connect.js';
 import { disconnect } from '../src/ws/disconnect.js';
@@ -160,6 +164,15 @@ describe('event ingestion', () => {
 
     const events = await repo.listEvents(SESSION);
     expect(events.map((e) => e.event.kind)).toEqual(['session.start', 'tool.call']);
+    // U20: every appended event self-expires — a `ttl` (epoch seconds, ≈ now +
+    // the retention window) rides on the stored item so DynamoDB TTL reaps it.
+    for (const e of events) {
+      const ttl = (e as unknown as { ttl?: number }).ttl;
+      expect(typeof ttl).toBe('number');
+      const nowSec = Math.floor(Date.now() / 1000);
+      expect(ttl).toBeGreaterThan(nowSec);
+      expect(ttl).toBeLessThanOrEqual(nowSec + DEFAULT_EVENT_RETENTION_DAYS * 86_400 + 60);
+    }
 
     const proj = await repo.getSessionById(SESSION);
     expect(proj?.name).toBe('reconcile-variance');
@@ -340,5 +353,67 @@ describe('$disconnect', () => {
     await disconnect(wsEvent('', 'old-conn'), { repo });
     // The newer claim survives.
     expect(await repo.getInstanceConnectionId(INSTANCE)).toBe('new-conn');
+  });
+});
+
+describe('U20: event-stream TTL (self-expiry)', () => {
+  const TTL_SESSION = 'ttl-session';
+  function ttlEnv(seq: number): Envelope {
+    return {
+      v: 1,
+      instanceId: INSTANCE,
+      host: 'matt@mbp',
+      ts: 1_700_000_000_000 + seq,
+      seq,
+      event: { kind: 'user.msg', sessionId: TTL_SESSION, tokens: 1 },
+    };
+  }
+
+  it('stamps a ttl ≈ supplied now + the retention window', async () => {
+    const nowMs = 1_800_000_000_000; // a fixed "ingest time"
+    await repo.appendEvent(ttlEnv(0), { nowMs });
+
+    const [stored] = await repo.listEvents(TTL_SESSION);
+    const ttl = (stored as unknown as { ttl?: number }).ttl;
+    const expected = Math.floor(nowMs / 1000) + DEFAULT_EVENT_RETENTION_DAYS * 86_400;
+    expect(ttl).toBe(expected);
+  });
+
+  it('falls back to the envelope ts when no now is supplied', async () => {
+    const e = ttlEnv(0);
+    await repo.appendEvent(e);
+    const [stored] = await repo.listEvents(TTL_SESSION);
+    const ttl = (stored as unknown as { ttl?: number }).ttl;
+    expect(ttl).toBe(Math.floor(e.ts / 1000) + DEFAULT_EVENT_RETENTION_DAYS * 86_400);
+  });
+
+  it('omits ttl entirely when the retention window is disabled (0)', async () => {
+    const prev = process.env.EVENT_RETENTION_DAYS;
+    process.env.EVENT_RETENTION_DAYS = '0';
+    try {
+      expect(eventRetentionDays()).toBe(0);
+      await repo.appendEvent(ttlEnv(0), { nowMs: 1_800_000_000_000 });
+      const [stored] = await repo.listEvents(TTL_SESSION);
+      expect((stored as unknown as { ttl?: number }).ttl).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.EVENT_RETENTION_DAYS;
+      else process.env.EVENT_RETENTION_DAYS = prev;
+    }
+  });
+
+  it('honours a custom EVENT_RETENTION_DAYS window', async () => {
+    const prev = process.env.EVENT_RETENTION_DAYS;
+    process.env.EVENT_RETENTION_DAYS = '7';
+    try {
+      expect(eventRetentionDays()).toBe(7);
+      const nowMs = 1_800_000_000_000;
+      await repo.appendEvent(ttlEnv(0), { nowMs });
+      const [stored] = await repo.listEvents(TTL_SESSION);
+      const ttl = (stored as unknown as { ttl?: number }).ttl;
+      expect(ttl).toBe(Math.floor(nowMs / 1000) + 7 * 86_400);
+    } finally {
+      if (prev === undefined) delete process.env.EVENT_RETENTION_DAYS;
+      else process.env.EVENT_RETENTION_DAYS = prev;
+    }
   });
 });

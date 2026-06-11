@@ -129,3 +129,33 @@ export const weeklyCommits = pgTable(
 );
 
 export type WeeklyCommitRow = typeof weeklyCommits.$inferSelect;
+
+/**
+ * `calibrations` — per-person reconciliation calibration (U19). On every
+ * `completeReconcile`, the just-reconciled week's terminal commits accumulate into
+ * the owner's running totals so the agent can right-size next week's proposal: a
+ * person who completes ~60% of what they lock is shown 6 high-leverage units, not
+ * 10. Keyed by `user_id` (KTD: calibration is per-person, not per-project) — a
+ * trailing accumulation across that person's reconciled weeks.
+ *
+ *  - `locked_count` — terminal commits the person has reconciled (the denominator).
+ *  - `done_count` — of those, the ones reconciled `done` (the numerator).
+ *  - `rate` — `done_count / locked_count`, the headline completion calibration.
+ *  - `high_priority_first_count` / `high_priority_total` — of the higher-priority
+ *    half of each window, how many shipped (`done`), so the agent can tell whether
+ *    leverage-first ordering actually held (advisory only).
+ *  - `updated_at` — epoch-ms of the last `completeReconcile` that touched the row.
+ *
+ * Advisory only — it never blocks a transition.
+ */
+export const calibrations = pgTable('calibrations', {
+  userId: text('user_id').primaryKey(),
+  lockedCount: integer('locked_count').notNull().default(0),
+  doneCount: integer('done_count').notNull().default(0),
+  rate: real('rate'),
+  highPriorityFirstCount: integer('high_priority_first_count').notNull().default(0),
+  highPriorityTotal: integer('high_priority_total').notNull().default(0),
+  updatedAt: bigint('updated_at', { mode: 'number' }),
+});
+
+export type CalibrationRow = typeof calibrations.$inferSelect;

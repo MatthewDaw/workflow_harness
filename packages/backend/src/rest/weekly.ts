@@ -14,6 +14,7 @@ import {
 } from '../db/pg/weeklyRepo.js';
 import { getObjective } from '../db/pg/objectivesRepo.js';
 import { deriveCategory, wsjfPriority } from '../projections/weeklyLifecycle.js';
+import { getCalibration } from '../projections/calibration.js';
 import {
   badRequest,
   conflict,
@@ -89,7 +90,10 @@ function deriveChessFields(input: {
 
 /**
  * Every week for the project (plan + its commits), oldest ISO-week first. The
- * commits are priority-sorted by the repo (KTD4).
+ * commits are priority-sorted by the repo (KTD4). The response also carries the
+ * caller's reconciliation `calibration` (U19) — the plan-anchored agent reads it
+ * in its propose step to right-size next week's set ("you complete ~60% — here are
+ * the 6 highest-leverage units"). It is absent for a first-ever week (no history).
  */
 export async function listWeekly(
   event: APIGatewayProxyEventV2,
@@ -103,7 +107,8 @@ export async function listWeekly(
     const commits = await listWeekCommits(deps.db, plan.projectId, plan.isoWeek);
     weeks.push({ plan, commits });
   }
-  return ok({ weeks });
+  const calibration = await getCalibration(deps.db, resolved.principal.userId);
+  return ok({ weeks, ...(calibration ? { calibration } : {}) });
 }
 
 /**

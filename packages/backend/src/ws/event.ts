@@ -51,8 +51,10 @@ export async function ingest(
   // (POST /projects). The daemon's session.start still carries a projectId so
   // sessions group under an already-connected project, but it never creates one.
 
-  // 2. Append (idempotent on duplicate seq).
-  const { stored } = await deps.repo.appendEvent(envelope);
+  // 2. Append (idempotent on duplicate seq). The handler supplies "now" so the
+  //    event's self-expiry `ttl` (U20) is stamped relative to ingest time, keeping
+  //    the repo path free of an ambient clock.
+  const { stored } = await deps.repo.appendEvent(envelope, { nowMs: Date.now() });
 
   // 2b. A `session.learning` is an append record, NOT a projection fold: it
   //     carries no projectId (post-start events don't), so we resolve the owning

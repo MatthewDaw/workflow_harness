@@ -5,6 +5,7 @@ import { getPlan, listWeekCommits, upsertPlan } from '../db/pg/weeklyRepo.js';
 import { weeklyCommits, weeklyPlans } from '../db/pg/schema.js';
 import { canTransition, carryForwardCommits, nextIsoWeek } from '../projections/weeklyLifecycle.js';
 import { recomputeOrgRollup } from '../projections/rollupRepo.js';
+import { recordCalibration } from '../projections/calibration.js';
 // Re-export the now-pure `nextIsoWeek` (moved to `weeklyLifecycle` in U5) so the
 // U4 transitions suite, which imports it from here, keeps resolving it.
 export { nextIsoWeek } from '../projections/weeklyLifecycle.js';
@@ -56,7 +57,7 @@ async function resolveWeek(
   event: APIGatewayProxyEventV2,
   deps: WeeklyTransitionsDeps,
 ): Promise<
-  | { projectId: string; week: string; plan: WeeklyPlan; org: string }
+  | { projectId: string; week: string; plan: WeeklyPlan; org: string; ownerUserId: string }
   | { error: APIGatewayProxyResultV2 }
 > {
   const resolved = await ownedProject(event, deps.repo, 'pid');
@@ -65,7 +66,13 @@ async function resolveWeek(
   if (!week) return { error: json(400, { error: 'missing project or week' }) };
   const plan = await getPlan(deps.db, resolved.project.id, week);
   if (!plan) return { error: json(404, { error: 'not found' }) };
-  return { projectId: resolved.project.id, week, plan, org: resolved.principal.org };
+  return {
+    projectId: resolved.project.id,
+    week,
+    plan,
+    org: resolved.principal.org,
+    ownerUserId: resolved.principal.userId,
+  };
 }
 
 /** Whether the transition `from -> to` is legal; a 409 otherwise (KTD2). */
@@ -137,10 +144,11 @@ export async function startReconcile(
  * RECONCILING -> RECONCILED. Refuses while any commit is still `planned` (a 409
  * listing them). On success, in ONE transaction: stamps `RECONCILED` +
  * `reconciledAt`, clones every `planned`/`partial` commit into next week's DRAFT
- * (created if absent) with `carriedFromWeek`/`carryDepth+1`, and stamps
- * `carriedToWeek` on the sources (KTD3). A clone reaching `carryDepth >= 3`
- * surfaces a decompose/kill nudge (not a block). Roll-up + metric recompute (U6/
- * U17) hooks in here in the same transaction once those land.
+ * (created if absent) with `carriedFromWeek`/`carryDepth+1`, stamps
+ * `carriedToWeek` on the sources (KTD3), and folds the week's terminal commits
+ * into the owner's reconciliation calibration (U19). A clone reaching
+ * `carryDepth >= 3` surfaces a decompose/kill nudge (not a block). The
+ * single-source roll-up recompute (U6) runs after the transaction commits.
  */
 export async function completeReconcile(
   event: APIGatewayProxyEventV2,
@@ -148,7 +156,7 @@ export async function completeReconcile(
 ): Promise<APIGatewayProxyResultV2> {
   const resolved = await resolveWeek(event, deps);
   if ('error' in resolved) return resolved.error;
-  const { projectId, week, plan, org } = resolved;
+  const { projectId, week, plan, org, ownerUserId } = resolved;
 
   const illegal = assertTransition(plan.status, 'RECONCILED');
   if (illegal) return illegal;
@@ -172,8 +180,9 @@ export async function completeReconcile(
   const reconciledAt = Date.now();
 
   // ONE transaction: stamp the source plan + sources, ensure next week's DRAFT,
-  // insert the clones. pglite runs this as a real transaction; the Neon HTTP
-  // driver swap to the WebSocket driver is deferred per the plan.
+  // insert the clones, and record the owner's calibration. pglite runs this as a
+  // real transaction; the Neon HTTP driver swap to the WebSocket driver is
+  // deferred per the plan.
   await deps.db.transaction(async (tx) => {
     // Stamp the source week RECONCILED.
     await tx
@@ -219,6 +228,12 @@ export async function completeReconcile(
         })),
       );
     }
+
+    // Reconciliation calibration (U19): accumulate this week's terminal commits
+    // into the owner's running locked-vs-done rate so the plan-anchored agent can
+    // right-size next week's proposal. Advisory — it never blocks. Runs in the
+    // same transaction as the reconcile (`tx` is the same PgDb shape).
+    await recordCalibration(tx as unknown as PgDb, ownerUserId, commits, reconciledAt);
   });
 
   // Single-source roll-up recompute (KTD5/U6): now that this week is RECONCILED,
