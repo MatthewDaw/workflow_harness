@@ -32,6 +32,26 @@ Phase 2 amendments (plan-003 U5):
   them are ordinary tickets tagged ``kind: "bug"`` (a tag in the plan
   document, not a ticket type — KTD Q4; §12 queries never special-case).
 
+Phase 007 amendments (plan-007 U2 — greenfield-mode planner contract):
+
+- Assumptions are typed (KTD2): each contract item is an object
+  ``{claim, risk_if_wrong (low|med|high), cheapest_test}`` (a legacy bare
+  string is accepted via a union ``type`` and normalized to a med-risk claim
+  for cross-unit fixture compatibility). They persist to the **``trace_assume``
+  ledger** (keyed by ``run_id``) as the single source of truth;
+  :func:`check_plan_assumptions` is subsumed onto those rows — it ranks them
+  through :func:`rank_questions` (risk-weight, KTD7) and settles each row
+  (``answered`` → ``confirmed`` + ``confirmed_by_msg``; over-budget stays
+  ``open``). The plan document keeps a rendered view so :func:`plan_report`
+  is unchanged for existing consumers.
+- A typed PROPOSAL artifact (KTD4/R10): the contract gains an optional
+  ``proposals[]`` persisted to ``trace_proposal`` — legal but unexercised
+  until the founder exists (Phase D); ``linked_assume_id`` remaps a
+  planner-local assumption id to the canonical ASSUME id.
+- REQ provenance is MSG-or-ASSUME (KTD2): a requirement may carry
+  ``source_assume`` instead of ``source_msg``; the trace_req DB CHECK enforces
+  exactly-one at persistence (the plan-dict provenance lint is U3).
+
 The lint list (1:1 with R10, :data:`PLAN_LINTS`):
 
 - ``req_set`` — non-empty REQ extraction, unique REQ ids, valid MSG provenance
@@ -67,6 +87,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_families.pipeline.sessions import RoleProfile, run_session
+from agent_families.store import ASSUME_RISKS
 
 if TYPE_CHECKING:
     from agent_families.store import Store
@@ -98,8 +119,26 @@ TICKET_KINDS = ("feature", "bug")
 DEFAULT_TICKET_KIND = "feature"
 
 # Per-assumption verification statuses written by the plan-checker (003 R13).
+# These name the SHAPE of the ``assumption_checks`` records surfaced on the plan
+# document — the human-readable verification outcome. They are distinct from the
+# ``trace_assume.status`` column (007 KTD2: open|confirmed|invalidated), which is
+# the queryable ledger state: ``check_plan_assumptions`` maps ``answered`` →
+# ``confirmed`` (with ``confirmed_by_msg``) on the row while still returning the
+# ``verified`` record below; over-budget/unavailable leaves the row ``open``.
 ASSUMPTION_VERIFIED = "verified"
 ASSUMPTION_UNVERIFIED = "unverified"
+
+# trace_assume row statuses (007 KTD2) the ledger is settled into.
+ASSUME_STATUS_OPEN = "open"
+ASSUME_STATUS_CONFIRMED = "confirmed"
+ASSUME_STATUS_INVALIDATED = "invalidated"
+
+# The planner prompt-set version stamped on planner spans (007 U2). The typed
+# ASSUME object + proposals[] contract is an instrument event (DESIGN §17): the
+# schema description below changed, so the version is bumped from the implicit
+# v1 (None) baseline. The orchestrator may override per call; absent an override,
+# run_planning stamps this constant so the contract revision is queryable.
+PLANNER_PROMPT_SET_VERSION = "planner-2-assume-typed"
 
 # --- the planner structured-output contract (R9/R10) --------------------------
 # Stays within the judge validator's schema subset (type/enum/required/
@@ -107,14 +146,59 @@ ASSUMPTION_UNVERIFIED = "unverified"
 # the lints' job, riding the Ralph feedback loop rather than the schema-retry
 # path — a dangling ref is a PLANNING failure, not a malformed response.
 
+# REQ provenance is MSG-or-ASSUME (007 KTD2 / R2): ``source_msg`` is no longer
+# mandatory — a requirement may instead trace to a planner assumption via
+# ``source_assume`` (the assumption's planner-local id, remapped to a canonical
+# ASSUME id at persistence). The exactly-one rule is enforced by the trace_req DB
+# CHECK (U1) at persistence and, at the plan-dict level, by the U3 provenance
+# lint; the schema validator's subset cannot express XOR, so both fields are
+# optional here and the contract is tightened downstream.
 _REQUIREMENT_SCHEMA = {
     "type": "object",
     "properties": {
         "id": {"type": "string"},
         "text": {"type": "string"},
         "source_msg": {"type": "string"},
+        "source_assume": {"type": "string"},
     },
-    "required": ["id", "text", "source_msg"],
+    "required": ["id", "text"],
+    "additionalProperties": False,
+}
+
+# Typed ASSUME object (007 KTD2): the planner's assumptions become typed rows
+# ``{claim, risk_if_wrong, cheapest_test}`` with an optional planner-local ``id``
+# so REQs/proposals can link to them. The validator accepts a union ``type`` and
+# only enforces ``required``/``additionalProperties`` when the item is an object,
+# so a legacy bare string still validates and is normalized to a med-risk claim
+# at persistence (cross-unit fixture compatibility — see the module Conformance
+# note). A well-formed object MUST carry all three typed fields.
+_ASSUMPTION_SCHEMA = {
+    "type": ["string", "object"],
+    "properties": {
+        "id": {"type": "string"},
+        "claim": {"type": "string"},
+        "risk_if_wrong": {"type": "string", "enum": list(ASSUME_RISKS)},
+        "cheapest_test": {"type": "string"},
+    },
+    "required": ["claim", "risk_if_wrong", "cheapest_test"],
+    "additionalProperties": False,
+}
+
+# Typed PROPOSAL artifact (007 KTD4/R10): a decision the planner surfaces with
+# options and a recommendation, optionally tied to the assumption it resolves.
+# Legal but unexercised in Phase B (the explorer answers questions; nothing
+# consumes proposals until the founder exists in Phase D) — persisted to
+# trace_proposal so the contract and store are ready.
+_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "topic": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "string"}},
+        "recommended": {"type": "string"},
+        "linked_assume_id": {"type": "string"},
+    },
+    "required": ["id", "topic", "options", "recommended"],
     "additionalProperties": False,
 }
 
@@ -159,7 +243,9 @@ PLANNER_OUTPUT_SCHEMA = {
     "properties": {
         "requirements": {"type": "array", "items": _REQUIREMENT_SCHEMA},
         "tickets": {"type": "array", "items": _TICKET_SCHEMA},
-        "assumptions": {"type": "array", "items": {"type": "string"}},
+        "assumptions": {"type": "array", "items": _ASSUMPTION_SCHEMA},
+        # optional (007 U2): the typed PROPOSAL artifact; absent → no proposals.
+        "proposals": {"type": "array", "items": _PROPOSAL_SCHEMA},
     },
     "required": ["requirements", "tickets", "assumptions"],
     "additionalProperties": False,
@@ -328,7 +414,13 @@ def build_planner_prompt(
         " least one per ticket, each with a unique id, its text, and req set"
         " to a requirement id the ticket covers).\n"
         "- assumptions: anything the spec leaves ambiguous that you decided"
-        " rather than asked about, as plain strings (empty array if none)."
+        " rather than asked about — each an object with claim (the assumption),"
+        " risk_if_wrong (one of low, med, high), and cheapest_test (the cheapest"
+        " way to check it). Empty array if none.\n"
+        "- proposals: OPTIONAL decisions you surface with options and a"
+        " recommendation, each with a unique id, topic, options (strings),"
+        " recommended, and an optional linked_assume_id naming the assumption"
+        " id it resolves. Omit or use an empty array if you have none."
         f"{carry_block}{injection_block}\n\n"
         f"Source messages:\n{msg_block}"
     )
@@ -414,7 +506,10 @@ def lint_plan(plan: dict, msg_ids: set[str], *, size_budget: int) -> list[LintFi
                 )
             )
         req_ids.add(rid)
-        if req["source_msg"] not in msg_ids:
+        # source_msg is now optional (007 KTD2 — a REQ may instead trace to an
+        # ASSUME). When present it must reference a synthesized MSG; the
+        # exactly-one provenance rule itself is the U3 provenance lint's job.
+        if "source_msg" in req and req["source_msg"] not in msg_ids:
             findings.append(
                 LintFinding(
                     LINT_REQ_SET,
@@ -591,6 +686,70 @@ def _cycle_members(edges: dict[str, list[str]]) -> list[str]:
     return [node for node in edges if indegree[node] > 0]
 
 
+# --- typed ASSUME / PROPOSAL contract helpers (007 U2) ----------------------------
+
+
+@dataclass(frozen=True)
+class NormalizedAssumption:
+    """A planner assumption flattened to the trace_assume column shape.
+
+    ``local_id`` is the planner-local handle (object form only) other planner
+    artifacts link to before canonical ids are minted; ``None`` for the legacy
+    bare-string form, which cannot be linked.
+    """
+
+    local_id: str | None
+    claim: str
+    risk_if_wrong: str
+    cheapest_test: str
+
+
+def normalize_assumption(item: str | Mapping) -> NormalizedAssumption:
+    """Flatten one contract assumption (string OR typed object) to ASSUME fields.
+
+    A legacy bare string normalizes to a med-risk claim with no cheapest test
+    (007 U2 cross-unit fixture compatibility); a typed object passes its fields
+    through. The contract schema has already validated the object's shape.
+    """
+    if isinstance(item, str):
+        return NormalizedAssumption(
+            local_id=None, claim=item, risk_if_wrong="med", cheapest_test=""
+        )
+    return NormalizedAssumption(
+        local_id=item.get("id"),
+        claim=item["claim"],
+        risk_if_wrong=item["risk_if_wrong"],
+        cheapest_test=item.get("cheapest_test", ""),
+    )
+
+
+# Risk ordering for the question-ranking seam (KTD7) — highest risk first.
+_RISK_RANK = {"high": 0, "med": 1, "low": 2}
+
+
+def _candidate_risk(candidate) -> str:
+    """Extract ``risk_if_wrong`` from a candidate (dict, sqlite Row, or object)."""
+    try:
+        # dicts and sqlite3.Row both index by column/key name
+        return candidate["risk_if_wrong"]
+    except (TypeError, KeyError, IndexError):
+        return getattr(candidate, "risk_if_wrong", "med")
+
+
+def rank_questions(candidates: Sequence) -> list:
+    """Order assumption candidates for confirmation (007 KTD7, v1 seam).
+
+    v1 is pure risk-weight ordering — high before med before low — with stable
+    ties (input order preserved). A real EVPI estimator (and, post-U4, the
+    DEC-category weight) replaces the key later without touching callers. The
+    seam exists so the gate and the assumption-conversion consume one definition
+    of "which question matters most."
+    """
+    return sorted(
+        candidates, key=lambda c: _RISK_RANK.get(_candidate_risk(c), 1)
+    )
+
+
 # --- persistence (orchestrator-minted canonical ids; one transaction) -------------
 
 
@@ -603,26 +762,59 @@ def _persist_plan(
 ) -> dict:
     """Write the linted plan in one transaction and return the canonical document.
 
-    Canonical REQ/TKT/AC ids are minted here in planner-output order — the
-    planner is an untrusted producer; its local ids exist only inside its own
-    output and are remapped on every link.
+    Canonical REQ/TKT/AC/ASSUME/PROP ids are minted here in planner-output order
+    — the planner is an untrusted producer; its local ids exist only inside its
+    own output and are remapped on every link. Typed assumptions become
+    trace_assume rows (007 KTD2: the queryable ledger, the single source of truth
+    that check_plan_assumptions settles), and proposals become trace_proposal
+    rows (KTD4); the plan document keeps a rendered view of each so plan_report
+    still surfaces them.
     """
     req_map: dict[str, str] = {}
     tkt_map: dict[str, str] = {}
+    assume_map: dict[str, str] = {}  # planner-local assumption id → canonical
     run = store.get_run(run_id)
     canonical_reqs: list[dict] = []
     canonical_tkts: list[dict] = []
+    canonical_props: list[dict] = []
     with store.transaction():
+        # ASSUME rows first — REQs and proposals may link to them (007 KTD2).
+        for i, item in enumerate(plan["assumptions"]):
+            norm = normalize_assumption(item)
+            aid = f"ASSUME-r{run_id}-{i:03d}"
+            store.conn.execute(
+                "INSERT INTO trace_assume (id, run_id, claim, risk_if_wrong,"
+                " cheapest_test) VALUES (?, ?, ?, ?, ?)",
+                (aid, run_id, norm.claim, norm.risk_if_wrong, norm.cheapest_test),
+            )
+            if norm.local_id is not None:
+                assume_map[norm.local_id] = aid
         for i, req in enumerate(plan["requirements"]):
             cid = f"REQ-r{run_id}-{i:03d}"
             req_map[req["id"]] = cid
-            store.conn.execute(
-                "INSERT INTO trace_req (id, source_msg_id) VALUES (?, ?)",
-                (cid, req["source_msg"]),
-            )
-            canonical_reqs.append(
-                {"id": cid, "text": req["text"], "source_msg": req["source_msg"]}
-            )
+            source_assume = req.get("source_assume")
+            if source_assume:
+                assume_cid = assume_map.get(source_assume)
+                if assume_cid is None:
+                    raise PlanningError(
+                        f"requirement {req['id']} sources unknown assumption"
+                        f" '{source_assume}' — no assumption carries that id"
+                    )
+                store.conn.execute(
+                    "INSERT INTO trace_req (id, source_assume_id) VALUES (?, ?)",
+                    (cid, assume_cid),
+                )
+                canonical_reqs.append(
+                    {"id": cid, "text": req["text"], "source_assume": assume_cid}
+                )
+            else:
+                store.conn.execute(
+                    "INSERT INTO trace_req (id, source_msg_id) VALUES (?, ?)",
+                    (cid, req["source_msg"]),
+                )
+                canonical_reqs.append(
+                    {"id": cid, "text": req["text"], "source_msg": req["source_msg"]}
+                )
         for i, ticket in enumerate(plan["tickets"]):
             tkt_map[ticket["id"]] = f"TKT-r{run_id}-{i:03d}"
         ac_counter = 0
@@ -660,12 +852,41 @@ def _persist_plan(
                     "acceptance_criteria": canonical_acs,
                 }
             )
+        for i, proposal in enumerate(plan.get("proposals", [])):
+            pid = f"PROP-r{run_id}-{i:03d}"
+            linked_local = proposal.get("linked_assume_id")
+            linked_cid = assume_map.get(linked_local) if linked_local else None
+            store.conn.execute(
+                "INSERT INTO trace_proposal (id, run_id, topic, options_json,"
+                " recommended, linked_assume_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    pid,
+                    run_id,
+                    proposal["topic"],
+                    json.dumps(proposal["options"], ensure_ascii=False),
+                    proposal["recommended"],
+                    linked_cid,
+                ),
+            )
+            canonical_props.append(
+                {
+                    "id": pid,
+                    "topic": proposal["topic"],
+                    "options": list(proposal["options"]),
+                    "recommended": proposal["recommended"],
+                    "linked_assume_id": linked_cid,
+                }
+            )
         document = {
             "run_id": run_id,
             "spec_ref": run["spec_ref"],
             "requirements": canonical_reqs,
             "tickets": canonical_tkts,
+            # rendered view — original shape passes through (legacy strings stay
+            # strings) so existing report consumers are unaffected; trace_assume
+            # is the queryable source of truth (007 KTD2).
             "assumptions": list(plan["assumptions"]),
+            "proposals": canonical_props,
             "warnings": [w.as_dict() for w in warnings],
         }
         store.set_meta(
@@ -689,7 +910,7 @@ def plan_report(store: Store, run_id: int) -> dict:
 
 
 def build_assumption_question(assumption: str) -> str:
-    """One planner assumption rendered as a verified-oracle question."""
+    """One planner assumption (its ``claim``) rendered as a verified-oracle question."""
     return (
         f"The plan for the current increment assumed: {assumption} — Is this"
         " assumption correct for the target app? Verify it against the live"
@@ -697,33 +918,61 @@ def build_assumption_question(assumption: str) -> str:
     )
 
 
+def load_assume_rows(store: Store, run_id: int) -> list:
+    """The run's trace_assume ledger rows in id order (007 KTD2)."""
+    return store.conn.execute(
+        "SELECT id, run_id, claim, basis, risk_if_wrong, cheapest_test, status,"
+        " confirmed_by_msg FROM trace_assume WHERE run_id = ? ORDER BY id",
+        (run_id,),
+    ).fetchall()
+
+
 def check_plan_assumptions(store: Store, run_id: int, ask) -> list[dict]:
-    """Convert the persisted plan's ``assumptions[]`` into questions (003 R13).
+    """Convert the run's ASSUME ledger into verification questions (003 R13 / 007 KTD2).
+
+    Subsumed onto ``trace_assume`` rows (007 KTD2): the ledger — not the plan
+    document — is the single source of truth. Rows are ranked by risk through
+    the :func:`rank_questions` seam (KTD7: confirm top-risk first) before
+    conversion, so under a tight question budget the riskiest assumptions are
+    the ones spent on.
 
     ``ask`` is the verified-oracle round-trip bound by the orchestrator —
     ``lambda q: explorer.ask_question(store, episode_id, q, mentions, ...)``
     — returning an object exposing ``outcome`` (``answered`` |
-    ``answer_unavailable`` | ``budget_exhausted``) and ``answer``.
-    Conversions consume question budget INSIDE ``ask`` (the budget trains
-    elicitation; free verification would untrain it — KTD Q6). Outcomes:
+    ``answer_unavailable`` | ``budget_exhausted``), ``answer``, and
+    ``answer_msg_id``. Conversions consume question budget INSIDE ``ask`` (the
+    budget trains elicitation; free verification would untrain it — KTD Q6).
+    Outcomes settle both the human-readable record AND the ledger row:
 
-    - ``answered`` → the assumption is ``verified``, the answer recorded;
-    - ``budget_exhausted`` → ``unverified`` (typed risk, not a blocker);
-    - ``answer_unavailable`` → ``unverified`` (the slot was refunded and the
-      tuple queued for human review by the round-trip itself).
+    - ``answered`` → record ``verified`` + answer; row → ``confirmed`` with
+      ``confirmed_by_msg`` = the answer MSG;
+    - ``budget_exhausted`` / ``answer_unavailable`` → record ``unverified``
+      (typed risk, not a blocker); the row stays ``open``.
 
     The records are persisted onto the plan document (``assumption_checks``)
     and surfaced by :func:`plan_report`.
     """
-    document = plan_report(store, run_id)
+    rows = rank_questions(load_assume_rows(store, run_id))
     records: list[dict] = []
-    for index, assumption in enumerate(document.get("assumptions", [])):
-        outcome = ask(build_assumption_question(assumption))
+    for index, row in enumerate(rows):
+        claim = row["claim"]
+        # ask() runs (and commits) its own round-trip; the ledger UPDATE rides a
+        # separate short transaction after it so the write lock is never held
+        # across a live LLM call (the original conversion's lock discipline).
+        outcome = ask(build_assumption_question(claim))
         kind = outcome.outcome
         if kind == "answered":
+            answer_msg = getattr(outcome, "answer_msg_id", None)
+            with store.transaction():
+                store.conn.execute(
+                    "UPDATE trace_assume SET status = ?, confirmed_by_msg = ?"
+                    " WHERE id = ?",
+                    (ASSUME_STATUS_CONFIRMED, answer_msg, row["id"]),
+                )
             record = {
                 "index": index,
-                "assumption": assumption,
+                "assume_id": row["id"],
+                "assumption": claim,
                 "status": ASSUMPTION_VERIFIED,
                 "reason": None,
                 "answer": outcome.answer,
@@ -731,25 +980,27 @@ def check_plan_assumptions(store: Store, run_id: int, ask) -> list[dict]:
         elif kind in ("budget_exhausted", "answer_unavailable"):
             record = {
                 "index": index,
-                "assumption": assumption,
+                "assume_id": row["id"],
+                "assumption": claim,
                 "status": ASSUMPTION_UNVERIFIED,
                 "reason": kind,
                 "answer": None,
             }
             logger.info(
-                "assumption %d recorded unverified (%s) — typed risk, not a"
-                " blocker (003 R13): %s",
-                index,
+                "assumption %s recorded unverified (%s) — typed risk, not a"
+                " blocker (003 R13); ledger row stays open: %s",
+                row["id"],
                 kind,
-                assumption,
+                claim,
             )
         else:
             raise PlanningError(
                 f"ask returned unknown outcome {kind!r} for assumption"
-                f" {index} (expected answered / answer_unavailable /"
+                f" {row['id']} (expected answered / answer_unavailable /"
                 " budget_exhausted)"
             )
         records.append(record)
+    document = plan_report(store, run_id)
     document["assumption_checks"] = records
     store.set_meta(
         plan_meta_key(run_id),
@@ -820,6 +1071,12 @@ def run_planning(
         spec_path.name, messages, size_budget, carry_in=carry_in
     )
 
+    # The typed-ASSUME/proposals contract is an instrument event (007 U2): absent
+    # a caller override, stamp the bumped planner prompt-set version on every span.
+    stamped_version = (
+        prompt_set_version if prompt_set_version is not None
+        else PLANNER_PROMPT_SET_VERSION
+    )
     prompt = base_prompt
     last_errors: list[LintFinding] = []
     for iteration in range(1, cap + 1):
@@ -833,7 +1090,7 @@ def run_planning(
             run_id=run_id,
             family=family,
             ralph_iteration=iteration,
-            prompt_set_version=prompt_set_version,
+            prompt_set_version=stamped_version,
             mode=mode,
             script_path=script_path,
         )

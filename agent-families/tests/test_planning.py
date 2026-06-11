@@ -42,19 +42,23 @@ from agent_families.pipeline.planning import (
     LINT_SIZE_BUDGET,
     PLAN_LINTS,
     PLANNER_OUTPUT_SCHEMA,
+    PLANNER_PROMPT_SET_VERSION,
     SEVERITY_ERROR,
     SEVERITY_WARN,
     PlanFailed,
     PlanningError,
     build_lint_feedback_prompt,
     build_planner_prompt,
+    check_plan_assumptions,
     chunk_spec,
     lint_plan,
+    normalize_assumption,
     plan_report,
+    rank_questions,
     run_planning,
     synthesize_messages,
 )
-from agent_families.pipeline.sessions import planner_profile
+from agent_families.pipeline.sessions import SessionSchemaViolation, planner_profile
 from agent_families.store import Store
 
 SPEC = """\
@@ -557,12 +561,29 @@ def test_planner_schema_carries_the_full_contract():
         "files",
         "acceptance_criteria",
     }
-    assert props["requirements"]["items"]["required"] == ["id", "text", "source_msg"]
+    # 007 U2: REQ provenance is MSG-or-ASSUME — source_msg is no longer mandatory
+    # (the exactly-one rule is the DB CHECK + the U3 lint).
+    assert props["requirements"]["items"]["required"] == ["id", "text"]
+    assert set(props["requirements"]["items"]["properties"]) == {
+        "id",
+        "text",
+        "source_msg",
+        "source_assume",
+    }
     assert ticket["properties"]["acceptance_criteria"]["items"]["required"] == [
         "id",
         "text",
         "req",
     ]
+    # 007 U2: assumptions are typed objects (string union for back-compat);
+    # proposals are an optional typed array.
+    assumption = props["assumptions"]["items"]
+    assert assumption["type"] == ["string", "object"]
+    assert set(assumption["required"]) == {"claim", "risk_if_wrong", "cheapest_test"}
+    assert assumption["properties"]["risk_if_wrong"]["enum"] == ["low", "med", "high"]
+    assert "proposals" not in PLANNER_OUTPUT_SCHEMA["required"]
+    proposal = props["proposals"]["items"]
+    assert set(proposal["required"]) == {"id", "topic", "options", "recommended"}
 
 
 def test_planner_prompt_lists_messages_and_budget(tmp_path):
@@ -587,3 +608,383 @@ def test_feedback_prompt_carries_typed_failures(tmp_path):
     assert feedback.startswith("BASE")
     assert "[dag_acyclic]" in feedback
     assert "expected an acyclic ticket dependency graph" in feedback
+
+
+def test_planner_prompt_describes_typed_assumptions_and_proposals(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    spec = tmp_path / "toy-spec.md"
+    spec.write_text(SPEC, encoding="utf-8", newline="\n")
+    messages = synthesize_messages(store, run_id, spec)
+    prompt = build_planner_prompt(spec.name, messages, 4)
+    # the typed ASSUME object shape is described (schema description only)
+    assert "risk_if_wrong" in prompt
+    assert "cheapest_test" in prompt
+    # proposals are described as OPTIONAL — no behavioral "always propose" push
+    # (proposal-first is Phase D, world-gated; KTD7)
+    assert "proposals" in prompt and "OPTIONAL" in prompt
+    assert "linked_assume_id" in prompt
+
+
+# --- 007 U2: typed ASSUME ledger, PROPOSAL artifact, ranked questions ---------------
+
+
+def typed_assumption(
+    claim: str, risk: str = "high", *, local_id: str | None = None,
+    cheapest: str = "click the thing",
+) -> dict:
+    obj = {"claim": claim, "risk_if_wrong": risk, "cheapest_test": cheapest}
+    if local_id is not None:
+        obj["id"] = local_id
+    return obj
+
+
+class _FakeAskOutcome:
+    """A duck-typed ask round-trip outcome (the explorer's QAOutcome surface)."""
+
+    def __init__(self, outcome: str, answer=None, answer_msg_id=None) -> None:
+        self.outcome = outcome
+        self.answer = answer
+        self.answer_msg_id = answer_msg_id
+
+
+def test_normalize_assumption_string_and_object():
+    norm = normalize_assumption("just a string")
+    assert (norm.local_id, norm.claim, norm.risk_if_wrong, norm.cheapest_test) == (
+        None,
+        "just a string",
+        "med",
+        "",
+    )
+    obj = normalize_assumption(
+        {"id": "A1", "claim": "c", "risk_if_wrong": "high", "cheapest_test": "t"}
+    )
+    assert (obj.local_id, obj.claim, obj.risk_if_wrong, obj.cheapest_test) == (
+        "A1",
+        "c",
+        "high",
+        "t",
+    )
+
+
+def test_typed_assumptions_persist_to_assume_rows(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    plan["assumptions"] = [
+        typed_assumption("auth is username-only", "high", cheapest="try logging in"),
+        typed_assumption("bookmarks are private", "low", cheapest="check another user"),
+    ]
+    plan_session(store, tmp_path, run_id, [plan])
+    rows = store.conn.execute(
+        "SELECT id, run_id, claim, risk_if_wrong, cheapest_test, status,"
+        " confirmed_by_msg FROM trace_assume ORDER BY id"
+    ).fetchall()
+    assert [r["id"] for r in rows] == [
+        f"ASSUME-r{run_id}-000",
+        f"ASSUME-r{run_id}-001",
+    ]
+    assert [r["claim"] for r in rows] == [
+        "auth is username-only",
+        "bookmarks are private",
+    ]
+    assert [r["risk_if_wrong"] for r in rows] == ["high", "low"]
+    assert [r["cheapest_test"] for r in rows] == [
+        "try logging in",
+        "check another user",
+    ]
+    # the ledger is the source of truth; rows are born open, unconfirmed
+    assert {r["status"] for r in rows} == {"open"}
+    assert {r["confirmed_by_msg"] for r in rows} == {None}
+    assert {r["run_id"] for r in rows} == {run_id}
+
+
+def test_string_assumption_normalized_to_med_risk_ledger_row(tmp_path):
+    # a legacy bare-string fixture (cross-unit back-compat) still persists as a
+    # med-risk ASSUME row, and the document keeps the original string shape.
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan_session(store, tmp_path, run_id, [valid_plan(run_id)])
+    row = store.conn.execute(
+        "SELECT claim, risk_if_wrong, cheapest_test FROM trace_assume"
+    ).fetchone()
+    assert row["claim"] == "username-only auth; no password required"
+    assert row["risk_if_wrong"] == "med"
+    assert row["cheapest_test"] == ""
+    assert plan_report(store, run_id)["assumptions"] == [
+        "username-only auth; no password required"
+    ]
+
+
+def test_typed_assumption_missing_field_fails_schema_cleanly(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    bad = valid_plan(run_id)
+    bad["assumptions"] = [{"claim": "no risk field", "cheapest_test": "x"}]
+    with pytest.raises(SessionSchemaViolation):
+        plan_session(store, tmp_path, run_id, [bad], cap=1)
+
+
+def test_typed_assumption_bad_risk_enum_fails_schema_cleanly(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    bad = valid_plan(run_id)
+    bad["assumptions"] = [typed_assumption("c", "critical")]  # not low|med|high
+    with pytest.raises(SessionSchemaViolation):
+        plan_session(store, tmp_path, run_id, [bad], cap=1)
+
+
+def test_proposals_persist_with_and_without_link(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    plan["assumptions"] = [typed_assumption("deletes are soft", "high", local_id="A-del")]
+    plan["proposals"] = [
+        {
+            "id": "P1",
+            "topic": "deletion semantics",
+            "options": ["soft", "hard"],
+            "recommended": "soft",
+            "linked_assume_id": "A-del",
+        },
+        {
+            "id": "P2",
+            "topic": "empty state",
+            "options": ["blank", "cta"],
+            "recommended": "cta",
+        },
+    ]
+    plan_session(store, tmp_path, run_id, [plan])
+    rows = store.conn.execute(
+        "SELECT id, topic, options_json, recommended, linked_assume_id"
+        " FROM trace_proposal ORDER BY id"
+    ).fetchall()
+    assert [r["id"] for r in rows] == [
+        f"PROP-r{run_id}-000",
+        f"PROP-r{run_id}-001",
+    ]
+    assert json.loads(rows[0]["options_json"]) == ["soft", "hard"]
+    # the linked proposal remaps the planner-local assume id to the canonical
+    # ASSUME id (the REQ/TKT remap discipline); the unlinked one is NULL
+    assert rows[0]["linked_assume_id"] == f"ASSUME-r{run_id}-000"
+    assert rows[1]["linked_assume_id"] is None
+    props = plan_report(store, run_id)["proposals"]
+    assert [p["id"] for p in props] == [
+        f"PROP-r{run_id}-000",
+        f"PROP-r{run_id}-001",
+    ]
+    assert props[0]["linked_assume_id"] == f"ASSUME-r{run_id}-000"
+    assert props[1]["linked_assume_id"] is None
+
+
+def test_req_sourced_from_assumption_persists(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    plan["assumptions"] = [
+        typed_assumption("untagged bookmarks are listed", "high", local_id="A-untag")
+    ]
+    plan["requirements"].append(
+        {"id": "REQ-3", "text": "list untagged", "source_assume": "A-untag"}
+    )
+    plan["tickets"].append(
+        {
+            "id": "TKT-3",
+            "title": "untagged",
+            "description": "list untagged",
+            "covers": ["REQ-3"],
+            "depends_on": [],
+            "files": ["src/untagged.ts"],
+            "acceptance_criteria": [
+                {"id": "AC-3", "text": "untagged listed", "req": "REQ-3"}
+            ],
+        }
+    )
+    plan_session(store, tmp_path, run_id, [plan])
+    # REQ provenance = MSG-or-ASSUME: the ASSUME-sourced REQ persists with
+    # source_assume_id and NO source_msg (the trace_req exactly-one CHECK holds)
+    assume_req = store.conn.execute(
+        "SELECT source_msg_id, source_assume_id FROM trace_req WHERE id = ?",
+        (f"REQ-r{run_id}-002",),
+    ).fetchone()
+    assert assume_req["source_msg_id"] is None
+    assert assume_req["source_assume_id"] == f"ASSUME-r{run_id}-000"
+    # the MSG-sourced REQs are unaffected
+    msg_req = store.conn.execute(
+        "SELECT source_msg_id, source_assume_id FROM trace_req WHERE id = ?",
+        (f"REQ-r{run_id}-000",),
+    ).fetchone()
+    assert msg_req["source_assume_id"] is None
+    assert msg_req["source_msg_id"] == msg(run_id, 1)
+
+
+def test_req_sourcing_unknown_assumption_is_an_actionable_error(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    plan["requirements"].append(
+        {"id": "REQ-3", "text": "x", "source_assume": "A-nope"}
+    )
+    plan["tickets"].append(
+        {
+            "id": "TKT-3",
+            "title": "x",
+            "description": "x",
+            "covers": ["REQ-3"],
+            "depends_on": [],
+            "files": ["src/x.ts"],
+            "acceptance_criteria": [{"id": "AC-3", "text": "x", "req": "REQ-3"}],
+        }
+    )
+    with pytest.raises(PlanningError, match="unknown assumption"):
+        plan_session(store, tmp_path, run_id, [plan], cap=1)
+
+
+def test_rank_questions_stable_under_ties():
+    items = [
+        {"id": "a", "risk_if_wrong": "med"},
+        {"id": "b", "risk_if_wrong": "med"},
+        {"id": "c", "risk_if_wrong": "med"},
+    ]
+    assert [i["id"] for i in rank_questions(items)] == ["a", "b", "c"]
+
+
+def test_rank_questions_orders_by_risk_high_first():
+    items = [
+        {"id": "low1", "risk_if_wrong": "low"},
+        {"id": "high1", "risk_if_wrong": "high"},
+        {"id": "med1", "risk_if_wrong": "med"},
+        {"id": "high2", "risk_if_wrong": "high"},
+    ]
+    # high before med before low; ties keep input order (high1 before high2)
+    assert [i["id"] for i in rank_questions(items)] == [
+        "high1",
+        "high2",
+        "med1",
+        "low1",
+    ]
+
+
+def test_check_plan_assumptions_ranks_and_settles_ledger(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan = valid_plan(run_id)
+    # low FIRST in plan order so risk-ranking demonstrably REORDERS the questions
+    plan["assumptions"] = [
+        typed_assumption("low risk two", "low", local_id="L"),
+        typed_assumption("high risk one", "high", local_id="H"),
+    ]
+    plan_session(store, tmp_path, run_id, [plan])
+    # a real MSG for the confirmed_by_msg FK
+    with store.transaction():
+        store.conn.execute(
+            "INSERT INTO trace_msg (id, content) VALUES (?, ?)",
+            ("MSG-answer", "the answer"),
+        )
+    answers = iter(
+        [
+            _FakeAskOutcome("answered", answer="yes", answer_msg_id="MSG-answer"),
+            _FakeAskOutcome("budget_exhausted"),
+        ]
+    )
+    seen: list[str] = []
+
+    def ask(question: str):
+        seen.append(question)
+        return next(answers)
+
+    records = check_plan_assumptions(store, run_id, ask)
+    # KTD7: the high-risk assumption is converted FIRST despite being second in
+    # plan order — the budget is spent on the riskiest question
+    assert "high risk one" in seen[0]
+    assert "low risk two" in seen[1]
+    assert records[0]["status"] == "verified"
+    assert records[0]["answer"] == "yes"
+    assert records[1]["status"] == "unverified"
+    assert records[1]["reason"] == "budget_exhausted"
+    # the ledger is settled: answered → confirmed with the answer MSG; the
+    # over-budget row stays open (a typed risk, not a blocker)
+    ledger = {
+        r["claim"]: r
+        for r in store.conn.execute(
+            "SELECT claim, status, confirmed_by_msg FROM trace_assume"
+        ).fetchall()
+    }
+    assert ledger["high risk one"]["status"] == "confirmed"
+    assert ledger["high risk one"]["confirmed_by_msg"] == "MSG-answer"
+    assert ledger["low risk two"]["status"] == "open"
+    assert ledger["low risk two"]["confirmed_by_msg"] is None
+    # surfaced on the plan document
+    assert plan_report(store, run_id)["assumption_checks"] == records
+
+
+def test_planner_prompt_set_version_stamped_and_overridable(tmp_path):
+    store = make_store(tmp_path)
+    run_id = make_run(store)
+    plan_session(store, tmp_path, run_id, [valid_plan(run_id)])
+    stamped = store.conn.execute(
+        "SELECT DISTINCT prompt_set_version FROM trace_span WHERE agent = 'planner'"
+        " AND run_id = ?",
+        (run_id,),
+    ).fetchall()
+    assert [s["prompt_set_version"] for s in stamped] == [PLANNER_PROMPT_SET_VERSION]
+    # an explicit caller override is respected (the orchestrator's channel)
+    run2 = make_run(store)
+    script = tmp_path / "ps-override-script.json"
+    script.write_text(
+        json.dumps({"steps": [planner_step(valid_plan(run2))]}, indent=2),
+        encoding="utf-8",
+        newline="\n",
+    )
+    run_planning(
+        store,
+        run2,
+        tmp_path / "toy-spec.md",
+        planner_profile(model="sonnet", max_turns=1, timeout_s=60.0),
+        transcript_dir=tmp_path / "transcripts-ps",
+        cap=1,
+        max_retries=0,
+        size_budget=SIZE_BUDGET,
+        mode="scripted",
+        script_path=script,
+        prompt_set_version="ps-custom",
+    )
+    overridden = store.conn.execute(
+        "SELECT prompt_set_version FROM trace_span WHERE run_id = ?", (run2,)
+    ).fetchone()
+    assert overridden["prompt_set_version"] == "ps-custom"
+
+
+# --- ## Conformance (007 U2) --------------------------------------------------------
+#
+# U2 maps its Test scenarios to the tests above; the planner-contract refactor
+# (ASSUME ledger, PROPOSAL artifact, ranked questions) is enforced behaviorally:
+#
+# - ambiguous fixture → ≥1 typed ASSUME persisted:
+#     test_typed_assumptions_persist_to_assume_rows
+# - an answered assumption question flips status with the MSG recorded:
+#     test_check_plan_assumptions_ranks_and_settles_ledger (→ confirmed +
+#     confirmed_by_msg) AND test_assumptions_converted_budget_counted_and_
+#     overbudget_unverified in tests/test_explorer.py (live explorer round-trip)
+# - legacy string-shaped transcripts: the contract is enforced for typed objects
+#     (test_typed_assumption_missing_field_fails_schema_cleanly,
+#     test_typed_assumption_bad_risk_enum_fails_schema_cleanly). DEVIATION (smallest
+#     faithful adaptation, wave-scoped "do not touch other units' files" +
+#     "suite must stay green"): bare strings are ACCEPTED via a union `type`
+#     and normalized to a med-risk claim, rather than rejected, because the
+#     string-assumption form is produced by 8 already-committed fixtures across
+#     other units (test_explorer/test_episode/test_pipeline_e2e/test_rehearsal/
+#     test_e2e_*). Back-compat is itself tested:
+#     test_string_assumption_normalized_to_med_risk_ledger_row.
+# - zero assumptions legal: test_valid_plan_persists_full_traceability_joins
+#     (and every []-assumption fixture across the suite)
+# - rank_questions stable under ties / orders by risk:
+#     test_rank_questions_stable_under_ties, test_rank_questions_orders_by_risk_high_first
+# - a proposal with no linked_assume_id persists (and a linked one remaps):
+#     test_proposals_persist_with_and_without_link
+# - REQ provenance = MSG-or-ASSUME: test_req_sourced_from_assumption_persists,
+#     test_req_sourcing_unknown_assumption_is_an_actionable_error
+# - prompt-set version bumped and stamped:
+#     test_planner_prompt_set_version_stamped_and_overridable
+# - brownfield regression (behaviour identical except assumption shape): the
+#     whole pre-existing planning suite + tests/test_pipeline_e2e.py stay green.
