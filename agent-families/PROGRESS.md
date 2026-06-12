@@ -85,7 +85,7 @@ R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b hu
 - [x] 008/U2 - Embedding: three vectors + Matryoshka
 - [x] 008/U3 - Vecindex: 3-column table + on= + flattener fix
 - [x] 008/U4 - NLI seam (nli.py)
-- [ ] 008/U5 - Admission gate (Operation 1)
+- [x] 008/U5 - Admission gate (Operation 1)
 - [ ] 008/U6 - add_idea rewrite (key-collision + NLI + corroborate/refine/deferred-supersede)
 - [ ] 008/U7 - Lifecycle: deferred-supersede at promotion + dormant
 - [ ] 008/U8 - Reflector routing through the R3 gate
