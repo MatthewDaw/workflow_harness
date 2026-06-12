@@ -36,6 +36,7 @@ deleted ``pipeline._knn_dedup_view`` helper worked around out-of-band.)
 from __future__ import annotations
 
 import sqlite3
+import struct
 from dataclasses import dataclass
 
 from agent_families.store import Store
@@ -223,6 +224,74 @@ class VecIndex:
             )
             for row in rows
         ]
+
+    def get_vector(self, insight_id: int, on: str = "full") -> list[float]:
+        """Read back the stored vector for ``insight_id`` from the ``on`` column.
+
+        The graph build (009 R4/R5) needs the raw clustering vectors to weight
+        edges by Tanimoto, so this reverses :meth:`insert`. The column comes from
+        the same fixed allow-list as :meth:`knn` (never interpolated, R8). The
+        vec0 column is stored as raw little-endian float32 (the exact bytes
+        ``sqlite_vec.serialize_float32`` produced), so ``struct.unpack`` recovers
+        the values without the precision loss of ``vec_to_json``'s 6-decimal text.
+        """
+        try:
+            column = _VIEW_COLUMN[on]
+        except KeyError:
+            raise VecIndexError(
+                f"unknown vector view {on!r}; expected one of {sorted(_VIEW_COLUMN)}"
+            ) from None
+        row = self.store.conn.execute(
+            f"SELECT {column} AS blob FROM {VEC_TABLE} WHERE insight_id = ?",
+            (insight_id,),
+        ).fetchone()
+        if row is None:
+            raise VecIndexError(f"no vec row for insight_id {insight_id}")
+        blob = row["blob"]
+        return list(struct.unpack(f"{self.dim}f", blob))
+
+    def all_neighbors(
+        self,
+        k: int,
+        *,
+        on: str = "full",
+        statuses: tuple[str, ...] | None = ("active",),
+    ) -> dict[int, list[Neighbor]]:
+        """Per-node kNN over every visible insight on the ``on`` column (009 R5).
+
+        Returns ``{insight_id: [k nearest neighbors, self dropped]}`` for every
+        insight whose status is in ``statuses`` (``None`` = all statuses) and that
+        carries a vec row. v1 is the brute-force per-node loop the plan specifies:
+        for each node we run :meth:`knn` on its own stored vector and drop the
+        self-edge (the node always matches itself at distance 0). We over-fetch
+        ``k + 1`` so dropping self still leaves up to ``k`` true neighbors.
+
+        Deterministic: nodes are visited in ascending id and :meth:`knn` already
+        breaks distance ties by ascending insight_id, so the mapping is byte-stable
+        for a fixed library snapshot. This is the input to
+        :func:`agent_families.reflector.graphbuild.build_similarity_graph`.
+        """
+        # Node set: visible insights that actually have a vector row. The status
+        # join mirrors knn's so every returned neighbor is itself a node.
+        sql = (
+            f"SELECT v.insight_id AS insight_id FROM {VEC_TABLE} v"
+            " JOIN insights i ON i.id = v.insight_id"
+        )
+        params: list = []
+        if statuses is not None:
+            placeholders = ", ".join("?" for _ in statuses)
+            sql += f" WHERE i.status IN ({placeholders})"
+            params.extend(statuses)
+        sql += " ORDER BY v.insight_id ASC"
+        node_ids = [r["insight_id"] for r in self.store.conn.execute(sql, params)]
+
+        result: dict[int, list[Neighbor]] = {}
+        for node_id in node_ids:
+            vector = self.get_vector(node_id, on=on)
+            hits = self.knn(vector, k + 1, statuses=statuses, on=on)
+            neighbors = [n for n in hits if n.insight_id != node_id][:k]
+            result[node_id] = neighbors
+        return result
 
     def count(self) -> int:
         """Total vec rows; lifecycle ops must never change this (R13 invariant)."""
