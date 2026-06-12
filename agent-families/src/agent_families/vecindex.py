@@ -5,19 +5,34 @@ vector row commits in the same transaction as its insight row — that one fact 
 what makes R7's registration atomicity a one-line rule. Inserts therefore refuse
 to run outside :meth:`Store.transaction`.
 
-**Three-vector shape (R5/R8).** Each insight owns one row carrying its clustering
-vectors in a single multi-column vec0 table, so every vector of an insight
-commits in the same transaction (the R7 atomicity invariant — no half-written
-insight is reachable). The columns:
+**Three-vector shape (R5/R8) + the dedicated retrieval vector (010 U2/R4).** Each
+insight owns one row carrying its vectors in a single multi-column vec0 table, so
+every vector of an insight commits in the same transaction (the R7 atomicity
+invariant — no half-written insight is reachable). The columns:
 
 - ``key_embedding`` — the clustering vector over the rule's *identity*
   (precondition + action). ``knn(on="key")`` collides contradictions on the rule
   they share, which is what lets NLI separate a duplicate from a negation.
 - ``full_embedding`` — the clustering vector over the whole atom.
-- ``embedding`` — the legacy search-document / retrieval vector, exposed as
-  ``knn(on="retrieval")``. (The dedicated v1 retrieval column is deferred to
-  plan 010; until then this legacy column carries the retrieval vector and keeps
-  the demoted retrieval/maintenance readers working — demote, never drop, R6.)
+- ``retrieval_embedding`` — the **dedicated** ``search_document:`` retrieval
+  vector (010 U2/R4), exposed as ``knn(on="retrieval")`` and read by
+  ``library.retrieval``. It is written equal to the legacy ``embedding`` at insert
+  time and then re-embedded with ``EmbeddingService.embed_retrieval`` by
+  :meth:`VecIndex.rebuild_retrieval_vectors` — the rebuild-migration that switches
+  retrieval off the clustering-vector stopgap onto the matched search geometry.
+- ``embedding`` — the **legacy** retrieval/search-document column kept for
+  byte-stability invariants and the raw status-filtered KNN that
+  ``lifecycle``/``maintenance`` issue directly against it (demote, never drop, R6).
+  ``retrieve`` no longer reads it; the dedicated ``retrieval_embedding`` does.
+
+**Why a 4th column, not a rename (010 U2 deviation).** The plan's R4 frames this
+as "declare 3 columns" (drop the legacy ``embedding``). But ``lifecycle`` reads the
+raw ``embedding`` column directly (``test_lifecycle.vec_dump`` /
+``knn_visible``) and those tests are out of this unit's edit scope. Renaming would
+break them, so the faithful adaptation is **additive**: keep ``embedding`` for the
+demoted raw readers and add ``retrieval_embedding`` as the dedicated column. The
+migration re-embeds only ``retrieval_embedding``; ``embedding``/``key``/``full`` are
+preserved byte-for-byte.
 
 Visibility (R13) is a query-time join, never a vec mutation: lifecycle operations
 flip insight status and the join picks it up; vec rows are written once at
@@ -48,7 +63,12 @@ VEC_TABLE = "insight_vectors"
 _VIEW_COLUMN = {
     "key": "key_embedding",
     "full": "full_embedding",
-    "retrieval": "embedding",
+    # 010 U2/R4: the dedicated search_document: retrieval vector. Before this plan
+    # "retrieval" resolved to the legacy `embedding` column (the clustering-vector
+    # stopgap); it now resolves to the re-embedded dedicated column.
+    "retrieval": "retrieval_embedding",
+    # The legacy column stays addressable for the demoted raw readers (lifecycle).
+    "legacy": "embedding",
 }
 
 
@@ -100,12 +120,26 @@ class VecIndex:
 
     def migrate(self) -> None:
         """Create the multi-column vec0 table if absent; dim is fixed at creation."""
+        self._create_table(if_not_exists=True)
+
+    def _create_table(self, *, if_not_exists: bool) -> None:
+        """The vec0 DDL — one place so :meth:`migrate` and the rebuild-migration
+        (:meth:`rebuild_retrieval_vectors`) declare an identical schema.
+
+        Four cosine columns: ``embedding`` (legacy retrieval, kept for the demoted
+        raw readers), ``key_embedding``/``full_embedding`` (clustering), and
+        ``retrieval_embedding`` (the dedicated search_document: retrieval vector,
+        010 U2/R4). vec0 has no ALTER-ADD-COLUMN, so adding the 4th column to an
+        existing table is a deliberate DROP+CREATE+re-insert rebuild.
+        """
+        clause = "IF NOT EXISTS " if if_not_exists else ""
         self.store.conn.execute(
-            f"CREATE VIRTUAL TABLE IF NOT EXISTS {VEC_TABLE} USING vec0("
+            f"CREATE VIRTUAL TABLE {clause}{VEC_TABLE} USING vec0("
             "  insight_id INTEGER PRIMARY KEY,"
             f"  embedding float[{self.dim}] distance_metric=cosine,"
             f"  key_embedding float[{self.dim}] distance_metric=cosine,"
-            f"  full_embedding float[{self.dim}] distance_metric=cosine"
+            f"  full_embedding float[{self.dim}] distance_metric=cosine,"
+            f"  retrieval_embedding float[{self.dim}] distance_metric=cosine"
             ")"
         )
 
@@ -121,17 +155,20 @@ class VecIndex:
         """Store an insight's vectors atomically with its insight row (R5/R7).
 
         New (R3) form — ``insert(id, key_vector, full_vector)`` — writes the key
-        and full clustering vectors; the retrieval column falls back to the full
-        vector unless ``retrieval_vector`` is given (the dedicated retrieval
-        vector arrives in plan 010).
+        and full clustering vectors; both retrieval columns (``embedding`` legacy
+        and ``retrieval_embedding`` dedicated) fall back to the full vector unless
+        ``retrieval_vector`` is given. The dedicated ``retrieval_embedding`` is then
+        re-embedded with ``embed_retrieval`` by :meth:`rebuild_retrieval_vectors`
+        (010 U2/R4) — at insert time it equals ``embedding``, and the migration is
+        what switches it onto the matched search geometry.
 
         Legacy single-vector form — ``insert(id, vector)`` (``full_vector`` left
-        ``None``) — fans the one vector into all three columns. The pre-R3 write
-        path and the deferred retrieval/maintenance readers still call this form;
-        it is preserved until the pipeline is rewritten to embed key+full (plan
-        008 U6).
+        ``None``) — fans the one vector into all four columns. The pre-R3 write
+        path (add-idea) and the demoted retrieval/maintenance readers still call
+        this form; the add-idea vector is already a ``search_document:`` embedding,
+        so its retrieval column is correct without a rebuild.
 
-        vec0 requires every declared column non-NULL per row, so all three are
+        vec0 requires every declared column non-NULL per row, so all four are
         always written. The dims are validated *before* the single ``INSERT`` is
         issued: a partial/mismatched call raises and leaves ZERO rows for this
         insight_id (no half-written vector — the R7 atomicity invariant).
@@ -158,15 +195,97 @@ class VecIndex:
 
         self.store.conn.execute(
             f"INSERT INTO {VEC_TABLE}"
-            " (insight_id, embedding, key_embedding, full_embedding)"
-            " VALUES (?, ?, ?, ?)",
+            " (insight_id, embedding, key_embedding, full_embedding,"
+            "  retrieval_embedding)"
+            " VALUES (?, ?, ?, ?, ?)",
             (
                 insight_id,
                 sqlite_vec.serialize_float32(retr_v),
                 sqlite_vec.serialize_float32(key_v),
                 sqlite_vec.serialize_float32(full_v),
+                # Dedicated retrieval column: equal to the legacy `embedding` at
+                # insert time; rebuild_retrieval_vectors re-embeds it (010 U2/R4).
+                sqlite_vec.serialize_float32(retr_v),
             ),
         )
+
+    # --- the retrieval-vector rebuild migration (010 U2/R4) ----------------------
+
+    def rebuild_retrieval_vectors(self, embedder, *, document_text=None) -> int:
+        """Re-embed every insight's ``retrieval_embedding`` with the dedicated
+        ``search_document:`` vector and rebuild the vec0 table (010 U2/R4).
+
+        vec0 has no ALTER-ADD-COLUMN, so this is a deliberate rebuild: snapshot
+        every row (the legacy ``embedding`` + ``key``/``full`` blobs are preserved
+        byte-for-byte), compute each insight's retrieval vector with
+        ``embedder.embed_retrieval`` over its document text, DROP and re-CREATE the
+        table, and re-insert. Switching ``library.retrieval`` off the
+        clustering-vector stopgap (``on="full"``/the legacy ``embedding``) onto this
+        dedicated column is what R4 buys.
+
+        ``document_text(insight_row) -> str`` builds the text to embed; it defaults
+        to ``pipeline.build_idea_text`` (the same whole-atom text the add-idea
+        indexer embeds, so the geometry matches). Returns the number of insights
+        re-embedded.
+
+        Idempotent: the preserved blobs and the recomputed retrieval vectors are a
+        pure function of the (unchanged) inputs, and ``insight_id`` is the primary
+        key, so a second run rebuilds an identical table — no duplicate or orphan
+        rows. An insight that lost its row (orphan vec row) keeps its legacy
+        retrieval blob as the dedicated vector (a conservative stopgap fallback).
+        """
+        import sqlite_vec
+
+        if document_text is None:
+            # Lazy import: vecindex is below pipeline in the import graph, so this
+            # stays a call-time dependency, never a module-load cycle.
+            from agent_families.pipeline import build_idea_text
+
+            def document_text(row):  # noqa: ANN001 - sqlite3.Row
+                return build_idea_text(
+                    row["precondition"], row["action"], row["expected_outcome"]
+                )
+
+        # Snapshot before any destructive step (reads are fine outside a txn).
+        existing = self.store.conn.execute(
+            f"SELECT insight_id, embedding, key_embedding, full_embedding"
+            f" FROM {VEC_TABLE} ORDER BY insight_id ASC"
+        ).fetchall()
+
+        rebuilt: list[tuple] = []
+        re_embedded = 0
+        for row in existing:
+            insight_id = row["insight_id"]
+            insight = self.store.get_insight(insight_id)
+            if insight is None:
+                # Orphan vec row: no atom to re-embed — preserve the legacy blob.
+                retrieval_blob = bytes(row["embedding"])
+            else:
+                retrieval_vector = list(embedder.embed_retrieval(document_text(insight)))
+                self._check_dim(retrieval_vector)
+                retrieval_blob = sqlite_vec.serialize_float32(retrieval_vector)
+                re_embedded += 1
+            rebuilt.append(
+                (
+                    insight_id,
+                    bytes(row["embedding"]),
+                    bytes(row["key_embedding"]),
+                    bytes(row["full_embedding"]),
+                    retrieval_blob,
+                )
+            )
+
+        with self.store.transaction():
+            self.store.conn.execute(f"DROP TABLE IF EXISTS {VEC_TABLE}")
+            self._create_table(if_not_exists=False)
+            self.store.conn.executemany(
+                f"INSERT INTO {VEC_TABLE}"
+                " (insight_id, embedding, key_embedding, full_embedding,"
+                "  retrieval_embedding)"
+                " VALUES (?, ?, ?, ?, ?)",
+                rebuilt,
+            )
+        return re_embedded
 
     # --- reads --------------------------------------------------------------------
 

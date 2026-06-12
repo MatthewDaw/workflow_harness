@@ -10,10 +10,11 @@ and insight-level**:
 - the candidate universe is **every active insight in the store**, not one
   family's pool — an insight owned by any module is reachable purely by relevance
   (the R13 invariant ``test_ownership_not_reachability_total`` pins);
-- ranking is by **per-insight cosine** on the retrieval vector (v1 stopgap: the
-  legacy/full vector exposed as ``insight_vectors.embedding`` until plan 010 stores
-  the dedicated ``search_document:`` retrieval vector), *not* whole-skill
-  max-member cosine;
+- ranking is by **per-insight cosine** on the dedicated retrieval vector
+  (``insight_vectors.retrieval_embedding`` — the ``search_document:`` geometry
+  re-embedded by ``VecIndex.rebuild_retrieval_vectors``, 010 U2/R4; this replaced
+  the plan-008/009 stopgap that ranked on the legacy/clustering ``embedding``
+  column), *not* whole-skill max-member cosine;
 - the budget is filled at **insight granularity** — whole insight blocks, never
   mid-insight, but no skill-level aggregation node sits in the ranked output;
 - the **own-skills prior is gone** (``own_skills_share`` / ``DEFAULT_OWN_SKILLS_SHARE``
@@ -217,19 +218,22 @@ def _cosine(a: list[float], b: list[float]) -> float:
 def _load_vectors(store: Store, insight_ids: set[int]) -> dict[int, list[float]]:
     """Load the retrieval vectors for ``insight_ids`` from the vec0 table.
 
-    Reads the ``embedding`` column — the legacy/search-document vector that plan
-    008 documents as the v1 retrieval vector until plan 010 stores the dedicated
-    ``search_document:`` column.
+    Reads the dedicated ``retrieval_embedding`` column (010 U2/R4) — the
+    ``search_document:`` geometry re-embedded by
+    ``VecIndex.rebuild_retrieval_vectors``. This replaced the plan-008/009 stopgap
+    that read the legacy/clustering ``embedding`` column. The column is a fixed
+    literal here (never caller-derived), matching ``VecIndex._VIEW_COLUMN``'s
+    ``"retrieval"`` view.
     """
     if not insight_ids:
         return {}
     placeholders = ", ".join("?" for _ in insight_ids)
     rows = store.conn.execute(
-        f"SELECT insight_id, embedding FROM {VEC_TABLE}"
+        f"SELECT insight_id, retrieval_embedding FROM {VEC_TABLE}"
         f" WHERE insight_id IN ({placeholders})",
         tuple(insight_ids),
     ).fetchall()
-    return {row["insight_id"]: _unpack(row["embedding"]) for row in rows}
+    return {row["insight_id"]: _unpack(row["retrieval_embedding"]) for row in rows}
 
 
 # --- whole-store visibility (R4) ---------------------------------------------
@@ -402,6 +406,69 @@ def retrieve(
         pool_insight_ids=frozenset(visible_ids),
         mode=mode,
         skills=tuple(retrieved_skills),
+    )
+
+
+# --- the retrieval-geometry worth-it check (010 U2/R5) -----------------------
+
+
+@dataclass(frozen=True)
+class GeometrySplitVerdict:
+    """The measured verdict for "is the dedicated retrieval vector worth it?" (R5).
+
+    Over a hand-labeled ``(query, document)`` pair set we measure how tightly each
+    geometry binds a query to its true document: ``dedicated_mean`` pairs
+    ``embed_query`` (``search_query:``) with ``embed_retrieval`` (``search_document:``);
+    ``stopgap_mean`` pairs the same query with ``embed_full`` (``clustering:`` — the
+    pre-010 stopgap). A higher mean means true documents sit closer to their query
+    in absolute cosine, which is what clears ``retrieve``'s ``relevance_floor`` gate.
+
+    ``margin > 0`` is the measured "dedicated beats the stopgap" verdict; a
+    non-positive margin is the documented escape hatch (the clustering-prefixed
+    stopgap is adequate — keep it). Either way the verdict is *measured*, not
+    assumed.
+    """
+
+    n_pairs: int
+    dedicated_mean: float
+    stopgap_mean: float
+    margin: float
+
+    @property
+    def dedicated_beats_stopgap(self) -> bool:
+        return self.margin > 0.0
+
+
+def evaluate_retrieval_geometry(embedder, pairs) -> GeometrySplitVerdict:
+    """Measure the dedicated-vs-stopgap retrieval geometry over a pair set (R5).
+
+    ``embedder`` exposes ``embed_query`` / ``embed_retrieval`` / ``embed_full``
+    (the real :class:`~agent_families.embedding.EmbeddingService`, or an offline
+    encoder that models nomic's documented asymmetric-prefix contract). ``pairs``
+    is a sequence of ``(query_text, document_text)``. The query side always uses
+    ``embed_query`` (``search_query:``); only the document side's prefix differs —
+    ``embed_retrieval`` for the dedicated geometry, ``embed_full`` for the stopgap.
+    """
+    pairs = list(pairs)
+    if not pairs:
+        raise RetrievalError(
+            "evaluate_retrieval_geometry needs a non-empty (query, document) pair"
+            " set (010 U2/R5: the worth-it check is measured, never assumed)"
+        )
+    dedicated_total = 0.0
+    stopgap_total = 0.0
+    for query_text, document_text in pairs:
+        query_vec = embedder.embed_query(query_text)
+        dedicated_total += _cosine(query_vec, embedder.embed_retrieval(document_text))
+        stopgap_total += _cosine(query_vec, embedder.embed_full(document_text))
+    n = len(pairs)
+    dedicated_mean = dedicated_total / n
+    stopgap_mean = stopgap_total / n
+    return GeometrySplitVerdict(
+        n_pairs=n,
+        dedicated_mean=dedicated_mean,
+        stopgap_mean=stopgap_mean,
+        margin=dedicated_mean - stopgap_mean,
     )
 
 
