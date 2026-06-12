@@ -112,8 +112,10 @@ import struct
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
+from agent_families.reflector import consolidation
+from agent_families.reflector import objective as obj
 from agent_families.store import RUN_MODES, Store
-from agent_families.vecindex import VEC_TABLE
+from agent_families.vecindex import VEC_TABLE, VecIndex
 
 # --- tunables (caller-supplied, carried defaults; PROVENANCE per DESIGN §17) -----
 #
@@ -133,7 +135,22 @@ DEFAULT_RETIREMENT_MIN_RETRIEVALS = 5
 # PROVENANCE: §4 "insights that stop earning retrievals-with-wins are demoted" — a
 # net fitness (wins - losses) at or below this floor, after real exposure, retires.
 # TUNING METRIC: dormant-revival rate (over-eager pruning) vs library size.
+#
+# DEMOTED at plan-009 U5 (R12): the net-fitness counter is REPLACED by the
+# usage-conditioned censored-survival hazard below (:func:`survival_retirement`).
+# Kept (not deleted) only so the plan-004 U8 ``retirement_candidates`` tests stay
+# green until U7 removes the old machinery; no R3 caller reads it.
 DEFAULT_RETIREMENT_MAX_NET_FITNESS = 0
+
+# PROVENANCE: §4/§6 R3 "usage-conditioned survival" (plan-009 R12). An insight that
+# has earned real exposure but whose USAGE has gone quiet — no retrieval within the
+# last ``staleness_window`` snapshots — is censored-survival "presumed dead" and
+# becomes a retirement candidate, REGARDLESS of its win/loss sign. A still-used
+# insight (a recent retrieval) survives even with a negative net fitness, because
+# usage — not the fitness sign — is the R3 survival signal. TUNING METRIC:
+# dormant-revival rate (over-eager pruning) vs library churn; re-pin once
+# co-retrieval flow replaces the similarity proxy.
+DEFAULT_RETIREMENT_STALENESS_WINDOW = 3
 
 # PROVENANCE: §6 "Split when insight_count > ~25". TUNING METRIC: post-split
 # routing accuracy vs skill size.
@@ -455,6 +472,162 @@ def retirement_candidates(
         ):
             losers.append(insight_id)
     return losers
+
+
+# --- R3 retirement: usage-conditioned censored-survival (plan-009 U5, R12) -------
+#
+# Replaces the net-fitness counter above (DEMOTED, kept for the U8 tests) with the
+# R3 survival model: candidacy is a censored-survival hazard on USAGE, and each
+# candidate is then scored as an isolated ``cost(G)`` delta (DESIGN §6a). Two stages,
+# both pure functions of the append-only fitness log + the v1 similarity flow graph:
+#
+# 1. **Hazard candidacy** (:func:`survival_retirement_candidates`) — an active
+#    insight that earned real exposure (``min_retrievals`` retrievals, the kept
+#    earned-exposure shape) but whose last retrieval is more than ``staleness_window``
+#    snapshots old is "presumed dead" and becomes a candidate. The win/loss SIGN is
+#    never read here: a recently-used insight with a negative net fitness survives,
+#    a usage-dead insight retires — usage, not fitness, is the R3 survival signal.
+# 2. **cost(G) gate** (:func:`survival_retirement`) — each candidate's demotion is
+#    adopted only if removing it from the active graph strictly lowers ``cost(G)``
+#    (``removal_cost_delta < 0``); a load-bearing bridge node survives. The trace
+#    writer ``settle_fitness`` is retained unchanged (it feeds this).
+
+
+@dataclass(frozen=True)
+class SurvivalParams:
+    """Tunables for the R3 usage-conditioned retirement (routed from config, U9)."""
+
+    min_retrievals: int = DEFAULT_RETIREMENT_MIN_RETRIEVALS
+    staleness_window: int = DEFAULT_RETIREMENT_STALENESS_WINDOW
+    knn_k: int = 15
+    module_overhead_bits: float = obj.DEFAULT_MODULE_OVERHEAD_BITS
+
+    def __post_init__(self) -> None:
+        if self.min_retrievals < 0:
+            raise MaintenanceError(
+                f"min_retrievals must be >= 0, got {self.min_retrievals}"
+            )
+        if self.staleness_window < 1:
+            raise MaintenanceError(
+                f"staleness_window must be >= 1, got {self.staleness_window}"
+            )
+        if self.knn_k < 1:
+            raise MaintenanceError(f"knn_k must be >= 1, got {self.knn_k}")
+        if self.module_overhead_bits < 0:
+            raise MaintenanceError(
+                f"module_overhead_bits must be >= 0, got {self.module_overhead_bits}"
+            )
+
+
+@dataclass(frozen=True)
+class SurvivalRetirementResult:
+    """One usage-conditioned retirement pass (R12) — what it demoted and what it spared."""
+
+    snapshot_id: int | None
+    minted_snapshot: bool
+    demoted_insight_ids: tuple[int, ...]
+    # Hazard candidates the cost(G) gate spared (removing them did not lower cost).
+    spared_by_cost_gate: tuple[int, ...]
+
+
+def _last_retrieval_snapshot(
+    store: Store, insight_id: int, snapshot_id: int
+) -> int | None:
+    """The snapshot of an insight's most recent training retrieval (``<= snapshot_id``).
+
+    ``None`` if the insight has never been retrieved in the training channel — the
+    "no exposure" case, which is never a candidate.
+    """
+    row = store.conn.execute(
+        "SELECT MAX(snapshot_id) AS s FROM fitness_events"
+        " WHERE insight_id = ? AND kind = 'retrieval' AND mode = 'training'"
+        " AND snapshot_id <= ?",
+        (insight_id, int(snapshot_id)),
+    ).fetchone()
+    return row["s"] if row is not None else None
+
+
+def survival_retirement_candidates(
+    store: Store, snapshot_id: int, params: SurvivalParams
+) -> list[int]:
+    """Active insights whose USAGE has gone stale — the censored-survival hazard (R12).
+
+    A candidate has (a) earned real exposure — at least ``min_retrievals`` training
+    retrievals at or before ``snapshot_id`` — AND (b) no retrieval within the last
+    ``staleness_window`` snapshots (``snapshot_id - last_retrieval >= window``). The
+    win/loss balance is **not** consulted, so a low-fitness-but-recently-used insight
+    is never a candidate. Pure function of the append-only fitness log; id-ordered.
+    """
+    candidates: list[int] = []
+    for insight_id in _active_insight_ids(store, snapshot_id):
+        retrievals = _training_retrievals(store, insight_id, snapshot_id)
+        if retrievals < params.min_retrievals:
+            continue  # not enough exposure to judge — never retire the under-tested
+        last = _last_retrieval_snapshot(store, insight_id, snapshot_id)
+        if last is None:
+            continue  # no retrieval at all (defensive; retrievals>=min implies one)
+        if snapshot_id - last >= params.staleness_window:
+            candidates.append(insight_id)
+    return candidates
+
+
+def survival_retirement(
+    store: Store,
+    vec: VecIndex,
+    *,
+    params: SurvivalParams = SurvivalParams(),
+    snapshot_id: int | None = None,
+) -> SurvivalRetirementResult:
+    """Run the R3 usage-conditioned retirement: hazard candidacy → cost(G) gate (R12).
+
+    Candidates come from :func:`survival_retirement_candidates` (the usage hazard);
+    each is demoted to ``dormant`` only if removing it from the active similarity
+    flow graph strictly lowers ``cost(G)`` (the isolated per-move delta, U1) — a
+    bridge node the store still leans on is spared. Demotions go to ``dormant``
+    (preserved as evidence, revivable — never deleted, R13) under one minted
+    snapshot; a pass with nothing to demote mints nothing. The ``settle_fitness``
+    trace writer is untouched and remains the producer of the usage events read here.
+    """
+    snap = store.current_snapshot_id() if snapshot_id is None else snapshot_id
+    candidates = survival_retirement_candidates(store, snap, params)
+    if not candidates:
+        return SurvivalRetirementResult(
+            snapshot_id=snap,
+            minted_snapshot=False,
+            demoted_insight_ids=(),
+            spared_by_cost_gate=(),
+        )
+
+    node_ids, edges = consolidation.active_flow_graph(vec, k=params.knn_k)
+    demote: list[int] = []
+    spared: list[int] = []
+    for insight_id in candidates:
+        delta = consolidation.removal_cost_delta(
+            node_ids, edges, insight_id,
+            module_overhead_bits=params.module_overhead_bits,
+        )
+        if delta < 0:
+            demote.append(insight_id)
+        else:
+            spared.append(insight_id)
+
+    if not demote:
+        return SurvivalRetirementResult(
+            snapshot_id=snap,
+            minted_snapshot=False,
+            demoted_insight_ids=(),
+            spared_by_cost_gate=tuple(spared),
+        )
+
+    with store.queue_operation("survival_retirement", f"{len(demote)} demoted") as new_snap:
+        for insight_id in demote:
+            store.set_status(insight_id, "dormant", new_snap)
+    return SurvivalRetirementResult(
+        snapshot_id=new_snap,
+        minted_snapshot=True,
+        demoted_insight_ids=tuple(demote),
+        spared_by_cost_gate=tuple(spared),
+    )
 
 
 # --- ratchet: cap tournament (R20) ----------------------------------------------
