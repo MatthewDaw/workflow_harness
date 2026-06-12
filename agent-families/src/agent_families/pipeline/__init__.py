@@ -37,7 +37,12 @@ from pathlib import Path
 
 from agent_families.config import Config
 from agent_families.embedding import EmbeddingService, ensure_pins
-from agent_families.judge import OUTCOMES, run_judge
+from agent_families.judge import (
+    ADMISSION_GATE_SCHEMA,
+    GATE_OUTCOMES,
+    OUTCOMES,
+    run_judge,
+)
 from agent_families.store import Store
 from agent_families.vecindex import Neighbor, VecIndex
 
@@ -466,6 +471,152 @@ def _resolve_scope_tag(output: dict, author_scope_tag: str | None) -> str | None
             output["scope_tag"]["justification"],
         )
     return judge_value
+
+
+# --- admission gate (Operation 1, R10) -------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AdmittedAtom:
+    """Operation 1's output: one generalized, transferable schema'd atom.
+
+    The admission gate is the standalone FRONT stage of the R3 ingest path: it
+    runs *before* any embedding so the key/full vectors (U6) are computed on this
+    GENERALIZED text, never on the raw input (R10). ``negative_scope`` ("when NOT
+    to apply") is mandatory; ``rationale`` ("because Z") is optional.
+    """
+
+    precondition: str
+    action: str
+    expected_outcome: str
+    negative_scope: str
+    scope_tag: str | None
+    rationale: str | None = None
+
+
+def build_admission_gate_prompt(
+    precondition: str,
+    action: str,
+    expected_outcome: str,
+    author_scope_tag: str | None,
+) -> str:
+    """Operation 1 prompt: extract-by-contrast -> generalize -> altitude-audit.
+
+    Pure and volatile-data-free (R23) so the offline suite replays it byte-stably.
+    """
+    raw = build_idea_text(precondition, action, expected_outcome)
+    return (
+        "You are the admission gate (Operation 1) for an insight library. Turn the"
+        " raw, possibly hyper-specific idea below into ONE transferable atom by"
+        " applying three sub-stages in order:\n"
+        "1. Extract-by-contrast: state the rule as a precondition / action /"
+        " expected-outcome triple, dropping narration.\n"
+        "2. Generalize-by-typed-substitution: strip instance trivia — file paths,"
+        " repo names, literal values, host names — and replace each with a TYPED"
+        " placeholder (e.g. <FILE>, <REPO>, <PORT>) so the atom transfers across"
+        " targets. The admitted atom must name NO concrete instance literal.\n"
+        "3. Decontextualize + altitude-audit: test the atom against one"
+        " over-general misfire and one over-specific non-application, and emit"
+        " negative_scope ('when NOT to apply'). If the input is target-trivia with"
+        " no transferable rule (or fails the altitude audit), return lint_reject"
+        " with a reason. If it is salvageable only by rewriting, return"
+        " rewrite_proposed carrying the rewritten atom.\n"
+        "Allowed outcomes for this call: admit (return the generalized atom),"
+        " lint_reject (reason), rewrite_proposed (atom = the proposed rewrite)."
+        " Confirm or override the author's scope tag.\n"
+        f"Author-proposed scope tag: {_scope_line(author_scope_tag)}\n\n"
+        f"Raw idea:\n{raw}"
+    )
+
+
+def gate_outcome_validator():
+    """``extra_validate`` for the admission gate: per-verdict field requirements.
+
+    Any violation rides run_judge's feedback-retry-then-fail path with zero side
+    effects (R6). ``lint_reject`` carries a reason and no atom; ``admit`` and
+    ``rewrite_proposed`` carry a fully-populated atom (incl. negative_scope).
+    """
+
+    def _validate(output: dict) -> str | None:
+        outcome = output.get("outcome")
+        if outcome not in GATE_OUTCOMES:
+            return (
+                f"outcome '{outcome}' is not an admission-gate verdict:"
+                f" {', '.join(GATE_OUTCOMES)}"
+            )
+        if outcome == "lint_reject":
+            if not str(output.get("reason", "")).strip():
+                return "lint_reject requires a non-empty reason"
+            return None
+        atom = output.get("atom")
+        if atom is None:
+            return f"{outcome} requires the generalized atom object"
+        for key in ("precondition", "action", "expected_outcome", "negative_scope"):
+            if not str(atom.get(key, "")).strip():
+                return f"atom.{key} must be non-empty for an admitted atom"
+        return None
+
+    return _validate
+
+
+def run_admission_gate(
+    config: Config,
+    *,
+    precondition: str,
+    action: str,
+    expected_outcome: str,
+    scope_tag: str | None = None,
+    accept_rewrite: bool = False,
+    judge_mode: str | None = None,
+    judge_fixtures_dir: str | Path | None = None,
+) -> AdmittedAtom:
+    """Operation 1: generalize raw input into a transferable atom, BEFORE embed.
+
+    The single front-gate ``run_judge`` call of the R3 ingest path. On admission
+    the returned :class:`AdmittedAtom` carries the GENERALIZED text — U6 embeds
+    the key/full vectors on it, never on the raw input (R10). Raises
+    :class:`LintRejected` (target-trivia / failed altitude audit) or
+    :class:`RewriteProposed` (the proposed rewrite is never silently adopted;
+    re-run it with ``accept_rewrite=True``), so the gate exits before any
+    downstream embed/insert on a rejection (R7). ``accept_rewrite`` only skips the
+    structural-template check on re-entry — the rewritten atom arrives already in
+    template form, judge-authored.
+    """
+    if not accept_rewrite:
+        _validate_structure(precondition, action, expected_outcome)
+    prompt = build_admission_gate_prompt(
+        precondition, action, expected_outcome, scope_tag
+    )
+    result = run_judge(
+        prompt,
+        ADMISSION_GATE_SCHEMA,
+        model=config.judge.model,
+        max_retries=config.judge.max_retries,
+        bare=config.judge.bare,
+        extra_validate=gate_outcome_validator(),
+        mode=judge_mode,
+        fixtures_dir=judge_fixtures_dir,
+    )
+    output = result.output
+    outcome = output["outcome"]
+    if outcome == "lint_reject":
+        reason = (output.get("reason") or "").strip()
+        raise LintRejected(
+            reason or "the idea is target-trivia with no transferable rule"
+        )
+    if outcome == "rewrite_proposed":
+        # Never silently adopted — surfaced for `--accept-rewrite` re-entry (R10).
+        raise RewriteProposed(output["atom"])
+    atom = output["atom"]
+    final_scope_tag = _resolve_scope_tag(output, scope_tag)
+    return AdmittedAtom(
+        precondition=atom["precondition"],
+        action=atom["action"],
+        expected_outcome=atom["expected_outcome"],
+        negative_scope=atom["negative_scope"],
+        scope_tag=final_scope_tag,
+        rationale=(atom.get("rationale") or None),
+    )
 
 
 def add_idea(

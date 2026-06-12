@@ -65,6 +65,54 @@ OUTCOMES = (
     "no_placement",
 )
 
+# The admission gate (Operation 1) verdict enum (R10/R14 gate half). The gate is
+# the standalone FRONT stage of the R3 ingest path: it turns messy raw input into
+# one transferable schema'd atom (precondition/action/expected_outcome/rationale/
+# negative_scope) or rejects/rewrites it — before any embedding, so the key vector
+# is computed on the generalized text. These three verdicts are a gate-scoped
+# subset; the per-call validator (pipeline.gate_outcome_validator) enforces the
+# per-verdict field requirements.
+GATE_OUTCOMES = ("admit", "lint_reject", "rewrite_proposed")
+
+# The generalized atom Operation 1 emits (or proposes, on rewrite). negative_scope
+# ("when NOT to apply", §5 Op.1) is mandatory; rationale ("because Z") is optional
+# (KTD: adopted now as a nullable field). Required only when `atom` is present —
+# a lint_reject carries no atom.
+_GATE_ATOM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "precondition": {"type": "string"},
+        "action": {"type": "string"},
+        "expected_outcome": {"type": "string"},
+        "rationale": {"type": "string"},
+        "negative_scope": {"type": "string"},
+    },
+    "required": ["precondition", "action", "expected_outcome", "negative_scope"],
+    "additionalProperties": False,
+}
+
+# The admission-gate judge contract. `atom` is absent on a lint_reject (enforced
+# application-side via gate_outcome_validator), so it is not top-level required.
+ADMISSION_GATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "outcome": {"type": "string", "enum": list(GATE_OUTCOMES)},
+        "atom": _GATE_ATOM_SCHEMA,
+        "scope_tag": {
+            "type": "object",
+            "properties": {
+                "value": {"type": "string"},
+                "justification": {"type": "string"},
+            },
+            "required": ["value", "justification"],
+            "additionalProperties": False,
+        },
+        "reason": {"type": "string"},
+    },
+    "required": ["outcome", "scope_tag"],
+    "additionalProperties": False,
+}
+
 _NPM_ENTRY_RELPATH = Path("node_modules") / "@anthropic-ai" / "claude-code" / "cli.js"
 _SHIM_SUFFIXES = {".cmd", ".bat", ".ps1"}
 
