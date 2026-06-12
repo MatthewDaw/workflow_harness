@@ -13,6 +13,12 @@ export set get stable numeric suffixes — skills are processed in ascending
 skill-ID order, so the same library exports the same slugs every time, which
 also makes re-export over an existing directory byte-idempotent.
 
+Under derived membership (plan-009) a module's ``skills.name`` is NULL until lazy
+naming fills it. Export is NULL-safe end to end: if a ``namer_fn`` is supplied a
+NULL-named leaf community is named (and persisted) before it is written (R18);
+with no namer, an unnamed module falls back to the deterministic ``module-{id}``
+slug and frontmatter so export never raises and never emits the literal ``None``.
+
 Empty skills (no active members at the current snapshot) are skipped, recorded
 in the report with a notice; no file or directory is written for them.
 """
@@ -21,10 +27,17 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-from .rendering import Renderer
+from .rendering import Renderer, display_name
+
+# A namer fills a NULL-named module's (name, description) from its central
+# insights — the same seam shape the derive pass uses (plan-009 U4). Export only
+# ever calls it for a leaf community that still lacks a name (R18).
+NamerFn = Callable[..., tuple[str, str]]
 
 # Claude Code skill-name format constraint (lowercase/digits/hyphens, max 64
 # chars per the skill spec) — a format constant, not a tunable threshold.
@@ -80,9 +93,12 @@ class ExportReport:
         return tuple(s.notice for s in self.skipped)
 
 
-def _skill_md(slug: str, description: str, body: bytes) -> bytes:
+def _skill_md(slug: str, description: str | None, body: bytes) -> bytes:
     # json.dumps yields a double-quoted scalar that is valid YAML for any
     # description content (quotes, colons, newlines), keeping the file parseable.
+    # A NULL description (unnamed derived module) serializes to "" — never None.
+    if description is None:
+        description = ""
     frontmatter = (
         "---\n"
         f"name: {slug}\n"
@@ -97,12 +113,21 @@ def export_skills(
     renderer: Renderer,
     out_dir: str | Path,
     skill_ids: list[int] | None = None,
+    *,
+    namer_fn: NamerFn | None = None,
 ) -> ExportReport:
     """Export skills as Claude Code SKILL.md files under ``out_dir``.
 
     ``skill_ids`` defaults to every skill in the library. Whatever subset and
     order the caller supplies, skills are processed in ascending ID order so
     collision suffixes are stable across runs.
+
+    ``namer_fn`` (R18) triggers lazy naming for a leaf community that is about to
+    be exported but still has a NULL ``skills.name``: the namer fills name and
+    description, they are persisted, and the named module is then rendered and
+    written. The name is filled *before* the body is rendered, so the rendered
+    header carries the new name (not the placeholder). With no namer, an unnamed
+    module falls back to the ``module-{id}`` slug and a placeholder header.
     """
     store = renderer.store
     out = Path(out_dir)
@@ -120,14 +145,28 @@ def export_skills(
         ).fetchone()
         if skill is None:
             raise ValueError(f"skill {skill_id} does not exist")
+        # R18: name the leaf community before export when a namer is available and
+        # the module is still unnamed. Naming precedes rendering so the body header
+        # reflects the new name rather than the placeholder.
+        if skill["name"] is None and namer_fn is not None:
+            members = store.skill_members(skill_id)
+            name, description = namer_fn(store, skill_id, members)
+            store.conn.execute(
+                "UPDATE skills SET name = ?, description = ? WHERE id = ?",
+                (name, description, skill_id),
+            )
+            skill = store.conn.execute(
+                "SELECT * FROM skills WHERE id = ?", (skill_id,)
+            ).fetchone()
         rendering = renderer.render_concat(skill_id, snapshot_id=snapshot_id)
         if rendering.empty:
+            display = display_name(skill)
             skipped.append(
                 SkippedSkill(
                     skill_id=skill_id,
                     name=skill["name"],
                     notice=(
-                        f"skill {skill_id} ({skill['name']!r}) has no active"
+                        f"skill {skill_id} ({display!r}) has no active"
                         " insights; skipped"
                     ),
                 )
@@ -139,7 +178,14 @@ def export_skills(
             else None
         )
         body = compiled if compiled is not None else rendering.content
-        slug = _allocate_slug(slugify(skill["name"]), used_slugs, SLUG_MAX_LENGTH)
+        # R18: a NULL name slugifies to the deterministic ``module-{id}`` fallback,
+        # so export never raises and never writes an empty slug.
+        base_slug = (
+            slugify(skill["name"])
+            if skill["name"] is not None
+            else f"module-{skill_id}"
+        )
+        slug = _allocate_slug(base_slug, used_slugs, SLUG_MAX_LENGTH)
         used_slugs.add(slug)
         path = out / slug / "SKILL.md"
         path.parent.mkdir(parents=True, exist_ok=True)

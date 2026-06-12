@@ -225,3 +225,80 @@ def test_reexport_over_existing_dir_is_idempotent(store, out_dir):
 def test_unknown_skill_id_raises(store, out_dir):
     with pytest.raises(ValueError, match="999"):
         export_skills(Renderer(store), out_dir, skill_ids=[999])
+
+
+# --- derived membership: NULL-safe names + naming trigger (U8, R18) ----------------
+
+
+def add_active_member_to(store, skill_id, key):
+    insight_id = store.insert_insight(
+        precondition=f"pre-{key}",
+        action=f"act-{key}",
+        expected_outcome=f"out-{key}",
+        content_hash=f"hash-{skill_id}-{key}",
+        status="quarantined",
+    )
+    store.append_member(skill_id, insight_id)
+    with store.queue_operation("promote", "test batch") as snapshot_id:
+        store.set_status(insight_id, "active", snapshot_id)
+    return insight_id
+
+
+def test_export_null_safe_slug_fallback(store, agent_id, out_dir):
+    """R18: a NULL-named module exports with the ``module-{id}`` fallback slug.
+
+    No namer is supplied, so the name stays NULL: slugify/_skill_md must produce a
+    valid SKILL.md (no exception, no empty slug, no literal ``None``).
+    """
+    module_id = store.create_skill(agent_id, None, "")  # unnamed derived module
+    add_active_member_to(store, module_id, "a")
+    report = export_skills(Renderer(store), out_dir)
+    (entry,) = report.exported
+    assert entry.slug == f"module-{module_id}"
+    assert entry.path == out_dir / f"module-{module_id}" / "SKILL.md"
+    assert entry.path.exists()
+    frontmatter, body = parse_skill_md(entry.path)  # parses => valid YAML frontmatter
+    assert frontmatter == {"name": f"module-{module_id}", "description": ""}
+    assert "None" not in entry.path.read_bytes().decode("utf-8")
+
+
+def test_export_triggers_naming_for_leaf_community_first(store, agent_id, out_dir):
+    """R18: a supplied namer names the NULL leaf community before it is written."""
+    module_id = store.create_skill(agent_id, None, "")
+    add_active_member_to(store, module_id, "a")
+    calls: list[tuple[int, tuple[int, ...]]] = []
+
+    def namer(s, skill_id, members):
+        calls.append((skill_id, tuple(members)))
+        return "Resolved Name", "A resolved description."
+
+    report = export_skills(Renderer(store), out_dir, namer_fn=namer)
+    # The namer was invoked exactly once, for the unnamed leaf community.
+    assert len(calls) == 1
+    assert calls[0][0] == module_id
+    (entry,) = report.exported
+    assert entry.slug == "resolved-name"  # slug now comes from the resolved name
+    frontmatter, body = parse_skill_md(entry.path)
+    assert frontmatter == {
+        "name": "resolved-name",
+        "description": "A resolved description.",
+    }
+    # Naming is persisted and precedes rendering: the body header carries the name.
+    assert body.encode("utf-8") == Renderer(store).render_concat(module_id).content
+    assert b"# Skill: Resolved Name" in body.encode("utf-8")
+    # Re-export does not re-name an already-named module.
+    calls.clear()
+    export_skills(Renderer(store), out_dir, namer_fn=namer)
+    assert calls == []
+
+
+# ## Conformance (plan-009 U8, R18)
+#
+# Each named R18 invariant maps to the behavioral test that enforces it:
+#
+# - "slugify/_skill_md on a NULL name produce the module-{id} fallback slug and a
+#    valid SKILL.md (no exception, no empty slug, no literal None)"
+#       -> test_export_null_safe_slug_fallback
+# - "export triggers naming for the leaf community first (named, persisted, and the
+#    rendered body carries the name) when a namer is supplied"
+#       -> test_export_triggers_naming_for_leaf_community_first

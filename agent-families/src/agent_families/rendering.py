@@ -99,8 +99,21 @@ def extract_provenance(content: bytes) -> list[list[int]]:
     ]
 
 
+def display_name(skill: sqlite3.Row) -> str:
+    """The module's name, or a stable ``module-{id}`` placeholder when unnamed (R17/R18).
+
+    Under derived membership a module's ``skills.name`` is NULL until lazy naming
+    fills it (plan-009 U4). Rendering and export must never emit the literal string
+    ``None``; the placeholder is the same ``module-{id}`` fallback :mod:`export`
+    slugifies from, so an unnamed module reads coherently everywhere.
+    """
+    name = skill["name"]
+    return name if name is not None else f"module-{skill['id']}"
+
+
 def _header_text(skill: sqlite3.Row) -> str:
-    return f"# Skill: {skill['name']}\n\n{skill['description']}\n\n---\n"
+    description = skill["description"] if skill["description"] is not None else ""
+    return f"# Skill: {display_name(skill)}\n\n{description}\n\n---\n"
 
 
 def _insight_block(row: sqlite3.Row) -> str:
@@ -115,7 +128,7 @@ def _insight_block(row: sqlite3.Row) -> str:
 
 
 def _compiled_text(skill: sqlite3.Row, sections: list[dict]) -> str:
-    parts = [f"# Skill: {skill['name']} (compiled)\n"]
+    parts = [f"# Skill: {display_name(skill)} (compiled)\n"]
     for section in sections:
         ids = ", ".join(str(i) for i in section["insight_ids"])
         parts.append(
@@ -176,9 +189,14 @@ class Renderer:
     def _visible_members(
         self, skill_id: int, snapshot_id: int, include_quarantined: bool
     ) -> list[sqlite3.Row]:
+        # R17: order by a derive-stable key (insight_id ascending), NOT
+        # skill_members.position. Append order is meaningless once the derive pass
+        # rebalances membership wholesale, so rendering must not depend on it — a
+        # rebalance that scrambles position but preserves membership renders
+        # byte-identically.
         visible = _WITH_QUARANTINED if include_quarantined else _ACTIVE_ONLY
         members = []
-        for insight_id in self.store.skill_members(skill_id):
+        for insight_id in sorted(self.store.skill_members(skill_id)):
             if self.store.status_at(insight_id, snapshot_id) in visible:
                 members.append(self.store.get_insight(insight_id))
         return members
