@@ -82,7 +82,7 @@ QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not uni
 ### Plan 008 - R3 Phase A: schema v6 + ingest gauntlet (docs/plans/2026-06-12-008-feat-agent-families-r3-ingest-gauntlet-plan.md)
 R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b human gate (autonomous).
 - [x] 008/U1 - Migration v6 + store methods
-- [ ] 008/U2 - Embedding: three vectors + Matryoshka
+- [x] 008/U2 - Embedding: three vectors + Matryoshka
 - [ ] 008/U3 - Vecindex: 3-column table + on= + flattener fix
 - [ ] 008/U4 - NLI seam (nli.py)
 - [ ] 008/U5 - Admission gate (Operation 1)
