@@ -1337,6 +1337,12 @@ class Store:
         active_cap: int = 50,
         parent_id: int | None = None,
     ) -> int:
+        # plan-010 R7: `base_prompt_specialty` is WRITE-ONLY at runtime. Personas
+        # are removed under R3 (§3) — nothing assembles a specialty section into a
+        # prompt, and no SELECT reads this column on any runtime path. The column
+        # and any written value survive for reversibility (§4: demote, never drop);
+        # the only reader (`reflector/agent_split.check_base_prompt_residue`) was
+        # deleted in plan-009. test_demotion_finish guards the no-read invariant.
         cur = self.conn.execute(
             "INSERT INTO agents (family_id, parent_id, name, description,"
             " base_prompt_specialty, permissions, active_cap)"

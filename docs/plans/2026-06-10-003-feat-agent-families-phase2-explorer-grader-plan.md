@@ -20,6 +20,14 @@ Phases 0–1 built the library and a pipeline that can build toy specs. Phase 2 
 
 ## Requirements
 
+> **R3 RECONCILIATION (terminology-only) — see plan 2026-06-12-010 (Phase C) R11.**
+> Phase 2 is **~untouched** by the R3 reform: the explorer, grader, registry, and
+> frontier are **training-only stage-roles** R3 §3 keeps verbatim. The only change
+> is wording — "explorer agent" / "grader agent" read as "explorer stage-role" /
+> "grader stage-role"; there is **no family/agent routing** assumption hidden in
+> the episode wiring (the runtime routes by stage, never by a per-request family
+> router). No requirement below is superseded or rewritten.
+
 **Episode and increment structure**
 
 - R1. An `episodes` table sits above Phase 1 runs: episode = one target × one library snapshot × one fresh workspace × one settlement. **An increment is exactly one Phase 1 run** (`run.episode_id` + `increment_index`); workspace ownership moves from run to the **target engagement**: created at the target's first episode, persisting across increments *and* episodes (each episode continues the same product; fresh workspaces only in Plan 5's rebuild-probe episodes), retained after settlement; TKT/MSG/REQ/SPAN IDs are globally unique, episode-scoped only for display.

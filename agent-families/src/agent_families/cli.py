@@ -95,8 +95,15 @@ SUBCOMMANDS: dict[str, str] = {
 
 COMPILED_DIRNAME = "compiled"
 
-# The four DESIGN §3 pipeline families, each seeded with one generic specialist
-# agent (R19). Names are stable identifiers consumed by later phases.
+# The four DESIGN §3 pipeline STAGES (plan-010 R6: stages, not a routing
+# taxonomy). Under the R3 reform the runtime is a fixed plan→assign→work→verify
+# pipeline that differs by tools/permissions/contract/trust, never by knowledge —
+# so these names are *stage roles*, not personas selected by a family router.
+# The rows are still materialized as families+one generic agent each for schema
+# continuity and reversibility (§4: demote, never drop), but nothing consumes
+# them as a router input — the router's `route` entry point (router.py) has zero
+# runtime callers (plan-009 R14).
+# Names are stable identifiers consumed by later phases.
 FAMILY_SEEDS: tuple[tuple[str, str], ...] = (
     ("planner", "Turn a request + Q&A into a fleshed-out, ticketed feature list."),
     ("worker", "Take a ticket plus retrieved context and code it."),
@@ -350,7 +357,14 @@ def _write_stdout_bytes(content: bytes) -> None:
 
 
 def _seed_taxonomy(store: Store, active_cap: int) -> int:
-    """Seed the four families + generic agents if absent; returns families created."""
+    """Seed the four pipeline-STAGE rows if absent; returns the number created.
+
+    plan-010 R6: this is stage setup, not routing-taxonomy setup. The four stage
+    roles (planner/worker/verifier/context-retriever) are materialized as
+    families+one generic agent each for schema continuity and reversibility, but
+    they are never read as a router input — the R3 runtime routes by stage, not by
+    a per-request family/agent selection (router.py's `route` has no runtime caller).
+    """
     created = 0
     with store.transaction():
         for name, charter in FAMILY_SEEDS:
@@ -392,6 +406,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         ensure_pins(store, config.embedding)
     if created:
         names = ", ".join(name for name, _ in FAMILY_SEEDS)
+        # The rows are families for schema continuity (reversibility); the line
+        # keeps the historical "taxonomy already seeded" wording on the idempotent
+        # path (pinned by plan-001 U9's e2e). The reframe to STAGES is in
+        # `_seed_taxonomy`'s contract, not the CLI chatter (plan-010 R6).
         print(f"seeded {created} families ({names}), one generic agent each")
     else:
         print("taxonomy already seeded; left untouched")
