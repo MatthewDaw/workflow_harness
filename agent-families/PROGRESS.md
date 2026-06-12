@@ -89,7 +89,7 @@ R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b hu
 - [x] 008/U6 - add_idea rewrite (key-collision + NLI + corroborate/refine/deferred-supersede)
 - [x] 008/U7 - Lifecycle: deferred-supersede at promotion + dormant
 - [x] 008/U8 - Reflector routing through the R3 gate
-- [ ] 008/U9 - Config, thresholds, and e2e acceptance
+- [x] 008/U9 - Config, thresholds, and e2e acceptance
 
 ### Plan 009 - R3 Phase B: derive pass + organization objective + retrieval (docs/plans/2026-06-12-009-feat-agent-families-r3-derive-objective-plan.md)
 - [x] 009/U1 - The organization objective (objective.py)
