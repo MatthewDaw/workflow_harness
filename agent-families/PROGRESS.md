@@ -92,7 +92,7 @@ R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b hu
 - [ ] 008/U9 - Config, thresholds, and e2e acceptance
 
 ### Plan 009 - R3 Phase B: derive pass + organization objective + retrieval (docs/plans/2026-06-12-009-feat-agent-families-r3-derive-objective-plan.md)
-- [ ] 009/U1 - The organization objective (objective.py)
+- [x] 009/U1 - The organization objective (objective.py)
 - [ ] 009/U2 - Graph build + vecindex neighbors
 - [ ] 009/U3 - Partitioners + dependencies
 - [ ] 009/U4 - The derive pass + identity tracking
