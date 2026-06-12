@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda
 import {
   orgScope,
   skillSchema,
+  variantIdFor,
   type GoldenCase,
   type GoldenReplayResult,
   type Idea,
@@ -30,6 +31,12 @@ import {
   type S3Vectors,
 } from '../embeddings/s3vectors.js';
 import { getGoldenJudge, replayGoldenCases, type GoldenJudge } from '../rerank/golden.js';
+import {
+  callPythonAuthorRevision,
+  usesPythonWriter,
+  type AuthorRevisionRequest,
+  type AuthorRevisionResponse,
+} from '../python-writer-client.js';
 
 /**
  * REST: skills + bundles — collapsed to a single ORG catalog.
@@ -69,6 +76,14 @@ export interface SkillsDeps {
    * injectable for tests; the runtime handler defaults to `getGoldenJudge()`.
    */
   golden?: GoldenJudge;
+  /**
+   * U10 / MAT-141 Gap 1 — the ONE Python author-revision writer. When configured
+   * (``PYTHON_AUTHOR_REVISION_URL`` set, or this injected for tests), the fold
+   * path authors the new skill revision + golden case through this single Python
+   * writer instead of writing the revision itself via ``repo.putNewVersion``.
+   * Injectable so tests can prove the TS path no longer authors revisions itself.
+   */
+  authorRevision?: (req: AuthorRevisionRequest) => Promise<AuthorRevisionResponse>;
 }
 
 const handlers = makeCatalogHandlers({
@@ -305,20 +320,79 @@ export async function foldIdea(
   const newBody = typeof b.body === 'string' ? b.body : existing.body;
   const description = typeof b.description === 'string' ? b.description : existing.description;
 
-  // Carry the existing skill forward, overlay the merged content + variant
-  // identity, and SNAPSHOT a new revision. `putNewVersion` writes the immutable
-  // revision row + the live "current" record and leaves TRUE untouched (a human
-  // promotes), forking the variant when repoId/authorUserId are set.
-  const candidate: Skill = {
-    ...existing,
-    scope: orgScope(org),
-    baseName: existing.baseName ?? name,
-    body: newBody,
-    description,
-    ...(repoId !== undefined ? { repoId } : {}),
-    ...(authorUserId !== undefined ? { authorUserId } : {}),
-  };
-  const stamped = await deps.repo.putNewVersion('SKILL', candidate, { repoId, authorUserId });
+  // U10 / MAT-141 Gap 1 — DRY single-writer contract. When the Python
+  // author-revision writer is configured, the fold MUST author the new skill
+  // revision (and its IDEAGOLD# golden case) through that ONE writer rather than
+  // writing the revision itself via `repo.putNewVersion` + `repo.putGoldenCase`.
+  // This is the whole point of U10: exactly one revision-author implementation
+  // (Python). The TS handler only orchestrates (auth, idea-state, provenance) and
+  // delegates the actual revision/golden write across the contract.
+  const authorRevision =
+    deps.authorRevision ?? (usesPythonWriter() ? callPythonAuthorRevision : undefined);
+
+  // The variant id the Python writer keys the revision under (mirrors the TS
+  // `variantInfix`: base variant id === baseName, a fork carries the repo/user
+  // infix). For the org base the variantId is the empty string the Python writer
+  // expects (it stores under `SKILL##r<N>`); a fork carries the variant infix.
+  const stampedBaseName = existing.baseName ?? name;
+
+  let stamped: Skill;
+  if (authorRevision) {
+    // --- ROUTE THROUGH THE ONE PYTHON WRITER (no TS revision write) ----------
+    const isFork = repoId !== undefined || authorUserId !== undefined;
+    const writerVariantId = isFork ? variantIdFor(stampedBaseName, repoId, authorUserId) : '';
+    const req: AuthorRevisionRequest = {
+      org,
+      baseName: stampedBaseName,
+      variantId: writerVariantId,
+      body: newBody,
+      ...(authorUserId !== undefined ? { authorUserId } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ideaId,
+      // Fold path → capture the before→after golden case via the SAME writer, so
+      // there is one IDEAGOLD# capture path (Python), not a separate TS one.
+      goldenCase: {
+        caseId: ideaId,
+        before: existing.body,
+        after: newBody,
+        ideaBody: idea.text,
+      },
+    };
+    const written = await authorRevision(req);
+    // The handler does NOT write the revision row, the live record, the TRUE
+    // pointer, or the golden case — the Python writer owns all of those. We carry
+    // the writer's `rev` forward as the version the idea was folded into.
+    stamped = {
+      ...existing,
+      scope: orgScope(org),
+      baseName: stampedBaseName,
+      variantId: writerVariantId || stampedBaseName,
+      body: newBody,
+      description,
+      version: written.rev,
+      ...(repoId !== undefined ? { repoId } : {}),
+      ...(authorUserId !== undefined ? { authorUserId } : {}),
+    } as Skill;
+  } else {
+    // --- LEGACY LOCAL-DEV / TEST FALLBACK (no Python writer configured) -------
+    // Carry the existing skill forward, overlay the merged content + variant
+    // identity, and SNAPSHOT a new revision. `putNewVersion` writes the immutable
+    // revision row + the live "current" record and leaves TRUE untouched (a human
+    // promotes), forking the variant when repoId/authorUserId are set. This branch
+    // exists only for local dev / tests where the Python writer is not wired; the
+    // deployed Lambda always has `PYTHON_AUTHOR_REVISION_URL` set so the one
+    // writer is authoritative.
+    const candidate: Skill = {
+      ...existing,
+      scope: orgScope(org),
+      baseName: stampedBaseName,
+      body: newBody,
+      description,
+      ...(repoId !== undefined ? { repoId } : {}),
+      ...(authorUserId !== undefined ? { authorUserId } : {}),
+    };
+    stamped = await deps.repo.putNewVersion('SKILL', candidate, { repoId, authorUserId });
+  }
 
   // AFTER the revision write: mark the idea folded with the rev it was folded
   // into, via the optimistic-concurrency conditional. If a concurrent
@@ -351,21 +425,29 @@ export async function foldIdea(
   // the same idea refreshes its case rather than duplicating it. The case is
   // best-effort: a failure here does NOT roll back the (already-marked) fold —
   // the revision + folded idea stand; the regression guard is advisory anyway.
-  try {
-    const goldenCase: GoldenCase = {
-      caseId: ideaId,
-      skillBaseName: name,
-      org,
-      ideaId,
-      lesson: idea.text,
-      before: existing.body,
-      after: newBody,
-      foldedIntoRev: stamped.version as number,
-      createdAt: Date.now(),
-    };
-    await deps.repo.putGoldenCase(goldenCase);
-  } catch {
-    // Advisory guard — never fail the fold on a golden-case write error.
+  //
+  // U10 / MAT-141 Gap 1: when the fold routed through the Python writer, the
+  // golden case was captured by that SAME single writer (the `goldenCase` payload
+  // above) — so the TS handler must NOT also write it here. Writing it in TS too
+  // would re-introduce the duplicate write path U10 exists to remove. Only the
+  // legacy local-dev/test fallback (no Python writer) captures the case in TS.
+  if (!authorRevision) {
+    try {
+      const goldenCase: GoldenCase = {
+        caseId: ideaId,
+        skillBaseName: name,
+        org,
+        ideaId,
+        lesson: idea.text,
+        before: existing.body,
+        after: newBody,
+        foldedIntoRev: stamped.version as number,
+        createdAt: Date.now(),
+      };
+      await deps.repo.putGoldenCase(goldenCase);
+    } catch {
+      // Advisory guard — never fail the fold on a golden-case write error.
+    }
   }
 
   return ok({

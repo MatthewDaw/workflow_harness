@@ -20,7 +20,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "humanlayer:setup": "node infra/scripts/setup-humanlayer.mjs",
-    "humanlayer:verify": "node infra/scripts/verify-humanlayer.mjs"
+    "humanlayer:verify": "node infra/scripts/verify-humanlayer.mjs",
+    "learning:codegen-check": "python -m learning_service.schema.codegen --check",
+    "learning:test": "python -m pytest packages/learning-service/tests/ -v --tb=short",
+    "learning:ci": "npm run learning:codegen-check && npm run learning:test"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

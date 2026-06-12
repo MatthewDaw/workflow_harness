@@ -1,0 +1,38 @@
+[project]
+name = "learning-service"
+version = "0.1.0"
+description = "Verified Learning — Python learning service (container Lambda). Reuses agent-families' store-free core (nli.py / judge.py); no SQLite."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # NLI cross-encoder (sentence-transformers); bundled in the container image.
+    # NOTE: sqlite-vec / vecindex / store are NOT listed here — only the store-free core.
+    "sentence-transformers[onnx]>=5.0",
+    # DynamoDB single-table + S3 Vectors persistence (F2 / MAT-149).  The
+    # production DynamoLearningStore / S3VectorStore speak boto3 directly.
+    "boto3>=1.34",
+]
+
+[project.scripts]
+# User-triggered ingest job (v1 primary trigger).
+learning-ingest = "learning_service.entrypoints.ingest:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/learning_service"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    # moto provides a mock DynamoDB backend so the production DynamoLearningStore
+    # is tested against real boto3 semantics offline (F2 / MAT-149).
+    "moto[dynamodb,s3]>=5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: tests that load the real NLI/judge model (skipped by default; opt in with --run-slow)",
+]

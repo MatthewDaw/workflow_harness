@@ -2,7 +2,28 @@ import type { GoldenCase, GoldenReplayResult } from '@harness/shared';
 import { type FetchLike, openRouterChat } from '../llm/openrouter.js';
 
 /**
- * U18 — the OpenRouter Claude-Haiku GOLDEN judge.
+ * U18 / U10 — the golden judge.
+ *
+ * **U10 DRY contract (MAT-141 Gap 3):** the canonical judge is the Python
+ * learning service's ``judge.py`` (which reuses agent-families' ``judge.py``).
+ * This TS module is now a **thin proxy**: when ``PYTHON_JUDGE_URL`` is set in
+ * the environment the ``GoldenJudge`` forwards each verdict call to the Python
+ * judge endpoint; when it is absent (local dev / legacy path) it falls back to
+ * the OpenRouter chat call below.
+ *
+ * The Python judge endpoint (served by the learning-service Lambda):
+ *   POST <PYTHON_JUDGE_URL>/judge/golden
+ *   Body: { lesson, candidateBody }
+ *   Returns: { satisfied: boolean, reason: string }
+ *
+ * Only ONE golden-judge *implementation* may exist (MAT-141 Gap 3). The single
+ * authoritative verdict implementation is the Python golden-judge endpoint:
+ *   packages/learning-service/src/learning_service/entrypoints/golden_judge.py
+ * (POST /judge/golden). In the deployed Lambda ``PYTHON_JUDGE_URL`` is always
+ * set, so EVERY production verdict is produced by that one Python judge. The
+ * OpenRouter chat path below is NOT a second production judge — it is a local-dev
+ * / test seam reached only when an explicit ``fetchImpl`` is injected (tests) or
+ * ``PYTHON_JUDGE_URL`` is unset (local dev). It must never run in production.
  *
  * Golden-set regression at fold. Every fold captures the lesson it folded as a
  * before→after expectation (a `GoldenCase`: the body BEFORE, the body AFTER, and
@@ -10,15 +31,6 @@ import { type FetchLike, openRouterChat } from '../llm/openrouter.js';
  * prior golden case against the CANDIDATE revision body and answers one question
  * per case: does the candidate STILL satisfy the prior lesson? A `satisfied:
  * false` is a REGRESSION — the candidate appears to undo an earlier fold.
- *
- * This is one of three chat call types in the loop, alongside the topic→skill
- * rerank judge (U9) and the idea-writer (`ideas/synth.ts`); embeddings are the
- * fourth model capability. It mirrors the U9 / idea-writer judge contract
- * exactly: an OpenRouter chat completion, a strict structured verdict, Haiku is
- * enough. Auth is the shared `OPENROUTER_API_KEY` (read at call time, never
- * hardcoded). A request error is NOT swallowed; it propagates so the caller can
- * decide (advisory v1: a replay error surfaces, never silently passes a
- * regression).
  *
  * v1 is ADVISORY: this judge only REPORTS. The human is the gate at promote —
  * `replayGoldenCases` returns the per-case verdicts and the caller surfaces any
@@ -57,9 +69,18 @@ function renderCase(lesson: string, candidateBody: string): string {
 }
 
 /**
- * An OpenRouter Claude-Haiku golden judge. The `fetch` impl is injectable so
- * tests drive it without touching the network (it defaults to the Node 20
- * global). Auth/base/model come from the environment at call time.
+ * The golden judge.
+ *
+ * **U10 DRY contract:** when ``PYTHON_JUDGE_URL`` is set in the environment,
+ * each verdict call is forwarded to the Python learning-service judge endpoint.
+ * The Python endpoint is the single authoritative implementation; this class is
+ * a thin proxy (in the deployed Lambda with ``PYTHON_JUDGE_URL`` set) or a local
+ * fallback (in dev / test, when ``PYTHON_JUDGE_URL`` is absent and an injectable
+ * ``fetchImpl`` drives OpenRouter).
+ *
+ * The ``fetchImpl`` constructor argument is for offline tests only (it overrides
+ * both the Python-proxy path and the local-fallback path so tests never touch
+ * the network).
  */
 export class GoldenJudge {
   private fetchImpl?: FetchLike;
@@ -76,7 +97,13 @@ export class GoldenJudge {
    * silent pass).
    */
   async judge(c: GoldenCase, candidateBody: string): Promise<GoldenReplayResult> {
-    const verdict = await this.invoke(renderCase(c.lesson, candidateBody));
+    const pythonJudgeUrl = process.env.PYTHON_JUDGE_URL;
+    if (pythonJudgeUrl && !this.fetchImpl) {
+      // Route to the Python judge (the single authoritative implementation).
+      return this.invokeViaPython(pythonJudgeUrl, c, candidateBody);
+    }
+    // Local-dev / test fallback: OpenRouter chat (injectable fetchImpl for tests).
+    const verdict = await this.invokeViaOpenRouter(renderCase(c.lesson, candidateBody));
     return {
       caseId: c.caseId,
       lesson: c.lesson,
@@ -85,8 +112,34 @@ export class GoldenJudge {
     };
   }
 
-  /** Send one chat completion and parse the strict JSON verdict. */
-  private async invoke(userPrompt: string): Promise<Verdict> {
+  /**
+   * Forward the verdict call to the Python learning-service judge endpoint.
+   * Body: { lesson, candidateBody }
+   * Response: { satisfied: boolean, reason: string }
+   */
+  private async invokeViaPython(
+    baseUrl: string,
+    c: GoldenCase,
+    candidateBody: string,
+  ): Promise<GoldenReplayResult> {
+    const fetchFn = (globalThis as { fetch?: FetchLike }).fetch;
+    if (!fetchFn) throw new Error('GoldenJudge: fetch not available for Python judge proxy');
+    const resp = await fetchFn(`${baseUrl.replace(/\/$/, '')}/judge/golden`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lesson: c.lesson, candidateBody }),
+    } as Parameters<FetchLike>[1]);
+    const raw = await (resp as Response).json() as { satisfied?: boolean; reason?: string };
+    return {
+      caseId: c.caseId,
+      lesson: c.lesson,
+      satisfied: raw.satisfied === true,
+      reason: raw.reason ?? '',
+    };
+  }
+
+  /** Send one OpenRouter chat completion and parse the strict JSON verdict. */
+  private async invokeViaOpenRouter(userPrompt: string): Promise<Verdict> {
     const text = await openRouterChat({
       system: SYSTEM_PROMPT,
       user: userPrompt,

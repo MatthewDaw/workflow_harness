@@ -1,5 +1,5 @@
 import type { ScopeRef } from '@harness/shared';
-import { variantIdFor } from '@harness/shared';
+import { variantIdFor, learningIdeaKey, learningGoldenCaseKey } from '@harness/shared';
 
 /**
  * Single-table key design for the `harness` table. Every entity is addressed by
@@ -292,10 +292,15 @@ export function orgFromScopePartition(pk: string | undefined): string | undefine
  * gathers every idea of one skill family in one `begins_with` read;
  * `ideaPrefixForOrg` gathers every idea in the org.
  */
-export const ideaKey = (org: string, skillBaseName: string, ideaId: string): PrimaryKey => ({
-  PK: `SCOPE#org#${org}`,
-  SK: `IDEA#${skillBaseName}#${ideaId}`,
-});
+// U10 / MAT-141 Gap 2 — NO hand-authored key mirror. The `IDEA#` and `IDEAGOLD#`
+// SK formats are defined ONCE in the learning IDL
+// (packages/learning-service/src/learning_service/schema/idl.py) and
+// code-generated into @harness/shared (`learningIdeaKey` / `learningGoldenCaseKey`).
+// These builders DELEGATE to the generated functions rather than re-spelling the
+// SK string, so the format cannot drift from the Python writer / Go reader. (CI's
+// `codegen --check` keeps the generated copy fresh; this delegation keeps TS on it.)
+export const ideaKey = (org: string, skillBaseName: string, ideaId: string): PrimaryKey =>
+  learningIdeaKey(org, skillBaseName, ideaId) as PrimaryKey;
 
 /** Every idea attached to ONE skill family in an org. */
 export const ideaPrefixForSkill = (
@@ -344,10 +349,10 @@ export const unassignedBinPrefix = (org: string): { PK: string; skPrefix: string
  * invisible to `listSkills`. `caseId` is typically the folded `ideaId`, so
  * re-folding the same idea overwrites its case in place rather than duplicating.
  */
-export const goldenCaseKey = (org: string, skillBaseName: string, caseId: string): PrimaryKey => ({
-  PK: `SCOPE#org#${org}`,
-  SK: `IDEAGOLD#${skillBaseName}#${caseId}`,
-});
+export const goldenCaseKey = (org: string, skillBaseName: string, caseId: string): PrimaryKey =>
+  // U10 / MAT-141 Gap 2 — delegates to the IDL-generated builder (single source of
+  // truth); the SK format is never re-spelled here. See `ideaKey` above.
+  learningGoldenCaseKey(org, skillBaseName, caseId) as PrimaryKey;
 
 /** Every golden case guarding ONE skill family in an org. */
 export const goldenCasePrefixForSkill = (

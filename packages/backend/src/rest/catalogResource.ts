@@ -19,6 +19,13 @@ import { effectiveOrg } from './membership.js';
 import { resolvePrincipal } from './bearerAuth.js';
 import { withAuthorNames } from './authorNames.js';
 import { flattenBundle } from '../catalog/bundles.js';
+import {
+  callPythonAuthorRevision,
+  usesPythonWriter,
+  type AuthorRevisionRequest,
+  type AuthorRevisionResponse,
+} from '../python-writer-client.js';
+import { variantIdFor } from '@harness/shared';
 
 /**
  * Generic org-catalog REST resource. Skills, agents, MCP servers, and workflows
@@ -95,9 +102,22 @@ export interface CatalogHandlersConfig {
   enrichGetWithAuthorNames?: boolean;
 }
 
+/**
+ * Deps the generic catalog handlers accept. ``authorRevision`` (U10 / MAT-141
+ * Gap 1) is the ONE Python skill-revision writer; when present (or
+ * ``PYTHON_AUTHOR_REVISION_URL`` is set) a SKILL create/update authors its
+ * revision through that single writer instead of ``repo.putNewVersion``. It is
+ * injectable so tests can prove the SKILL authoring path no longer writes the
+ * revision itself.
+ */
+type CatalogDeps = {
+  repo: Repo;
+  authorRevision?: (req: AuthorRevisionRequest) => Promise<AuthorRevisionResponse>;
+};
+
 type Handler = (
   event: APIGatewayProxyEventV2,
-  deps: { repo: Repo },
+  deps: CatalogDeps,
 ) => Promise<APIGatewayProxyResultV2>;
 
 export interface CatalogHandlers {
@@ -114,7 +134,7 @@ export interface CatalogHandlers {
    */
   dispatch(
     event: APIGatewayProxyEventV2,
-    deps: { repo: Repo },
+    deps: CatalogDeps,
     overrides?: { promote?: Handler; remove?: Handler },
   ): Promise<APIGatewayProxyResultV2>;
 }
@@ -202,6 +222,41 @@ export function makeCatalogHandlers(cfg: CatalogHandlersConfig): CatalogHandlers
       // POST — stamp authorship from the principal.
       item.createdBy = { userId: principal.userId, name: principal.name ?? principal.userId };
       item.baseName = item.baseName ?? item.name;
+    }
+
+    // U10 / MAT-141 Gap 1 — DRY single-writer contract. For SKILL kind, when the
+    // ONE Python author-revision writer is configured, the web editor / hq-add-skill
+    // create+update path MUST author the skill revision through that single writer
+    // rather than writing the revision itself via `repo.putNewVersion`. Other
+    // catalog kinds (agent / mcp / workflow) are out of U10's skill-revision-writer
+    // scope and keep the local versioning path. This is the deliberate re-point of
+    // existing TS catalog-authoring writes named in the ticket.
+    const authorRevision =
+      cfg.kind === 'SKILL'
+        ? (deps.authorRevision ?? (usesPythonWriter() ? callPythonAuthorRevision : undefined))
+        : undefined;
+
+    if (authorRevision) {
+      const baseName = item.baseName ?? item.name;
+      const isFork = item.repoId !== undefined || item.authorUserId !== undefined;
+      const writerVariantId = isFork ? variantIdFor(baseName, item.repoId, item.authorUserId) : '';
+      const req: AuthorRevisionRequest = {
+        org,
+        baseName,
+        variantId: writerVariantId,
+        body: typeof item.body === 'string' ? item.body : '',
+        ...(item.authorUserId !== undefined ? { authorUserId: item.authorUserId } : {}),
+        ...(typeof item.description === 'string' ? { description: item.description } : {}),
+      };
+      const written = await authorRevision(req);
+      // The handler authored NO revision row itself — the Python writer owns it.
+      const stamped = {
+        ...item,
+        baseName,
+        variantId: writerVariantId || baseName,
+        version: written.rev,
+      } as CatalogRecord;
+      return name ? ok({ [cfg.responseKey]: stamped }) : created({ [cfg.responseKey]: stamped });
     }
 
     const stamped = await deps.repo.putNewVersion(cfg.kind, item, {
