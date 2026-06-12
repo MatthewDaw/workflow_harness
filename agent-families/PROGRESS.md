@@ -100,7 +100,7 @@ R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b hu
 - [x] 009/U6 - Retrieval: insight-level whole-store rewrite
 - [x] 009/U7 - Demotions: router, agent_split, maintenance
 - [x] 009/U8 - Rendering / export under derived membership
-- [ ] 009/U9 - Config + e2e
+- [x] 009/U9 - Config + e2e
 
 ### Plan 010 - R3 Phase C: stages pivot + assign stage (docs/plans/2026-06-12-010-feat-agent-families-r3-stages-assign-plan.md)
 - [ ] 010/U1 - The assign stage
