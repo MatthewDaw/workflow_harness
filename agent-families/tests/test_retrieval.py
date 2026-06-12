@@ -1,29 +1,40 @@
-"""Retrieval-into-prompts tests (plan-004 U2, R2/R3/R4).
+"""Retrieval tests — R3 §4 insight-level whole-store rewrite (plan-009 U6, R13).
 
 Fully offline: vectors are hand-written (the U5 registration write shape), the
 store is exercised directly, and no embedding model / judge / subprocess runs.
 
 ## Conformance
 
-Each named invariant from the plan's "Required acceptance tests" maps 1:1 to a
-behavioral test here:
+Each named MUST-test from plan-009 U6 maps 1:1 to a behavioral test here:
 
-- `test_budget_caps_injection` → R3 bloat invariant: injected tokens ≤ budget AND
-  every injected skill is whole (no mid-skill truncation).
-- `test_relevance_is_self_focusing` → a wider pool does not dilute a focused query
-  (zero cluster-B skills in the injection for a cluster-A query).
-- `test_pool_is_family_scoped` → the candidate pool is the family's active set
-  (not one agent's partition); the own-skills-prior parameter exists and defaults
-  to the configured share.
-- `test_ranking_honors_full_text_cosine` → ranking uses member-body cosine, not
-  skill-description similarity (SkillRouter body-signal invariant).
-- `test_quarantine_visibility_by_mode` → quarantined insight invisible in
-  `training`, visible only in its batch's `trial`.
-- `test_injection_byte_stable` → identical inputs → byte-identical injected section.
+- `test_ownership_not_reachability_total` → an insight owned by a module the query
+  has no relationship to is retrieved purely by cosine; passing an *unrelated*
+  `family_id` cannot gate it (the inert no-op proves no family-pool gating is
+  possible — the U6 deviation seam, see the retrieval module docstring).
+- `test_no_own_skills_weighting` → `own_skills_share` / `DEFAULT_OWN_SKILLS_SHARE`
+  are gone (absent on the dataclass and the module); two cosine-tied insights rank
+  in stable cosine/id order, NOT own-first.
+- `test_ranks_insights_not_skills` → the result carries insight-granular items and
+  the budget fills insight-by-insight; two insights from the SAME skill are ranked
+  and budgeted independently (no whole-skill aggregation node in the ranked output).
+- `test_quarantine_visibility_by_mode_preserved` → a quarantined insight is hidden
+  in `training` and visible only in its batch's `trial` (both directions asserted).
+- `test_boundary_ticket_subsystem_deleted` → the R14c boundary-ticket code path is
+  gone from the module (its symbols no longer exist / import).
 
-Supporting scenario coverage: drop-log rank+size (R3), relevance-gate drops,
-trial-requires-batch / unknown-mode guards, the prompt-assembly seam, and the R2
-query builders.
+U6 deviation (documented, not hidden — mirrors the retrieval module docstring):
+under the wave's one-unit constraint the unmigrated callers (run-memory composer,
+planner/worker run-assembly) are not touched, so `retrieve` keeps inert
+`family_id`/`working_agent_id` no-op params and `RetrievalResult` keeps a *derived*
+`skills` provenance tuple. `test_ownership_not_reachability_total` /
+`test_no_own_skills_weighting` assert the no-ops cannot gate and carry no weight;
+`test_ranks_insights_not_skills` asserts `insights` (not `skills`) is the ranked
+granularity. U7's demotion sweep deletes the seams once callers migrate.
+
+Supporting scenario coverage: whole-store reach (not a family pool), budget cap +
+whole-insight injection, relevance-gate drops, drop-log rank+size (R3),
+byte-stability, trial-requires-batch / unknown-mode guards, the prompt-assembly
+seam, and the R2 query builders.
 """
 
 from __future__ import annotations
@@ -32,16 +43,17 @@ from types import SimpleNamespace
 
 import pytest
 
+import agent_families.library.retrieval as retrieval_module
 from agent_families.library.retrieval import (
-    DEFAULT_OWN_SKILLS_SHARE,
     DROP_BUDGET,
     DROP_RELEVANCE_GATE,
+    InsightCandidate,
     RetrievalError,
     RetrievalParams,
     count_tokens,
     planner_query,
-    retrieve,
     render_injection_section,
+    retrieve,
     verifier_query,
     worker_query,
 )
@@ -73,18 +85,9 @@ def env(tmp_path):
     store.close()
 
 
-def _insert_member(
-    env,
-    skill_id,
-    *,
-    vector,
-    status="active",
-    batch=None,
-):
-    """Insert insight + vec row + membership; promote to active unless quarantined.
-
-    Mirrors the U5 registration write shape used elsewhere in the suite.
-    """
+def _insert_insight(env, *, vector, skill_id=None, status="active", batch=None):
+    """Insert insight + vec row (+ optional membership); promote to active unless
+    quarantined. Mirrors the U5 registration write shape used elsewhere."""
     env.counter += 1
     n = env.counter
     with env.store.transaction():
@@ -98,7 +101,8 @@ def _insert_member(
             batch_id=batch_id,
         )
         env.vec.insert(insight_id, vector)
-        env.store.append_member(skill_id, insight_id)
+        if skill_id is not None:
+            env.store.append_member(skill_id, insight_id)
     if status == "active":
         with env.store.queue_operation("promote", f"seed {n}") as snap:
             env.store.set_status(insight_id, "active", snap)
@@ -111,227 +115,265 @@ def make_skill(env, name, *, agent_id=None, description="A description."):
     )
 
 
-def params(budget, *, floor=0.5, own_share=DEFAULT_OWN_SKILLS_SHARE):
-    return RetrievalParams(
-        budget_tokens=budget, relevance_floor=floor, own_skills_share=own_share
+def params(budget, *, floor=0.5):
+    return RetrievalParams(budget_tokens=budget, relevance_floor=floor)
+
+
+# === MUST-test: ownership ≠ reachability, total ==============================
+
+
+def test_ownership_not_reachability_total(env):
+    # A second family/agent the query has NO relationship to owns a relevant skill.
+    other_family = env.store.create_family("unrelated")
+    other_agent = env.store.create_agent(other_family, "stranger")
+    far_skill = make_skill(env, "far-away", agent_id=other_agent)
+    far_insight = _insert_insight(env, vector=NEAR_A, skill_id=far_skill)
+
+    # Retrieval reaches it purely by cosine — no scope argument at all.
+    result = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
+    assert far_insight in result.insights
+    assert far_insight in result.pool_insight_ids
+
+    # The inert family_id no-op cannot gate it: passing the WRONG family (the
+    # working family, not the owner's) still returns the cross-module insight —
+    # proving no family-pool gating is possible.
+    gated = retrieve(
+        env.store, query_vector=QUERY_A, params=params(10_000),
+        family_id=env.family_id, working_agent_id=env.agent_id,
     )
+    assert far_insight in gated.insights
+    assert gated.insights == result.insights  # the no-op changed nothing
 
 
-# --- R3: budget caps injection, whole skills only ----------------------------
+# === MUST-test: no own-skills weighting =====================================
 
 
-def test_budget_caps_injection(env):
-    # >=3x budget of relevant skills available; each near the query.
-    skill_ids = []
-    for i in range(10):
-        sid = make_skill(env, f"skill-{i}", description=f"desc {i}")
-        _insert_member(env, sid, vector=NEAR_A)
-        skill_ids.append(sid)
+def test_no_own_skills_weighting(env):
+    # The own-skills prior is gone from the public surface entirely.
+    p = RetrievalParams(budget_tokens=1, relevance_floor=0.5)
+    assert not hasattr(p, "own_skills_share")
+    assert not hasattr(retrieval_module, "DEFAULT_OWN_SKILLS_SHARE")
 
-    # Per-skill rendered size, then a budget that fits only ~3 of them.
-    renderer_result = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000),
-    )
-    per_skill = renderer_result.candidates[0].token_count
-    assert per_skill >= 3  # the budget math below relies on this
-    budget = 3 * per_skill + 1
-
-    result = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(budget),
-    )
-
-    # Bloat invariant: total injected tokens never exceed the budget.
-    assert result.injected_token_count <= budget
-    # 10 relevant skills available, far more than 3x the budget's capacity.
-    assert len(result.candidates) == 10
-    assert len(result.skills) <= 3
-    assert result.drops  # the overflow is dropped, not truncated
-
-    # Every injected skill is WHOLE: its full rendered bytes appear intact.
-    for cand in result.candidates:
-        if cand.skill_id in result.skills:
-            assert cand.content in result.injected_bytes
-    # Reassembling the included skills' bytes reproduces the injection exactly.
-    included = [c for c in result.candidates if c.skill_id in result.skills]
-    assert b"\n".join(c.content for c in included) == result.injected_bytes
-    # Overflow skills were dropped for budget, with rank and size logged.
-    assert all(d.reason == DROP_BUDGET for d in result.drops)
-    assert all(d.rank > 0 and d.token_count > 0 for d in result.drops)
-
-
-# --- a wider pool does not dilute a focused query ----------------------------
-
-
-def test_relevance_is_self_focusing(env):
-    a_skills = []
-    for i in range(3):
-        sid = make_skill(env, f"a-{i}")
-        _insert_member(env, sid, vector=NEAR_A)
-        a_skills.append(sid)
-    b_skills = []
-    b_insights = []
-    for i in range(3):
-        sid = make_skill(env, f"b-{i}")
-        b_insights.append(_insert_member(env, sid, vector=CLUSTER_B))
-        b_skills.append(sid)
-
-    # Floor sits between cluster A (cosine 1.0) and cluster B (cosine 0.0).
-    result = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000, floor=0.5),
-    )
-
-    # The injection contains ZERO cluster-B skills — B scored below the margin.
-    assert set(result.skills) == set(a_skills)
-    assert not (set(result.skills) & set(b_skills))
-    # Cluster-B insights are in the family pool but gated out of the injection.
-    for iid in b_insights:
-        assert iid in result.pool_insight_ids
-    gated = {d.skill_id for d in result.drops if d.reason == DROP_RELEVANCE_GATE}
-    assert gated == set(b_skills)
-
-
-# --- the pool is family-scoped, not agent-partitioned ------------------------
-
-
-def test_pool_is_family_scoped(env):
-    # Two agents in the same family; the working agent owns only its partition.
-    sibling_agent = env.store.create_agent(env.family_id, "sibling")
+    # Two cosine-tied insights, one "owned" by the working agent, one by a sibling.
     own_skill = make_skill(env, "own", agent_id=env.agent_id)
-    own_insight = _insert_member(env, own_skill, vector=NEAR_A)
-    sib_skill = make_skill(env, "sibling-skill", agent_id=sibling_agent)
-    sib_insight = _insert_member(env, sib_skill, vector=NEAR_A)
+    sibling_agent = env.store.create_agent(env.family_id, "sibling")
+    sib_skill = make_skill(env, "sib", agent_id=sibling_agent)
+    own_insight = _insert_insight(env, vector=NEAR_A, skill_id=own_skill)
+    sib_insight = _insert_insight(env, vector=NEAR_A, skill_id=sib_skill)
 
     result = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        working_agent_id=env.agent_id, params=params(10_000),
+        env.store, query_vector=QUERY_A, params=params(10_000),
+        working_agent_id=env.agent_id,
     )
+    # Identical cosine → stable cosine/id order (lower id first), NOT own-first.
+    ordered = [c.insight_id for c in result.candidates]
+    assert ordered.index(own_insight) < ordered.index(sib_insight)  # only because id is lower
+    assert min(own_insight, sib_insight) == own_insight  # own was inserted first
+    # The tie is broken by id, not ownership: scores are equal.
+    by_id = {c.insight_id: c.score for c in result.candidates}
+    assert by_id[own_insight] == by_id[sib_insight]
 
-    # The candidate POOL spans the family — both the agent's own and the
-    # sibling's active insights — not just the working agent's partition.
-    assert own_insight in result.pool_insight_ids
-    assert sib_insight in result.pool_insight_ids
-    scored = {c.skill_id for c in result.candidates}
-    assert {own_skill, sib_skill} <= scored
 
-    # The own-skills-prior parameter exists and defaults to the configured share.
-    assert RetrievalParams(budget_tokens=1, relevance_floor=0.5).own_skills_share == (
-        DEFAULT_OWN_SKILLS_SHARE
+# === MUST-test: ranks insights, not skills ==================================
+
+
+def test_ranks_insights_not_skills(env):
+    # TWO insights in the SAME skill, at different relevances.
+    skill = make_skill(env, "multi")
+    near = _insert_insight(env, vector=NEAR_A, skill_id=skill)  # cosine 1.0
+    mid = _insert_insight(env, vector=[0.8, 0.6, 0.0, 0.0], skill_id=skill)  # ~0.8
+
+    result = retrieve(env.store, query_vector=QUERY_A, params=params(10_000, floor=0.0))
+    # The result carries insight-granular items (insight ids), both from one skill.
+    assert set(result.insights) == {near, mid}
+    assert all(isinstance(c, InsightCandidate) for c in result.candidates)
+    assert all(hasattr(c, "insight_id") for c in result.candidates)
+    # Ranked by per-insight cosine, not aggregated to the skill: near outranks mid.
+    assert result.insights.index(near) < result.insights.index(mid)
+
+    # Budget fills insight-by-insight: a budget that fits only the higher-cosine
+    # insight drops the other — same-skill insights are budgeted INDEPENDENTLY,
+    # not as one whole-skill block.
+    one = next(c for c in result.candidates if c.insight_id == near)
+    tight = retrieve(
+        env.store, query_vector=QUERY_A,
+        params=params(one.token_count, floor=0.0),
     )
-    # The own skill is ranked ahead of the equally-relevant sibling (the prior).
-    own_rank = next(i for i, c in enumerate(result.candidates) if c.skill_id == own_skill)
-    sib_rank = next(i for i, c in enumerate(result.candidates) if c.skill_id == sib_skill)
-    assert own_rank < sib_rank
+    assert tight.insights == (near,)
+    assert any(d.insight_id == mid and d.reason == DROP_BUDGET for d in tight.drops)
 
 
-# --- ranking uses member-body cosine, not skill-description similarity --------
+# === MUST-test: quarantine visibility by mode ===============================
 
 
-def test_ranking_honors_full_text_cosine(env):
-    # Skill whose DESCRIPTION looks query-shaped but whose member BODY is far.
-    desc_skill = make_skill(
-        env, "desc-similar", description="login authentication query match"
-    )
-    _insert_member(env, desc_skill, vector=CLUSTER_B)  # body irrelevant
-    # Skill with a plain description but a member BODY near the query.
-    body_skill = make_skill(env, "body-relevant", description="unrelated words")
-    _insert_member(env, body_skill, vector=NEAR_A)  # body relevant
-
-    result = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000, floor=0.0),
-    )
-
-    # Ranking is by member-body cosine: the body-relevant skill outranks the
-    # description-similar-but-body-irrelevant one.
-    assert result.candidates[0].skill_id == body_skill
-    by_id = {c.skill_id: c.score for c in result.candidates}
-    assert by_id[body_skill] > by_id[desc_skill]
-
-
-# --- quarantine visibility is mode-keyed (R4) --------------------------------
-
-
-def test_quarantine_visibility_by_mode(env):
-    active_skill = make_skill(env, "active-skill")
-    _insert_member(env, active_skill, vector=NEAR_A)
-    quar_skill = make_skill(env, "quar-skill")
-    quar_insight = _insert_member(
-        env, quar_skill, vector=NEAR_A, status="quarantined", batch="b1"
-    )
+def test_quarantine_visibility_by_mode_preserved(env):
+    active = _insert_insight(env, vector=NEAR_A)
+    quar = _insert_insight(env, vector=NEAR_A, status="quarantined", batch="b1")
     batch_id = env.store.ensure_batch("b1")
 
-    # training: the quarantined insight is invisible — not in the pool, not injected.
+    # training: the quarantined insight is HIDDEN — not in pool, not injected.
     training = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000), mode="training",
+        env.store, query_vector=QUERY_A, params=params(10_000), mode="training"
     )
-    assert quar_insight not in training.pool_insight_ids
-    assert quar_skill not in training.skills
+    assert quar not in training.pool_insight_ids
+    assert quar not in training.insights
+    assert active in training.insights  # the active one is still reachable
 
-    # trial for its own batch: the quarantined insight becomes visible.
+    # trial for its own batch: the quarantined insight becomes VISIBLE.
     trial = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000), mode="trial", batch_id=batch_id,
+        env.store, query_vector=QUERY_A, params=params(10_000),
+        mode="trial", batch_id=batch_id,
     )
-    assert quar_insight in trial.pool_insight_ids
-    assert quar_skill in trial.skills
+    assert quar in trial.pool_insight_ids
+    assert quar in trial.insights
 
 
 def test_quarantine_other_batch_invisible_in_trial(env):
     # A trial for batch b1 must not surface batch b2's quarantined insight.
-    quar_skill = make_skill(env, "other-batch")
-    other = _insert_member(
-        env, quar_skill, vector=NEAR_A, status="quarantined", batch="b2"
-    )
+    other = _insert_insight(env, vector=NEAR_A, status="quarantined", batch="b2")
     b1 = env.store.ensure_batch("b1")
     trial = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000), mode="trial", batch_id=b1,
+        env.store, query_vector=QUERY_A, params=params(10_000),
+        mode="trial", batch_id=b1,
     )
     assert other not in trial.pool_insight_ids
+    assert other not in trial.insights
 
 
-# --- byte stability ----------------------------------------------------------
+# === MUST-test: boundary-ticket subsystem deleted ===========================
+
+
+def test_boundary_ticket_subsystem_deleted():
+    for name in (
+        "classify_boundary",
+        "run_boundary_ticket",
+        "injected_agent_clusters",
+        "BoundaryDecision",
+        "BoundaryRefinementResult",
+        "BoundaryPass",
+        "Persona",
+        "SkillCandidate",  # the old whole-skill candidate shape is gone too
+    ):
+        assert not hasattr(retrieval_module, name), f"{name} should be deleted (R13)"
+    with pytest.raises(ImportError):
+        from agent_families.library.retrieval import (  # noqa: F401
+            run_boundary_ticket,
+        )
+
+
+# === supporting: whole-store reach ==========================================
+
+
+def test_retrieval_reaches_whole_store_not_family_pool(env):
+    # Insights scattered across two families; none share the query's family.
+    fam2 = env.store.create_family("other")
+    ag2 = env.store.create_agent(fam2, "g")
+    s1 = make_skill(env, "s1", agent_id=env.agent_id)
+    s2 = make_skill(env, "s2", agent_id=ag2)
+    i1 = _insert_insight(env, vector=NEAR_A, skill_id=s1)
+    i2 = _insert_insight(env, vector=NEAR_A, skill_id=s2)
+    # An unattached insight (no skill at all) is reachable too.
+    i3 = _insert_insight(env, vector=NEAR_A, skill_id=None)
+
+    result = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
+    assert {i1, i2, i3} <= set(result.insights)
+    assert {i1, i2, i3} <= result.pool_insight_ids
+
+
+# === supporting: budget caps injection, whole insights only =================
+
+
+def test_budget_caps_injection(env):
+    skill = make_skill(env, "skill")
+    for _ in range(10):
+        _insert_insight(env, vector=NEAR_A, skill_id=skill)
+
+    probe = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
+    per_insight = probe.candidates[0].token_count
+    assert per_insight >= 3
+    budget = 3 * per_insight + 1
+
+    result = retrieve(env.store, query_vector=QUERY_A, params=params(budget))
+    # Bloat invariant: total injected tokens never exceed the budget.
+    assert result.injected_token_count <= budget
+    assert len(result.candidates) == 10
+    assert len(result.insights) <= 3
+    assert result.drops  # the overflow is dropped, not truncated
+
+    # Every injected insight is WHOLE: its full rendered bytes appear intact.
+    included = [c for c in result.candidates if c.insight_id in result.insights]
+    for cand in included:
+        assert cand.content in result.injected_bytes
+    assert b"\n".join(c.content for c in included) == result.injected_bytes
+    assert all(d.reason == DROP_BUDGET for d in result.drops)
+    assert all(d.rank > 0 and d.token_count > 0 for d in result.drops)
+
+
+# === supporting: relevance gate is self-focusing ============================
+
+
+def test_relevance_is_self_focusing(env):
+    a = [_insert_insight(env, vector=NEAR_A) for _ in range(3)]
+    b = [_insert_insight(env, vector=CLUSTER_B) for _ in range(3)]
+
+    result = retrieve(
+        env.store, query_vector=QUERY_A, params=params(10_000, floor=0.5)
+    )
+    # Zero cluster-B insights injected — they scored below the floor.
+    assert set(result.insights) == set(a)
+    assert not (set(result.insights) & set(b))
+    # Cluster-B insights are visible (in the pool) but gated out of the injection.
+    for iid in b:
+        assert iid in result.pool_insight_ids
+    gated = {d.insight_id for d in result.drops if d.reason == DROP_RELEVANCE_GATE}
+    assert gated == set(b)
+
+
+# === supporting: byte stability =============================================
 
 
 def test_injection_byte_stable(env):
-    for i in range(4):
-        sid = make_skill(env, f"s-{i}", description=f"desc {i}")
-        _insert_member(env, sid, vector=NEAR_A)
+    skill = make_skill(env, "skill")
+    for _ in range(4):
+        _insert_insight(env, vector=NEAR_A, skill_id=skill)
 
-    first = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000),
-    )
-    second = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000),
-    )
+    first = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
+    second = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
     assert first.injected_bytes == second.injected_bytes
-    assert first.skills == second.skills
+    assert first.insights == second.insights
     assert first.injected_bytes  # non-empty (the section actually rendered)
 
 
-# --- guards ------------------------------------------------------------------
+# === supporting: derived skills provenance (the U6 back-compat seam) =========
+
+
+def test_skills_is_derived_provenance_of_retrieved_insights(env):
+    skill = make_skill(env, "elicitation")
+    iid = _insert_insight(env, vector=NEAR_A, skill_id=skill)
+    result = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
+    assert iid in result.insights
+    # The derived provenance names the owning skill of the retrieved insight.
+    assert skill in result.skills
+    # And the rendered section carries the skill name as provenance + the body.
+    assert "Skill: elicitation" in result.injected_text
+    assert "action 1".rstrip() in result.injected_text  # the insight body verbatim
+    # Nothing retrieved → empty provenance.
+    empty = retrieve(env.store, query_vector=CLUSTER_B, params=params(10_000, floor=0.9))
+    assert empty.insights == ()
+    assert empty.skills == ()
+
+
+# === guards =================================================================
 
 
 def test_trial_requires_batch(env):
     with pytest.raises(RetrievalError, match="trial-mode retrieval requires"):
-        retrieve(
-            env.store, query_vector=QUERY_A, family_id=env.family_id,
-            params=params(10_000), mode="trial",
-        )
+        retrieve(env.store, query_vector=QUERY_A, params=params(10_000), mode="trial")
 
 
 def test_unknown_mode_rejected(env):
     with pytest.raises(RetrievalError, match="unknown run mode"):
-        retrieve(
-            env.store, query_vector=QUERY_A, family_id=env.family_id,
-            params=params(10_000), mode="nonsense",
-        )
+        retrieve(env.store, query_vector=QUERY_A, params=params(10_000), mode="nonsense")
 
 
 def test_params_validate_ranges():
@@ -339,22 +381,18 @@ def test_params_validate_ranges():
         RetrievalParams(budget_tokens=0, relevance_floor=0.5)
     with pytest.raises(RetrievalError, match="relevance_floor"):
         RetrievalParams(budget_tokens=1, relevance_floor=1.5)
-    with pytest.raises(RetrievalError, match="own_skills_share"):
-        RetrievalParams(budget_tokens=1, relevance_floor=0.5, own_skills_share=2.0)
 
 
-# --- the prompt-assembly seam ------------------------------------------------
+# === the prompt-assembly seam ===============================================
 
 
 def test_prompt_injection_seam_round_trips(env):
-    sid = make_skill(env, "elicitation")
-    _insert_member(env, sid, vector=NEAR_A)
-    result = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000),
-    )
+    skill = make_skill(env, "elicitation")
+    _insert_insight(env, vector=NEAR_A, skill_id=skill)
+    result = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
     section = render_injection_section(result)
     assert "Skill: elicitation" in section
+    assert "Insight" in section
 
     ticket = {
         "id": "TKT-A", "title": "login", "description": "build login",
@@ -363,7 +401,6 @@ def test_prompt_injection_seam_round_trips(env):
     }
     ledger = "(no prior iterations)"
     injected = build_worker_prompt(ticket, ledger, injected_skills=section)
-    # A planted high-relevance skill appears in the (fake) session's prompt.
     assert "Skill: elicitation" in injected
     # The seam is inert by default — empty injection reproduces the bare prompt.
     assert build_worker_prompt(ticket, ledger, injected_skills="") == (
@@ -371,17 +408,15 @@ def test_prompt_injection_seam_round_trips(env):
     )
 
 
-def test_empty_pool_injects_nothing(env):
-    result = retrieve(
-        env.store, query_vector=QUERY_A, family_id=env.family_id,
-        params=params(10_000),
-    )
-    assert result.skills == ()
+def test_empty_store_injects_nothing(env):
+    result = retrieve(env.store, query_vector=QUERY_A, params=params(10_000))
+    assert result.insights == ()
     assert result.injected_bytes == b""
+    assert result.skills == ()
     assert render_injection_section(result) == ""
 
 
-# --- R2 query builders -------------------------------------------------------
+# === R2 query builders ======================================================
 
 
 def test_query_builders_assemble_per_family_signals():
