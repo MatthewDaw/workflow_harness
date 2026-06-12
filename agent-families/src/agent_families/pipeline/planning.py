@@ -93,7 +93,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1189,6 +1189,7 @@ def run_planning(
     mode: str | None = None,
     script_path: str | Path | None = None,
     carry_in_msg_ids: Sequence[str] = (),
+    assign_provider: Callable[[], str] | None = None,
 ) -> PlanningResult:
     """Drive the planner Ralph loop: spec → MSG → session → lints → plan.
 
@@ -1229,8 +1230,13 @@ def run_planning(
             )
         carry_in.append((row["id"], row["content"]))
     msg_ids = {m.msg_id for m in messages} | {mid for mid, _ in carry_in}
+    # plan-010 U1 (R2): the assign stage fills the existing inert
+    # ``injected_skills=`` planner seam. ``None`` (the default) → ``""``, keeping
+    # the planner prompt byte-identical to today (the seam was inert).
+    injected_skills = assign_provider() if assign_provider is not None else ""
     base_prompt = build_planner_prompt(
-        spec_path.name, messages, size_budget, carry_in=carry_in
+        spec_path.name, messages, size_budget, carry_in=carry_in,
+        injected_skills=injected_skills,
     )
 
     # The typed-ASSUME/proposals contract is an instrument event (007 U2): absent
