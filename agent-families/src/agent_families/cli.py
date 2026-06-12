@@ -139,13 +139,27 @@ dim = 768
 # PROVENANCE: KTD — CPUExecutionProvider pinned so ONNX float output is reproducible
 # enough for record/replay fixture stability across machines.
 device = "cpu"
+# OPTIONAL Matryoshka truncation dim (R7): when set, every vector is truncated to
+# this many leading dims and L2-renormalized, and the *effective* (truncated) dim is
+# what is pinned. Left commented = full 768-dim used (Phase-0 behavior). Re-pinning
+# is a deliberate re-embed migration. PROVENANCE: §13 Matryoshka. TUNING METRIC:
+# retrieval/clustering quality vs index size at the truncated dim.
+# matryoshka_dim = 256
 
 [merge]
-# Cosine prefilter for the merge-review judge call: candidates at or above this
-# similarity are JUDGED (never silently auto-merged).
-# PROVENANCE: SkillRouter (arXiv 2603.22455) — "cosine>0.92 merge".
-# TUNING METRIC: duplicate-pair precision/recall on ~50 hand-labeled pairs (§13/§17).
+# DEMOTED (R11): the shipped cosine-0.92 *verdict* was a negation-blindness bug — a
+# negation sits at cosine ~0.97, CLOSER than a paraphrase at ~0.94, so the old path
+# silently merged contradictions. The R3 gauntlet (add_idea_r3) no longer treats any
+# cosine as a verdict; NLI renders the duplicate-vs-contradiction call. This key is
+# retained (read only by the legacy author-at-ingest add_idea until its callers
+# migrate). PROVENANCE: SkillRouter (arXiv 2603.22455) "cosine>0.92 merge", now
+# superseded by the NLI verdict (DESIGN §5 Op.2, R11/R12).
 cosine_threshold = 0.92
+# R11 candidate FILTER floor (never a verdict): key-collision candidates at or above
+# this cosine are *classified* by NLI. The R3 add_idea_r3 path reads this.
+# PROVENANCE: design note §2b "key-collision candidates at cosine ~0.80".
+# TUNING METRIC: candidate recall vs NLI-call volume on the hand-labeled pair set.
+candidate_floor = 0.80
 
 [retrieval]
 # Approximate-nearest-neighbor breadth handed to the placement judge.
@@ -173,11 +187,13 @@ max_retries = 3
 bare = false
 
 [lifecycle]
-# Active-set cap per skill. Phase 0 promotion is unconditional (the cap-tournament
-# admission is a marked Phase-3 seam); the value is carried now so the seam reads it.
-# PROVENANCE: §17 "active cap ~50"; Skill Shadowing (2605.24050) — selection collapses
-# as libraries grow (21% drop at 202 skills).
-# TUNING METRIC: routing selection accuracy vs active library size.
+# DEMOTED (R20/D-2): the fixed-cap tournament at promotion is removed. Survival
+# pressure — which insights stay active under cost(G) — is governed by the DESIGN
+# §6a objective in the slow derive pass (plan 009), which defines no per-promotion
+# move; ``_cap_tournament_seam`` is now a documented no-op. This key is retained
+# (reversibility) but no longer gates promotion.
+# PROVENANCE: §17 "active cap ~50" — superseded by the §6a objective.
+# TUNING METRIC: (historical) routing selection accuracy vs active library size.
 active_cap = 50
 
 [store]
@@ -185,6 +201,30 @@ active_cap = 50
 # BEGIN IMMEDIATE writers block up to this long rather than failing immediately.
 # PROVENANCE: default backstop. TUNING METRIC: lifecycle-op contention under load.
 busy_timeout_ms = 5000
+
+[nli]
+# R9/R12 local NLI seam: the 3-class cross-encoder that renders the
+# duplicate-vs-contradiction VERDICT (cosine is only the candidate filter). Local,
+# CPU, deterministic, no quota — so the high-volume classification stays off the
+# subscription and replays byte-identically from fixtures.
+# A model swap is a deliberate migration (the head's label order is asserted at load
+# and the request hash includes the model id, so fixtures are not portable).
+# PROVENANCE: §13 three-vector stack / design note §2c — cross-encoder/nli-deberta-v3-base.
+model = "cross-encoder/nli-deberta-v3-base"
+# At or above this softmax-max confidence the local NLI verdict stands; below it the
+# LLM judge resolve_edge prompt is the fallback (NLI primary, judge fallback).
+# PROVENANCE: design note §2c provisional. TUNING METRIC: NLI-vs-judge agreement and
+# fallback rate on the hand-labeled contradiction/paraphrase pair set.
+confidence_threshold = 0.65
+
+[graph]
+# RESERVED (R20): the similarity-graph parameters for the derive pass (plan 009).
+# Not read at Phase A — wired when the §6 partition / §6a objective land. The KNN
+# graph is recomputed from sqlite-vec each derive pass (never materialized), with
+# surviving mutual-kNN edges re-weighted by Tanimoto over the clustering vectors.
+# PROVENANCE: DESIGN §6 (mutual-kNN k≈15 + Tanimoto). TUNING METRIC: partition
+# stability / modularity on the seeded insight corpus.
+knn_k = 15
 
 [greenfield]
 # Plan 007 greenfield-mode tunables: the founder simulator's degradation severity,

@@ -15,8 +15,15 @@ from pathlib import Path
 DEFAULT_CONFIG_FILENAME = "thresholds.toml"
 
 _KNOWN_SECTIONS = (
-    "embedding", "merge", "retrieval", "judge", "lifecycle", "store", "greenfield"
+    "embedding", "merge", "retrieval", "judge", "lifecycle", "store", "greenfield",
+    "nli", "graph",
 )
+
+# R20 default for the NLI model pin (mirrors ``nli.DEFAULT_MODEL``): the local
+# 3-class cross-encoder that renders the duplicate/contradiction verdict. Kept as
+# a literal here (not an import) so the config loader has no dependency on the nli
+# runtime; a change here and in nli.DEFAULT_MODEL is a deliberate model migration.
+_DEFAULT_NLI_MODEL = "cross-encoder/nli-deberta-v3-base"
 
 
 class ConfigError(Exception):
@@ -28,11 +35,23 @@ class EmbeddingConfig:
     model: str
     dim: int
     device: str
+    # R7 optional Matryoshka truncation: when set, every vector is truncated to
+    # this many leading dims and L2-renormalized, and the *effective* (truncated)
+    # dim is what ``ensure_pins`` pins. Absent/None → the full ``dim`` is used.
+    # Defaulted last so existing keyword constructions keep working.
+    matryoshka_dim: int | None = None
 
 
 @dataclass(frozen=True)
 class MergeConfig:
+    # DEMOTED (R11): the shipped cosine-0.92 *verdict* was a negation-blindness
+    # bug. It is retained as a key (read only by the legacy author-at-ingest
+    # ``add_idea`` until its callers migrate) but is no longer a merge verdict.
     cosine_threshold: float
+    # R11 candidate filter floor: key-collision candidates at or above this cosine
+    # are *classified* by NLI (never auto-merged — that verdict is NLI's). The R3
+    # ``add_idea_r3`` path reads this. Defaulted last for back-compat.
+    candidate_floor: float = 0.80
 
 
 @dataclass(frozen=True)
@@ -93,6 +112,41 @@ _GREENFIELD_DEFAULTS = GreenfieldConfig(
 
 
 @dataclass(frozen=True)
+class NliConfig:
+    """R9/R12 local-NLI seam tunables.
+
+    The section is OPTIONAL: a thresholds.toml without ``[nli]`` loads with these
+    documented defaults (the loader still fail-fasts on unknown keys / out-of-range
+    values WHEN the section is present), so brownfield configs predating R3 keep
+    working.
+    """
+
+    model: str
+    confidence_threshold: float
+
+
+@dataclass(frozen=True)
+class GraphConfig:
+    """R20-reserved similarity-graph tunables (used by plan 009's derive pass).
+
+    Reserved here, wired in plan 009. OPTIONAL with documented defaults; validated
+    when present.
+    """
+
+    knn_k: int
+
+
+# Defaults applied when [nli] is absent (R9/R20). Mirrors thresholds.toml.
+_NLI_DEFAULTS = NliConfig(
+    model=_DEFAULT_NLI_MODEL,
+    confidence_threshold=0.65,
+)
+
+# Defaults applied when [graph] is absent (R20, reserved for plan 009).
+_GRAPH_DEFAULTS = GraphConfig(knn_k=15)
+
+
+@dataclass(frozen=True)
 class Config:
     embedding: EmbeddingConfig
     merge: MergeConfig
@@ -100,9 +154,11 @@ class Config:
     judge: JudgeConfig
     lifecycle: LifecycleConfig
     store: StoreConfig
-    # Defaulted (last field) so callers constructing a Config directly without a
-    # greenfield section keep working; load_config always passes it explicitly.
+    # Defaulted (last fields) so callers constructing a Config directly without a
+    # greenfield/nli/graph section keep working; load_config always passes them.
     greenfield: GreenfieldConfig = _GREENFIELD_DEFAULTS
+    nli: NliConfig = _NLI_DEFAULTS
+    graph: GraphConfig = _GRAPH_DEFAULTS
 
 
 # --- parsing helpers -------------------------------------------------------
@@ -193,11 +249,21 @@ def load_config(path: str | Path) -> Config:
     _positive_int("embedding", "dim", dim)
     device = _take(emb, "embedding", "device", str)
     _non_empty_str("embedding", "device", device)
+    # R7 optional Matryoshka truncation dim. Absent → None (full dim).
+    matryoshka_dim: int | None = None
+    if "matryoshka_dim" in emb:
+        matryoshka_dim = _take(emb, "embedding", "matryoshka_dim", int)
+        _positive_int("embedding", "matryoshka_dim", matryoshka_dim)
     _reject_extra(emb, "embedding")
 
     mrg = _require_table(data, "merge")
     cosine_threshold = _take(mrg, "merge", "cosine_threshold", float)
     _unit_interval("merge", "cosine_threshold", cosine_threshold)
+    # R11 optional candidate filter floor. Absent → MergeConfig default (0.80).
+    candidate_floor = MergeConfig.candidate_floor
+    if "candidate_floor" in mrg:
+        candidate_floor = _take(mrg, "merge", "candidate_floor", float)
+        _unit_interval("merge", "candidate_floor", candidate_floor)
     _reject_extra(mrg, "merge")
 
     ret = _require_table(data, "retrieval")
@@ -258,9 +324,36 @@ def load_config(path: str | Path) -> Config:
             benchmark_seed=benchmark_seed,
         )
 
+    # [nli] is optional (R9/R20): absent → documented defaults; present → fully
+    # validated, unknown keys rejected, out-of-range values rejected.
+    nli = _NLI_DEFAULTS
+    if "nli" in data:
+        nli_tbl = _require_table(data, "nli")
+        nli_model = _take(nli_tbl, "nli", "model", str)
+        _non_empty_str("nli", "model", nli_model)
+        confidence_threshold = _take(nli_tbl, "nli", "confidence_threshold", float)
+        _unit_interval("nli", "confidence_threshold", confidence_threshold)
+        _reject_extra(nli_tbl, "nli")
+        nli = NliConfig(
+            model=nli_model, confidence_threshold=confidence_threshold
+        )
+
+    # [graph] is optional (R20, reserved for plan 009): same discipline.
+    graph = _GRAPH_DEFAULTS
+    if "graph" in data:
+        graph_tbl = _require_table(data, "graph")
+        knn_k = _take(graph_tbl, "graph", "knn_k", int)
+        _positive_int("graph", "knn_k", knn_k)
+        _reject_extra(graph_tbl, "graph")
+        graph = GraphConfig(knn_k=knn_k)
+
     return Config(
-        embedding=EmbeddingConfig(model=model, dim=dim, device=device),
-        merge=MergeConfig(cosine_threshold=cosine_threshold),
+        embedding=EmbeddingConfig(
+            model=model, dim=dim, device=device, matryoshka_dim=matryoshka_dim
+        ),
+        merge=MergeConfig(
+            cosine_threshold=cosine_threshold, candidate_floor=candidate_floor
+        ),
         retrieval=RetrievalConfig(
             ann_top_k=ann_top_k, relevance_floor=relevance_floor
         ),
@@ -268,4 +361,6 @@ def load_config(path: str | Path) -> Config:
         lifecycle=LifecycleConfig(active_cap=active_cap),
         store=StoreConfig(busy_timeout_ms=busy_timeout_ms),
         greenfield=greenfield,
+        nli=nli,
+        graph=graph,
     )
