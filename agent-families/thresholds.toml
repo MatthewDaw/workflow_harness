@@ -100,13 +100,42 @@ model = "cross-encoder/nli-deberta-v3-base"
 confidence_threshold = 0.65
 
 [graph]
-# RESERVED (R20): the similarity-graph parameters for the derive pass (plan 009).
-# Not read at Phase A — wired when the §6 partition / §6a objective land. The KNN
-# graph is recomputed from sqlite-vec each derive pass (never materialized), with
-# surviving mutual-kNN edges re-weighted by Tanimoto over the clustering vectors.
-# PROVENANCE: DESIGN §6 (mutual-kNN k≈15 + Tanimoto). TUNING METRIC: partition
-# stability / modularity on the seeded insight corpus.
+# The similarity-graph + partitioner parameters for the R3 derive pass (plan 009,
+# DESIGN §6). The KNN graph is recomputed from sqlite-vec each derive pass (never
+# materialized); surviving mutual-kNN edges are re-weighted by `edge_weight` over the
+# full clustering vectors, and the partitioners (Leiden sweep + Infomap) only PROPOSE
+# candidates — the §6a objective ([objective]) selects the whole partition.
+# Mutual-kNN neighborhood size. PROVENANCE: DESIGN §6 (mutual-kNN k≈15 + Tanimoto).
+# TUNING METRIC: partition stability / modularity on the seeded insight corpus.
 knn_k = 15
+# Edge re-weighting for the surviving reciprocal pairs. "tanimoto" is the only
+# implemented weight: T(a,b)=a·b/(‖a‖²+‖b‖²−a·b) (CosTaL). PROVENANCE: DESIGN §6 /
+# CosTaL. TUNING METRIC: cluster cohesion vs bridge-edge leakage.
+edge_weight = "tanimoto"
+# Leiden CPM resolution sweep: the Leiden proposer runs once per resolution and every
+# candidate partition is handed to the §6a scorer, which selects the whole partition
+# minimizing cost(G). PROVENANCE: DESIGN §6 (resolution sweep). TUNING METRIC: A/B
+# candidate-win rate across resolutions vs Infomap.
+leiden_resolution_sweep = [0.5, 1.0, 2.0]
+# Fixed seed pinning the native partitioner backends (graspologic takes random_seed,
+# Infomap takes seed) so offline membership is byte-stable; the pure-Python fallback
+# is exact and ignores it. PROVENANCE: KTD offline determinism. TUNING METRIC:
+# membership byte-stability across runs (must be exact).
+infomap_seed = 1234
+
+[objective]
+# The §6a organization-objective constants (plan 009, DESIGN §6a — "nail before any
+# code; everything in §4–§6 defers to it"). cost(G) = L(traces|G) (map-equation
+# routing + locate bits) + L(G) (active-insight count + per-module codebook overhead).
+# Per-module codebook overhead in BITS — the one underspecified §6a number. PROVENANCE:
+# §6a v1 provisional (no canonical paper): the MDL description cost of declaring one
+# module's codebook. 4.0 bits ≈ naming a module among ~16 candidates — small enough not
+# to over-merge a genuine 2-community graph, large enough that the N-singleton
+# partition's N codebooks dominate; it is load-bearing (zeroing it lets the
+# all-singletons extreme win — tests/test_objective.py). Mirrors
+# objective.DEFAULT_MODULE_OVERHEAD_BITS. TUNING METRIC: derive-pass partition stability
+# vs held-out silhouette; re-pin when co-retrieval flow replaces the similarity proxy.
+module_overhead_bits = 4.0
 
 [greenfield]
 # Plan 007 greenfield-mode tunables: the founder simulator's degradation severity,

@@ -16,8 +16,13 @@ DEFAULT_CONFIG_FILENAME = "thresholds.toml"
 
 _KNOWN_SECTIONS = (
     "embedding", "merge", "retrieval", "judge", "lifecycle", "store", "greenfield",
-    "nli", "graph",
+    "nli", "graph", "objective",
 )
+
+# The only mutual-kNN edge re-weighting implemented (R4/R19): the Tanimoto
+# coefficient. A fail-fast loader rejects any other value rather than silently
+# falling back, so a typo or an un-implemented weight surfaces at load.
+_ALLOWED_EDGE_WEIGHTS = ("tanimoto",)
 
 # R20 default for the NLI model pin (mirrors ``nli.DEFAULT_MODEL``): the local
 # 3-class cross-encoder that renders the duplicate/contradiction verdict. Kept as
@@ -127,13 +132,34 @@ class NliConfig:
 
 @dataclass(frozen=True)
 class GraphConfig:
-    """R20-reserved similarity-graph tunables (used by plan 009's derive pass).
+    """Similarity-graph + partitioner tunables for the R3 derive pass (plan 009 U9).
 
-    Reserved here, wired in plan 009. OPTIONAL with documented defaults; validated
-    when present.
+    OPTIONAL section with documented defaults; every key validated when present.
+    ``knn_k`` is the mutual-kNN neighborhood size; ``edge_weight`` re-weights the
+    surviving reciprocal pairs (only ``"tanimoto"`` is implemented, R4);
+    ``leiden_resolution_sweep`` is the CPM sweep the Leiden proposer runs once per
+    value (R6); ``infomap_seed`` pins the native partitioner backends so offline
+    membership is byte-stable (R7). Defaults mirror ``partition.DEFAULT_RESOLUTIONS``
+    / ``partition.DEFAULT_SEED`` so a config that omits them matches the code path.
     """
 
     knn_k: int
+    edge_weight: str = "tanimoto"
+    leiden_resolution_sweep: tuple[float, ...] = (0.5, 1.0, 2.0)
+    infomap_seed: int = 1234
+
+
+@dataclass(frozen=True)
+class ObjectiveConfig:
+    """The §6a organization-objective constants (plan 009 U9, R1/R19).
+
+    ``module_overhead_bits`` is the per-module codebook overhead — the single
+    underspecified §6a number, carried here with documented provenance and mirroring
+    ``objective.DEFAULT_MODULE_OVERHEAD_BITS``. OPTIONAL section with a documented
+    default; validated (>= 0) when present.
+    """
+
+    module_overhead_bits: float = 4.0
 
 
 # Defaults applied when [nli] is absent (R9/R20). Mirrors thresholds.toml.
@@ -142,8 +168,12 @@ _NLI_DEFAULTS = NliConfig(
     confidence_threshold=0.65,
 )
 
-# Defaults applied when [graph] is absent (R20, reserved for plan 009).
+# Defaults applied when [graph] is absent (plan 009 U9). Mirrors thresholds.toml.
 _GRAPH_DEFAULTS = GraphConfig(knn_k=15)
+
+# Defaults applied when [objective] is absent (plan 009 U9). Mirrors thresholds.toml
+# and objective.DEFAULT_MODULE_OVERHEAD_BITS.
+_OBJECTIVE_DEFAULTS = ObjectiveConfig(module_overhead_bits=4.0)
 
 
 @dataclass(frozen=True)
@@ -159,6 +189,7 @@ class Config:
     greenfield: GreenfieldConfig = _GREENFIELD_DEFAULTS
     nli: NliConfig = _NLI_DEFAULTS
     graph: GraphConfig = _GRAPH_DEFAULTS
+    objective: ObjectiveConfig = _OBJECTIVE_DEFAULTS
 
 
 # --- parsing helpers -------------------------------------------------------
@@ -214,6 +245,41 @@ def _non_negative_int(sect: str, key: str, val: int) -> None:
 def _non_empty_str(sect: str, key: str, val: str) -> None:
     if not val.strip():
         raise ConfigError(f"[{sect}] '{key}' must be a non-empty string")
+
+
+def _non_negative_float(sect: str, key: str, val: float) -> None:
+    if val < 0:
+        raise ConfigError(f"[{sect}] '{key}' must be >= 0, got {val}")
+
+
+def _take_positive_float_tuple(section: dict, sect: str, key: str) -> tuple[float, ...]:
+    """Pop a non-empty TOML array of positive numbers, return it as a float tuple.
+
+    Used for ``[graph].leiden_resolution_sweep`` (R19): every entry must be a
+    positive number (bool is rejected — it is an int subclass), and the array must
+    be non-empty so the Leiden proposer always has at least one resolution.
+    """
+    if key not in section:
+        raise ConfigError(f"[{sect}] missing required key '{key}' in thresholds.toml")
+    val = section.pop(key)
+    if not isinstance(val, list) or not val:
+        raise ConfigError(
+            f"[{sect}] '{key}' must be a non-empty array of numbers in thresholds.toml"
+        )
+    out: list[float] = []
+    for item in val:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            got = type(item).__name__
+            raise ConfigError(
+                f"[{sect}] '{key}' must contain only numbers, got a {got}"
+            )
+        f = float(item)
+        if f <= 0:
+            raise ConfigError(
+                f"[{sect}] '{key}' values must be positive, got {f}"
+            )
+        out.append(f)
+    return tuple(out)
 
 
 # --- loader ----------------------------------------------------------------
@@ -338,14 +404,52 @@ def load_config(path: str | Path) -> Config:
             model=nli_model, confidence_threshold=confidence_threshold
         )
 
-    # [graph] is optional (R20, reserved for plan 009): same discipline.
+    # [graph] is optional (plan 009 U9): absent → documented defaults; present →
+    # every key validated, unknown keys rejected, out-of-range values rejected. The
+    # new R19 keys (edge_weight / leiden_resolution_sweep / infomap_seed) are
+    # optional WITHIN the section so a minimal `[graph]\nknn_k=...` still loads.
     graph = _GRAPH_DEFAULTS
     if "graph" in data:
         graph_tbl = _require_table(data, "graph")
         knn_k = _take(graph_tbl, "graph", "knn_k", int)
         _positive_int("graph", "knn_k", knn_k)
+        edge_weight = _GRAPH_DEFAULTS.edge_weight
+        if "edge_weight" in graph_tbl:
+            edge_weight = _take(graph_tbl, "graph", "edge_weight", str)
+            _non_empty_str("graph", "edge_weight", edge_weight)
+            if edge_weight not in _ALLOWED_EDGE_WEIGHTS:
+                raise ConfigError(
+                    f"[graph] 'edge_weight' must be one of"
+                    f" {list(_ALLOWED_EDGE_WEIGHTS)}, got '{edge_weight}'"
+                )
+        resolution_sweep = _GRAPH_DEFAULTS.leiden_resolution_sweep
+        if "leiden_resolution_sweep" in graph_tbl:
+            resolution_sweep = _take_positive_float_tuple(
+                graph_tbl, "graph", "leiden_resolution_sweep"
+            )
+        infomap_seed = _GRAPH_DEFAULTS.infomap_seed
+        if "infomap_seed" in graph_tbl:
+            infomap_seed = _take(graph_tbl, "graph", "infomap_seed", int)
+            _non_negative_int("graph", "infomap_seed", infomap_seed)
         _reject_extra(graph_tbl, "graph")
-        graph = GraphConfig(knn_k=knn_k)
+        graph = GraphConfig(
+            knn_k=knn_k,
+            edge_weight=edge_weight,
+            leiden_resolution_sweep=resolution_sweep,
+            infomap_seed=infomap_seed,
+        )
+
+    # [objective] is optional (plan 009 U9): the §6a per-module bit cost. Absent →
+    # documented default; present → validated (>= 0), unknown keys rejected.
+    objective = _OBJECTIVE_DEFAULTS
+    if "objective" in data:
+        obj_tbl = _require_table(data, "objective")
+        module_overhead_bits = _take(
+            obj_tbl, "objective", "module_overhead_bits", float
+        )
+        _non_negative_float("objective", "module_overhead_bits", module_overhead_bits)
+        _reject_extra(obj_tbl, "objective")
+        objective = ObjectiveConfig(module_overhead_bits=module_overhead_bits)
 
     return Config(
         embedding=EmbeddingConfig(
@@ -363,4 +467,5 @@ def load_config(path: str | Path) -> Config:
         greenfield=greenfield,
         nli=nli,
         graph=graph,
+        objective=objective,
     )
