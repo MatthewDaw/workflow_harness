@@ -113,6 +113,31 @@ ADMISSION_GATE_SCHEMA = {
     "additionalProperties": False,
 }
 
+# The NLI-fallback edge-resolution verdict enum (R12/R14, Operation 2). Local NLI
+# (nli.py) renders the verdict for each key-collision candidate; only when its
+# confidence is below threshold does the LLM judge run this Graphiti-style
+# resolve_edge prompt as the FALLBACK. The four moves mirror the NLI labels plus
+# an explicit `unrelated` (the key collided but the rules are independent):
+#   corroborate <- entailment   contradicts <- contradiction
+#   refine      <- same-key nuance (neutral)   unrelated <- different rule
+# This is a SEPARATE, additive verdict surface from OUTCOMES: the R3 ingest
+# gauntlet (plan 008 U6) classifies *edges*, it does not place skills. The legacy
+# placement/merge OUTCOMES surface above is demoted (kept intact for the not-yet-
+# migrated Phase-0 callers; the cut-over rides plans 008 U8/U9 — see the 008 U6
+# Deviations note in PROGRESS.md).
+RESOLVE_EDGE_OUTCOMES = ("corroborate", "refine", "contradicts", "unrelated")
+
+RESOLVE_EDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "outcome": {"type": "string", "enum": list(RESOLVE_EDGE_OUTCOMES)},
+        "confidence": {"type": "number"},
+        "rationale": {"type": "string"},
+    },
+    "required": ["outcome"],
+    "additionalProperties": False,
+}
+
 _NPM_ENTRY_RELPATH = Path("node_modules") / "@anthropic-ai" / "claude-code" / "cli.js"
 _SHIM_SUFFIXES = {".cmd", ".bat", ".ps1"}
 

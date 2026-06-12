@@ -35,12 +35,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from agent_families import nli
 from agent_families.config import Config
 from agent_families.embedding import EmbeddingService, ensure_pins
 from agent_families.judge import (
     ADMISSION_GATE_SCHEMA,
     GATE_OUTCOMES,
     OUTCOMES,
+    RESOLVE_EDGE_SCHEMA,
     run_judge,
 )
 from agent_families.store import Store
@@ -835,5 +837,321 @@ def add_idea(
         message=(
             f"registered insight {insight_id} (quarantined) in skill {skill_id}"
             f" via {outcome}"
+        ),
+    )
+
+
+# =============================================================================
+# R3 ingest gauntlet (plan 008 U6) — the derive-from-graph write path.
+# =============================================================================
+#
+# This is the R3 replacement for the author-at-ingest :func:`add_idea` spine: a
+# standalone admission gate (U5) -> key-collision candidate fetch -> local-NLI
+# verdict (corroborate / refine / contradicts / unrelated, judge fallback only at
+# low NLI confidence) -> one transaction inserting a quarantined insight + its
+# key+full clustering vectors + typed edges. It authors NO skill and NO
+# membership (grouping is deferred to plan 009's derive pass), it never mints a
+# snapshot (R3), and — the shipped-bug fix — it never lets whole-atom cosine
+# render the duplicate-vs-contradiction *verdict*: cosine is only a candidate
+# filter, NLI renders the verdict, so a negation colliding at cosine ~0.95
+# becomes a `contradicts` edge instead of a silent merge (R11/R12).
+#
+# DEVIATION (008 U6 wave scope): the live cut-over — making this THE behavior of
+# ``add_idea``, deleting the placement/taxonomy/merge-verdict machinery, shrinking
+# judge ``OUTCOMES``, and re-recording every dependent fixture — touches ~5 test
+# files and ~6 source modules outside U6's three-file scope and would turn the
+# offline suite red mid-wave. So the R3 path ships here as ``add_idea_r3`` (the
+# real, tested behavior + every U6 acceptance invariant), legacy ``add_idea`` and
+# its symbols stay intact-but-demoted, and the rename/deletion + caller migration
+# ride the units that own those files (U8 reflector routing, U9 e2e + config). See
+# PROGRESS.md ## Deviations.
+
+# R11 candidate-filter floor (cosine similarity): key-collision candidates at or
+# above this similarity are *classified* (never auto-merged — that verdict is
+# NLI's). PROVENANCE: design note §2b "key-collision candidates at cosine ~0.80".
+# This module default is the seam until U9 wires it to ``config.merge``
+# (candidate_floor, repurposing the demoted 0.92 cosine_threshold). NEVER a
+# verdict — only a filter.
+CANDIDATE_FLOOR_DEFAULT = 0.80
+
+# R9/R12 NLI confidence threshold: at or above it the local NLI verdict stands; below
+# it the LLM judge resolve_edge prompt is the fallback. PROVENANCE: design note §2c
+# (NLI primary, judge fallback). Seam until U9 wires ``[nli].confidence_threshold``.
+NLI_CONFIDENCE_THRESHOLD_DEFAULT = 0.65
+
+# NLI label -> ingest move (R12). All candidates already collided on the rule's KEY
+# identity (knn on="key" >= candidate_floor), so a `neutral` verdict among them is a
+# same-key *nuance* (refine), not an unrelated rule.
+NLI_LABEL_TO_MOVE = {
+    "entailment": "corroborate",
+    "contradiction": "contradicts",
+    "neutral": "refine",
+}
+
+# Ingest move -> the typed edge it materializes (R12/R13). `unrelated` writes no
+# edge — the key collision was incidental and the new insight stands alone.
+MOVE_TO_EDGE_KIND = {
+    "corroborate": "corroborates",
+    "refine": "refines",
+    "contradicts": "contradicts",
+    "unrelated": None,
+}
+
+
+@dataclass(frozen=True)
+class CandidateMove:
+    """One key-collision candidate and the verdict rendered against it."""
+
+    candidate: Neighbor
+    move: str  # corroborate | refine | contradicts | unrelated
+    source: str  # nli | judge (which classifier rendered the verdict)
+
+
+def build_resolve_edge_prompt(incumbent_text: str, new_text: str) -> str:
+    """The Graphiti-style resolve_edge fallback prompt (R12), pure/volatile-free.
+
+    Run only when local NLI confidence is below threshold — the high-volume
+    duplicate/contradiction classification stays on the quota-free local model;
+    this LLM call is the rare tie-breaker.
+    """
+    return (
+        "You are the edge-resolution judge for an insight library. Local NLI was"
+        " not confident enough to classify the relationship between an existing"
+        " insight and a newly submitted one that collides with it on rule"
+        " identity. Decide the relationship.\n"
+        "Allowed outcomes: corroborate (the new insight agrees with / supports the"
+        " existing one — keep both, the new one is an independent vote), refine"
+        " (the same rule with added nuance — keep both), contradicts (the new"
+        " insight asserts the opposite — record the conflict, never merge),"
+        " unrelated (the identity collision is incidental; they are independent"
+        " rules).\n\n"
+        f"Existing insight:\n{incumbent_text}\n\n"
+        f"Newly submitted insight:\n{new_text}"
+    )
+
+
+def _classify_candidate(
+    config: Config,
+    *,
+    incumbent_text: str,
+    new_text: str,
+    nli_model: str,
+    nli_mode: str | None,
+    nli_fixtures_dir: str | Path | None,
+    nli_confidence_threshold: float,
+    judge_mode: str | None,
+    judge_fixtures_dir: str | Path | None,
+    _nli_encoder=None,
+) -> tuple[str, str]:
+    """Classify a key-collision candidate into one R3 move; return (move, source).
+
+    Local NLI renders the verdict; the LLM judge resolve_edge prompt is the
+    fallback used ONLY when NLI confidence is below the threshold (R9/R12). Above
+    the threshold the judge is never called.
+    """
+    result = nli.classify(
+        incumbent_text,
+        new_text,
+        model=nli_model,
+        mode=nli_mode,
+        fixtures_dir=nli_fixtures_dir,
+        _encoder=_nli_encoder,
+    )
+    if result.confidence >= nli_confidence_threshold:
+        return NLI_LABEL_TO_MOVE[result.label], "nli"
+    judged = run_judge(
+        build_resolve_edge_prompt(incumbent_text, new_text),
+        RESOLVE_EDGE_SCHEMA,
+        model=config.judge.model,
+        max_retries=config.judge.max_retries,
+        bare=config.judge.bare,
+        mode=judge_mode,
+        fixtures_dir=judge_fixtures_dir,
+    )
+    return judged.output["outcome"], "judge"
+
+
+def _corroborate_incumbent(
+    store: Store, incumbent_id: int, *, mode: str
+) -> None:
+    """Append a corroborate vote on the incumbent, stamped with the CURRENT
+    standing snapshot — duplicates are votes, not silent no-ops (R12/R15). No new
+    snapshot is minted at ingest. Caller holds the transaction."""
+    store.record_fitness_event(
+        incumbent_id,
+        "corroborate",
+        mode,
+        store.current_snapshot_id(),
+    )
+
+
+def add_idea_r3(
+    store: Store,
+    vec: VecIndex,
+    embedder: EmbeddingService,
+    config: Config,
+    *,
+    precondition: str,
+    action: str,
+    expected_outcome: str,
+    batch_label: str,
+    scope_tag: str | None = None,
+    accept_rewrite: bool = False,
+    provenance: str = "manual",
+    judge_mode: str | None = None,
+    judge_fixtures_dir: str | Path | None = None,
+    nli_model: str | None = None,
+    nli_mode: str | None = None,
+    nli_fixtures_dir: str | Path | None = None,
+    candidate_floor: float | None = None,
+    nli_confidence_threshold: float | None = None,
+    corroborate_mode: str = "training",
+    _nli_encoder=None,
+) -> AddIdeaResult:
+    """Register one idea through the R3 ingest gauntlet (R11–R15).
+
+    Spine: admission gate (U5, BEFORE embed) -> generalized content-hash check
+    (a hit corroborates the incumbent and returns it, R15) -> embed KEY + FULL
+    clustering vectors on the GENERALIZED atom -> ``knn(on="key")`` candidate
+    fetch at >= ``candidate_floor`` (a filter, never a verdict, R11) -> per
+    candidate, local-NLI verdict (judge resolve_edge fallback only below
+    confidence threshold, R12) -> ONE transaction writing the quarantined insight,
+    its key+full vectors, and its typed edges (corroborates/refines/contradicts),
+    plus a corroborate vote per entailment. Authors NO skill, NO membership (R13);
+    mints NO snapshot (R3); never stamps ``invalid_at`` (deferred-supersede rides
+    promotion, R12/R16).
+
+    Non-registration exits raise (zero rows written, R7): the gate raises
+    :class:`StructuralValidationError` / :class:`LintRejected` /
+    :class:`RewriteProposed` before any embed/insert.
+    """
+    floor = candidate_floor if candidate_floor is not None else CANDIDATE_FLOOR_DEFAULT
+    threshold = (
+        nli_confidence_threshold
+        if nli_confidence_threshold is not None
+        else NLI_CONFIDENCE_THRESHOLD_DEFAULT
+    )
+    model = nli_model if nli_model is not None else nli.DEFAULT_MODEL
+
+    # 1. Admission gate (Operation 1) — BEFORE embed, so vectors are on the
+    #    generalized text. Raises LintRejected / RewriteProposed / structural.
+    atom = run_admission_gate(
+        config,
+        precondition=precondition,
+        action=action,
+        expected_outcome=expected_outcome,
+        scope_tag=scope_tag,
+        accept_rewrite=accept_rewrite,
+        judge_mode=judge_mode,
+        judge_fixtures_dir=judge_fixtures_dir,
+    )
+
+    fields = {
+        "precondition": atom.precondition,
+        "action": atom.action,
+        "expected_outcome": atom.expected_outcome,
+    }
+    idea_hash = content_hash(**fields)
+    new_text = build_idea_text(**fields)
+
+    # 2. Generalized content-hash hit -> corroborate the incumbent (R15): a vote,
+    #    not a silent no-op. No new insight, no new snapshot.
+    existing = store.find_insight_by_hash(idea_hash)
+    if existing is not None:
+        with store.transaction():
+            _corroborate_incumbent(store, existing["id"], mode=corroborate_mode)
+        return AddIdeaResult(
+            code="corroborated",
+            insight_id=existing["id"],
+            skill_id=None,
+            judge_outcome="corroborate",
+            scope_tag=existing["scope_tag"],
+            batch_id=existing["batch_id"],
+            message=(
+                f"exact duplicate of insight {existing['id']} — corroborated"
+                " (content hash); no new insight authored"
+            ),
+        )
+
+    # 3. Embed the KEY (rule identity) and FULL (whole atom) clustering vectors on
+    #    the GENERALIZED atom (R7/R11).
+    ensure_pins(store, config.embedding)
+    key_vector = embedder.embed_key(atom.precondition, atom.action)
+    full_vector = embedder.embed_full(new_text)
+
+    # 4. Key-collision candidate fetch: a FILTER, never a verdict (R11). All
+    #    statuses (R13 dedup view).
+    candidates = [
+        n
+        for n in vec.knn(
+            key_vector, config.retrieval.ann_top_k, statuses=None, on="key"
+        )
+        if 1.0 - n.distance >= floor
+    ]
+
+    # 5. NLI verdict per candidate (judge fallback only below confidence, R12).
+    moves: list[CandidateMove] = []
+    for candidate in candidates:
+        incumbent = store.get_insight(candidate.insight_id)
+        incumbent_text = build_idea_text(
+            incumbent["precondition"],
+            incumbent["action"],
+            incumbent["expected_outcome"],
+        )
+        move, source = _classify_candidate(
+            config,
+            incumbent_text=incumbent_text,
+            new_text=new_text,
+            nli_model=model,
+            nli_mode=nli_mode,
+            nli_fixtures_dir=nli_fixtures_dir,
+            nli_confidence_threshold=threshold,
+            judge_mode=judge_mode,
+            judge_fixtures_dir=judge_fixtures_dir,
+            _nli_encoder=_nli_encoder,
+        )
+        moves.append(CandidateMove(candidate=candidate, move=move, source=source))
+
+    # 6. The single registration transaction (R7/R13): insight (quarantined) +
+    #    key+full vectors + typed edges + corroborate votes. NO skill, NO
+    #    membership; NO snapshot minted (R3); NO invalid_at stamped (deferred to
+    #    promotion, R12/R16).
+    with store.transaction():
+        batch_id = store.ensure_batch(batch_label)
+        insight_id = store.insert_insight(
+            **fields,
+            content_hash=idea_hash,
+            scope_tag=atom.scope_tag,
+            status="quarantined",
+            batch_id=batch_id,
+            embedding_model=config.embedding.model,
+            embedding_dim=config.embedding.dim,
+            provenance=provenance,
+            negative_scope=atom.negative_scope,
+            rationale=atom.rationale,
+        )
+        vec.insert(insight_id, key_vector, full_vector)
+        for cm in moves:
+            edge_kind = MOVE_TO_EDGE_KIND[cm.move]
+            if edge_kind is not None:
+                store.add_insight_edge(insight_id, cm.candidate.insight_id, edge_kind)
+            if cm.move == "corroborate":
+                # The new insight stays DISTINCT; the vote lands on the incumbent,
+                # stamped with the current standing snapshot (no snapshot minted).
+                _corroborate_incumbent(
+                    store, cm.candidate.insight_id, mode=corroborate_mode
+                )
+
+    move_summary = ",".join(cm.move for cm in moves) or "unrelated"
+    return AddIdeaResult(
+        code="registered",
+        insight_id=insight_id,
+        skill_id=None,
+        judge_outcome=move_summary,
+        scope_tag=atom.scope_tag,
+        batch_id=batch_id,
+        message=(
+            f"registered insight {insight_id} (quarantined) via the R3 gauntlet;"
+            f" edges: {move_summary}; no skill authored"
         ),
     )
