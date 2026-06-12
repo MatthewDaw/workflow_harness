@@ -122,41 +122,6 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _knn_dedup_view(vec: VecIndex, vector, k: int) -> list[Neighbor]:
-    """ANN top-k across ALL statuses — the add-idea dedup view (R5/R13).
-
-    Workaround for a vec0 incompatibility in :meth:`VecIndex.knn` (U3): SQLite's
-    query flattener merges that method's outer ``ORDER BY`` into the vec0 KNN
-    subquery, and vec0 rejects a second ``ORDER BY distance`` clause. Expressing
-    k as the subquery's ``LIMIT`` (vec0 accepts either form) blocks the
-    flattening, because a LIMIT-carrying subquery cannot be flattened into a
-    join. The fix belongs in vecindex.py (owning unit); this helper keeps U5
-    self-contained until then.
-    """
-    import sqlite_vec
-
-    from agent_families.vecindex import VEC_TABLE
-
-    rows = vec.store.conn.execute(
-        "SELECT v.insight_id AS insight_id, v.distance AS distance,"
-        "       i.status AS status"
-        f" FROM (SELECT insight_id, distance FROM {VEC_TABLE}"
-        "        WHERE embedding MATCH ?"
-        "        ORDER BY distance LIMIT ?) v"
-        " JOIN insights i ON i.id = v.insight_id"
-        " ORDER BY v.distance ASC, v.insight_id ASC",
-        (sqlite_vec.serialize_float32(list(vector)), int(k)),
-    ).fetchall()
-    return [
-        Neighbor(
-            insight_id=row["insight_id"],
-            distance=float(row["distance"]),
-            status=row["status"],
-        )
-        for row in rows
-    ]
-
-
 # --- exceptions ----------------------------------------------------------------
 
 
@@ -571,7 +536,12 @@ def add_idea(
     ensure_pins(store, config.embedding)
     idea_text = build_idea_text(precondition, action, expected_outcome)
     vector = embedder.embed_document(idea_text)
-    neighbors = _knn_dedup_view(vec, vector, config.retrieval.ann_top_k)
+    # Add-idea dedup view: all statuses (R13), over the retrieval column the
+    # legacy embed_document vector lives in. The U3 flattener fix lets us call
+    # VecIndex.knn directly (the old out-of-band dedup-view helper is deleted).
+    neighbors = vec.knn(
+        vector, config.retrieval.ann_top_k, statuses=None, on="retrieval"
+    )
 
     judge_kwargs = dict(
         model=config.judge.model,

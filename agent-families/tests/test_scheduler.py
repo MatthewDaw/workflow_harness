@@ -62,7 +62,6 @@ from agent_families.grading.target_env import (
 from agent_families.judge import write_fixture
 from agent_families.pipeline import (
     JUDGE_SCHEMA,
-    _knn_dedup_view,
     add_idea,
     build_idea_text,
     build_merge_prompt,
@@ -216,7 +215,9 @@ def make_register(env, embedder):
             )
         idea_text = build_idea_text(**fields)
         vector = embedder.embed_document(idea_text)
-        neighbors = _knn_dedup_view(env.vec, vector, CFG.retrieval.ann_top_k)
+        neighbors = env.vec.knn(
+            vector, CFG.retrieval.ann_top_k, statuses=None, on="retrieval"
+        )
         merge = [n for n in neighbors if 1.0 - n.distance >= CFG.merge.cosine_threshold]
         if merge:
             prompt = build_merge_prompt(env.store, idea_text, merge)

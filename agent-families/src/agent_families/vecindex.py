@@ -5,11 +5,32 @@ vector row commits in the same transaction as its insight row — that one fact 
 what makes R7's registration atomicity a one-line rule. Inserts therefore refuse
 to run outside :meth:`Store.transaction`.
 
+**Three-vector shape (R5/R8).** Each insight owns one row carrying its clustering
+vectors in a single multi-column vec0 table, so every vector of an insight
+commits in the same transaction (the R7 atomicity invariant — no half-written
+insight is reachable). The columns:
+
+- ``key_embedding`` — the clustering vector over the rule's *identity*
+  (precondition + action). ``knn(on="key")`` collides contradictions on the rule
+  they share, which is what lets NLI separate a duplicate from a negation.
+- ``full_embedding`` — the clustering vector over the whole atom.
+- ``embedding`` — the legacy search-document / retrieval vector, exposed as
+  ``knn(on="retrieval")``. (The dedicated v1 retrieval column is deferred to
+  plan 010; until then this legacy column carries the retrieval vector and keeps
+  the demoted retrieval/maintenance readers working — demote, never drop, R6.)
+
 Visibility (R13) is a query-time join, never a vec mutation: lifecycle operations
 flip insight status and the join picks it up; vec rows are written once at
 registration and never deleted or rewritten. ``statuses=None`` is the add-idea
 dedup view (all statuses, including retired — that is what triggers R14's
 revive-or-override prompt); narrower views pass an explicit status tuple.
+
+The vec0 KNN query uses ``LIMIT`` inside the subquery rather than the ``k = ?``
+form: with an outer ``ORDER BY`` and a join, SQLite's query flattener merges the
+outer ordering into the vec0 subquery and vec0 rejects the resulting second
+``ORDER BY distance``. A ``LIMIT``-carrying subquery cannot be flattened into a
+join, so the ordering stays put. (This is the documented flattener fix that the
+deleted ``pipeline._knn_dedup_view`` helper worked around out-of-band.)
 """
 
 from __future__ import annotations
@@ -20,6 +41,14 @@ from dataclasses import dataclass
 from agent_families.store import Store
 
 VEC_TABLE = "insight_vectors"
+
+# on= → physical column. Validated allow-list: the column is NEVER interpolated
+# from caller input, only chosen from this map (no SQL injection surface, R8).
+_VIEW_COLUMN = {
+    "key": "key_embedding",
+    "full": "full_embedding",
+    "retrieval": "embedding",
+}
 
 
 class VecIndexError(Exception):
@@ -69,18 +98,43 @@ class VecIndex:
             conn.enable_load_extension(False)
 
     def migrate(self) -> None:
-        """Create the vec0 table if absent; dim is fixed at creation (pinned, R22)."""
+        """Create the multi-column vec0 table if absent; dim is fixed at creation."""
         self.store.conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS {VEC_TABLE} USING vec0("
             "  insight_id INTEGER PRIMARY KEY,"
-            f"  embedding float[{self.dim}] distance_metric=cosine"
+            f"  embedding float[{self.dim}] distance_metric=cosine,"
+            f"  key_embedding float[{self.dim}] distance_metric=cosine,"
+            f"  full_embedding float[{self.dim}] distance_metric=cosine"
             ")"
         )
 
     # --- writes ------------------------------------------------------------------
 
-    def insert(self, insight_id: int, vector) -> None:
-        """Store an insight's embedding; must share the insight row's transaction (R7)."""
+    def insert(
+        self,
+        insight_id: int,
+        key_vector,
+        full_vector=None,
+        retrieval_vector=None,
+    ) -> None:
+        """Store an insight's vectors atomically with its insight row (R5/R7).
+
+        New (R3) form — ``insert(id, key_vector, full_vector)`` — writes the key
+        and full clustering vectors; the retrieval column falls back to the full
+        vector unless ``retrieval_vector`` is given (the dedicated retrieval
+        vector arrives in plan 010).
+
+        Legacy single-vector form — ``insert(id, vector)`` (``full_vector`` left
+        ``None``) — fans the one vector into all three columns. The pre-R3 write
+        path and the deferred retrieval/maintenance readers still call this form;
+        it is preserved until the pipeline is rewritten to embed key+full (plan
+        008 U6).
+
+        vec0 requires every declared column non-NULL per row, so all three are
+        always written. The dims are validated *before* the single ``INSERT`` is
+        issued: a partial/mismatched call raises and leaves ZERO rows for this
+        insight_id (no half-written vector — the R7 atomicity invariant).
+        """
         if not self.store.in_transaction:
             raise VecIndexError(
                 "VecIndex.insert must run inside Store.transaction() — the vec row"
@@ -88,10 +142,29 @@ class VecIndex:
             )
         import sqlite_vec
 
-        self._check_dim(vector)
+        if full_vector is None:  # legacy single-vector fan-out
+            key_v = full_v = retr_v = list(key_vector)
+        else:
+            key_v = list(key_vector)
+            full_v = list(full_vector)
+            retr_v = list(retrieval_vector) if retrieval_vector is not None else full_v
+
+        # Validate every column up front: any bad dim aborts before the write, so
+        # a rejected partial insert can never leave a row behind.
+        self._check_dim(key_v)
+        self._check_dim(full_v)
+        self._check_dim(retr_v)
+
         self.store.conn.execute(
-            f"INSERT INTO {VEC_TABLE} (insight_id, embedding) VALUES (?, ?)",
-            (insight_id, sqlite_vec.serialize_float32(list(vector))),
+            f"INSERT INTO {VEC_TABLE}"
+            " (insight_id, embedding, key_embedding, full_embedding)"
+            " VALUES (?, ?, ?, ?)",
+            (
+                insight_id,
+                sqlite_vec.serialize_float32(retr_v),
+                sqlite_vec.serialize_float32(key_v),
+                sqlite_vec.serialize_float32(full_v),
+            ),
         )
 
     # --- reads --------------------------------------------------------------------
@@ -101,23 +174,38 @@ class VecIndex:
         vector,
         k: int,
         statuses: tuple[str, ...] | None = None,
+        *,
+        on: str = "key",
     ) -> list[Neighbor]:
-        """K nearest neighbors by cosine distance, joined to insights for status.
+        """K nearest neighbors by cosine distance over the ``on`` column.
+
+        ``on`` selects which vector column to search — ``"key"`` (rule identity),
+        ``"full"`` (whole atom), or ``"retrieval"`` (legacy/search-document) —
+        from a fixed allow-list; an unknown value raises rather than reaching SQL,
+        so the column is never string-interpolated from caller input (R8).
 
         The status filter applies AFTER the KNN takes its k, so filtered views can
-        return fewer than k rows; callers needing exact-k-after-filter over-fetch
-        (Phase 1+ runtime-retrieval seam — Phase 0's only ANN caller is add-idea,
-        which wants the unfiltered dedup view anyway).
+        return fewer than k rows; callers needing exact-k-after-filter over-fetch.
+        ``statuses=None`` is the add-idea dedup view (all statuses).
         """
         import sqlite_vec
 
+        try:
+            column = _VIEW_COLUMN[on]
+        except KeyError:
+            raise VecIndexError(
+                f"unknown knn view {on!r}; expected one of {sorted(_VIEW_COLUMN)}"
+            ) from None
+
         self._check_dim(vector)
+        # LIMIT in the subquery (not `k = ?`) blocks the flattener from merging the
+        # outer ORDER BY into the vec0 KNN and tripping its single-ORDER-BY rule.
         sql = (
             "SELECT v.insight_id AS insight_id, v.distance AS distance,"
             "       i.status AS status"
             f" FROM (SELECT insight_id, distance FROM {VEC_TABLE}"
-            "        WHERE embedding MATCH ? AND k = ?"
-            "        ORDER BY distance) v"
+            f"        WHERE {column} MATCH ?"
+            "        ORDER BY distance LIMIT ?) v"
             " JOIN insights i ON i.id = v.insight_id"
         )
         params: list = [sqlite_vec.serialize_float32(list(vector)), int(k)]

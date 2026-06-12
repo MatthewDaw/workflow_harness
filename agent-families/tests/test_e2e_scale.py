@@ -98,7 +98,6 @@ from agent_families.judge import write_fixture
 from agent_families.library import router
 from agent_families.pipeline import (
     JUDGE_SCHEMA,
-    _knn_dedup_view,
     add_idea,
     build_idea_text,
     build_merge_prompt,
@@ -415,7 +414,9 @@ def make_register(store: Store, vec: VecIndex, agent_id: int, embedder, fixtures
             )
         idea_text = build_idea_text(**fields)
         vector = embedder.embed_document(idea_text)
-        neighbors = _knn_dedup_view(vec, vector, CFG.retrieval.ann_top_k)
+        neighbors = vec.knn(
+            vector, CFG.retrieval.ann_top_k, statuses=None, on="retrieval"
+        )
         merge = [n for n in neighbors if 1.0 - n.distance >= CFG.merge.cosine_threshold]
         if merge:
             prompt = build_merge_prompt(store, idea_text, merge)

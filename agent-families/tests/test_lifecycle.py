@@ -121,9 +121,11 @@ def vec_dump(env) -> dict[int, bytes]:
 def knn_visible(env, vector, k: int, statuses: tuple[str, ...]) -> list[int]:
     """Filtered KNN per the visibility matrix (R13).
 
-    Uses the LIMIT-form vec0 subquery (the `_knn_dedup_view` workaround from
-    U5) because `VecIndex.knn`'s `k = ?` form trips the SQLite query-flattener
-    incompatibility — that fix belongs to vecindex.py's owning unit (U3).
+    Uses the LIMIT-form vec0 subquery directly against the legacy ``embedding``
+    column. As of U3 this is the same flattener-safe form `VecIndex.knn` now
+    emits (the `_knn_dedup_view` workaround is deleted); this helper stays a raw
+    query only because it filters status *inside* the KNN subquery, whereas
+    `VecIndex.knn` filters status after taking k.
     """
     placeholders = ", ".join("?" for _ in statuses)
     rows = env.store.conn.execute(
