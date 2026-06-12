@@ -88,6 +88,16 @@ Required acceptance test / invariant (plan-007 U10) -> test (in
   exists, an ``elicitation``-class batch stays quarantined with a TYPED hold
   reason (default-deny; never silently validated on the wrong instrument).
   [enforced by :func:`route_substrates` + the :func:`validate_batch` guard]
+
+Required acceptance test / invariant (plan-008 U8, R19) -> test (in
+``tests/test_stage_b.py``):
+
+- ``test_validation_record_names_retired_incumbent`` — promoting a reflector batch
+  that retires a contradicted incumbent (the R3 deferred-supersede) surfaces
+  ``LifecycleResult.retired_incumbent_ids`` on the :class:`BatchValidationOutcome`
+  AND names them in the persisted ``batch_validations.detail`` — the retirement is
+  named, never silent. [enforced by :func:`validate_batch` forwarding the NLI seam
+  to :func:`lifecycle.promote_batch` and threading its result through]
 """
 
 from __future__ import annotations
@@ -511,6 +521,11 @@ class BatchValidationOutcome:
     cosigned_by: str | None
     promoted: bool
     active_insight_ids: tuple[int, ...]
+    # R3 deferred-supersede (008 R16/U8): incumbents this promotion retired (a
+    # validated challenger beat a contradicted incumbent), and contradiction-flag
+    # rows a revert closed. Surfaced so the batch_validations record NAMES them.
+    retired_incumbent_ids: tuple[int, ...] = ()
+    closed_contradiction_ids: tuple[int, ...] = ()
 
 
 CosignFn = Callable[[ValidationDecision], "str | None"]
@@ -557,6 +572,13 @@ def validate_batch(
     trial_episode_id: int | None = None,
     benchmark_episode_id: int | None = None,
     greenfield_available: bool = False,
+    nli_model: str | None = None,
+    nli_mode: str | None = None,
+    nli_fixtures_dir: object | None = None,
+    nli_confidence_threshold: float = (
+        lifecycle.SUPERSEDE_RECHECK_CONFIDENCE_DEFAULT
+    ),
+    _nli_encoder: object | None = None,
 ) -> BatchValidationOutcome:
     """Run the validation gate for one quarantined batch and enact the verdict.
 
@@ -605,9 +627,29 @@ def validate_batch(
         )
 
     if decision.promotes:
-        result = lifecycle.promote_batch(store, batch_label)
+        # Forward the NLI seam so the promotion-time deferred-supersede re-check
+        # (008 R16) replays offline; a contradiction-free batch never loads the
+        # model, so contradiction-free callers can omit these entirely.
+        result = lifecycle.promote_batch(
+            store,
+            batch_label,
+            nli_model=nli_model,
+            nli_mode=nli_mode,
+            nli_fixtures_dir=nli_fixtures_dir,
+            nli_confidence_threshold=nli_confidence_threshold,
+            _nli_encoder=_nli_encoder,
+        )
     else:
         result = lifecycle.revert_batch(store, batch_label)
+
+    retired = result.retired_incumbent_ids
+    closed = result.closed_contradiction_ids
+    detail = decision.reason
+    if retired:
+        # Name the deferred-supersede retirements in the persisted record (008 U8).
+        detail += f" | deferred-supersede retired incumbents: {list(retired)}"
+    if closed:
+        detail += f" | closed contradictions: {list(closed)}"
 
     validation_id = store.insert_batch_validation(
         batch_id,
@@ -618,7 +660,7 @@ def validate_batch(
         replay_miss=decision.replay_miss,
         bootstrap=bootstrap,
         cosigned_by=cosigned_by,
-        detail=decision.reason,
+        detail=detail,
     )
 
     active = active_batch_insight_ids(store, batch_label)
@@ -638,6 +680,8 @@ def validate_batch(
         cosigned_by=cosigned_by,
         promoted=decision.promotes,
         active_insight_ids=active,
+        retired_incumbent_ids=retired,
+        closed_contradiction_ids=closed,
     )
 
 

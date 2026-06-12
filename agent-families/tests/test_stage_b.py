@@ -39,7 +39,34 @@ Test-scenario / invariant (plan-004 U6) -> test:
 - a full fixture episode yields a batch whose every insight passes registration:
   ``test_full_episode_every_insight_passes_registration``
 
+## Conformance (plan-008 U8 — reflector routing through the R3 gate, R19)
+
+Required acceptance test / invariant (named MUST-tests) -> test:
+
+- reflector text reaches ``add_idea`` via ``make_add_idea_registrar`` and inherits
+  the R3 gate; stage_b does NO separate generalization (the gate owns it, §13):
+  ``test_reflector_routes_through_r3_gate_no_separate_generalization``
+- a lint_reject / rewrite_proposed / deferred-supersede inside the selected loop is
+  captured as telemetry and the loop CONTINUES with the remaining lessons:
+  ``test_gate_rejection_does_not_abort_batch``
+- a duplicating lesson records a corroboration vote through the ONE ``corroborate``
+  fitness-event counter; NO separate recurrence tally exists:
+  ``test_corroborate_is_single_recurrence_counter``
+- promoting a reflector batch that retires a contradicted incumbent names it in the
+  ``batch_validations`` record: ``test_validation_record_names_retired_incumbent``
+
+The R3-gate tests drive the real ``add_idea_r3`` offline (admission-gate + NLI
+replay fixtures, fake encoders); the gate-rejection / corroboration loop semantics
+are driven by an injected fake registrar so they need no fixtures.
+
 ## Deviations
+
+- 008 U8 routes the registrar through the R3 gate behind ``use_r3_gate`` (default
+  legacy ``add_idea``) because the plan-004 closed-loop e2e
+  (``tests/test_e2e_learning.py``) still asserts legacy skill-authoring +
+  skill-based retrieval and is outside this wave's three-file scope; flipping the
+  default to R3 here would turn it red. The default flip + legacy deletion ride
+  U9's e2e/config cut-over. See ``stage_b.py``'s module-docstring DEVIATION.
 
 - The U6 Approach line mentions "run-memory nominations", but run memory (R5/R6)
   is unit U3's ``pipeline/runmemory.py`` (absent in this wave) and is not among
@@ -62,16 +89,19 @@ from agent_families.config import (
     RetrievalConfig,
     StoreConfig,
 )
+from agent_families import nli
 from agent_families.embedding import EmbeddingService
-from agent_families.judge import write_fixture
+from agent_families.judge import ADMISSION_GATE_SCHEMA, write_fixture
 from agent_families.pipeline import (
     JUDGE_SCHEMA,
+    build_admission_gate_prompt,
     build_idea_text,
     build_taxonomy_prompt,
     content_hash,
 )
 from agent_families.reflector import stage_a as sa
 from agent_families.reflector import stage_b as sb
+from agent_families.reflector import validate as v
 from agent_families.store import Store
 from agent_families.vecindex import VecIndex
 
@@ -236,7 +266,7 @@ def test_one_idea_per_cluster_enforced(store):
             status="quarantined", batch_id=store.ensure_batch(idea.batch_label),
         )
         registered.append(idea)
-        return iid
+        return sb.RegistrationOutcome(insight_id=iid, code="registered")
 
     result = sb.run_stage_b(
         store, sar, register_fn=register_fn, episode_id=ep,
@@ -344,13 +374,14 @@ def test_over_budget_ranking_drops_the_right_clusters(store):
 
     def register_fn(idea):
         registered.append(idea.feat_id)
-        return store.insert_insight(
+        iid = store.insert_insight(
             precondition=idea.precondition, action=idea.action,
             expected_outcome=idea.expected_outcome,
             content_hash=content_hash(idea.precondition, idea.action,
                                       idea.expected_outcome) + idea.feat_id,
             status="quarantined", batch_id=store.ensure_batch(idea.batch_label),
         )
+        return sb.RegistrationOutcome(insight_id=iid, code="registered")
 
     result = sb.run_stage_b(
         store, sar, register_fn=register_fn, episode_id=ep, idea_budget=1,
@@ -599,3 +630,284 @@ def test_full_episode_every_insight_passes_registration(store, tmp_path):
 
 def test_reflector_exposes_stage_b():
     assert sb.run_stage_b is not None and sb.REFLECTION_SCHEMA["type"] == "object"
+
+
+# =============================================================================
+# plan-008 U8: reflector routing through the R3 gate (R19)
+# =============================================================================
+#
+# The reflector registrar routes through the R3 ingest gauntlet (add_idea_r3) when
+# `use_r3_gate=True`, inheriting the admission gate (Operation 1) + key-collision
+# NLI verdict (Operation 2). Fully offline: the admission gate replays against
+# judge fixtures, NLI against nli fixtures, embeddings come from a fake encoder.
+
+
+def _envelope(output: dict) -> dict:
+    return {
+        "type": "result", "subtype": "success", "is_error": False,
+        "duration_ms": 900, "num_turns": 1, "result": "ok",
+        "total_cost_usd": 0.003, "structured_output": output,
+    }
+
+
+def _record_gate_admit(fixtures_dir, raw_fields, atom_fields, *, author_scope=None):
+    """Record an admission-gate `admit` for the RAW reflection text -> a generalized
+    atom (so the test can prove the GATE generalized, not stage_b)."""
+    prompt = build_admission_gate_prompt(
+        raw_fields["precondition"], raw_fields["action"],
+        raw_fields["expected_outcome"], author_scope,
+    )
+    atom = dict(atom_fields)
+    atom.setdefault("negative_scope", "do not apply outside the precondition")
+    output = {
+        "outcome": "admit", "atom": atom,
+        "scope_tag": {"value": "universal", "justification": "generalizes"},
+    }
+    write_fixture(fixtures_dir, prompt, ADMISSION_GATE_SCHEMA, "sonnet",
+                  _envelope(output))
+
+
+def _r3_env(store):
+    vec = VecIndex(store, DIM)
+    vec.migrate()
+    embedder = EmbeddingService(CFG.embedding, encoder=FakeEncoder(V_IDEA))
+    return SimpleNamespace(vec=vec, embedder=embedder)
+
+
+def test_reflector_routes_through_r3_gate_no_separate_generalization(store, tmp_path):
+    """Reflector text reaches add_idea via make_add_idea_registrar and inherits the
+    R3 gate; stage_b performs NO in-reflector generalization — the gate owns it."""
+    ep = store.create_episode("linkding", "sha256:x", 0)
+    _scen_row(store, "SCEN-1", "FEAT-1", tier="must", episode_id=ep)
+    sar = _stage_a_result(ep, [_attr("SCEN-1", "FEAT-1")])
+    env = _r3_env(store)
+    fixtures = tmp_path / "fixtures"
+
+    # The reflection proposes a HYPER-SPECIFIC lesson (names a concrete file/repo);
+    # the gate is what strips that to typed placeholders.
+    raw = {
+        "precondition": "Implementing src/links/views.py in the linkding repo",
+        "action": "Wire the create-form submit handler in views.py to /api/bookmarks",
+        "expected_outcome": "Creating a bookmark persists and reloads the list",
+    }
+    generalized = {
+        "precondition": "A <REPO> web target exposes a create form over <ENTITY>",
+        "action": "Wire the create-form submit handler to the <ENTITY> API before UI",
+        "expected_outcome": "Creating an <ENTITY> persists and reloads the list",
+    }
+    _record_gate_admit(fixtures, raw, generalized)
+
+    real = sb.make_add_idea_registrar(
+        store, env.vec, env.embedder, CFG,
+        use_r3_gate=True, judge_mode="replay", judge_fixtures_dir=fixtures,
+        nli_mode="replay", nli_fixtures_dir=fixtures,
+    )
+    captured = []
+
+    def spy(idea):
+        captured.append(idea)
+        return real(idea)
+
+    result = sb.run_stage_b(
+        store, sar, register_fn=spy, episode_id=ep,
+        judge_fn=_judge_returning(_reflection_output(insight=raw)),
+    )
+
+    # stage_b handed the gate the RAW reflection triple — it did not generalize.
+    assert len(captured) == 1
+    assert captured[0].precondition == raw["precondition"]
+    assert captured[0].action == raw["action"]
+    # The registered insight carries the GATE's generalized atom (the gate ran).
+    assert len(result.registered) == 1
+    row = store.get_insight(result.registered[0].insight_id)
+    assert row["precondition"] == generalized["precondition"]
+    assert "src/links/views.py" not in row["precondition"]  # trivia stripped
+    assert row["negative_scope"]  # the gate's altitude-audit output is present
+    # The duplicated generalization path is gone: stage_b exposes no generalizer.
+    assert not hasattr(sb, "generalize")
+    assert not hasattr(sb, "generalize_lesson")
+
+
+def test_gate_rejection_does_not_abort_batch(store):
+    """A lint_reject / rewrite_proposed / deferred-supersede inside the selected
+    loop is captured as telemetry, and the loop CONTINUES with the rest."""
+    ep = store.create_episode("linkding", "sha256:x", 0)
+    feats = ["FEAT-reject", "FEAT-rewrite", "FEAT-ok", "FEAT-sup"]
+    attrs = []
+    for i, feat in enumerate(feats):
+        sid = f"SCEN-{i}"
+        _scen_row(store, sid, feat, tier="should", episode_id=ep)
+        attrs.append(_attr(sid, feat))
+    sar = _stage_a_result(ep, attrs)
+
+    def fake_register(idea):
+        if idea.feat_id == "FEAT-reject":
+            return sb.RegistrationOutcome(
+                insight_id=None, code="lint_reject", detail="target-trivia only"
+            )
+        if idea.feat_id == "FEAT-rewrite":
+            return sb.RegistrationOutcome(insight_id=None, code="rewrite_proposed")
+        iid = store.insert_insight(
+            precondition=idea.precondition, action=idea.action,
+            expected_outcome=idea.expected_outcome,
+            content_hash=content_hash(idea.precondition, idea.action,
+                                      idea.expected_outcome) + idea.feat_id,
+            status="quarantined", batch_id=store.ensure_batch(idea.batch_label),
+        )
+        # FEAT-sup is a deferred-supersede: registered WITH a contradicts move.
+        outcome = "contradicts" if idea.feat_id == "FEAT-sup" else "unrelated"
+        return sb.RegistrationOutcome(
+            insight_id=iid, code="registered", outcome=outcome
+        )
+
+    result = sb.run_stage_b(
+        store, sar, register_fn=fake_register, episode_id=ep,
+        judge_fn=_judge_returning(_reflection_output()),
+    )
+
+    # The loop did not abort: both the OK lesson and the deferred-supersede landed.
+    assert len(result.registered) == 2
+    landed_feats = {p.feat_id for p in result.registered}
+    assert landed_feats == {"FEAT-ok", "FEAT-sup"}
+    # The deferred-supersede's move rides home in its provenance (not silent).
+    sup = next(p for p in result.registered if p.feat_id == "FEAT-sup")
+    assert sup.judge_outcome == "contradicts"
+    # The two gate rejections were captured as telemetry, never crashed the batch.
+    assert len(result.gate_rejected_cluster_ids) == 2
+    rejected = store.conn.execute(
+        "SELECT COUNT(*) AS n FROM review_queue WHERE episode_id = ? AND kind = ?",
+        (ep, sb.GATE_REJECTED_KIND),
+    ).fetchone()["n"]
+    assert rejected == 2
+
+
+def test_corroborate_is_single_recurrence_counter(store, tmp_path):
+    """A reflector lesson duplicating an existing insight records a corroboration
+    vote through the ONE `corroborate` fitness-event counter — no separate tally,
+    no new insight."""
+    ep = store.create_episode("linkding", "sha256:x", 0)
+    _scen_row(store, "SCEN-1", "FEAT-1", tier="must", episode_id=ep)
+    sar = _stage_a_result(ep, [_attr("SCEN-1", "FEAT-1")])
+    env = _r3_env(store)
+    fixtures = tmp_path / "fixtures"
+
+    # An existing active incumbent. The gate will generalize the reflector lesson to
+    # this EXACT atom, so its content hash collides -> corroborate (R15).
+    incumbent_fields = {
+        "precondition": "A <REPO> web target exposes a create form over <ENTITY>",
+        "action": "Wire the create-form submit handler to the <ENTITY> API before UI",
+        "expected_outcome": "Creating an <ENTITY> persists and reloads the list",
+    }
+    incumbent_id = store.insert_insight(
+        **incumbent_fields,
+        content_hash=content_hash(**incumbent_fields),
+        status="active",
+    )
+
+    raw = {
+        "precondition": "Implementing the bookmark create form in views.py",
+        "action": "Hook up the bookmark create submit to the API",
+        "expected_outcome": "A created bookmark shows in the list",
+    }
+    _record_gate_admit(fixtures, raw, incumbent_fields)
+
+    registrar = sb.make_add_idea_registrar(
+        store, env.vec, env.embedder, CFG,
+        use_r3_gate=True, corroborate_mode="training",
+        judge_mode="replay", judge_fixtures_dir=fixtures,
+        nli_mode="replay", nli_fixtures_dir=fixtures,
+    )
+    result = sb.run_stage_b(
+        store, sar, register_fn=registrar, episode_id=ep,
+        judge_fn=_judge_returning(_reflection_output(insight=raw)),
+    )
+
+    # No new insight authored — the duplicate became a vote on the incumbent.
+    assert result.registered == ()
+    assert result.corroborated_incumbent_ids == (incumbent_id,)
+    # The ONE counter: exactly one corroborate fitness event, keyed on the incumbent.
+    events = store.conn.execute(
+        "SELECT insight_id, kind FROM fitness_events WHERE kind = 'corroborate'"
+    ).fetchall()
+    assert len(events) == 1
+    assert events[0]["insight_id"] == incumbent_id
+    # No second insight was created anywhere (the vote is not a registration).
+    n_insights = store.conn.execute(
+        "SELECT COUNT(*) AS n FROM insights"
+    ).fetchone()["n"]
+    assert n_insights == 1  # only the incumbent
+
+
+def _nli_text(fields):
+    """Mirror lifecycle._insight_nli_text (space-joined atom) for fixture keying."""
+    parts = [fields["precondition"].strip(), fields["action"].strip(),
+             fields["expected_outcome"].strip()]
+    return " ".join(p for p in parts if p)
+
+
+def _record_nli_contradiction(fixtures_dir, incumbent_fields, challenger_fields):
+    nli.write_fixture(
+        fixtures_dir, nli.DEFAULT_MODEL,
+        _nli_text(incumbent_fields), _nli_text(challenger_fields),
+        {"label": "contradiction", "confidence": 0.95, "logits": [0.0, 0.0, 0.0]},
+    )
+
+
+def test_validation_record_names_retired_incumbent(store, tmp_path):
+    """Promoting a reflector batch that retires a contradicted incumbent (R3
+    deferred-supersede) surfaces the retired-incumbent ids AND names them in the
+    persisted batch_validations record."""
+    fixtures = tmp_path / "fixtures"
+    ep = store.create_episode("linkding", "sha256:x", 0)
+    batch_label = sb.batch_label_for(ep)
+    batch_id = store.ensure_batch(batch_label)
+
+    incumbent_fields = {
+        "precondition": "A web target is being implemented",
+        "action": "Skip the create-form API wiring and ship the UI first",
+        "expected_outcome": "The UI renders before any persistence exists",
+    }
+    challenger_fields = {
+        "precondition": "A web target is being implemented",
+        "action": "Wire the create-form submit handler to the API before the UI",
+        "expected_outcome": "Creating an entity persists and reloads the list",
+    }
+    incumbent_id = store.insert_insight(
+        **incumbent_fields, content_hash=content_hash(**incumbent_fields),
+        status="active", provenance="reflector",
+    )
+    challenger_id = store.insert_insight(
+        **challenger_fields, content_hash=content_hash(**challenger_fields),
+        status="quarantined", batch_id=batch_id, provenance="reflector",
+    )
+    # The deferred-supersede edge U6 writes at ingest: challenger -> incumbent.
+    store.add_insight_edge(challenger_id, incumbent_id, "contradicts")
+    _record_nli_contradiction(fixtures, incumbent_fields, challenger_fields)
+
+    snap_before = store.current_snapshot_id()
+    benchmark = v.BenchmarkOutcome(candidate=0.90, sigma=0.02,
+                                   history=(0.90, 0.90, 0.90))
+    outcome = v.validate_batch(
+        store,
+        batch_label=batch_label,
+        snapshot_id=snap_before,
+        benchmark=benchmark,
+        n_replay_pairs=3,
+        cosign_fn=lambda decision: "human",
+        nli_mode="replay",
+        nli_fixtures_dir=fixtures,
+    )
+
+    assert outcome.promoted is True
+    # The retirement is surfaced on the outcome...
+    assert outcome.retired_incumbent_ids == (incumbent_id,)
+    # ...and named in the persisted batch_validations record (not silent).
+    record = store.get_batch_validation(outcome.validation_id)
+    assert str(incumbent_id) in record["detail"]
+    assert "retired incumbents" in record["detail"]
+    # The incumbent is retired + invalid_at stamped under the promotion snapshot;
+    # the challenger rode the queue and is active.
+    inc = store.get_insight(incumbent_id)
+    assert inc["status"] == "retired"
+    assert inc["invalid_at"] is not None
+    assert store.get_insight(challenger_id)["status"] == "active"

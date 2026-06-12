@@ -71,6 +71,49 @@ Test-scenario / invariant (plan-004 U6) -> test (in ``tests/test_stage_b.py``):
   ``test_batch_lands_quarantined_with_full_provenance``
 - a full fixture episode yields a batch whose every insight passes registration:
   ``test_full_episode_every_insight_passes_registration``
+
+R3 routing (plan-008 U8, R19)
+-----------------------------
+
+Once the R3 ingest gauntlet (plan-008 U6, :func:`agent_families.pipeline.add_idea_r3`)
+is the registration path, reflector lessons inherit Operation 1 (the admission
+gate's generalize/altitude-audit) and Operation 2 (key-collision + NLI verdict)
+**for free** — stage_b hands the raw counterfactual triple straight to the gate
+and performs NO in-reflector generalization (the gate owns it, DESIGN §13). The
+``for lesson in selected`` loop captures every non-registering gate outcome
+(``lint_reject`` / ``rewrite_proposed`` / structural reject) as a telemetry row
+and CONTINUES with the remaining lessons — one bad lesson never crashes or
+aborts the batch. A duplicate becomes a corroboration vote on the incumbent,
+recorded through the ONE ``corroborate`` fitness-event counter inside
+``add_idea_r3`` (the §11 cross-target-recurrence substrate); stage_b adds no
+separate recurrence tally. A deferred-supersede (a ``contradicts`` edge written
+at ingest) lands as a normal quarantined registration whose move rides home in
+:class:`InsightProvenance`; the incumbent is invalidated only at promotion
+(``validate.py`` surfaces the retired-incumbent ids in the ``batch_validations``
+record).
+
+DEVIATION (008 U8 wave scope): U6 shipped the R3 gate as the SEPARATE
+``add_idea_r3`` (legacy ``add_idea`` intact-but-demoted), deferring the live
+cut-over + caller migration to U8/U9. The plan-004 closed-loop e2e
+(``tests/test_e2e_learning.py``) still asserts the legacy skill-authoring +
+skill-based retrieval and is outside this wave's three-file scope, so flipping
+the registrar's default to R3 here would turn it red. Smallest faithful
+adaptation: :func:`make_add_idea_registrar` gains ``use_r3_gate`` — the reflector
+routes through the R3 gate when True (U8's behavior, proven by the acceptance
+tests below) and through legacy ``add_idea`` by default (keeping the un-migrated
+e2e green). The default flip + legacy deletion ride U9's e2e/config cut-over.
+
+Test-scenario / invariant (plan-008 U8, R19) -> test (in ``tests/test_stage_b.py``):
+
+- reflector text reaches ``add_idea`` via the registrar and inherits the R3 gate;
+  stage_b does NO separate generalization:
+  ``test_reflector_routes_through_r3_gate_no_separate_generalization``
+- a gate rejection inside the selected loop is telemetry, not a crash; the loop
+  continues: ``test_gate_rejection_does_not_abort_batch``
+- a duplicating lesson corroborates through the single fitness-event counter, with
+  no separate recurrence tally: ``test_corroborate_is_single_recurrence_counter``
+- promoting a reflector batch that retires a contradicted incumbent names it in the
+  validation record: ``test_validation_record_names_retired_incumbent``
 """
 
 from __future__ import annotations
@@ -108,6 +151,23 @@ DEFAULT_OVERRIDE_CONFIDENCE_THRESHOLD = 0.7
 NO_LESSON_KIND = "reflection_no_lesson"
 OVER_BUDGET_KIND = "reflection_over_budget"
 EMPTY_BATCH_KIND = "reflection_empty_batch"
+# A lesson the registration gate declined (lint_reject / rewrite_proposed /
+# structural reject): captured as telemetry so a single bad lesson never aborts
+# the batch (R19). The selected loop continues with the remaining lessons.
+GATE_REJECTED_KIND = "reflection_gate_rejected"
+# A lesson that duplicated an existing insight: the corroboration vote is recorded
+# through add_idea_r3's single `corroborate` fitness-event counter (the §11
+# recurrence substrate); this telemetry row only names the incumbent (R19).
+CORROBORATE_KIND = "reflection_corroborate"
+
+# Registration codes that mean "no new quarantined insight landed" — the gate
+# declined the lesson (R19). The selected loop turns these into telemetry and
+# carries on; ``add_idea``'s success codes (registered/corroborated) are handled
+# separately.
+GATE_REJECTION_CODES = frozenset(
+    {"lint_reject", "rewrite_proposed", "structural_invalid", "no_placement",
+     "retired_near_duplicate", "rejected"}
+)
 
 # Structural fields every counterfactual insight must carry (R12); free prose is
 # rejected for missing any of them (mirrors the add_idea structural template).
@@ -168,10 +228,13 @@ REFLECTION_SCHEMA = {
 
 JudgeFn = Callable[..., object]
 
-# A registrar turns one validated idea into a registered insight id. The default
-# binds Phase 0 ``add_idea`` (see :func:`make_add_idea_registrar`); unit tests
-# inject a fake so they need no embedder / vec / placement fixtures.
-RegisterFn = Callable[["RegisteredIdea"], int]
+# A registrar turns one validated idea into a :class:`RegistrationOutcome` — the
+# new insight id plus the registration ``code``/move so the selected loop can tell
+# a fresh quarantined insight from a gate rejection or a corroboration vote (R19).
+# The default binds ``add_idea`` / ``add_idea_r3`` (see
+# :func:`make_add_idea_registrar`); unit tests inject a fake so they need no
+# embedder / vec / gate fixtures.
+RegisterFn = Callable[["RegisteredIdea"], "RegistrationOutcome"]
 
 
 # --- clustering (R10) -----------------------------------------------------------
@@ -511,6 +574,28 @@ def rank_and_select(
 
 
 @dataclass(frozen=True)
+class RegistrationOutcome:
+    """What a registrar reports back for one lesson (R19).
+
+    ``code`` is ``add_idea``'s outcome code — ``registered`` / ``corroborated``
+    (a duplicate became a vote, no new insight) — or a gate-rejection code in
+    :data:`GATE_REJECTION_CODES` when the admission gate declined the lesson.
+    ``insight_id`` is the new (or, for a corroboration, the incumbent's) id, or
+    ``None`` on rejection; ``outcome`` carries the move summary
+    (corroborate/refine/contradicts/unrelated) for a registered R3 insight.
+    """
+
+    insight_id: int | None
+    code: str
+    outcome: str | None = None
+    detail: str = ""
+
+    @property
+    def is_gate_rejection(self) -> bool:
+        return self.code in GATE_REJECTION_CODES
+
+
+@dataclass(frozen=True)
 class RegisteredIdea:
     """The payload handed to a registrar: the idea text + its provenance."""
 
@@ -540,6 +625,9 @@ class InsightProvenance:
     implicated_existing_insights: tuple[int, ...]
     scope_tag: str | None
     confidence: float
+    # The R3 registration move (corroborate/refine/contradicts/unrelated summary)
+    # when the lesson routed through the gauntlet; None on the legacy path (R19).
+    judge_outcome: str | None = None
 
 
 @dataclass(frozen=True)
@@ -552,6 +640,11 @@ class StageBResult:
     no_lesson_cluster_ids: tuple[str, ...]
     dropped_cluster_ids: tuple[str, ...]
     telemetry_ids: tuple[int, ...]
+    # R19 routing telemetry: incumbents a duplicating lesson corroborated (the vote
+    # rides add_idea_r3's single fitness-event counter), and clusters the
+    # registration gate declined without aborting the batch.
+    corroborated_incumbent_ids: tuple[int, ...] = ()
+    gate_rejected_cluster_ids: tuple[str, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -571,37 +664,108 @@ def _write_telemetry(
     return cur.lastrowid
 
 
+# add_idea / add_idea_r3 exception class name -> the RegistrationOutcome code the
+# selected loop turns into a telemetry row (R19). Anything not here (e.g. a
+# JudgeError / fixture-missing) is a real fault and propagates, never swallowed.
+_REJECTION_CODE_BY_EXC = {
+    "LintRejected": "lint_reject",
+    "RewriteProposed": "rewrite_proposed",
+    "StructuralValidationError": "structural_invalid",
+    "NoPlacement": "no_placement",
+    "RetiredNearDuplicate": "retired_near_duplicate",
+}
+
+
 def make_add_idea_registrar(
     store: Store,
     vec,
     embedder,
     config,
     *,
+    use_r3_gate: bool = False,
+    provenance: str = "reflector",
+    corroborate_mode: str = "training",
+    accept_rewrite: bool = False,
     judge_mode: str | None = None,
     judge_fixtures_dir=None,
+    nli_model: str | None = None,
+    nli_mode: str | None = None,
+    nli_fixtures_dir=None,
 ) -> RegisterFn:
-    """Bind Phase 0 ``add_idea`` as a Stage B registrar (the live default).
+    """Bind ``add_idea`` as a Stage B registrar (R19).
 
-    Imported lazily so unit tests that inject a fake registrar never pull in the
-    embedding stack.
+    With ``use_r3_gate=True`` the lesson routes through the R3 ingest gauntlet
+    (``add_idea_r3``) — inheriting Operation 1 (the admission gate's
+    generalize/altitude-audit) and Operation 2 (key-collision + NLI verdict), so
+    stage_b hands the gate the raw counterfactual triple and does NO generalization
+    of its own (DESIGN §13). With ``use_r3_gate=False`` (default) it binds the
+    legacy author-at-ingest ``add_idea`` (kept until U9's cut-over so the
+    plan-004 closed-loop e2e stays green — see the module docstring's DEVIATION).
+
+    Either way the registrar returns a :class:`RegistrationOutcome`: a gate
+    rejection (lint_reject / rewrite_proposed / structural) is caught and reported
+    as a non-registering code rather than raised, so :func:`run_stage_b` can record
+    it as telemetry and continue the batch (R19). A real fault (e.g. a missing
+    judge/NLI fixture) is NOT caught and propagates. Imported lazily so unit tests
+    that inject a fake registrar never pull in the embedding stack.
     """
-    from agent_families.pipeline import add_idea
+    from agent_families.pipeline import (
+        RegistrationRejected,
+        StructuralValidationError,
+        add_idea,
+        add_idea_r3,
+    )
 
-    def _register(idea: RegisteredIdea) -> int:
-        result = add_idea(
-            store,
-            vec,
-            embedder,
-            config,
-            precondition=idea.precondition,
-            action=idea.action,
-            expected_outcome=idea.expected_outcome,
-            batch_label=idea.batch_label,
-            scope_tag=idea.scope_tag,
-            judge_mode=judge_mode,
-            judge_fixtures_dir=judge_fixtures_dir,
+    def _register(idea: RegisteredIdea) -> RegistrationOutcome:
+        try:
+            if use_r3_gate:
+                result = add_idea_r3(
+                    store,
+                    vec,
+                    embedder,
+                    config,
+                    precondition=idea.precondition,
+                    action=idea.action,
+                    expected_outcome=idea.expected_outcome,
+                    batch_label=idea.batch_label,
+                    scope_tag=idea.scope_tag,
+                    accept_rewrite=accept_rewrite,
+                    provenance=provenance,
+                    corroborate_mode=corroborate_mode,
+                    judge_mode=judge_mode,
+                    judge_fixtures_dir=judge_fixtures_dir,
+                    nli_model=nli_model,
+                    nli_mode=nli_mode,
+                    nli_fixtures_dir=nli_fixtures_dir,
+                )
+            else:
+                result = add_idea(
+                    store,
+                    vec,
+                    embedder,
+                    config,
+                    precondition=idea.precondition,
+                    action=idea.action,
+                    expected_outcome=idea.expected_outcome,
+                    batch_label=idea.batch_label,
+                    scope_tag=idea.scope_tag,
+                    accept_rewrite=accept_rewrite,
+                    judge_mode=judge_mode,
+                    judge_fixtures_dir=judge_fixtures_dir,
+                )
+        except (RegistrationRejected, StructuralValidationError) as exc:
+            return RegistrationOutcome(
+                insight_id=None,
+                code=_REJECTION_CODE_BY_EXC.get(type(exc).__name__, "rejected"),
+                outcome=None,
+                detail=str(exc),
+            )
+        return RegistrationOutcome(
+            insight_id=result.insight_id,
+            code=result.code,
+            outcome=result.judge_outcome,
+            detail=result.message,
         )
-        return result.insight_id
 
     return _register
 
@@ -714,6 +878,8 @@ def run_stage_b(
 
     label = batch_label_for(episode_id)
     registered: list[InsightProvenance] = []
+    corroborated_ids: list[int] = []
+    gate_rejected_ids: list[str] = []
     for lesson in selected:
         idea = RegisteredIdea(
             precondition=lesson.fields["precondition"],
@@ -727,10 +893,54 @@ def run_stage_b(
             effective_role=lesson.effective_role,
             confidence=lesson.confidence,
         )
-        insight_id = register_fn(idea)
+        outcome = register_fn(idea)
+
+        if outcome.is_gate_rejection:
+            # R19: the registration gate declined this lesson (lint_reject /
+            # rewrite_proposed / structural). Capture it as telemetry and carry on
+            # — one bad lesson never aborts the batch.
+            gate_rejected_ids.append(lesson.cluster.cluster_id)
+            telemetry_ids.append(
+                _write_telemetry(
+                    store,
+                    episode_id,
+                    GATE_REJECTED_KIND,
+                    {
+                        "cluster_id": lesson.cluster.cluster_id,
+                        "feat_id": lesson.cluster.feat_id,
+                        "code": outcome.code,
+                        "detail": outcome.detail,
+                    },
+                )
+            )
+            continue
+
+        if outcome.code == "corroborated":
+            # R19: the lesson duplicated an existing insight — a corroboration vote,
+            # not a new registration. The vote already rode add_idea_r3's single
+            # `corroborate` fitness-event counter (the §11 recurrence substrate);
+            # stage_b adds NO separate tally, only this naming telemetry row.
+            if outcome.insight_id is not None:
+                corroborated_ids.append(outcome.insight_id)
+            telemetry_ids.append(
+                _write_telemetry(
+                    store,
+                    episode_id,
+                    CORROBORATE_KIND,
+                    {
+                        "cluster_id": lesson.cluster.cluster_id,
+                        "feat_id": lesson.cluster.feat_id,
+                        "incumbent_insight_id": outcome.insight_id,
+                    },
+                )
+            )
+            continue
+
+        # Registered (incl. a deferred-supersede that wrote a `contradicts` edge):
+        # a fresh quarantined insight landed; its move rides home in the provenance.
         registered.append(
             InsightProvenance(
-                insight_id=insight_id,
+                insight_id=outcome.insight_id,
                 cluster_id=lesson.cluster.cluster_id,
                 feat_id=lesson.cluster.feat_id,
                 scen_ids=lesson.cluster.scen_ids,
@@ -741,6 +951,7 @@ def run_stage_b(
                 ),
                 scope_tag=lesson.scope_tag,
                 confidence=lesson.confidence,
+                judge_outcome=outcome.outcome,
             )
         )
 
@@ -751,4 +962,6 @@ def run_stage_b(
         no_lesson_cluster_ids=tuple(no_lesson_ids),
         dropped_cluster_ids=tuple(l.cluster.cluster_id for l in dropped),
         telemetry_ids=tuple(telemetry_ids),
+        corroborated_incumbent_ids=tuple(corroborated_ids),
+        gate_rejected_cluster_ids=tuple(gate_rejected_ids),
     )
