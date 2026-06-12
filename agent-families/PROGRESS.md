@@ -3,7 +3,7 @@
 
 This manifest is PRE-GENERATED from the five plans and is AUTHORITATIVE.
 Loop agents: flip checkboxes and statuses only. NEVER add, remove, merge,
-or renumber unit lines. 57 units total (42 core + 15 greenfield, Plan 007). A unit is `done` only when its
+or renumber unit lines. 78 units total (42 core + 15 greenfield + 21 R3 reform, Plans 008-010). A unit is `done` only when its
 plan's Files exist, its Test scenarios are implemented, its Verification
 holds, and the full offline suite is green.
 
@@ -79,7 +79,35 @@ QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not uni
 - [ ] 007/U11 - af induct <domain> researched-insight induction
 - [ ] 007/U12 - Define-chain seed batch
 
-## Final milestone (after all 57 units, before COMPLETE)
+### Plan 008 - R3 Phase A: schema v6 + ingest gauntlet (docs/plans/2026-06-12-008-feat-agent-families-r3-ingest-gauntlet-plan.md)
+R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b human gate (autonomous).
+- [ ] 008/U1 - Migration v6 + store methods
+- [ ] 008/U2 - Embedding: three vectors + Matryoshka
+- [ ] 008/U3 - Vecindex: 3-column table + on= + flattener fix
+- [ ] 008/U4 - NLI seam (nli.py)
+- [ ] 008/U5 - Admission gate (Operation 1)
+- [ ] 008/U6 - add_idea rewrite (key-collision + NLI + corroborate/refine/deferred-supersede)
+- [ ] 008/U7 - Lifecycle: deferred-supersede at promotion + dormant
+- [ ] 008/U8 - Reflector routing through the R3 gate
+- [ ] 008/U9 - Config, thresholds, and e2e acceptance
+
+### Plan 009 - R3 Phase B: derive pass + organization objective + retrieval (docs/plans/2026-06-12-009-feat-agent-families-r3-derive-objective-plan.md)
+- [ ] 009/U1 - The organization objective (objective.py)
+- [ ] 009/U2 - Graph build + vecindex neighbors
+- [ ] 009/U3 - Partitioners + dependencies
+- [ ] 009/U4 - The derive pass + identity tracking
+- [ ] 009/U5 - Consolidation + retirement
+- [ ] 009/U6 - Retrieval: insight-level whole-store rewrite
+- [ ] 009/U7 - Demotions: router, agent_split, maintenance
+- [ ] 009/U8 - Rendering / export under derived membership
+- [ ] 009/U9 - Config + e2e
+
+### Plan 010 - R3 Phase C: stages pivot + assign stage (docs/plans/2026-06-12-010-feat-agent-families-r3-stages-assign-plan.md)
+- [ ] 010/U1 - The assign stage
+- [ ] 010/U2 - The retrieval vector (third vector)
+- [ ] 010/U3 - Finish runtime demotion + re-scope downstream plans
+
+## Final milestone (after all 78 units, before COMPLETE)
 - [ ] AUDIT — per-plan audit pass written to agent-families/AUDIT.md (every unit: Files exist, each Test scenario mapped to a test, Verification re-confirmed)
 - [ ] LIVE — one full episode against linkding; clone built (`npm run build && npm run preview`) and core flows verified via Playwright; score/cost/start-command recorded below
 - [ ] Plans 001–005 frontmatter flipped to `status: completed`
@@ -113,3 +141,5 @@ QUEUED after Plans 001-005. Execution follows the plan's dependency DAG, not uni
 - DRIVER: iteration 1 reverted (red suite)
 
 - REVIEW CHECKPOINT: paused before Plan 005 (novel phase). To proceed: review the prior plan's units + their ## Conformance notes, then create agent-families\REVIEW-OK-005.txt and relaunch ralph-wave.ps1.
+
+- HUMAN STEP: 007/U5b is a manual human-as-founder trial (no production code). Run it per the plan, record transcripts under docs/, flip 007/U5b to [x] in this file, create agent-families\U5B-DONE.txt, then relaunch ralph-wave.ps1.
