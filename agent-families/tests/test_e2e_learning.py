@@ -385,10 +385,13 @@ def test_learning_cycle_closes_the_loop(tmp_path):
     assert store.get_insight(prov.insight_id)["status"] == "active"
     assert v.active_batch_insight_ids(store, batch_label) == (prov.insight_id,)
 
-    # --- the post-promotion maintenance pass runs (nothing to do, not deferred) --
-    maint = mnt.run_maintenance(store)
-    assert maint.split_deferred is False
-    assert maint.splits == ()
+    # --- post-promotion retirement runs (nothing usage-stale, so a no-op) --------
+    # The R2 cap-tournament/skill-split maintenance pass was removed in plan-009 U7;
+    # the surviving post-promotion governance is the usage-conditioned survival
+    # retirement, which here has no usage-stale candidate and mints nothing.
+    retire = mnt.survival_retirement(store, lib.vec)
+    assert retire.minted_snapshot is False
+    assert retire.demoted_insight_ids == ()
 
     # === the loop is CLOSED: the next episode's planner prompt injects the lesson ==
     snap2 = store.current_snapshot_id()

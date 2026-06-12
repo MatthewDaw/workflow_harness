@@ -1,5 +1,14 @@
 """The family router: per-request specialist selection + the decision log (plan-005 U4, R12).
 
+**DEMOTED to dead code (plan-009 U7, R14).** The R3 reform replaces per-family routing
+with whole-store insight-level retrieval (:mod:`agent_families.library.retrieval`) and
+derives group structure rather than splitting agents by routing volume. This module's
+sole production caller was ``agent_split.replay_agreement``, removed when the family
+split engine was gutted (R15), so **no production code calls ``router.route`` anymore**.
+The file and the ``routing_decisions`` table are deliberately retained (not deleted)
+for reversibility — the §6 router can be re-activated without a migration. Everything
+below is the original Plan 5 implementation, kept intact for that reason.
+
 The router is the §6 mechanism that picks which specialist in a family handles a
 request, **and** it is the routing-decision logger. Splitting was deliberately
 starved until this data exists (DESIGN §6): every routing decision is appended to

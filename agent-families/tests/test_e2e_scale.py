@@ -16,7 +16,8 @@ prove out here:
    2 epochs × 2 parallel episodes × deterministic rotation — drives the held-out
    suite (U1, generalization curve), the rehearsal pass (U2, one-shot curve),
    batch merging through the parallel-episode scheduler (U5, merged-batch
-   lineage), and one agent split (U4, the taxonomy self-reorganizing). Every
+   lineage). (The "one agent split" artifact was removed in plan-009 U7 — the R3
+   reform deletes the family-split engine; group structure is now derived.) Every
    produced artifact is queryable, and the README training-operations runbook's
    commands execute against the resulting fixture state.
 
@@ -49,7 +50,6 @@ grader primitive — no new production surface is introduced for them.
   ``test_scale_campaign_produces_generalization_curve``
 - ... a queryable one-shot curve: ``test_scale_campaign_produces_one_shot_curve``
 - ... queryable merged-batch lineage: ``test_scale_campaign_produces_merged_batch_lineage``
-- ... a completed split: ``test_scale_campaign_completes_one_agent_split``
 - runbook commands execute against fixture state:
   ``test_runbook_commands_execute_against_fixture_state``
 - the documented live campaign procedure is the project's operating manual
@@ -95,7 +95,6 @@ from agent_families.grading.suite import (
 )
 from agent_families.grading.target_env import PORT_TABLE, compose_image_ref
 from agent_families.judge import write_fixture
-from agent_families.library import router
 from agent_families.pipeline import (
     JUDGE_SCHEMA,
     add_idea,
@@ -132,7 +131,6 @@ from agent_families.pipeline.scheduler import (
     merge_state_digest,
 )
 from agent_families.pipeline.workspace import Workspace
-from agent_families.reflector import agent_split as asplit
 from agent_families.reflector.validate import BenchmarkOutcome, active_batch_insight_ids
 from agent_families.store import Store
 from agent_families.vecindex import VecIndex
@@ -584,63 +582,12 @@ def _always(passed: bool):
 REHEARSAL_CONFIG = RehearsalConfig(injection_budget_tokens=1000)
 
 
-# --- the planted agent-split fixture (own family; independent of the merge agent) ---
-
-_SPLIT_HASH = [0]
-
-
-def _split_skill(store: Store, agent_id: int, name: str) -> int:
-    _SPLIT_HASH[0] += 1
-    sid = store.create_skill(agent_id, name, f"{name} description")
-    with store.transaction():
-        iid = store.insert_insight(
-            precondition=f"pre {name}", action=f"act {name}",
-            expected_outcome=f"out {name}", content_hash=f"split-{name}-{_SPLIT_HASH[0]}",
-            status="active",
-        )
-        store.append_member(sid, iid)
-    return sid
-
-
-def make_split_fixture(store: Store) -> SimpleNamespace:
-    """A generalist worker with two planted skill clusters (tag/search), enough
-    logged routing decisions to clear the gate, and the description vectors the
-    clustering reads — the U4 split fixture pattern, in its own family so the
-    campaign's merge registrations never perturb it."""
-    fam = store.create_family("split-fam", charter="builds the app")
-    parent = store.create_agent(fam, "worker", description="generalist")
-    store.conn.execute(
-        "UPDATE agents SET routing_decisions = 60 WHERE id = ?", (parent,)
-    )
-    skill_vectors: dict[int, list[float]] = {}
-    for i in range(3):
-        sid = _split_skill(store, parent, f"tag-{i}")
-        skill_vectors[sid] = [1.0, 0.0, 0.0, i * 0.001]
-    for i in range(3):
-        sid = _split_skill(store, parent, f"search-{i}")
-        skill_vectors[sid] = [0.0, 1.0, 0.0, i * 0.001]
-    router.ensure_routing_log(store)
-    for i in range(10):
-        text = "tag this bookmark" if i % 2 == 0 else "search the bookmarks"
-        store.conn.execute(
-            "INSERT INTO routing_decisions (family_id, request_hash, request_text,"
-            " candidates_json, chosen_agent_id, confidence, ambiguous, snapshot_id,"
-            " created_at) VALUES (?, 'h', ?, '[]', ?, 1.0, 0, 0, ?)",
-            (fam, text, parent, _utcnow()),
-        )
-    return SimpleNamespace(fam=fam, parent=parent, skill_vectors=skill_vectors)
-
-
-def _split_judge(choose):
-    def judge(prompt, schema, model, *, max_retries, mode=None, fixtures_dir=None):
-        request_text = prompt.split("## Request\n", 1)[1].split("\n\n", 1)[0]
-        return SimpleNamespace(output={"chosen_agent": choose(request_text), "confidence": 0.99})
-
-    return judge
-
-
-def _route_to_either_child(request_text: str) -> str:
-    return "worker-1" if "tag" in request_text else "worker-2"
+# NOTE (plan-009 U7, R15): the planted agent-split fixture and the campaign's "one
+# agent split" step were removed here. The R3 reform deletes the family-split engine
+# (routing-volume-gated, k-means over skill descriptions, routing-replay) — group
+# structure is now *derived* (reflector/derive.py), not authored by splitting agents.
+# The remaining scale-campaign artifacts (generalization curve, one-shot curve,
+# merged-batch lineage, parallel scheduling) are independent of the deleted machinery.
 
 
 # --- the campaign ------------------------------------------------------------------
@@ -769,15 +716,7 @@ def run_scale_campaign(base: Path) -> SimpleNamespace:
 
         curriculum.advance_epoch(store)
 
-    # --- one agent split (R12-R13: the taxonomy self-reorganizes) ------------------
-    split_fx = make_split_fixture(store)
-    split_outcome = asplit.perform_agent_split(
-        store,
-        split_fx.parent,
-        skill_vectors=split_fx.skill_vectors,
-        judge_fn=_split_judge(_route_to_either_child),
-        benchmark_fn=lambda split: True,
-    )
+    # (plan-009 U7) The "one agent split" step was removed with the family-split engine.
 
     return SimpleNamespace(
         store=store,
@@ -788,8 +727,6 @@ def run_scale_campaign(base: Path) -> SimpleNamespace:
         rotations=rotations,
         one_shot_curve=one_shot_curve,
         merge_results=merge_results,
-        split_fixture=split_fx,
-        split_outcome=split_outcome,
         scheduler_peak=scheduler_peak,
     )
 
@@ -860,10 +797,6 @@ def test_scale_campaign_produces_merged_batch_lineage(campaign):
     store = campaign.store
 
     # Three distinct lessons survived (A, B, C); A_NEAR was absorbed.
-    n_insights = store.conn.execute(
-        "SELECT COUNT(*) AS n FROM insights WHERE status = 'active'"
-    ).fetchone()["n"]
-    # (active insights = the 3 merged lessons + the 6 planted split-fixture members)
     merged_lessons = store.conn.execute(
         "SELECT COUNT(*) AS n FROM insights i JOIN batches b ON b.id = i.batch_id"
         " WHERE b.label LIKE 'camp-ep%'"
@@ -886,32 +819,6 @@ def test_scale_campaign_produces_merged_batch_lineage(campaign):
     assert joint_confirm_failure_rate(store) == pytest.approx(0.0)
     # The post-merge state digest is well-formed (the determinism instrument).
     assert merge_state_digest(store)
-
-
-def test_scale_campaign_completes_one_agent_split(campaign):
-    """One agent split runs the full §6 transaction to completion: parent retired
-    (a frozen lineage anchor), two parented children routing in its place (R12/R13)."""
-    store = campaign.store
-    outcome = campaign.split_outcome
-    assert outcome.committed is True
-    assert outcome.replay_score >= 0.9
-    assert outcome.benchmark_passed is True
-    assert outcome.split.finalized is True
-
-    parent = campaign.split_fixture.parent
-    assert store.conn.execute(
-        "SELECT lineage_status FROM agents WHERE id = ?", (parent,)
-    ).fetchone()["lineage_status"] == asplit.LINEAGE_RETIRED
-    for cid in outcome.split.child_agent_ids:
-        row = store.conn.execute(
-            "SELECT parent_id, lineage_status FROM agents WHERE id = ?", (cid,)
-        ).fetchone()
-        assert row["parent_id"] == parent
-        assert row["lineage_status"] is None
-    # The children are the family's routable candidates now (the parent is excluded).
-    assert {c.name for c in router.family_candidates(store, campaign.split_fixture.fam)} == {
-        "worker-1", "worker-2"
-    }
 
 
 def test_scale_campaign_scheduled_episodes_in_parallel(campaign):
