@@ -96,7 +96,7 @@ R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b hu
 - [x] 009/U2 - Graph build + vecindex neighbors
 - [x] 009/U3 - Partitioners + dependencies
 - [x] 009/U4 - The derive pass + identity tracking
-- [ ] 009/U5 - Consolidation + retirement
+- [x] 009/U5 - Consolidation + retirement
 - [x] 009/U6 - Retrieval: insight-level whole-store rewrite
 - [ ] 009/U7 - Demotions: router, agent_split, maintenance
 - [ ] 009/U8 - Rendering / export under derived membership
