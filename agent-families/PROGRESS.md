@@ -104,7 +104,7 @@ R3 reform - supersedes Phase 0 author-at-ingest. Scheduled before the 007/U5b hu
 
 ### Plan 010 - R3 Phase C: stages pivot + assign stage (docs/plans/2026-06-12-010-feat-agent-families-r3-stages-assign-plan.md)
 - [x] 010/U1 - The assign stage
-- [ ] 010/U2 - The retrieval vector (third vector)
+- [x] 010/U2 - The retrieval vector (third vector)
 - [ ] 010/U3 - Finish runtime demotion + re-scope downstream plans
 
 ## Final milestone (after all 78 units, before COMPLETE)
