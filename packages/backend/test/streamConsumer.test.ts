@@ -453,16 +453,17 @@ describe('stream consumer — skill embedding on write (U3)', () => {
 });
 
 /**
- * U8→U10 — a `session.topic` EVT# record drives the FULL ideas pipeline
- * end-to-end (`associateAndFinalize`): retrieve top-k candidates (U8) → judge
- * rerank (U9) → create/merge the idea on the chosen skill, or route to the
- * unassigned bin (U10). The first three tests inject `associateAndFinalize` as a
- * spy to assert the consumer wiring (the topic branch fires with the event's
- * finding, the reprojection is undisturbed, a throw routes to a batch-item
- * failure); the `end-to-end` describe below drives the REAL pipeline through the
- * in-memory table with injected OpenRouter collaborators.
+ * MAT-150 (R1) — topic association branch is DISABLED.
+ *
+ * The session-recurrence idea-creator pipeline (plan 008: topic-mining →
+ * associate → corroborate) is switched off. Session topics are still reprojected
+ * (enrichment / U7), but `associateAndFinalize` is never called for a
+ * `session.topic` event, so no ideas are minted from raw topic recurrence.
+ *
+ * The `associateAndFinalize` dep on `StreamConsumerDeps` is retained for
+ * compilation; it is never invoked by `processRecord` while the flag is active.
  */
-describe('stream consumer — topic association branch (U8→U10)', () => {
+describe('stream consumer — topic association branch (MAT-150/R1: disabled)', () => {
   function topicEnvelope(seq: number): Envelope {
     return env(seq, {
       kind: 'session.topic',
@@ -482,7 +483,7 @@ describe('stream consumer — topic association branch (U8→U10)', () => {
     return { fn, calls };
   }
 
-  it('drives the pipeline for a session.topic event with the event finding', async () => {
+  it('MAT-150/R1: does NOT call associateAndFinalize for a session.topic event (pipeline disabled)', async () => {
     // The session must exist so reprojection has something to fold the topic into.
     await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
     const { fn: associateAndFinalize, calls } = spyAssociate();
@@ -493,15 +494,10 @@ describe('stream consumer — topic association branch (U8→U10)', () => {
     });
 
     expect(res.batchItemFailures).toEqual([]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      sessionId: SESSION,
-      segmentId: 'seg-1',
-      topicLabel: 'decimal money handling',
-      description: 'Always use a decimal type for currency, never a float.',
-      seq: 1,
-    });
-    // The reprojection branch was NOT disturbed: the topic folded into the projection.
+    // R1: associateAndFinalize is NOT called — topic recurrence is not an idea-creator.
+    expect(calls).toHaveLength(0);
+    // The reprojection branch is still intact: the topic still folds into the
+    // session projection (enrichment / U7 lookup).
     const proj = await repo.getSessionById(SESSION);
     expect(proj?.topic).toBe('decimal money handling');
     expect(proj?.maxSeq).toBe(1);
@@ -517,7 +513,7 @@ describe('stream consumer — topic association branch (U8→U10)', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('surfaces an association failure as a batch-item-failure (not a silent drop)', async () => {
+  it('MAT-150/R1: a topic event succeeds cleanly even with a throwing associateAndFinalize (never called)', async () => {
     await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
     const associateAndFinalize = vi.fn(async (): Promise<PipelineResult> => {
       throw new Error('ThrottlingException');
@@ -526,23 +522,25 @@ describe('stream consumer — topic association branch (U8→U10)', () => {
     const topicRec = eventRecord(topicEnvelope(1));
     const res = await consume(streamEvent(topicRec), { repo, associateAndFinalize });
 
-    expect(res.batchItemFailures).toEqual([{ itemIdentifier: 'evt-1' }]);
+    // Pipeline is not called → no batch-item-failure from it.
+    expect(res.batchItemFailures).toEqual([]);
+    // The injected spy was NOT called.
+    expect(associateAndFinalize).not.toHaveBeenCalled();
   });
 });
 
 /**
- * U8→U10 end-to-end through the REAL pipeline (no `associateAndFinalize` spy):
- * a `session.topic` event, fed through the in-memory table with injected OpenRouter
- * collaborators (embedder / vectors / judge / writer), must PRODUCE a real idea
- * on the judge-chosen skill — or write a real unassigned-bin entry when nothing
- * routes. This is the consolidation the wiring exists for: a topic event now
- * creates/merges an idea, not just a candidate seam.
+ * MAT-150 (R1) — end-to-end: a `session.topic` event must NOT produce ideas.
+ *
+ * The session-recurrence pipeline (U8→U10) is disabled. A topic event is
+ * reprojected (enrichment) but no `associateAndFinalize` call is made, so no
+ * ideas and no bin entries are written regardless of the injected collaborators.
  */
-describe('stream consumer — topic pipeline end-to-end (U8→U10)', () => {
+describe('stream consumer — topic pipeline end-to-end (MAT-150/R1: no ideas from session topics)', () => {
   const ORG = 'acme';
   const PROJECT = 'weekly-compass';
 
-  /** Seed the session→project→org chain the pipeline resolves the org from. */
+  /** Seed the session→project→org chain the pipeline would use (to prove it's inert). */
   async function seedSessionAndProject(): Promise<void> {
     await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
     await repo.putProject({
@@ -567,64 +565,12 @@ describe('stream consumer — topic pipeline end-to-end (U8→U10)', () => {
     );
   }
 
-  /** A deterministic embedder — every text maps to the same unit vector. */
-  function fakeEmbedder(): OpenRouterEmbedder {
-    return {
-      embed: vi.fn(async () => ({
-        vector: Array.from({ length: EMBEDDING_DIMENSION }, () => 0.1),
-        embeddingModel: 'openai/text-embedding-3-small',
-        embeddingVersion: 'openai/text-embedding-3-small',
-      })),
-    } as unknown as OpenRouterEmbedder;
-  }
-
-  /**
-   * A vectors fake whose skill query returns the seeded candidate above the
-   * floor, and whose idea query returns NO match (so the pipeline CREATES rather
-   * than merges). `putVectors` is captured so the idea-vector write is assertable.
-   */
-  function fakeVectors(candidateSkill: string | null) {
-    const puts: { index: string; items: VectorItem[] }[] = [];
-    const store = {
-      queryTopK: vi.fn(async (index: string) => {
-        if (index === SKILL_VECTOR_INDEX && candidateSkill) {
-          return [{ key: candidateSkill, score: 0.95, metadata: { skillBaseName: candidateSkill } }];
-        }
-        return []; // idea index: no near-duplicate → create
-      }),
-      putVectors: vi.fn(async (index: string, items: VectorItem[]) => {
-        puts.push({ index, items });
-      }),
-    } as unknown as S3Vectors;
-    return { store, puts };
-  }
-
-  /** A judge that always picks the given skill at high confidence (or `none`). */
-  function fakeJudge(pick: string | null): RerankJudge {
-    return {
-      judge: vi.fn(async () =>
-        pick ? { outcome: 'best', skillBaseName: pick, confidence: 0.9 } : { outcome: 'none' },
-      ),
-    } as unknown as RerankJudge;
-  }
-
   /** A writer that synthesizes deterministic concept text. */
   function fakeWriter(): IdeaWriter {
     return {
       write: vi.fn(async () => 'Use a decimal type for currency, never a float.'),
       merge: vi.fn(async (existing: string) => existing),
     } as unknown as IdeaWriter;
-  }
-
-  function metricCapture() {
-    const lines: string[] = [];
-    return { sink: (l: string) => lines.push(l), lines };
-  }
-  function outcomes(lines: string[]): { metric: string; outcome: string }[] {
-    return lines.map((l) => {
-      const obj = JSON.parse(l);
-      return { metric: obj._aws.CloudWatchMetrics[0].Metrics[0].Name, outcome: obj.Outcome };
-    });
   }
 
   /** Wire the real `associateAndFinalize` with injected collaborators. */
@@ -635,9 +581,8 @@ describe('stream consumer — topic pipeline end-to-end (U8→U10)', () => {
     };
   }
 
-  it('creates an idea on the judge-chosen skill (routed) and emits candidates', async () => {
+  it('MAT-150/R1: a session.topic event produces NO idea even with real pipeline collaborators injected', async () => {
     await seedSessionAndProject();
-    // The chosen skill must be readable for loadCandidateDescriptions.
     await repo.putSkill({
       name: 'money-handling',
       scope: { tier: 'org', id: ORG },
@@ -648,86 +593,52 @@ describe('stream consumer — topic pipeline end-to-end (U8→U10)', () => {
       body: '# money',
     } as unknown as Skill);
 
-    const { store: vectors, puts } = fakeVectors('money-handling');
-    const { sink, lines } = metricCapture();
+    // Inject real pipeline collaborators — but R1 ensures the pipeline is never called.
+    const associateSpy = vi.fn(realAssociate({ writer: fakeWriter() }));
     const res = await consume(streamEvent(topicRecord(1, 'Use decimal for currency.')), {
       repo,
-      metrics: sink,
-      associateAndFinalize: realAssociate({
-        embedder: fakeEmbedder(),
-        vectors,
-        judge: fakeJudge('money-handling'),
-        writer: fakeWriter(),
-      }),
+      associateAndFinalize: associateSpy,
     });
 
     expect(res.batchItemFailures).toEqual([]);
-    // A real idea was created on the chosen skill.
-    const ideas: Idea[] = await repo.listIdeasForOrg(ORG);
-    expect(ideas).toHaveLength(1);
-    expect(ideas[0]!.skillBaseName).toBe('money-handling');
-    expect(ideas[0]!.sources.some((s) => s.sessionId === SESSION)).toBe(true);
-    // Its vector was indexed.
-    expect(puts.some((p) => p.index !== SKILL_VECTOR_INDEX)).toBe(true);
-    // U23 metric still fires; a routed topic counts as `candidates` (reached + passed the judge).
-    expect(outcomes(lines)).toContainEqual({ metric: 'AssociationOutcome', outcome: 'candidates' });
+    // R1: no idea was created from the session topic.
+    expect(await repo.listIdeasForOrg(ORG)).toHaveLength(0);
+    // R1: the pipeline was not invoked.
+    expect(associateSpy).not.toHaveBeenCalled();
+    // Enrichment: the session projection was still updated.
+    const proj = await repo.getSessionById(SESSION);
+    expect(proj?.topic).toBe('decimal money handling');
   });
 
-  it('writes an unassigned-bin entry when the judge rejects (and emits unassigned)', async () => {
+  it('MAT-150/R1: a session.topic event produces NO bin entry (pipeline is not invoked)', async () => {
     await seedSessionAndProject();
-    await repo.putSkill({
-      name: 'money-handling',
-      scope: { tier: 'org', id: ORG },
-      kind: 'skill',
-      description: 'Currency guidance.',
-      source: 'local',
-      members: [],
-      body: '# money',
-    } as unknown as Skill);
 
-    const { store: vectors } = fakeVectors('money-handling');
-    const { sink, lines } = metricCapture();
-    const res = await consume(streamEvent(topicRecord(1, 'Something unrelated.')), {
+    const associateSpy = vi.fn(realAssociate({ writer: fakeWriter() }));
+    const res = await consume(streamEvent(topicRecord(1, 'Something else entirely.')), {
       repo,
-      metrics: sink,
-      associateAndFinalize: realAssociate({
-        embedder: fakeEmbedder(),
-        vectors,
-        judge: fakeJudge(null), // judge says none → bin
-        writer: fakeWriter(),
-      }),
+      associateAndFinalize: associateSpy,
     });
 
     expect(res.batchItemFailures).toEqual([]);
-    // No idea created; a bin entry exists instead.
     expect(await repo.listIdeasForOrg(ORG)).toHaveLength(0);
-    const bin = await repo.listUnassignedForOrg(ORG);
-    expect(bin).toHaveLength(1);
-    expect(bin[0]!.sources[0]!.sessionId).toBe(SESSION);
-    expect(outcomes(lines)).toContainEqual({ metric: 'AssociationOutcome', outcome: 'unassigned' });
+    expect(await repo.listUnassignedForOrg(ORG)).toHaveLength(0);
+    expect(associateSpy).not.toHaveBeenCalled();
   });
 
-  it('routes a pipeline failure to batchItemFailures (not a silent drop)', async () => {
+  it('MAT-150/R1: a throwing associateAndFinalize does not fail the batch (it is not called)', async () => {
     await seedSessionAndProject();
-    const throwingEmbedder = {
-      embed: vi.fn(async () => {
-        throw new Error('ThrottlingException');
-      }),
-    } as unknown as OpenRouterEmbedder;
-
-    const { store: vectors } = fakeVectors('money-handling');
-    const res = await consume(streamEvent(topicRecord(1, 'Use decimal for currency.')), {
-      repo,
-      associateAndFinalize: realAssociate({
-        embedder: throwingEmbedder,
-        vectors,
-        judge: fakeJudge('money-handling'),
-        writer: fakeWriter(),
-      }),
+    const associateAndFinalize = vi.fn(async (): Promise<PipelineResult> => {
+      throw new Error('ThrottlingException');
     });
 
-    expect(res.batchItemFailures).toEqual([{ itemIdentifier: 'evt-1' }]);
-    expect(await repo.listIdeasForOrg(ORG)).toHaveLength(0);
+    const res = await consume(streamEvent(topicRecord(1, 'Use decimal for currency.')), {
+      repo,
+      associateAndFinalize,
+    });
+
+    // Pipeline not called → no batch-item-failure.
+    expect(res.batchItemFailures).toEqual([]);
+    expect(associateAndFinalize).not.toHaveBeenCalled();
   });
 });
 
@@ -819,7 +730,7 @@ describe('stream consumer — observability metrics (U23)', () => {
     expect(failures.every((f) => f.metric === 'EmbedOutcome')).toBe(true);
   });
 
-  it('emits the AssociationOutcome for a topic association (to-bin rate observable)', async () => {
+  it('MAT-150/R1: does NOT emit AssociationOutcome for a topic event (pipeline is disabled)', async () => {
     await consume(streamEvent(eventRecord(env(0, startEvent))), { repo });
     const { sink, lines } = metricCapture();
     const associateAndFinalize = vi.fn(
@@ -836,7 +747,9 @@ describe('stream consumer — observability metrics (U23)', () => {
     });
     await consume(streamEvent(eventRecord(topicEnv)), { repo, associateAndFinalize, metrics: sink });
 
-    expect(outcomes(lines)).toContainEqual({ metric: 'AssociationOutcome', outcome: 'unassigned' });
+    // R1: the pipeline is not called → no AssociationOutcome metric emitted.
+    expect(associateAndFinalize).not.toHaveBeenCalled();
+    expect(outcomes(lines).filter((o) => o.metric === 'AssociationOutcome')).toHaveLength(0);
   });
 });
 

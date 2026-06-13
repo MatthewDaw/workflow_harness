@@ -12,6 +12,11 @@ import {
 } from './runtime.js';
 import { resolvePrincipal } from './bearerAuth.js';
 import { ownedProject } from './ownership.js';
+import {
+  callPythonAuthored,
+  usesPythonAuthored,
+  type AuthoredRequest,
+} from '../python-authored-client.js';
 
 /**
  * REST: project memories — the per-user "Memories" tab (Project Details) fed by
@@ -27,10 +32,31 @@ import { ownedProject } from './ownership.js';
  * userId so authors never clobber each other. Each memory is stamped with its
  * author so the tab can group/filter by user. HQ stores and serves them — it
  * never generates the content.
+ *
+ * Graph bridge (U8 two-store coherence)
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ * When ``PYTHON_AUTHORED_URL`` is configured, each memory write/delete is
+ * additionally bridged to the Python authored-ingestion endpoint.  This makes
+ * every Memories-tab write a directive in the learning graph (authored idea,
+ * top authority, immediately active, necessity-exempt) and every delete an
+ * un-bridge (invalidAt stamped on the authored idea).
+ *
+ * The bridge is fire-and-forget-on-error: a Python endpoint failure is logged
+ * but does NOT fail the Memories tab PUT response — the flat MEM# DynamoDB
+ * write (user-visible, machine-syncable) is the primary operation.  The graph
+ * bridge is additive.
+ *
+ * When ``PYTHON_AUTHORED_URL`` is not set (local dev / tests that don't run
+ * the Python service), the bridge is skipped and the handler works exactly as
+ * before.
  */
 
 export interface MemoriesDeps {
   repo: Repo;
+  /** Injectable fetch for tests (overrides the global fetch used by callPythonAuthored). */
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  /** Org slug for the org-scoped Python authored bridge. */
+  org?: string;
 }
 
 /**
@@ -61,6 +87,11 @@ export async function listMemories(
  * clobber another author's memories. Dropping the owner gate is what lets a
  * COLLABORATOR's daemon push memories to a project they do not own; ownership only
  * governs who can READ the aggregated tab (the GET above).
+ *
+ * Graph bridge: when ``PYTHON_AUTHORED_URL`` is configured, each added/updated
+ * memory is bridged to the Python authored endpoint (directive kind), and each
+ * deleted memory is un-bridged (delete kind).  Errors from the bridge are logged
+ * but do not fail the handler — the MEM# write is the primary operation.
  */
 export async function reconcileMemories(
   event: APIGatewayProxyEventV2,
@@ -92,7 +123,60 @@ export async function reconcileMemories(
     updatedAt: now,
   }));
 
+  // Compute deletions (items previously stored by this author but absent from
+  // the new payload) so we can un-bridge them in the Python graph.
+  let deletedNames: string[] = [];
+  if (usesPythonAuthored()) {
+    const existing = await deps.repo.listMemories(pid);
+    const callerExisting = existing.filter((m) => m.userId === principal.userId);
+    const incomingNames = new Set(items.map((m) => m.name));
+    deletedNames = callerExisting
+      .map((m) => m.name)
+      .filter((n) => !incomingNames.has(n));
+  }
+
+  // Primary write: flat MEM# DynamoDB reconcile (the user-visible, machine-syncable path).
   await deps.repo.replaceUserMemories(pid, principal.userId, items);
+
+  // Graph bridge (additive, fire-and-log-on-error).
+  if (usesPythonAuthored()) {
+    const org = deps.org ?? principal.org;
+    // Bridge each new/updated memory as a directive.
+    for (const m of items) {
+      const req: AuthoredRequest = {
+        kind: 'directive',
+        org,
+        projectId: pid,
+        userId: principal.userId,
+        name: m.name,
+        content: m.content,
+        // Use the memory name as the skill base name so directives are
+        // co-located in a predictable skill family.  Production operators can
+        // configure a different mapping; this is the safe default.
+        skillBaseName: m.name,
+        scopeTag: 'project',
+      };
+      callPythonAuthored(req, deps.fetchImpl).catch((err: unknown) => {
+        console.warn(`[memories] bridge write failed for ${m.name}: ${String(err)}`);
+      });
+    }
+
+    // Un-bridge deleted memories.
+    for (const name of deletedNames) {
+      const req: AuthoredRequest = {
+        kind: 'delete',
+        org,
+        projectId: pid,
+        userId: principal.userId,
+        name,
+        skillBaseName: name,
+      };
+      callPythonAuthored(req, deps.fetchImpl).catch((err: unknown) => {
+        console.warn(`[memories] bridge delete failed for ${name}: ${String(err)}`);
+      });
+    }
+  }
+
   return ok({ memories: items });
 }
 

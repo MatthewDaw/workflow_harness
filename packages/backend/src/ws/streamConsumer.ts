@@ -261,21 +261,21 @@ function routeOutcomeMetric(outcome: RouteOutcome): AssociationMetricOutcome {
 }
 
 /**
- * Run the FULL topic→skill ideas pipeline for a `session.topic` event (U8→U10).
- * Builds the `TopicFinding` from the event and delegates to
- * `associateAndFinalize`, which resolves the org from the session's project
- * (NEVER `principal.org`), embeds the topic, retrieves the org's top-k
- * candidates (U8), judge-reranks to the single best skill (U9), and either
- * creates/merges the idea on that skill or routes the topic to the unassigned
- * bin (U10). End-to-end: a `session.topic` event now PRODUCES or MERGES an idea
- * (or a bin entry), not just a candidate seam.
+ * MAT-150 (R1) — The session-recurrence idea-creator pipeline is DISABLED.
  *
- *  - `routed`      → idea created/merged on the chosen skill (move-on-re-eval).
- *  - `unassigned`  → bin entry written (no candidate cleared the floor, or the
- *                    judge rejected / was below the confidence bar).
- *  - `unresolved`  → no-op (org/description unresolvable; never a wrong-org guess).
+ * The inferred-lane idea source is merged-PR distillation only (U1). Session
+ * topics survive solely as enrichment context (U7) — they are reprojected into
+ * the session record (so topic/topic-label fields stay current for U7 enrichment
+ * lookups) but they NO LONGER mint ideas via the topic-mining → associate →
+ * corroborate pipeline (plan 008). Raw session-topic recurrence must not create
+ * ideas; un-verified session ideas must not leak beside PR-gated ones.
  *
- * Errors propagate (not swallowed) so the record is redelivered/DLQ'd.
+ * The `associateAndFinalize` dep is retained on `StreamConsumerDeps` so existing
+ * tests that inject it still compile; the function is never called from
+ * `processRecord` while this flag is active. The dep and the `associateTopicEvent`
+ * helper remain for the shadow-observe path if the flag is later toggled.
+ *
+ * @deprecated Topic-based idea creation — disabled by MAT-150 (R1).
  */
 async function associateTopicEvent(
   deps: StreamConsumerDeps,
@@ -307,6 +307,23 @@ async function associateTopicEvent(
   // batch-item-failure path and shows up as an `EmbedOutcome=failure` + DLQ depth.
   emitAssociationOutcome(routeOutcomeMetric(result.route.outcome), deps.metrics);
   return result;
+}
+
+/**
+ * MAT-150 (R1) — session-recurrence as an idea-creator is disabled.
+ *
+ * When `true` (the default), `processRecord` skips the `associateTopicEvent`
+ * call for `session.topic` events. The topic is still reprojected so the session
+ * record's topic/label fields stay current for U7 enrichment; the only change is
+ * that the topic no longer drives idea creation.
+ *
+ * Override to `false` (env `SESSION_TOPIC_IDEA_CREATION_DISABLED=false`) to
+ * re-enable for testing the old path or future shadow-observe work.
+ */
+function isSessionTopicIdeaCreationDisabled(): boolean {
+  const v = process.env.SESSION_TOPIC_IDEA_CREATION_DISABLED;
+  // Disabled by default (MAT-150); only re-enable with an explicit `false`.
+  return v !== 'false';
 }
 
 /** True when a PROJECT META record's roll-up-relevant fields changed. */
@@ -341,12 +358,12 @@ async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): 
     const parsed = safeParseEnvelope(newImg);
     if (!parsed.success) return; // not a well-formed envelope; ignore noise
     await reprojectEvent(deps.repo, parsed.data);
-    // A `session.topic` ALSO drives the FULL topic→skill ideas pipeline
-    // (U8→U10): embed the topic, retrieve the org's top-k candidate skills above
-    // the floor (U8), judge-rerank to the best skill (U9), and create/merge the
-    // idea on that skill — or route to the unassigned bin (U10). Done AFTER the
-    // reprojection so the session projection (the org-resolution path) is current.
-    if (parsed.data.event.kind === 'session.topic') {
+    // MAT-150 (R1) — session-topic recurrence is NO LONGER an idea-creator.
+    // The inferred lane's only idea source is merged-PR distillation (U1).
+    // Session topics are reprojected above (enrichment / U7 lookup), but the
+    // topic-mining → associate → corroborate pipeline (plan 008) is switched off
+    // so un-verified session ideas cannot leak beside PR-gated ones.
+    if (parsed.data.event.kind === 'session.topic' && !isSessionTopicIdeaCreationDisabled()) {
       await associateTopicEvent(deps, parsed.data.event, parsed.data.seq);
     }
     return;

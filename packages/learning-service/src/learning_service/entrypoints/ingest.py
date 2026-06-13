@@ -125,5 +125,55 @@ def main(argv: list[str] | None = None) -> None:
     sys.exit(run_ingest(config))
 
 
+def lambda_handler(event: dict, context: object) -> dict:
+    """AWS Lambda handler for the container Lambda ingest entrypoint.
+
+    This is the CMD target set in the LearningStack CDK construct:
+      ``learning_service.entrypoints.ingest.lambda_handler``
+
+    The Lambda event may supply ``org``, ``repo``, ``since_pr``, and ``mode``
+    fields.  Missing fields fall back to environment variable defaults so the
+    ingest job can also be invoked directly from the CLI (``learning-ingest``).
+
+    Example event::
+
+        {
+            "org": "acme",
+            "repo": "acme/backend",
+            "since_pr": 100,
+            "mode": "shadow"
+        }
+    """
+    import os
+
+    org = event.get("org", "")
+    repo = event.get("repo", "")
+    since_pr = event.get("since_pr", None)
+    mode = event.get("mode", os.environ.get("LS_MODE", "shadow"))
+
+    if not org or not repo:
+        return {
+            "statusCode": 400,
+            "body": "org and repo are required in the Lambda event payload",
+        }
+
+    config = IngestConfig(
+        org=org,
+        repo=repo,
+        since_pr=since_pr,
+        mode=mode,
+        nli_mode=os.environ.get("LS_NLI_MODE", "replay"),
+        judge_mode=os.environ.get("LS_JUDGE_MODE", "replay"),
+    )
+
+    exit_code = run_ingest(config)
+    if exit_code == 0:
+        return {"statusCode": 200, "body": f"ingest ok: org={org} repo={repo}"}
+    return {
+        "statusCode": 500,
+        "body": f"ingest failed with exit code {exit_code}: org={org} repo={repo}",
+    }
+
+
 if __name__ == "__main__":
     main()
