@@ -245,8 +245,16 @@ export function installFetchStub(seed: SeedData) {
     if (skillVariants) return json({ variants: seed.skillVariants?.[skillVariants[1]!] ?? [] });
     // All-ideas read for the HQ ideas dropdown (skill-idea loop, U13/U14). Matched
     // before the project opt-in routes so it doesn't fall through to a 200 [].
+    // A1 / MAT-154: also handle the Python API route (/all-ideas) which the
+    // learningApi slice calls when the TS web is repointed to the Python service.
+    const skillAllIdeas = /^skills\/([^/]+)\/all-ideas$/.exec(path);
+    if (skillAllIdeas) return json({ ideas: seed.skillIdeas?.[skillAllIdeas[1]!] ?? [] });
     const skillIdeas = /^skills\/([^/]+)\/ideas$/.exec(path);
     if (skillIdeas) return json({ ideas: seed.skillIdeas?.[skillIdeas[1]!] ?? [] });
+    // candidate-learnings (A1 / MAT-154): the Python API security-gated surface.
+    const skillCandidates = /^skills\/([^/]+)\/candidate-learnings$/.exec(path);
+    if (skillCandidates)
+      return json({ learnings: seed.skillIdeas?.[skillCandidates[1]!] ?? [] });
     const skillPromote = /^skills\/([^/]+)\/promote$/.exec(path);
     if (skillPromote) return json({ name: skillPromote[1], variantId: '', rev: 1 });
     // The org's unassigned bin (skill-idea loop, U15): the new-skill backlog.

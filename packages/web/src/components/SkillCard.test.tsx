@@ -104,24 +104,28 @@ describe('SkillCard ideas dropdown (skill-idea loop, U14)', () => {
   });
 });
 
-describe('getSkillIdeas query (skill-idea loop, U14)', () => {
+describe("getSkillIdeasFromPython query (A1 - web reads via Python API)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('tags the list per-skill so a fold of that skill’s idea can invalidate it', async () => {
-    // The Idea tag is registered and providesTags is keyed by skill name, so a
-    // future fold mutation (invalidatesTags [{ type: 'Idea', id: name }]) refetches
-    // exactly this list. Assert the dropdown round-trips a tagged read of the
-    // wrapped `{ ideas: [...] }` backend shape.
+  it("tags the list per-skill in the learningApi slice (Python API repoint)", async () => {
+    // A1 / MAT-154: the SkillCard now reads ideas via the Python learning API
+    // (learningApi slice), not the TS DynamoDB backend (baseApi slice).
+    // The tag is keyed per-skill (LearningIdea / endforge) so a future fold
+    // mutation can invalidate it.
     const { store } = renderWithProviders(<SkillCard skill={SKILL} />, {
       seed: { skillIdeas: IDEAS },
     });
     await openIdeas('endforge');
     await screen.findByTestId('idea-idea-corr');
 
-    // A tagged getSkillIdeas('endforge') subscription is live in the cache.
+    // The query lives in the 'learningApi' reducer (not 'api') and uses the
+    // 'getSkillIdeasFromPython' endpoint name (not 'getSkillIdeas').
     await waitFor(() => {
-      const queries = store.getState().api.queries;
-      const entry = Object.entries(queries).find(([k]) => k.startsWith('getSkillIdeas('));
+      const state = store.getState() as Record<string, { queries?: Record<string, unknown> }>;
+      const queries = state.learningApi?.queries ?? {};
+      const entry = Object.entries(queries).find(([k]) =>
+        k.startsWith('getSkillIdeasFromPython('),
+      );
       expect(entry).toBeDefined();
       expect(entry![0]).toContain('endforge');
       expect((entry![1] as { data?: unknown[] }).data).toHaveLength(3);

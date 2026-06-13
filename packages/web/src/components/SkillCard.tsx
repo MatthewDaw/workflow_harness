@@ -7,7 +7,12 @@ import { OverlayModal } from './OverlayModal.js';
 import { stripFrontmatter } from '../lib/frontmatter.js';
 import { authorOf } from '../lib/catalogUi.js';
 import { VariantSwitcher } from './VariantSwitcher.js';
-import { variantOf, useGetSkillIdeasQuery, type SkillIdea } from '../api/baseApi.js';
+import { variantOf, type SkillIdea } from '../api/baseApi.js';
+import { useGetSkillIdeasFromPythonQuery, type AllIdeaDto } from '../api/learningApi.js';
+
+// A1 / MAT-154: The Python API uses `body` (not `text`) for the idea content.
+// PythonIdeaRow is the union of both shapes so the dropdown works with either.
+type PythonIdeaRow = AllIdeaDto & { text?: string };
 
 /**
  * Distinct-session count at which an idea is "corroborated" (skill-idea loop,
@@ -159,7 +164,7 @@ function SkillBodyModal({
 }
 
 /** Whether an idea has reached the corroboration bar (distinct-session count ≥ K). */
-function isCorroborated(idea: SkillIdea): boolean {
+function isCorroborated(idea: PythonIdeaRow): boolean {
   return idea.corroborationCount >= CORROBORATION_K;
 }
 
@@ -177,9 +182,13 @@ function isCorroborated(idea: SkillIdea): boolean {
  */
 function SkillIdeasDropdown({ name }: { name: string }) {
   const [open, setOpen] = useState(false);
-  const { data, isLoading } = useGetSkillIdeasQuery(name);
+  // A1 / MAT-154: learning data is read from the Python API, not DynamoDB.
+  // useGetSkillIdeasFromPythonQuery calls /skills/:name/all-ideas on the
+  // Python learning service (or falls back to the TS backend in local dev).
+  const { data, isLoading } = useGetSkillIdeasFromPythonQuery(name);
 
-  const ideas = data ?? [];
+  // Cast to PythonIdeaRow so the body/text union is typed throughout.
+  const ideas: PythonIdeaRow[] = (data ?? []) as PythonIdeaRow[];
   const openIdeas = ideas.filter((i) => i.status !== 'folded');
   const folded = ideas.filter((i) => i.status === 'folded');
   const corroborated = openIdeas.filter(isCorroborated);
@@ -232,7 +241,7 @@ function IdeaGroup({
   folded = false,
 }: {
   title: string;
-  ideas: SkillIdea[];
+  ideas: PythonIdeaRow[];
   badge: 'good' | 'idle' | 'skill';
   folded?: boolean;
 }) {
@@ -268,7 +277,8 @@ function IdeaGroup({
                 {idea.corroborationCount} session{idea.corroborationCount === 1 ? '' : 's'}
               </span>
             </div>
-            <div className="line-clamp-3">{idea.text}</div>
+            {/* A1 / MAT-154: Python API returns `body`; legacy TS shape uses `text`. */}
+            <div className="line-clamp-3">{idea.body ?? idea.text}</div>
           </li>
         ))}
       </ul>
