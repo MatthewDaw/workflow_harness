@@ -35,10 +35,12 @@ from typing import Any, Protocol
 
 from learning_service.schema.generated.py_types import (
     AnchorRecord,
+    BranchSessionRecord,
     GoldenCaseRecord,
     IdeaRecord,
     IdeaSourceRecord,
     anchor_key,
+    branch_session_key,
     golden_case_key,
     idea_key,
     idea_source_key,
@@ -242,6 +244,28 @@ class LearningStore(Protocol):
         """Return all audit events for an idea, ordered by seq ascending."""
         ...
 
+    # -- Branch→session link (U7) --------------------------------------------
+
+    def put_branch_session_link(self, record: BranchSessionRecord) -> None:
+        """Write (or overwrite) a branch→session link at push time (U7).
+
+        Last-writer-wins per (org, ownerRepo, branch).  Multi-session branches
+        overwrite the previous link (the newest push wins; the plan calls for a
+        "small list" for multi-session branches, but last-writer-wins is the v1
+        behaviour — enough for the acceptance checklist).
+        """
+        ...
+
+    def get_branch_session_link(
+        self, org: str, owner_repo: str, branch: str
+    ) -> BranchSessionRecord | None:
+        """Return the branch→session link for (org, repo, branch), or None.
+
+        Returns None when no push has been recorded (best-effort; U1 degrades
+        to PR-only distillation when the link is absent).
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Protocol: S3 Vectors store (dependency-injection seam)
@@ -307,6 +331,8 @@ class InMemoryLearningStore:
     _processed_prs: dict[tuple[str, str, int], ProcessedPrRecord] = field(default_factory=dict)
     # {(org, idea_id): sorted list of VerifyEventRecord}
     _verify_events: dict[tuple[str, str], list[VerifyEventRecord]] = field(default_factory=dict)
+    # {(org, owner_repo, branch): BranchSessionRecord}
+    _branch_session_links: dict[tuple[str, str, str], BranchSessionRecord] = field(default_factory=dict)
 
     # -- Ideas ---------------------------------------------------------------
 
@@ -378,6 +404,20 @@ class InMemoryLearningStore:
 
     def put_anchor(self, record: AnchorRecord) -> None:
         _org_guard(record.org, "put_anchor")
+        # Upsert: replace an existing record with the same (org, ownerRepo,
+        # file, symbol, ideaId) identity key, mirroring the DynamoDB put_item
+        # behaviour (PK/SK uniquely identifies the row; a second write replaces
+        # the first, not appends alongside it).
+        for i, existing in enumerate(self._anchors):
+            if (
+                existing.org == record.org
+                and existing.ownerRepo == record.ownerRepo
+                and existing.file == record.file
+                and existing.symbol == record.symbol
+                and existing.ideaId == record.ideaId
+            ):
+                self._anchors[i] = record
+                return
         self._anchors.append(record)
 
     def get_anchors_for_idea(
@@ -424,6 +464,17 @@ class InMemoryLearningStore:
     def list_verify_events(self, org: str, idea_id: str) -> list[VerifyEventRecord]:
         events = self._verify_events.get((org, idea_id), [])
         return sorted(events, key=lambda e: e.seq)
+
+    # -- Branch→session link (U7) --------------------------------------------
+
+    def put_branch_session_link(self, record: BranchSessionRecord) -> None:
+        _org_guard(record.org, "put_branch_session_link")
+        self._branch_session_links[(record.org, record.ownerRepo, record.branch)] = record
+
+    def get_branch_session_link(
+        self, org: str, owner_repo: str, branch: str
+    ) -> BranchSessionRecord | None:
+        return self._branch_session_links.get((org, owner_repo, branch))
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +776,40 @@ class DynamoLearningStore:
         )
         return [_dynamo_to_verify_event(item) for item in resp.get("Items", [])]
 
+    # -- Branch→session link (U7) --------------------------------------------
+
+    def put_branch_session_link(self, record: BranchSessionRecord) -> None:
+        _org_guard(record.org, "put_branch_session_link")
+        key = branch_session_key(record.org, record.ownerRepo, record.branch)
+        item: dict[str, Any] = {
+            **key,
+            "org": record.org,
+            "ownerRepo": record.ownerRepo,
+            "branch": record.branch,
+            "sessionId": record.sessionId,
+        }
+        if record.turnStart is not None:
+            item["turnStart"] = record.turnStart
+        if record.turnEnd is not None:
+            item["turnEnd"] = record.turnEnd
+        if record.distilledContext is not None:
+            item["distilledContext"] = record.distilledContext
+        if record.pushedAt is not None:
+            item["pushedAt"] = record.pushedAt
+        # TTL is stored as a top-level attribute so DynamoDB's TTL feature can
+        # expire records automatically (90-day window).
+        if record.ttlAt is not None:
+            item["ttlAt"] = record.ttlAt
+        self._table.put_item(Item=item)
+
+    def get_branch_session_link(
+        self, org: str, owner_repo: str, branch: str
+    ) -> BranchSessionRecord | None:
+        key = branch_session_key(org, owner_repo, branch)
+        resp = self._table.get_item(Key=key)
+        item = resp.get("Item")
+        return _dynamo_to_branch_session(item) if item else None
+
 
 # ---------------------------------------------------------------------------
 # Production S3 Vectors implementation (requires boto3 / aws-sdk at runtime)
@@ -1009,6 +1094,20 @@ def _dynamo_to_verify_event(item: dict[str, Any]) -> VerifyEventRecord:
         pr_ref=item.get("prRef"),
         authority=item.get("authority"),
         recorded_at=int(item["recordedAt"]),
+    )
+
+
+def _dynamo_to_branch_session(item: dict[str, Any]) -> BranchSessionRecord:
+    return BranchSessionRecord(
+        ownerRepo=item["ownerRepo"],
+        branch=item["branch"],
+        org=item["org"],
+        sessionId=item["sessionId"],
+        turnStart=int(item["turnStart"]) if "turnStart" in item else None,
+        turnEnd=int(item["turnEnd"]) if "turnEnd" in item else None,
+        distilledContext=item.get("distilledContext"),
+        pushedAt=int(item["pushedAt"]) if "pushedAt" in item else None,
+        ttlAt=int(item["ttlAt"]) if "ttlAt" in item else None,
     )
 
 

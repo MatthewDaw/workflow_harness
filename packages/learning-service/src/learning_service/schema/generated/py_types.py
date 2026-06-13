@@ -1,7 +1,7 @@
 """GENERATED — do not edit by hand.
 
 This file is produced by ``learning_service.schema.codegen``.
-IDL fingerprint: ff4765c52834e28b  (schema version 1.0.0)
+IDL fingerprint: 55379a9c92d0b91e  (schema version 1.0.0)
 
 Regenerate with:
     python -m learning_service.schema.codegen
@@ -60,6 +60,10 @@ def processed_pr_key(org: str | int, ownerRepo: str | int, prNumber: str | int) 
 def verify_event_key(org: str | int, ideaId: str | int, seq: str | int) -> dict[str, str]:
     """Append-only audit row under an idea (supersede/corroborate events)."""
     return {"PK": f"SCOPE#org#{org}", "SK": f"VERIFY#{ideaId}#{str(seq).zfill(12)}"}
+
+def branch_session_key(org: str | int, ownerRepo: str | int, branch: str | int) -> dict[str, str]:
+    """Branch→session link written at git-push time (U7). Maps a (repo, branch) pair to the sessionId(s) + turn-range + eagerly-distilled context that produced the push.  TTL 90 days.  U1 reads distilledContext at merge time without re-reading EVT# records."""
+    return {"PK": f"SCOPE#org#{org}", "SK": f"BSLINK#{ownerRepo}#{branch}"}
 
 # ---------------------------------------------------------------------------
 # Record dataclasses
@@ -157,3 +161,16 @@ class AnchorRecord:
     symbol: str  # Enclosing named symbol (or '__file__' for file-level fallback).
     org: str  # Owning org slug.
     active: bool  # False when the anchor has been retired (idea un-folded/superseded).
+
+@dataclass
+class BranchSessionRecord:
+    """Branch→session link written by the Go wrapper at git-push time (U7). Stores the sessionId(s), turn-range, and eagerly-distilled context for a (repo, branch) pair so U1 can enrich PR distillation without re-reading 90-day-TTL EVT# records at merge time."""
+    ownerRepo: str  # owner/repo string, e.g. acme/backend.
+    branch: str  # Git branch name, e.g. feat/my-feature.
+    org: str  # Owning org slug (the daemon's resolved org).
+    sessionId: str  # Stable tab/session id (PinnedSessionID) of the authoring Claude session.
+    turnStart: int | None = None  # Start turn index of the relevant slice within the session.
+    turnEnd: int | None = None  # End turn index of the relevant slice within the session.
+    distilledContext: str | None = None  # Eagerly-distilled, scrubbed summary of the relevant turn slice.
+    pushedAt: int | None = None  # Epoch-ms when the push was detected.
+    ttlAt: int | None = None  # DynamoDB TTL epoch-second (90 days from pushedAt).

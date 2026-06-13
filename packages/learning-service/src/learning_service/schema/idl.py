@@ -149,6 +149,19 @@ KEY_DEFS: list[KeyDef] = [
         params=["org", "ideaId", "seq"],
         description="Append-only audit row under an idea (supersede/corroborate events).",
     ),
+    # --- Branch→session link (U7 session-link capture) ----------------------
+    KeyDef(
+        name="branch_session_key",
+        pk_template="SCOPE#org#{org}",
+        sk_template="BSLINK#{ownerRepo}#{branch}",
+        params=["org", "ownerRepo", "branch"],
+        description=(
+            "Branch→session link written at git-push time (U7). Maps a (repo, branch) "
+            "pair to the sessionId(s) + turn-range + eagerly-distilled context that "
+            "produced the push.  TTL 90 days.  U1 reads distilledContext at merge time "
+            "without re-reading EVT# records."
+        ),
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -262,6 +275,26 @@ RECORD_DEFS: list[RecordDef] = [
             FieldDef("symbol", "str", "Enclosing named symbol (or '__file__' for file-level fallback)."),
             FieldDef("org", "str", "Owning org slug."),
             FieldDef("active", "bool", "False when the anchor has been retired (idea un-folded/superseded)."),
+        ],
+    ),
+    RecordDef(
+        name="BranchSessionRecord",
+        description=(
+            "Branch→session link written by the Go wrapper at git-push time (U7). "
+            "Stores the sessionId(s), turn-range, and eagerly-distilled context "
+            "for a (repo, branch) pair so U1 can enrich PR distillation without "
+            "re-reading 90-day-TTL EVT# records at merge time."
+        ),
+        fields=[
+            FieldDef("ownerRepo", "str", "owner/repo string, e.g. acme/backend."),
+            FieldDef("branch", "str", "Git branch name, e.g. feat/my-feature."),
+            FieldDef("org", "str", "Owning org slug (the daemon's resolved org)."),
+            FieldDef("sessionId", "str", "Stable tab/session id (PinnedSessionID) of the authoring Claude session."),
+            FieldDef("turnStart", "int?", "Start turn index of the relevant slice within the session.", optional=True),
+            FieldDef("turnEnd", "int?", "End turn index of the relevant slice within the session.", optional=True),
+            FieldDef("distilledContext", "str?", "Eagerly-distilled, scrubbed summary of the relevant turn slice.", optional=True),
+            FieldDef("pushedAt", "int?", "Epoch-ms when the push was detected.", optional=True),
+            FieldDef("ttlAt", "int?", "DynamoDB TTL epoch-second (90 days from pushedAt).", optional=True),
         ],
     ),
 ]

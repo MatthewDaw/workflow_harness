@@ -19,7 +19,6 @@ import type {
   Project,
   ScopeRef,
   SessionProjection,
-  SessionVector,
   Skill,
   TruePointer,
   UnassignedEntry,
@@ -1422,31 +1421,6 @@ export class Repo {
         this.doc.send(new DeleteCommand({ TableName: this.table, Key: { PK, SK: sk } })),
       ),
     ]);
-  }
-
-  // --- Forge session vectors (U27) ---------------------------------------
-
-  /** Persist a summarized + embedded session vector for the brute-force k-NN. */
-  async putSessionVector(v: SessionVector): Promise<void> {
-    await this.doc.send(
-      new PutCommand({
-        TableName: this.table,
-        Item: { ...k.sessionVectorKey(v.userId, v.sessionId), ...v },
-      }),
-    );
-  }
-
-  /** All of a user's session vectors, for the brute-force cosine fallback. */
-  async listSessionVectors(userId: string): Promise<SessionVector[]> {
-    const { PK, skPrefix } = k.sessionVectorPrefix(userId);
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.table,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: { ':pk': PK, ':sk': skPrefix },
-      }),
-    );
-    return (res.Items ?? []) as SessionVector[];
   }
 
   // --- Session learnings (topic-focus logging) ---------------------------

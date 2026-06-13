@@ -18,7 +18,7 @@
  * The codegen also writes this file (packages/shared/src/learning-schema.ts) so
  * both copies are always in sync.  If they diverge, CI fails.
  *
- * IDL fingerprint: ff4765c52834e28b  (schema version 1.0.0)
+ * IDL fingerprint: 55379a9c92d0b91e  (schema version 1.0.0)
  */
 
 // ---------------------------------------------------------------------------
@@ -88,6 +88,12 @@ export const learningProcessedPrKey = (org: string | number, ownerRepo: string |
 export const learningVerifyEventKey = (org: string | number, ideaId: string | number, seq: string | number): { PK: string; SK: string } => ({
   PK: `SCOPE#org#${org}`,
   SK: `VERIFY#${ideaId}#${_pad(Number(seq), 12)}`,
+});
+
+/** Branch→session link written at git-push time (U7). Maps a (repo, branch) pair to the sessionId(s) + turn-range + eagerly-distilled context that produced the push.  TTL 90 days.  U1 reads distilledContext at merge time without re-reading EVT# records. */
+export const learningBranchSessionKey = (org: string | number, ownerRepo: string | number, branch: string | number): { PK: string; SK: string } => ({
+  PK: `SCOPE#org#${org}`,
+  SK: `BSLINK#${ownerRepo}#${branch}`,
 });
 
 // ---------------------------------------------------------------------------
@@ -185,4 +191,17 @@ export interface LearningAnchorRecord {
   symbol: string;  // Enclosing named symbol (or '__file__' for file-level fallback).
   org: string;  // Owning org slug.
   active: boolean;  // False when the anchor has been retired (idea un-folded/superseded).
+}
+
+/** Branch→session link written by the Go wrapper at git-push time (U7). Stores the sessionId(s), turn-range, and eagerly-distilled context for a (repo, branch) pair so U1 can enrich PR distillation without re-reading 90-day-TTL EVT# records at merge time. */
+export interface LearningBranchSessionRecord {
+  ownerRepo: string;  // owner/repo string, e.g. acme/backend.
+  branch: string;  // Git branch name, e.g. feat/my-feature.
+  org: string;  // Owning org slug (the daemon's resolved org).
+  sessionId: string;  // Stable tab/session id (PinnedSessionID) of the authoring Claude session.
+  turnStart?: number | undefined;  // Start turn index of the relevant slice within the session.
+  turnEnd?: number | undefined;  // End turn index of the relevant slice within the session.
+  distilledContext?: string | undefined;  // Eagerly-distilled, scrubbed summary of the relevant turn slice.
+  pushedAt?: number | undefined;  // Epoch-ms when the push was detected.
+  ttlAt?: number | undefined;  // DynamoDB TTL epoch-second (90 days from pushedAt).
 }

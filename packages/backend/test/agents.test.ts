@@ -177,19 +177,3 @@ describe('agent bundle-overwrite guard (agent push must not clobber a bundle)', 
   });
 });
 
-describe('POST /agents/:name/scope (retired)', () => {
-  it('responds 410 Gone', async () => {
-    const res = await agentsHandler(
-      httpEvent({
-        method: 'POST',
-        userId: MATT,
-        org: ORG,
-        admin: true,
-        rawPath: '/agents/builder/scope',
-        path: { name: 'builder' },
-        body: { scope: { tier: 'org', id: ORG } },
-      }),
-    );
-    expect(res).toMatchObject({ statusCode: 410 });
-  });
-});

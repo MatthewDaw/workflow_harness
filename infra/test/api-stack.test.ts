@@ -60,12 +60,6 @@ describe('ApiStack', () => {
     });
   });
 
-  test('routes the skills scope endpoint (POST /skills/{name}/scope)', () => {
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
-      RouteKey: 'POST /skills/{name}/scope',
-    });
-  });
-
   test('routes the skill-edit verbs: promote + idea fold (U16)', () => {
     // Promote (repoint TRUE) and fold (snapshot a revision from an idea) are both
     // the skills Lambda and both skill-edit gated; they are `noAuth` at the gateway

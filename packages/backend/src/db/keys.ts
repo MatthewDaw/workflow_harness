@@ -447,22 +447,6 @@ export const listenerPrefix = (sessionId: string): { PK: string; skPrefix: strin
 });
 
 /**
- * A summarized + embedded session vector (U27 Forge). Stored under the owning
- * user so the brute-force cosine fallback can query a user's whole corpus with a
- * single partition read (`begins_with(SK, 'VEC#')`), keeping k-NN scoped to the
- * user (KTD7).
- */
-export const sessionVectorKey = (userId: string, sessionId: string): PrimaryKey => ({
-  PK: `USERVEC#${userId}`,
-  SK: `VEC#${sessionId}`,
-});
-
-export const sessionVectorPrefix = (userId: string): { PK: string; skPrefix: string } => ({
-  PK: `USERVEC#${userId}`,
-  skPrefix: 'VEC#',
-});
-
-/**
  * A `owner/repo` -> projectId pointer (U26). GitHub webhooks identify a repo by
  * its full name, not the harness project id; this record lets a GitHub-sourced
  * read resolve the project without a scan. Written when a project connects a

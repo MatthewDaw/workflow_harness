@@ -976,28 +976,6 @@ export const projectFramingSchema = z.object({
 export type ProjectFraming = z.infer<typeof projectFramingSchema>;
 
 /**
- * A summarized + embedded session, the unit Forge searches over (U27). The
- * session's transcript summary + embedding and the skills/tools it used are
- * recorded so similar sessions can be aggregated into an agent proposal. This
- * is a stored contract shape; the vector/fuzzy-Forge read path is deferred and
- * not wired to any deployed handler.
- */
-export const sessionVectorSchema = z.object({
-  sessionId: z.string().min(1),
-  userId: z.string().min(1),
-  projectId: z.string().min(1),
-  summary: z.string().default(''),
-  /** The embedding vector for the summary. */
-  vector: z.array(z.number()),
-  /** Skills used during the session (for frequency aggregation). */
-  skills: z.array(z.string()).default([]),
-  /** Tools used during the session (for frequency aggregation). */
-  tools: z.array(z.string()).default([]),
-  createdAt: z.number().int().nonnegative(),
-});
-export type SessionVector = z.infer<typeof sessionVectorSchema>;
-
-/**
  * A persisted learning mined from a correction turn (topic-focus logging). The
  * `session.learning` event is appended as one of these records under the owning
  * PROJECT partition, so a project's whole corpus is one partition read. It is

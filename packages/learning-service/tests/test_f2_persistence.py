@@ -639,32 +639,38 @@ def test_multiple_anchors_for_same_idea_all_queryable():
 
 
 def test_deactivated_anchor_no_longer_surfaces_in_locality_join():
-    """An anchor retired with active=False must be excluded from the locality join."""
+    """An anchor retired with active=False must be excluded from the locality join.
+
+    put_anchor behaves as a DynamoDB-style upsert: a second write with the same
+    (org, ownerRepo, file, symbol, ideaId) key REPLACES the first record — it
+    does not append alongside it.  So after writing active=False, the record is
+    inactive and must not appear in the active-only locality join.
+    """
     store = InMemoryLearningStore()
-    # Write an active anchor then "retire" it by writing inactive.
+    # Write an active anchor.
     store.put_anchor(AnchorRecord(
         ideaId="idea-001", ownerRepo="acme/backend",
         file="src/foo.ts", symbol="fn", org="acme", active=True
     ))
+    # Verify it's active before retirement.
+    assert "idea-001" in store.get_ideas_by_anchor("acme", "acme/backend", "src/foo.ts", "fn")
+
+    # Retire by writing the same key with active=False (upsert — replaces the record).
     store.put_anchor(AnchorRecord(
         ideaId="idea-001", ownerRepo="acme/backend",
         file="src/foo.ts", symbol="fn", org="acme", active=False
     ))
-    # The in-memory store keeps both; the locality join must filter to active only.
-    hits = store.get_ideas_by_anchor("acme", "acme/backend", "src/foo.ts", "fn")
-    # There is one active=True and one active=False entry. Only active=False remains
-    # as the latest anchor record; count of idea-001 in active lookups should be 0.
-    # (Note: InMemoryLearningStore.get_ideas_by_anchor scans for active=True only,
-    #  so this deactivation scenario requires the caller to manage active flags correctly.)
-    active_hits = [h for h in store._anchors
-                   if h.ideaId == "idea-001" and h.active is True]
-    # We have both records; the query should only return active=True ones.
-    # The second put (active=False) was appended separately.  This verifies the filter.
+
+    # After retirement the locality join must return empty (upsert replaced the
+    # active record — only one record exists in the store, and it is inactive).
     result_ids = store.get_ideas_by_anchor("acme", "acme/backend", "src/foo.ts", "fn")
-    # The active=True entry exists alongside active=False; both are in _anchors.
-    # The query returns ideaId of active=True entries. Here we have 1 active=True
-    # (the first write) and 1 active=False (the second write), so idea-001 appears once.
-    assert "idea-001" in result_ids  # from the active=True entry
+    assert "idea-001" not in result_ids, (
+        "Retired anchor (active=False) must not appear in the active locality join"
+    )
+
+    # The record still exists in history (get_anchors_for_idea returns it).
+    history = store.get_anchors_for_idea("acme", "acme/backend", "idea-001")
+    assert len(history) == 1 and history[0].active is False
 
 
 # ===========================================================================

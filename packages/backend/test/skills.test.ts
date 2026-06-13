@@ -407,23 +407,6 @@ describe('POST /skills/:name/promote (skill-edit gated, U16)', () => {
   });
 });
 
-describe('POST /skills/:name/scope (retired)', () => {
-  it('responds 410 Gone', async () => {
-    const res = await skillsHandler(
-      httpEvent({
-        method: 'POST',
-        userId: MATT,
-        org: ORG,
-        admin: true,
-        rawPath: '/skills/reconcile/scope',
-        path: { name: 'reconcile' },
-        body: { scope: { tier: 'org', id: ORG } },
-      }),
-    );
-    expect(res).toMatchObject({ statusCode: 410 });
-  });
-});
-
 /**
  * The claude+ wrapper writes the catalog with its HS256 DEVICE TOKEN (no Cognito
  * gateway, no `custom:admin` claim). The write routes are HttpNoneAuthorizer, so

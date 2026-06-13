@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+﻿import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   orgScope,
   skillSchema,
@@ -13,7 +13,6 @@ import {
   badRequest,
   conflict,
   defaultRepo,
-  gone,
   notFound,
   ok,
   parseBodySafe,
@@ -50,7 +49,6 @@ import {
  *   DELETE /skills/:name/members/:member  — eject a member (it stays standalone)
  *   POST   /skills/:name/dissolve         — flatten a bundle: members standalone, bundle removed
  *   GET    /skills/:name/usage            — count of agents depending on the skill
- *   POST   /skills/:name/scope            — RETIRED (410 Gone): no tiers in the org catalog
  *   POST   /skills/:name/promote          — repoint the org-wide TRUE pointer (skill-edit)
  *   POST   /skills/:name/ideas/:ideaId/fold — fold an idea into a new revision (U16)
  *
@@ -529,8 +527,6 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const method = event.requestContext.http.method;
   const path = event.requestContext.http.path;
 
-  // The scope-change endpoint is retired in the org-only catalog.
-  if (method === 'POST' && path.endsWith('/scope')) return gone('scope changes are retired');
   // Fold an idea into a new revision (U16). Checked before /promote etc. since it
   // is the most specific POST suffix on the skills resource.
   if (method === 'POST' && path.endsWith('/fold')) return foldIdea(event, deps);

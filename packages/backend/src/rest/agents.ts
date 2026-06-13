@@ -1,7 +1,7 @@
-import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+﻿import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { agentSchema, type Agent } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
-import { defaultRepo, gone, pathParam } from './runtime.js';
+import { defaultRepo, pathParam } from './runtime.js';
 import { makeBundleMemberHandlers } from './bundles.js';
 import { makeCatalogHandlers } from './catalogResource.js';
 
@@ -17,7 +17,6 @@ import { makeCatalogHandlers } from './catalogResource.js';
  *   POST   /agents/:name/members          — add a member ref to an agent bundle
  *   DELETE /agents/:name/members/:member  — eject a member (it stays standalone)
  *   POST   /agents/:name/dissolve         — flatten a bundle: members standalone, bundle removed
- *   POST   /agents/:name/scope            — RETIRED (410 Gone)
  *
  * Agents keep `skills[]`. There is no tier elevation/demotion in the org catalog.
  * An agent bundle (`kind:'bundle'`) holds member *refs* (agent names); a member
@@ -74,8 +73,6 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const method = event.requestContext.http.method;
   const path = event.requestContext.http.path;
 
-  // The scope-change endpoint is retired in the org-only catalog.
-  if (method === 'POST' && path.endsWith('/scope')) return gone('scope changes are retired');
   if (method === 'POST' && path.endsWith('/members')) return addMember(event, deps);
   if (method === 'DELETE' && pathParam(event, 'member')) return removeMember(event, deps);
   if (method === 'POST' && path.endsWith('/dissolve')) return dissolveAgentBundle(event, deps);
