@@ -74,7 +74,7 @@ from dataclasses import dataclass
 from agent_families.judge import request_hash, run_judge
 from agent_families.store import Store
 
-ROUTING_LOG_TABLE = "routing_decisions_log"
+ROUTING_LOG_TABLE = "routing_decisions"
 
 # A judge seam (the ``stage_b`` precedent): returns an object with ``.output``.
 # Live binding is ``run_judge``; the suite injects a deterministic fake.

@@ -383,7 +383,7 @@ def _leiden_native(
             resolution=resolution,
             randomness=0.001,
             use_modularity=True,
-            random_seed=seed,
+            seed=seed,
         )
     except Exception:
         return None

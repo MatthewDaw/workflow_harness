@@ -158,6 +158,27 @@ class EnforcementParams:
 
 
 @dataclass(frozen=True)
+class PersonaRotationRule:
+    """Explorer prompt-style persona-rotation rule (DESIGN §9). Kept by R3 R8 as a
+    deliberate decoy — the stages pivot removes *family/agent* personas, but the
+    explorer's prompt-rotation-on-plateau is a separate, retained mechanism. Exposes
+    the plateau tunables under the names ``planner_scores_plateaued`` reads, so it is
+    interchangeable with :class:`EnforcementParams` for ``should_rotate_personas``.
+    """
+
+    window: int
+    min_improvement: float
+
+    @property
+    def plateau_window(self) -> int:
+        return self.window
+
+    @property
+    def plateau_min_improvement(self) -> float:
+        return self.min_improvement
+
+
+@dataclass(frozen=True)
 class AnnealingSchedule:
     """The question-budget annealing schedule (R20). ``budget_at`` is a pure
     function of the epoch, so a resumed campaign recomputes the same value."""

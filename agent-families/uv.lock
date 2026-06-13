@@ -11,6 +11,8 @@ name = "agent-families"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "graspologic-native" },
+    { name = "infomap" },
     { name = "sentence-transformers", extra = ["onnx"] },
     { name = "sqlite-vec" },
 ]
@@ -23,6 +25,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "graspologic-native", specifier = ">=1.3.0" },
+    { name = "infomap", specifier = ">=2.12.0" },
     { name = "sentence-transformers", extras = ["onnx"], specifier = ">=5.0" },
     { name = "sqlite-vec", specifier = "==0.1.9" },
 ]
@@ -163,6 +167,25 @@ wheels = [
 ]
 
 [[package]]
+name = "graspologic-native"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/35/85/1729ca251be30ea6f137172ae8fd13c1300fdf15bb0e69be05f0260e28b0/graspologic_native-1.3.0.tar.gz", hash = "sha256:27301d885c0f47be0ed6496420de444a6f2c2032b0d19cfcc6869471ca654875", size = 2656005, upload-time = "2026-06-03T01:21:22.093Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/99/32b39ecdcaaab1daf5756f9e84a83b768673f56d75edeb76364ed9d5da3f/graspologic_native-1.3.0-cp39-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:db2ede7b6095a62b9e0dc28185436954db3dd90e6fe2dbc31cd9324097b12c68", size = 728135, upload-time = "2026-06-03T01:21:12.244Z" },
+    { url = "https://files.pythonhosted.org/packages/89/59/af503e7f1c7e4801a9902892e3b9c197adf59a0b2e4ca18df8fb0ec8e93d/graspologic_native-1.3.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2ccfc98653686a8fdad42ad7d8ccc522e807d92966e4ecc437d9ff87c260a3bd", size = 400398, upload-time = "2026-06-03T01:21:13.867Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/fe/8d46d0503717c192a158b70ef10f211715a5b15d4caa79e53d5bc52c8c03/graspologic_native-1.3.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8c9f6a1e5698893cecd284b9ef07024493c5e414f1efcf17fc1c063e23b47660", size = 416514, upload-time = "2026-06-03T01:21:15.199Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/0e/bfb2fe307b0428822215ca91d02c0d7426f3c6a0597b5b7e10690ded66c8/graspologic_native-1.3.0-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:e519ed7dc6a836d523947be84d3b573e1f99cd80c1bec15a6265774299b0667e", size = 468501, upload-time = "2026-06-03T01:21:16.721Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/b0/fbb8a424e227b346174f0bc68f4a3cd68f0adec200c5de0ee8bf6304eba7/graspologic_native-1.3.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e711fd2817cdaea4d2dcb37cd2acb3b18bb7d7860bed4f1d7e64f138cdf1a7ed", size = 617479, upload-time = "2026-06-03T01:21:18.152Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/51/de9902b258802de8c227baa014f9cb1c9793872f24f5ba8a78117f030b21/graspologic_native-1.3.0-cp39-abi3-win_amd64.whl", hash = "sha256:3b0cc5102c4da829097f651b351acc45c4dfe09301abedfde97803f3f6e5aafc", size = 260654, upload-time = "2026-06-03T01:21:19.388Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/76/2072fed5a5b9d4660358cd453ba43bba8486c1b5e46cb76c955db373c058/graspologic_native-1.3.0-cp39-abi3-win_arm64.whl", hash = "sha256:41e0df69a51c3feb27b15826fa22befd768f20bf33cfe99b55390162ab644a66", size = 245006, upload-time = "2026-06-03T01:21:20.622Z" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -204,6 +227,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/63/9496c57188a2ee585e0f1db071d75089a11e98aa86eb99d9d7618fc1edce/idna-3.18.tar.gz", hash = "sha256:ffb385a7e039654cef1ab9ef32c6fafe283c0c0467bba1d9029738ce4a14a848", size = 196711, upload-time = "2026-06-02T14:34:07.794Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
+]
+
+[[package]]
+name = "infomap"
+version = "2.12.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/f6/bc213265e734929aac52694168c2e8e9612d42ffda45bc32b5fa4a7a4a10/infomap-2.12.0.tar.gz", hash = "sha256:fc3da6567d054a9daa2f047115c023f8e15853529a286a349da0ee3b13644e76", size = 500562, upload-time = "2026-06-08T11:53:25.613Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/26/17c9fbdfd8b0d0125cffb6870f8a5dfc2d4a8f10954888e9d5cb26794d5b/infomap-2.12.0-cp312-cp312-macosx_15_0_arm64.whl", hash = "sha256:c433eb17433ca6607df5fd41dabf524bab76d1263ccff3a20ab1c2cda1bcadfb", size = 1131722, upload-time = "2026-06-08T11:53:05.02Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/05/89a2de58d0fabfb6d0f6734b22068da56777a9e73897aad580981c5cb9e8/infomap-2.12.0-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c09ae24b204a64adf6edaa2183b5816e1728172876e24da1383f0641998f4959", size = 14723565, upload-time = "2026-06-08T11:53:06.552Z" },
+    { url = "https://files.pythonhosted.org/packages/59/9b/49e74148379667778b26cce189801c87915ef2a68f55622bfe6671c2d3e8/infomap-2.12.0-cp312-cp312-win32.whl", hash = "sha256:d88aefb51e1ba8df0cc8ea4966b3036ee367b92b0ee36952efb74438d0f5743d", size = 646431, upload-time = "2026-06-08T11:53:08.718Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/2d/c9a03ae1d4dac62586b6e9f5e60e222311c678d4aa15277af781cf326200/infomap-2.12.0-cp312-cp312-win_amd64.whl", hash = "sha256:f91bdec121487d85c9d3055f9283353546f112e01e08ed0c2f060f949501a909", size = 764714, upload-time = "2026-06-08T11:53:10.235Z" },
 ]
 
 [[package]]

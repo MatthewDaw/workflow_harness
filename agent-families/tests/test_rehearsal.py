@@ -51,7 +51,7 @@ from agent_families.pipeline import rehearsal as rh
 from agent_families.pipeline.episode import EpisodeConfig, EpisodeStages, run_episode
 from agent_families.pipeline.explorer import write_explorer_msg
 from agent_families.pipeline.orchestrator import RunResult
-from agent_families.pipeline.planning import file_ownership_conflicts
+from agent_families.pipeline.planning import file_ownership_conflict_pairs
 from agent_families.store import Store
 
 TARGET = "linkding"
@@ -156,7 +156,7 @@ def test_file_conflict_pairs_and_planning_helper_agree():
         {"id": "TKT-B", "files": ["shared.ts"]},
         {"id": "TKT-C", "files": ["c.ts"]},
     ]
-    from_plan = file_ownership_conflicts(plan_tickets)
+    from_plan = file_ownership_conflict_pairs(plan_tickets)
     from_rehearsal = rh.file_conflict_pairs(rh.tickets_from_plan({"tickets": plan_tickets}))
     assert from_plan == from_rehearsal == [("TKT-A", "TKT-B")]
 

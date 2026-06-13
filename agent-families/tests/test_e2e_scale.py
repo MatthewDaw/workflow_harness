@@ -59,6 +59,21 @@ grader primitive — no new production surface is introduced for them.
 
 from __future__ import annotations
 
+import pytest as _pytest
+
+# Agent Families R3 teardown: this plan-005-U7 module is ORPHANED — it imports
+# symbols removed by the R3 reform: grading.suite scale-curve names
+# (SUITE_REGISTRY/aggregate_curve/control_limits/revisit_curve/suite_run_count)
+# AND legacy pipeline names deleted in the A-U6 cut-over (build_merge_prompt,
+# build_placement_prompt, build_taxonomy_prompt, JUDGE_SCHEMA). Skipped at module
+# level so the suite collects green; restore/rewrite if those subsystems return.
+# git history preserves the original.
+_pytest.skip(
+    "orphaned by Agent Families R3 teardown (removed grading.suite + legacy "
+    "pipeline symbols)",
+    allow_module_level=True,
+)
+
 import json
 import subprocess
 import threading

@@ -487,33 +487,3 @@ def render_injection_section(result: RetrievalResult) -> str:
     )
 
 
-# --- family-pool cluster spanning (Plan 5 R14b/R14c) -------------------------
-# Once agents split, a family's active pool spans several agents. These helpers
-# read which agent clusters a retrieval actually surfaced — the substrate the
-# boundary-ticket trigger reads (a ticket is cross-cutting when its retrieved
-# insights span >=2 agent clusters; DESIGN §4 "Boundary tickets" / R14c). They do
-# not change retrieval; they only project the existing per-candidate agent_id.
-
-
-def injected_agent_clusters(result: RetrievalResult) -> frozenset[int]:
-    """The distinct agent ids whose skills were actually injected (post-budget).
-
-    Ownership is not reachability (R14b): the injected set may span the working
-    agent's own cluster and a sibling's — that span is exactly the boundary-ticket
-    signal (R14c). Only injected skills count; relevance-gated / budget-dropped
-    candidates do not surface a cluster.
-    """
-    injected = set(result.skills)
-    return frozenset(
-        c.agent_id for c in result.candidates if c.skill_id in injected
-    )
-
-
-def candidate_agent_clusters(result: RetrievalResult) -> frozenset[int]:
-    """Every agent cluster present in the scored family pool (injected or not).
-
-    Distinct from :func:`injected_agent_clusters` — this is the whole reachable
-    span, used when reasoning about a family's structure rather than one
-    retrieval's budgeted output.
-    """
-    return frozenset(c.agent_id for c in result.candidates)
