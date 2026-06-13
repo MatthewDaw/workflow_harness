@@ -326,7 +326,12 @@ def extract_anchors_from_diff(hunks: list[DiffHunk]) -> list[Anchor]:
             continue
 
         try:
-            tree = parser.parse(hunk.content)
+            # tree-sitter requires bytes; guard against str-typed file_contents
+            # so the producer contract (dict[str, bytes]) can't silently regress.
+            _content = hunk.content
+            if isinstance(_content, str):
+                _content = _content.encode("utf-8")
+            tree = parser.parse(_content)
         except Exception as exc:  # noqa: BLE001
             _add_anchor(seen, hunk.file, FILE_LEVEL_SYMBOL, "file_fallback")
             logger.warning(

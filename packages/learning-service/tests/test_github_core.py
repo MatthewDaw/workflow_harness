@@ -417,3 +417,343 @@ def test_distill_pr_session_context_appended_to_llm_insight(monkeypatch):
 
     assert "Agent chose pool size=10" in result.body
     assert "Use connection pooling" in result.body
+
+
+# ---------------------------------------------------------------------------
+# 5. Noise-skipping pagination: max_prs counts only NON-noise PRs
+# ---------------------------------------------------------------------------
+
+
+def _make_noise_pr_item(number: int, base_ref: str = "main") -> dict:
+    """A renovate bot PR item (curriculum noise)."""
+    return {
+        "number": number,
+        "title": f"Update dependency foo to v{number}",
+        "body": "",
+        "base": {"ref": base_ref},
+        "merged_at": "2026-06-01T00:00:00Z",
+        "user": {"login": "renovate[bot]"},
+        "labels": [],
+    }
+
+
+def _make_human_pr_item(number: int, base_ref: str = "main") -> dict:
+    """A genuine human engineering PR item (not noise)."""
+    return {
+        "number": number,
+        "title": f"Add feature {number} with proper implementation",
+        "body": "Real engineering work here.",
+        "base": {"ref": base_ref},
+        "merged_at": "2026-06-01T00:00:00Z",
+        "user": {"login": f"human-dev-{number}"},
+        "labels": [],
+    }
+
+
+def test_noise_skipping_pagination_counts_only_human_prs():
+    """max_prs counts only NON-noise PRs; noise PRs are skipped without counting.
+
+    Setup: each page has 2 renovate (noise) PRs and 1 human PR.
+    With max_prs=3 we need 3 human PRs => at most 3 pages needed.
+    Page requests must stay within max_pages=5.
+    """
+    # 5 pages, each: [noise, noise, human] (3 items total per page)
+    pages = []
+    for page_idx in range(5):
+        base = page_idx * 10
+        pages.append([
+            _make_noise_pr_item(base + 1),
+            _make_noise_pr_item(base + 2),
+            _make_human_pr_item(base + 3),
+        ])
+
+    page_call_count = {"n": 0}
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        idx = page_call_count["n"]
+        page_call_count["n"] += 1
+        if idx < len(pages):
+            return pages[idx]
+        return []
+
+    reader = PublicGitHubReader(fetch=fake_fetch)
+    reader.PER_PAGE = 3  # treat 3-item pages as full (triggers next-page fetch)
+
+    prs = reader.list_merged_pull_requests(
+        "acme/repo",
+        default_branch="main",
+        max_prs=3,
+        max_pages=5,
+        skip_noise=True,
+    )
+
+    # We should get exactly 3 human PRs.
+    assert len(prs) == 3, f"Expected 3 human PRs, got {len(prs)}"
+
+    # All returned PRs should be human (not renovate noise).
+    for pr in prs:
+        assert "renovate" not in pr.author_login.lower(), (
+            f"Noise PR leaked into results: {pr!r}"
+        )
+
+    # Page requests must stay within the max_pages guard.
+    assert page_call_count["n"] <= 5, (
+        f"Page requests ({page_call_count['n']}) exceeded max_pages=5"
+    )
+
+
+def test_noise_skipping_respects_max_pages_runaway_guard():
+    """Even if max_prs isn't reached, pagination stops at max_pages."""
+    # All PRs are noise — we can never collect max_prs=10 human PRs.
+    # With max_pages=3, we should stop after 3 page fetches.
+
+    def all_noise_fetch(url: str, headers: dict) -> Any:
+        # Always return a full page of noise PRs.
+        return [_make_noise_pr_item(i) for i in range(100)]
+
+    page_call_count = {"n": 0}
+
+    def counting_fetch(url: str, headers: dict) -> Any:
+        page_call_count["n"] += 1
+        return all_noise_fetch(url, headers)
+
+    reader = PublicGitHubReader(fetch=counting_fetch)
+    reader.PER_PAGE = 100
+
+    prs = reader.list_merged_pull_requests(
+        "acme/noisy-repo",
+        default_branch="main",
+        max_prs=10,
+        max_pages=3,
+        skip_noise=True,
+    )
+
+    # No human PRs should be collected (all noise).
+    assert prs == []
+
+    # Must not have fetched more pages than max_pages.
+    assert page_call_count["n"] <= 3, (
+        f"Fetched {page_call_count['n']} pages, expected <= 3 (max_pages=3)"
+    )
+
+
+def test_skip_noise_false_preserves_original_behaviour():
+    """With skip_noise=False, noise PRs ARE counted toward max_prs."""
+    # Page of 3 renovate PRs followed by human PRs.
+    pages = [
+        [_make_noise_pr_item(i) for i in range(1, 4)],  # 3 noise PRs
+        [_make_human_pr_item(i) for i in range(10, 13)],  # 3 human PRs
+    ]
+
+    page_call_count = {"n": 0}
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        idx = page_call_count["n"]
+        page_call_count["n"] += 1
+        return pages[idx] if idx < len(pages) else []
+
+    reader = PublicGitHubReader(fetch=fake_fetch)
+    reader.PER_PAGE = 3
+
+    prs = reader.list_merged_pull_requests(
+        "acme/repo",
+        default_branch="main",
+        max_prs=3,
+        skip_noise=False,  # old behaviour
+    )
+
+    # With skip_noise=False, renovate PRs fill the max_prs cap.
+    assert len(prs) == 3
+    assert all("renovate" in pr.author_login.lower() for pr in prs)
+    # Only page 1 should have been fetched (cap hit).
+    assert page_call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. fetch_pr_file_contents: blob fetching for changed files
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_pr_file_contents_returns_decoded_content():
+    """fetch_pr_file_contents returns a path->source dict for changed files."""
+    import base64
+
+    diff = (
+        "--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n+x = 1\n"
+        "--- a/src/utils.py\n+++ b/src/utils.py\n@@ -1 +1 @@\n+y = 2\n"
+    )
+    pr = _pr(diff=diff)
+
+    app_source = "def main():\n    pass\n"
+    utils_source = "def helper():\n    return 42\n"
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        if "src/app.py" in url:
+            return {
+                "size": len(app_source),
+                "encoding": "base64",
+                "content": base64.b64encode(app_source.encode()).decode() + "\n",
+            }
+        if "src/utils.py" in url:
+            return {
+                "size": len(utils_source),
+                "encoding": "base64",
+                "content": base64.b64encode(utils_source.encode()).decode() + "\n",
+            }
+        return []
+
+    reader = PublicGitHubReader(fetch=fake_fetch)
+    contents = reader.fetch_pr_file_contents("acme/backend", pr)
+
+    assert "src/app.py" in contents
+    assert "src/utils.py" in contents
+    assert contents["src/app.py"] == app_source
+    assert contents["src/utils.py"] == utils_source
+
+
+def test_fetch_pr_file_contents_respects_file_cap():
+    """fetch_pr_file_contents fetches at most _MAX_FILE_CONTENTS files."""
+    import base64
+
+    # Build a diff with 15 distinct Python files (exceeds the cap of 10).
+    diff_lines = []
+    for i in range(15):
+        diff_lines.append(f"--- a/src/file{i}.py\n+++ b/src/file{i}.py\n@@ -1 +1 @@\n+x = {i}\n")
+    diff = "".join(diff_lines)
+
+    pr = _pr(diff=diff)
+
+    call_count = {"n": 0}
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        call_count["n"] += 1
+        source = f"# file content\nx = {call_count['n']}\n"
+        return {
+            "size": len(source),
+            "encoding": "base64",
+            "content": base64.b64encode(source.encode()).decode(),
+        }
+
+    reader = PublicGitHubReader(fetch=fake_fetch)
+    contents = reader.fetch_pr_file_contents("acme/backend", pr)
+
+    # Must not exceed the file cap.
+    assert len(contents) <= reader._MAX_FILE_CONTENTS, (
+        f"Got {len(contents)} files, expected <= {reader._MAX_FILE_CONTENTS}"
+    )
+    assert call_count["n"] <= reader._MAX_FILE_CONTENTS
+
+
+def test_fetch_pr_file_contents_skips_binary_extensions():
+    """Binary file extensions are skipped without making a fetch call."""
+    diff = (
+        "--- a/assets/logo.png\n+++ b/assets/logo.png\n@@ -1 +1 @@\nBinary\n"
+        "--- a/src/real.py\n+++ b/src/real.py\n@@ -1 +1 @@\n+x = 1\n"
+    )
+    pr = _pr(diff=diff)
+
+    import base64
+
+    call_urls: list[str] = []
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        call_urls.append(url)
+        source = "x = 1\n"
+        return {
+            "size": len(source),
+            "encoding": "base64",
+            "content": base64.b64encode(source.encode()).decode(),
+        }
+
+    reader = PublicGitHubReader(fetch=fake_fetch)
+    contents = reader.fetch_pr_file_contents("acme/backend", pr)
+
+    # PNG must not have been fetched.
+    assert not any("logo.png" in u for u in call_urls), (
+        "Binary file logo.png should have been skipped without a fetch call"
+    )
+    # Python file should be present.
+    assert "src/real.py" in contents
+
+
+def test_fetch_pr_file_contents_empty_diff_returns_empty():
+    """An empty diff produces an empty dict without any fetch calls."""
+    pr = _pr(diff="")
+
+    fetch_called = {"called": False}
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        fetch_called["called"] = True
+        return {}
+
+    reader = PublicGitHubReader(fetch=fake_fetch)
+    contents = reader.fetch_pr_file_contents("acme/backend", pr)
+
+    assert contents == {}
+    assert not fetch_called["called"]
+
+
+# ---------------------------------------------------------------------------
+# 7. Token auth: Authorization header added when token is set
+# ---------------------------------------------------------------------------
+
+
+def test_token_auth_adds_authorization_header():
+    """When a token is set, every request carries Authorization: Bearer <token>."""
+    captured_headers: list[dict] = []
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        captured_headers.append(dict(headers))
+        return []
+
+    reader = PublicGitHubReader(fetch=fake_fetch, token="ghp_testtoken12345")
+    reader.list_merged_pull_requests("acme/backend", default_branch="main")
+
+    assert captured_headers, "Expected at least one fetch call"
+    for hdrs in captured_headers:
+        assert "Authorization" in hdrs, "Authorization header missing from request"
+        assert hdrs["Authorization"] == "Bearer ghp_testtoken12345"
+
+
+def test_no_token_omits_authorization_header():
+    """Without a token, no Authorization header is sent."""
+    import os
+
+    # Make sure GITHUB_TOKEN is not set in the environment for this test.
+    original_env = os.environ.pop("GITHUB_TOKEN", None)
+    try:
+        captured_headers: list[dict] = []
+
+        def fake_fetch(url: str, headers: dict) -> Any:
+            captured_headers.append(dict(headers))
+            return []
+
+        reader = PublicGitHubReader(fetch=fake_fetch)  # no token arg
+        reader.list_merged_pull_requests("acme/backend", default_branch="main")
+
+        assert captured_headers, "Expected at least one fetch call"
+        for hdrs in captured_headers:
+            assert "Authorization" not in hdrs, (
+                "Authorization header should NOT be present when no token is configured"
+            )
+    finally:
+        if original_env is not None:
+            os.environ["GITHUB_TOKEN"] = original_env
+
+
+def test_token_from_env_variable(monkeypatch):
+    """PublicGitHubReader picks up GITHUB_TOKEN from the environment."""
+    monkeypatch.setenv("GITHUB_TOKEN", "env_token_abc123")
+
+    captured_headers: list[dict] = []
+
+    def fake_fetch(url: str, headers: dict) -> Any:
+        captured_headers.append(dict(headers))
+        return []
+
+    reader = PublicGitHubReader(fetch=fake_fetch)  # no explicit token
+    reader.list_merged_pull_requests("acme/backend", default_branch="main")
+
+    assert captured_headers, "Expected at least one fetch call"
+    for hdrs in captured_headers:
+        assert hdrs.get("Authorization") == "Bearer env_token_abc123"

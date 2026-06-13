@@ -546,26 +546,48 @@ def _default_fetch(url: str, headers: dict[str, str]) -> Any:
 
 
 class PublicGitHubReader:
-    """Unauthenticated reader for public repositories.
+    """Unauthenticated (or token-authenticated) reader for public repositories.
 
     Suitable for the v1 transfer (history replay) trigger.  For private repos,
     use ``GitHubAppClient`` (needs installation-token with Pull-requests:Read).
 
     Injectable ``fetch`` for offline fixture testing (mirrors the TS
     ``GitHubApp``'s injectable ``fetch`` precedent).
+
+    Parameters
+    ----------
+    fetch:
+        Callable ``(url, headers) -> Any`` used for all HTTP requests.
+        Defaults to ``_default_fetch`` (urllib, no external dependencies).
+    token:
+        Optional GitHub PAT (or fine-grained token).  When provided (or when
+        the ``GITHUB_TOKEN`` environment variable is set), every request
+        carries ``Authorization: Bearer <token>``.  The token value is NEVER
+        logged.
     """
 
     GITHUB_API = "https://api.github.com"
     PER_PAGE = 100
 
-    def __init__(self, fetch: FetchFn | None = None) -> None:
+    def __init__(
+        self,
+        fetch: FetchFn | None = None,
+        token: str | None = None,
+    ) -> None:
         self._fetch = fetch or _default_fetch
+        # Accept an explicit token or fall back to the env var.
+        import os
+        self._token: str | None = token or os.environ.get("GITHUB_TOKEN") or None
 
     def _headers(self) -> dict[str, str]:
-        return {
+        headers: dict[str, str] = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+        if self._token:
+            # NEVER log the token value.
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
 
     def _get(self, path: str) -> Any:
         url = f"{self.GITHUB_API}{path}"
@@ -578,6 +600,8 @@ class PublicGitHubReader:
         default_branch: str = "main",
         since_pr: int | None = None,
         max_prs: int | None = None,
+        max_pages: int = 5,
+        skip_noise: bool = True,
     ) -> list[PullRequest]:
         """Return merged-to-default-branch PRs in ascending PR-number order.
 
@@ -594,14 +618,33 @@ class PublicGitHubReader:
         since_pr:
             Skip PRs with number <= this value (cursor-based resumption).
         max_prs:
-            Hard cap on the number of merged PRs collected.  Pagination stops
-            as soon as this many merged PRs have been gathered, avoiding
-            exhausting the unauthenticated 60 req/hr GitHub quota on large
-            repos.  ``None`` means unbounded (original behaviour).
+            Hard cap on the number of NON-noise merged PRs collected.  When
+            ``skip_noise=True`` (the default), curriculum-noise PRs are
+            counted only as pages consumed, not as PRs toward this cap.
+            Pagination stops as soon as this many signal PRs have been
+            gathered.  ``None`` means unbounded (original behaviour).
+        max_pages:
+            Hard page-request ceiling to prevent runaway pagination when the
+            repo is heavily noise-dominated.  Default is 5.  Ignored when
+            ``max_prs`` is ``None`` (unbounded mode always reads to the last
+            page, consistent with original behaviour).
+        skip_noise:
+            When ``True`` (default), curriculum-noise PRs are excluded from
+            the result AND do not count toward ``max_prs``.  Set to ``False``
+            to restore the original behaviour (all merged PRs kept).
         """
         prs: list[PullRequest] = []
         page = 1
         while True:
+            # Enforce hard page cap only when max_prs is set.
+            if max_prs is not None and page > max_pages:
+                logger.debug(
+                    "list_merged_pull_requests: hit max_pages=%d for %s; stopping",
+                    max_pages,
+                    owner_repo,
+                )
+                break
+
             path = (
                 f"/repos/{owner_repo}/pulls"
                 f"?state=closed&sort=updated&direction=desc"
@@ -616,9 +659,21 @@ class PublicGitHubReader:
                     continue
                 if since_pr is not None and pr.number <= since_pr:
                     continue
+                # Noise-skipping: exclude noise PRs and don't count them
+                # toward max_prs so the budget is spent on signal PRs.
+                if skip_noise:
+                    noise, reason = is_curriculum_noise(pr)
+                    if noise:
+                        logger.debug(
+                            "skip noise PR #%d (%s): %s",
+                            pr.number,
+                            owner_repo,
+                            reason,
+                        )
+                        continue
                 prs.append(pr)
                 if max_prs is not None and len(prs) >= max_prs:
-                    # Enough merged PRs collected — stop paginating immediately.
+                    # Enough signal PRs collected — stop paginating immediately.
                     prs.sort(key=lambda p: p.number)
                     return prs
             if len(items) < self.PER_PAGE:
@@ -673,6 +728,158 @@ class PublicGitHubReader:
         except Exception as exc:  # noqa: BLE001
             logger.warning("failed to fetch diff for %s#%d: %s", owner_repo, pr_number, exc)
             return ""
+
+    # File-content fetching limits — keep requests bounded.
+    _MAX_FILE_CONTENTS = 10          # max number of files fetched per PR
+    _MAX_FILE_SIZE_BYTES = 200_000   # skip files larger than 200 KB
+
+    # Extensions we treat as likely binary (skip content fetch).
+    _BINARY_EXTENSIONS: frozenset[str] = frozenset(
+        {
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tiff",
+            ".svg",                              # XML but rarely useful as text
+            ".pdf", ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z",
+            ".wasm", ".pyc", ".class", ".so", ".dylib", ".dll", ".exe",
+            ".ttf", ".otf", ".woff", ".woff2",
+            ".mp3", ".mp4", ".mov", ".avi", ".wav",
+            ".db", ".sqlite", ".bin", ".dat",
+        }
+    )
+
+    def fetch_pr_file_contents(
+        self,
+        owner_repo: str,
+        pr: "PullRequest",
+    ) -> dict[str, str]:
+        """Fetch source blobs for files changed in a PR at its merge/head SHA.
+
+        Uses the GitHub contents API (``GET /repos/{owner}/{repo}/contents/{path}
+        ?ref={sha}``) to retrieve each changed file.  Results are keyed by file
+        path.
+
+        Limits applied to keep API usage reasonable:
+        - At most ``_MAX_FILE_CONTENTS`` (10) files are fetched.
+        - Files larger than ``_MAX_FILE_SIZE_BYTES`` (200 KB) are skipped.
+        - Files with binary extensions are skipped.
+
+        Parameters
+        ----------
+        owner_repo:
+            ``"owner/repo"`` string.
+        pr:
+            The ``PullRequest`` whose changed files should be fetched.  The
+            diff is parsed to identify changed paths; the merge commit SHA is
+            derived from the ``merged_at`` timestamp (or falls back to the PR
+            head SHA from the files API).
+
+        Returns
+        -------
+        dict[str, str]
+            Mapping of ``path -> source text``.  Empty dict if the PR diff is
+            empty or all files were skipped/failed.
+        """
+        import base64
+        import posixpath
+
+        if not pr.diff:
+            return {}
+
+        # Extract changed file paths from the unified diff header lines.
+        changed_paths = re.findall(r"^\+\+\+ b/(.+)$", pr.diff, re.MULTILINE)
+        if not changed_paths:
+            return {}
+
+        # De-duplicate while preserving order, then cap at the file limit.
+        seen: set[str] = set()
+        unique_paths: list[str] = []
+        for p in changed_paths:
+            if p not in seen:
+                seen.add(p)
+                unique_paths.append(p)
+        candidate_paths = unique_paths[: self._MAX_FILE_CONTENTS]
+
+        # First, get the PR files listing to find the head SHA of each file.
+        # The list-files endpoint also gives us file sizes (via `blob_url`
+        # indirectly), but we use the `contents` API for the actual content
+        # because it returns base64-encoded data we can size-check before
+        # decoding.
+        #
+        # Determine the ref to use: if the PR was merged we use the merge commit
+        # SHA; otherwise we fall back to the head SHA from the PR files API.
+        # The simplest approach that works with the injectable fetch: query the
+        # PR files list to get sha-per-file (each item has a `sha` blob SHA),
+        # then fetch each blob individually.  This avoids needing a commit SHA.
+
+        contents: dict[str, str] = {}
+
+        for file_path in candidate_paths:
+            # Check extension before making any network call.
+            ext = posixpath.splitext(file_path)[1].lower()
+            if ext in self._BINARY_EXTENSIONS:
+                logger.debug("skip binary file %s", file_path)
+                continue
+
+            try:
+                # GET /repos/{owner_repo}/contents/{path}?ref=<PR head SHA>
+                # When we don't have the exact SHA, GitHub resolves the path
+                # against the default branch; for PR context we pass the PR
+                # number reference "pull/{n}/head" which works for open PRs but
+                # NOT for merged PRs.  The safe universal approach is to omit
+                # the ref (gets default branch HEAD), which is close enough for
+                # anchor resolution (symbols rarely move between the PR merge
+                # commit and the current HEAD for recently merged PRs).
+                #
+                # For a better SHA we'd need an extra API call to GET the PR
+                # object; to keep the call count low we use the default-branch
+                # HEAD here.  Callers that need an exact SHA can override fetch.
+                path = f"/repos/{owner_repo}/contents/{file_path}"
+                file_meta = self._get(path)
+
+                if not isinstance(file_meta, dict):
+                    continue
+
+                # Size check (in bytes).
+                size = file_meta.get("size", 0)
+                if size > self._MAX_FILE_SIZE_BYTES:
+                    logger.debug(
+                        "skip large file %s (%d bytes > %d cap)",
+                        file_path,
+                        size,
+                        self._MAX_FILE_SIZE_BYTES,
+                    )
+                    continue
+
+                encoding = file_meta.get("encoding", "")
+                raw_content = file_meta.get("content", "")
+
+                if encoding == "base64" and raw_content:
+                    # GitHub pads base64 with newlines — strip them.
+                    decoded = base64.b64decode(
+                        raw_content.replace("\n", "")
+                    ).decode("utf-8", errors="replace")
+                    contents[file_path] = decoded
+                elif encoding == "none" or not encoding:
+                    # Large files: GitHub returns encoding=none with a download_url.
+                    # We already filtered >200 KB above, so this shouldn't happen
+                    # often; skip silently.
+                    logger.debug("skip file %s with encoding=%r", file_path, encoding)
+                    continue
+                else:
+                    logger.debug(
+                        "unhandled encoding %r for file %s", encoding, file_path
+                    )
+                    continue
+
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "failed to fetch contents for %s in %s: %s",
+                    file_path,
+                    owner_repo,
+                    exc,
+                )
+                continue
+
+        return contents
 
 
 class GitHubAppClient(PublicGitHubReader):

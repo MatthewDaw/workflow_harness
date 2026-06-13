@@ -74,6 +74,7 @@ class IngestConfig:
     verified_k: float = 2.0
     nli_mode: str = "replay"
     judge_mode: str = "replay"
+    default_branch: str = "main"  # default branch for the repo (e.g. 'preview' for makeplane/plane)
     # Extension point: boto3 DynamoDB resource injected at runtime; None → dry-run.
     dynamo: object = field(default=None, repr=False)
     # Pre-seeded telemetry accumulator (for testing or warm-start with spot-check data).
@@ -249,11 +250,12 @@ def run_ingest(config: IngestConfig) -> int:
         )
 
         from learning_service.merge_handler import replay_merge_log
+        default_branch = getattr(config, "default_branch", "main")
         results = replay_merge_log(
             pull_requests=pr_log,
             org=config.org,
             store=store,
-            default_branch="main",
+            default_branch=default_branch,
             mode=config.mode,
             classifier=classifier,
             credibility_store=credibility_store,
