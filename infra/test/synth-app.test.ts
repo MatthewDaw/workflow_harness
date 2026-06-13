@@ -51,7 +51,13 @@ describe('synth app (bin/infra.ts)', () => {
     expect(combinedTemplates).not.toMatch(/forge-sessions/);
   });
 
-  test('still synthesizes the Auth, Api, Site, and Vectors stacks', () => {
-    expect(stackIds.sort()).toEqual(['ApiStack', 'AuthStack', 'SiteStack', 'VectorsStack']);
+  test('still synthesizes the Auth, Api, Site, Vectors, and Learning stacks', () => {
+    expect(stackIds.sort()).toEqual([
+      'ApiStack',
+      'AuthStack',
+      'LearningStack',
+      'SiteStack',
+      'VectorsStack',
+    ]);
   });
 });

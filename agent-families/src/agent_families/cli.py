@@ -66,11 +66,13 @@ from agent_families.lifecycle import (
     revive_insight,
     revive_skill,
     skills_created_by_reverted_batches,
+    stamp_insight_provenance,
 )
 from agent_families.pipeline import PipelineError, add_idea
 from agent_families.rendering import Renderer, RenderingError
 from agent_families.store import (
     DEFAULT_DB_FILENAME,
+    INSIGHT_PROVENANCES,
     STATUSES,
     Store,
     StoreError,
@@ -93,8 +95,15 @@ SUBCOMMANDS: dict[str, str] = {
 
 COMPILED_DIRNAME = "compiled"
 
-# The four DESIGN §3 pipeline families, each seeded with one generic specialist
-# agent (R19). Names are stable identifiers consumed by later phases.
+# The four DESIGN §3 pipeline STAGES (plan-010 R6: stages, not a routing
+# taxonomy). Under the R3 reform the runtime is a fixed plan→assign→work→verify
+# pipeline that differs by tools/permissions/contract/trust, never by knowledge —
+# so these names are *stage roles*, not personas selected by a family router.
+# The rows are still materialized as families+one generic agent each for schema
+# continuity and reversibility (§4: demote, never drop), but nothing consumes
+# them as a router input — the router's `route` entry point (router.py) has zero
+# runtime callers (plan-009 R14).
+# Names are stable identifiers consumed by later phases.
 FAMILY_SEEDS: tuple[tuple[str, str], ...] = (
     ("planner", "Turn a request + Q&A into a fleshed-out, ticketed feature list."),
     ("worker", "Take a ticket plus retrieved context and code it."),
@@ -137,13 +146,27 @@ dim = 768
 # PROVENANCE: KTD — CPUExecutionProvider pinned so ONNX float output is reproducible
 # enough for record/replay fixture stability across machines.
 device = "cpu"
+# OPTIONAL Matryoshka truncation dim (R7): when set, every vector is truncated to
+# this many leading dims and L2-renormalized, and the *effective* (truncated) dim is
+# what is pinned. Left commented = full 768-dim used (Phase-0 behavior). Re-pinning
+# is a deliberate re-embed migration. PROVENANCE: §13 Matryoshka. TUNING METRIC:
+# retrieval/clustering quality vs index size at the truncated dim.
+# matryoshka_dim = 256
 
 [merge]
-# Cosine prefilter for the merge-review judge call: candidates at or above this
-# similarity are JUDGED (never silently auto-merged).
-# PROVENANCE: SkillRouter (arXiv 2603.22455) — "cosine>0.92 merge".
-# TUNING METRIC: duplicate-pair precision/recall on ~50 hand-labeled pairs (§13/§17).
+# DEMOTED (R11): the shipped cosine-0.92 *verdict* was a negation-blindness bug — a
+# negation sits at cosine ~0.97, CLOSER than a paraphrase at ~0.94, so the old path
+# silently merged contradictions. The R3 gauntlet (add_idea_r3) no longer treats any
+# cosine as a verdict; NLI renders the duplicate-vs-contradiction call. This key is
+# retained (read only by the legacy author-at-ingest add_idea until its callers
+# migrate). PROVENANCE: SkillRouter (arXiv 2603.22455) "cosine>0.92 merge", now
+# superseded by the NLI verdict (DESIGN §5 Op.2, R11/R12).
 cosine_threshold = 0.92
+# R11 candidate FILTER floor (never a verdict): key-collision candidates at or above
+# this cosine are *classified* by NLI. The R3 add_idea_r3 path reads this.
+# PROVENANCE: design note §2b "key-collision candidates at cosine ~0.80".
+# TUNING METRIC: candidate recall vs NLI-call volume on the hand-labeled pair set.
+candidate_floor = 0.80
 
 [retrieval]
 # Approximate-nearest-neighbor breadth handed to the placement judge.
@@ -171,11 +194,13 @@ max_retries = 3
 bare = false
 
 [lifecycle]
-# Active-set cap per skill. Phase 0 promotion is unconditional (the cap-tournament
-# admission is a marked Phase-3 seam); the value is carried now so the seam reads it.
-# PROVENANCE: §17 "active cap ~50"; Skill Shadowing (2605.24050) — selection collapses
-# as libraries grow (21% drop at 202 skills).
-# TUNING METRIC: routing selection accuracy vs active library size.
+# DEMOTED (R20/D-2): the fixed-cap tournament at promotion is removed. Survival
+# pressure — which insights stay active under cost(G) — is governed by the DESIGN
+# §6a objective in the slow derive pass (plan 009), which defines no per-promotion
+# move; ``_cap_tournament_seam`` is now a documented no-op. This key is retained
+# (reversibility) but no longer gates promotion.
+# PROVENANCE: §17 "active cap ~50" — superseded by the §6a objective.
+# TUNING METRIC: (historical) routing selection accuracy vs active library size.
 active_cap = 50
 
 [store]
@@ -183,6 +208,99 @@ active_cap = 50
 # BEGIN IMMEDIATE writers block up to this long rather than failing immediately.
 # PROVENANCE: default backstop. TUNING METRIC: lifecycle-op contention under load.
 busy_timeout_ms = 5000
+
+[nli]
+# R9/R12 local NLI seam: the 3-class cross-encoder that renders the
+# duplicate-vs-contradiction VERDICT (cosine is only the candidate filter). Local,
+# CPU, deterministic, no quota — so the high-volume classification stays off the
+# subscription and replays byte-identically from fixtures.
+# A model swap is a deliberate migration (the head's label order is asserted at load
+# and the request hash includes the model id, so fixtures are not portable).
+# PROVENANCE: §13 three-vector stack / design note §2c — cross-encoder/nli-deberta-v3-base.
+model = "cross-encoder/nli-deberta-v3-base"
+# At or above this softmax-max confidence the local NLI verdict stands; below it the
+# LLM judge resolve_edge prompt is the fallback (NLI primary, judge fallback).
+# PROVENANCE: design note §2c provisional. TUNING METRIC: NLI-vs-judge agreement and
+# fallback rate on the hand-labeled contradiction/paraphrase pair set.
+confidence_threshold = 0.65
+
+[graph]
+# The similarity-graph + partitioner parameters for the R3 derive pass (plan 009,
+# DESIGN §6). The KNN graph is recomputed from sqlite-vec each derive pass (never
+# materialized); surviving mutual-kNN edges are re-weighted by `edge_weight` over the
+# full clustering vectors, and the partitioners (Leiden sweep + Infomap) only PROPOSE
+# candidates — the §6a objective ([objective]) selects the whole partition.
+# Mutual-kNN neighborhood size. PROVENANCE: DESIGN §6 (mutual-kNN k≈15 + Tanimoto).
+# TUNING METRIC: partition stability / modularity on the seeded insight corpus.
+knn_k = 15
+# Edge re-weighting for the surviving reciprocal pairs. "tanimoto" is the only
+# implemented weight: T(a,b)=a·b/(‖a‖²+‖b‖²−a·b) (CosTaL). PROVENANCE: DESIGN §6 /
+# CosTaL. TUNING METRIC: cluster cohesion vs bridge-edge leakage.
+edge_weight = "tanimoto"
+# Leiden CPM resolution sweep: the Leiden proposer runs once per resolution and every
+# candidate partition is handed to the §6a scorer, which selects the whole partition
+# minimizing cost(G). PROVENANCE: DESIGN §6 (resolution sweep). TUNING METRIC: A/B
+# candidate-win rate across resolutions vs Infomap.
+leiden_resolution_sweep = [0.5, 1.0, 2.0]
+# Fixed seed pinning the native partitioner backends (graspologic takes random_seed,
+# Infomap takes seed) so offline membership is byte-stable; the pure-Python fallback
+# is exact and ignores it. PROVENANCE: KTD offline determinism. TUNING METRIC:
+# membership byte-stability across runs (must be exact).
+infomap_seed = 1234
+
+[objective]
+# The §6a organization-objective constants (plan 009, DESIGN §6a — "nail before any
+# code; everything in §4–§6 defers to it"). cost(G) = L(traces|G) (map-equation
+# routing + locate bits) + L(G) (active-insight count + per-module codebook overhead).
+# Per-module codebook overhead in BITS — the one underspecified §6a number. PROVENANCE:
+# §6a v1 provisional (no canonical paper): the MDL description cost of declaring one
+# module's codebook. 4.0 bits ≈ naming a module among ~16 candidates — small enough not
+# to over-merge a genuine 2-community graph, large enough that the N-singleton
+# partition's N codebooks dominate; it is load-bearing (zeroing it lets the
+# all-singletons extreme win — tests/test_objective.py). Mirrors
+# objective.DEFAULT_MODULE_OVERHEAD_BITS. TUNING METRIC: derive-pass partition stability
+# vs held-out silhouette; re-pin when co-retrieval flow replaces the similarity proxy.
+module_overhead_bits = 4.0
+
+[greenfield]
+# Plan 007 greenfield-mode tunables: the founder simulator's degradation severity,
+# the assumption gate, the world-rotation fraction, and the induction/seed policy.
+# This section is OPTIONAL — a config without it loads with these same defaults
+# (config.py:_GREENFIELD_DEFAULTS) so brownfield-only setups predating Plan 007
+# keep working. Every default here is Phase-0-provisional (no paper): calibrate
+# against the pilot greenfield episode before the rotation leaves 0.0 (KTD6).
+#
+# Fraction of non-core registry refs the founder is fully ignorant of (state
+# `dropped`). PROVENANCE: provisional. TUNING METRIC: elicitation recovery-rate
+# signal-to-noise across benchmark runs (KTD3).
+drop_rate = 0.2
+# Fraction degraded to a vague cached blur (state `blurred`, JTBD-level prose).
+# PROVENANCE: provisional. TUNING METRIC: blur-leak rate vs recoverable signal (KTD3).
+blur_rate = 0.3
+# "Core-loop" size: the top-N JTBD-linked FEATs the stratification guard protects
+# (≥1 stays intact; guard-protected items are excluded from recovery denominators).
+# PROVENANCE: provisional. TUNING METRIC: guard false-protection rate (KTD3).
+core_loop_n = 5
+# Share of scheduled episodes drawn as greenfield once Phase D lands. Held at 0.0
+# until a measured pilot episode (the economics gate, KTD6) — never flip blind.
+# PROVENANCE: KTD6 (0.0 until pilot). TUNING METRIC: greenfield cost-per-episode.
+rotation_fraction = 0.0
+# Assumption-gate k: top-k open high-risk ASSUMEs must be confirmed before
+# increment 1. Auto-scaled at runtime to min(gate_k, floor(question_budget/2))
+# (KTD7) so confirmations can never consume the whole budget.
+# PROVENANCE: KTD7. TUNING METRIC: elicitation starvation at annealed budgets.
+gate_k = 2
+# Grace window (episodes) a seeded/researched insight cannot displace or be
+# displaced before facing the normal fitness tournament (KTD9 probation).
+# PROVENANCE: KTD9. TUNING METRIC: seeded-insight survival vs ossification.
+grace_window = 3
+# Active-occupancy cap for the Define-chain seed batch; the remainder register
+# dormant. PROVENANCE: KTD9 (~15). TUNING METRIC: seeded vs mined fitness (U10).
+seed_occupancy_cap = 15
+# Fixed seed pinning the benchmark founder model (KTD8 — the seed alone does not
+# pin the model; a registry/prompt-set change is an instrument event).
+# PROVENANCE: KTD8 pinned artifact. TUNING METRIC: gauge-R&R repeatability.
+benchmark_seed = 1234
 """
 
 # Failure types mapped to `af <command>: <message>` + exit 1. Anything else is a
@@ -239,7 +357,14 @@ def _write_stdout_bytes(content: bytes) -> None:
 
 
 def _seed_taxonomy(store: Store, active_cap: int) -> int:
-    """Seed the four families + generic agents if absent; returns families created."""
+    """Seed the four pipeline-STAGE rows if absent; returns the number created.
+
+    plan-010 R6: this is stage setup, not routing-taxonomy setup. The four stage
+    roles (planner/worker/verifier/context-retriever) are materialized as
+    families+one generic agent each for schema continuity and reversibility, but
+    they are never read as a router input — the R3 runtime routes by stage, not by
+    a per-request family/agent selection (router.py's `route` has no runtime caller).
+    """
     created = 0
     with store.transaction():
         for name, charter in FAMILY_SEEDS:
@@ -281,6 +406,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         ensure_pins(store, config.embedding)
     if created:
         names = ", ".join(name for name, _ in FAMILY_SEEDS)
+        # The rows are families for schema continuity (reversibility); the line
+        # keeps the historical "taxonomy already seeded" wording on the idempotent
+        # path (pinned by plan-001 U9's e2e). The reframe to STAGES is in
+        # `_seed_taxonomy`'s contract, not the CLI chatter (plan-010 R6).
         print(f"seeded {created} families ({names}), one generic agent each")
     else:
         print("taxonomy already seeded; left untouched")
@@ -344,6 +473,13 @@ def _cmd_add_idea(args: argparse.Namespace) -> int:
                 f"  provenance: episode={args.episode} scenario={args.scenario}"
                 f" ticket={args.ticket}"
             )
+        # Insight provenance (007 KTD5): default `manual` for a hand-entered idea;
+        # `researched`/`seeded` enter through `af induct` / the seed loader. Stamped
+        # only on a fresh registration, for the same reason as the evidence refs.
+        if result.code == "registered":
+            stamp_insight_provenance(store, result.insight_id, args.provenance)
+            if args.provenance != "manual":
+                print(f"  insight provenance: {args.provenance}")
     return 0
 
 
@@ -913,6 +1049,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--ticket", help="provenance: evidence TKT id (optional, 003 R27)"
+    )
+    p.add_argument(
+        "--provenance",
+        choices=INSIGHT_PROVENANCES,
+        default="manual",
+        help="insight provenance (007 KTD5; default: manual)",
     )
 
     p = sub("promote", _cmd_promote)

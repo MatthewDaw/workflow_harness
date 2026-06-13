@@ -4,6 +4,7 @@ import { AuthStack } from '../lib/auth-stack';
 import { ApiStack } from '../lib/api-stack';
 import { SiteStack } from '../lib/site-stack';
 import { VectorsStack } from '../lib/vectors-stack';
+import { LearningStack } from '../lib/learning-stack';
 
 const app = new cdk.App();
 
@@ -30,10 +31,21 @@ new VectorsStack(app, 'VectorsStack', { env });
 
 // U5 — backend API: DynamoDB single-table + HTTP API + WebSocket API. The HTTP
 // API's JWT authorizer trusts the AuthStack user pool, so ApiStack references it.
-new ApiStack(app, 'ApiStack', {
+const apiStack = new ApiStack(app, 'ApiStack', {
   env,
   userPool: authStack.userPool,
   userPoolClient: authStack.userPoolClient,
+});
+
+// R3 (MAT-152) — Verified Learning infra: container Lambda (NLI model bundled +
+// hash-pinned), EventBridge rate(1 day) → necessity-scan handler, Secrets
+// Manager for GitHub App PEM + webhook secret, IAM least-privilege scoped to
+// the new learning partitions (SCOPE#org#*, REPO#*, VERIFY#*, SKILL#*,
+// IDEAGOLD#*). The ingest Lambda (user-triggered v1) and the daily necessity
+// scan Lambda share the same container image and execution role.
+new LearningStack(app, 'LearningStack', {
+  env,
+  table: apiStack.table,
 });
 
 // U29 — static site: private S3 bucket + CloudFront (OAC) serving the Vite build

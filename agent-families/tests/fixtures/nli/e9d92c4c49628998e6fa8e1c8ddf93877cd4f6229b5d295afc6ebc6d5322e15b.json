@@ -1,0 +1,17 @@
+{
+  "envelope": {
+    "confidence": 0.9906115858614851,
+    "label": "contradiction",
+    "logits": [
+      4.1,
+      -1.8,
+      -0.9
+    ]
+  },
+  "request": {
+    "hypothesis": "The deploy script proceeds when the lockfile is stale.",
+    "model": "cross-encoder/nli-deberta-v3-base",
+    "premise": "The deploy script aborts when the lockfile is stale."
+  },
+  "request_hash": "e9d92c4c49628998e6fa8e1c8ddf93877cd4f6229b5d295afc6ebc6d5322e15b"
+}

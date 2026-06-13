@@ -78,6 +78,83 @@ PORT_TABLE: MappingProxyType = MappingProxyType(
     }
 )
 
+# Per-episode container/port namespacing (plan-005 U5, R15): the Phase 1/2 seam
+# this module reserved (see the module docstring's "stays the Phase 3 seam"
+# note) activates here so N episodes can hold disjoint stacks against one
+# snapshot. Each episode gets its own compose PROJECT name (Docker isolates
+# container/network names by project) and a private block of HOST ports carved
+# from a static base so two episodes can never collide by construction — the
+# §15 "per-episode environment isolation" invariant, enforced arithmetically
+# rather than discovered at bind time. The container-internal ports stay
+# upstream-fixed (linkding 9090, clone preview 4173); only the host side is
+# namespaced. Base/stride are caller-overridable per the established tunable
+# precedent; the carried defaults record provenance.
+EPISODE_PORT_BASE = 20000  # PROVENANCE: well above linkding/clone defaults and
+# the OS ephemeral range floor; a static allocation, not a discovered port.
+EPISODE_PORT_STRIDE = 100  # host-port block per episode; >> services per stack,
+# so episode E's block never overlaps episode E+1's.
+EPISODE_COMPOSE_PREFIX = "af-ep"
+
+
+@dataclass(frozen=True)
+class EpisodeNamespace:
+    """One episode's isolated stack identity: compose project + host ports.
+
+    ``compose_project`` is passed to ``docker compose -p`` so the episode's
+    containers, networks, and volumes live in their own namespace; ``ports``
+    maps each service to its private HOST port. Two namespaces minted for
+    different episode ids carry disjoint project names AND disjoint port sets
+    (R15 — isolation by construction, not by probe).
+    """
+
+    episode_id: int
+    compose_project: str
+    ports: Mapping[str, int]
+
+
+def episode_namespace(
+    episode_id: int,
+    *,
+    services: Sequence[str] = tuple(PORT_TABLE),
+    port_base: int = EPISODE_PORT_BASE,
+    port_stride: int = EPISODE_PORT_STRIDE,
+) -> EpisodeNamespace:
+    """Mint the disjoint stack namespace for ``episode_id`` (R15).
+
+    Episode ids are 1-based; episode E owns the host-port block
+    ``[port_base + (E-1)*port_stride, … + len(services))``. The stride must
+    exceed the service count so neighbouring episodes' blocks never touch, and
+    the top of the highest block must stay a valid TCP port. Service→port
+    assignment is by sorted service name so it is deterministic regardless of
+    the caller's iteration order.
+    """
+    if episode_id < 1:
+        raise TargetEnvError(
+            f"episode_id must be a positive 1-based id, got {episode_id}"
+        )
+    ordered = sorted(set(services))
+    if not ordered:
+        raise TargetEnvError("episode_namespace needs at least one service")
+    if len(ordered) > port_stride:
+        raise TargetEnvError(
+            f"port_stride {port_stride} is too small for {len(ordered)} services"
+            " — neighbouring episode blocks would overlap (R15 disjointness)"
+        )
+    block = port_base + (episode_id - 1) * port_stride
+    top = block + len(ordered) - 1
+    if block < 1 or top > 65535:
+        raise TargetEnvError(
+            f"episode {episode_id} host-port block [{block}, {top}] falls outside"
+            " the valid TCP port range — lower port_base/port_stride or cap the"
+            " concurrent-episode count"
+        )
+    ports = {svc: block + i for i, svc in enumerate(ordered)}
+    return EpisodeNamespace(
+        episode_id=episode_id,
+        compose_project=f"{EPISODE_COMPOSE_PREFIX}{episode_id}",
+        ports=MappingProxyType(ports),
+    )
+
 # Compose service name and the harness's superuser/token identities. These are
 # the committed local-harness contract (they appear verbatim in the compose
 # file), not secrets and not tunables.
@@ -199,6 +276,11 @@ class TargetEnvConfig:
     superuser: str = SUPERUSER_NAME
     host: str = "127.0.0.1"
     port: int = PORT_TABLE["linkding"]
+    # Per-episode isolation (R15): when set, every ``docker compose`` call is
+    # scoped with ``-p <project>`` so parallel episodes never share container
+    # state. ``None`` keeps the single static stack (Phase 2 default) — the
+    # default-stack argv is unchanged, so the pin/seed/mint contract is intact.
+    compose_project: str | None = None
 
     def __post_init__(self) -> None:
         if self.readiness_timeout_s <= 0:
@@ -620,9 +702,12 @@ class LinkdingTarget:
     # --- plumbing --------------------------------------------------------------
 
     def _compose(self, *args: str) -> subprocess.CompletedProcess:
-        return self._run(
-            ["docker", "compose", "-f", str(self.config.compose_file), *args]
-        )
+        base = ["docker", "compose", "-f", str(self.config.compose_file)]
+        if self.config.compose_project:
+            # Scope the stack to the episode's namespace (R15). Only added when
+            # a project is set, so the static single-stack argv is unchanged.
+            base += ["-p", self.config.compose_project]
+        return self._run([*base, *args])
 
     @staticmethod
     def _auth(token: str) -> dict[str, str]:

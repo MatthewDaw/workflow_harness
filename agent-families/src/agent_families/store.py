@@ -32,6 +32,16 @@ episode refs ↔ verdict); and the lineage seam columns (agents.routing_decision
 lineage_status, skills.parent_skill_id / split_snapshot_id) the self-reorganization
 lands on. Backfill-safe over Phase 0/1/2 databases.
 
+Plan 008 U1 (R3 ingest gauntlet) adds the R3 schema spine via migration v6:
+the deferred-supersede + altitude-audit columns on insights (negative_scope,
+valid_at, invalid_at, rationale) with the provenance enum widened to include
+`consolidated`; the module hierarchy `level` on skills with `name` relaxed to
+nullable (lazy naming); the `corroborate` fitness-event kind (a snapshot-keyed
+duplicate vote); and the typed `insight_edges` graph (corroborates / refines /
+contradicts / generalizes_from). Three rename-copy-drop rebuilds carry the CHECK
+widenings; nothing is dropped (demote, never drop — reversibility). Backfill-safe
+over a Phase 0–007 database.
+
 Transaction discipline: the connection runs in manual-commit mode; writers compose
 inside :meth:`Store.transaction` (``BEGIN IMMEDIATE`` + busy-timeout backstop, R4)
 so U5 can commit one atomic registration. Multi-statement mutators refuse to run
@@ -128,10 +138,13 @@ QA_CHECKER_VERDICTS = ("pass", "fail")
 # runs are implicitly `training`.
 RUN_MODES = ("training", "trial", "benchmark")
 
-# Fitness-event kinds (004 R1/R19): retrieval = insight rendered into a prompt;
-# win = the session's ticket reaches done AND is unimplicated; loss = causal
-# blame only. The append-only log is the substrate; insight counters are derived.
-FITNESS_EVENT_KINDS = ("retrieval", "win", "loss")
+# Fitness-event kinds (004 R1/R19; 008 R4): retrieval = insight rendered into a
+# prompt; win = the session's ticket reaches done AND is unimplicated; loss =
+# causal blame only; corroborate = a snapshot-keyed append-only vote that a
+# distinct insight restated this rule (008 R4/R12 — NOT a mutable insights
+# counter, so it serves the §11 cross-target-recurrence signal). The append-only
+# log is the substrate; insight counters are derived.
+FITNESS_EVENT_KINDS = ("retrieval", "win", "loss", "corroborate")
 
 # Run-memory workflow lifecycle (004 R1/R5/R6): a workflow row lives within its
 # episode and dies at settlement (status flips live → dead).
@@ -139,6 +152,47 @@ WORKFLOW_STATUSES = ("live", "dead")
 
 # Batch-validation verdicts (004 R1/R15-R17).
 BATCH_VERDICTS = ("promote", "revert")
+
+# --- Plan 007 (greenfield mode) state vocabularies ---------------------------
+
+# DEC registry rows follow the FEAT identity discipline (007 KTD1): confirmed on
+# runtime, deprecated never deleted.
+DEC_STATUSES = ("confirmed", "deprecated")
+
+# Assumption-ledger rows (007 KTD2): the planner's typed assumptions, promoted
+# from plan-document strings to queryable rows keyed by run_id.
+ASSUME_STATUSES = ("open", "confirmed", "invalidated")
+ASSUME_RISKS = ("low", "med", "high")
+
+# The episode `world` axis (007 KTD6) — orthogonal to `mode`. `greenfield_pure`
+# is reserved (unused in this plan); default is `brownfield`.
+WORLDS = ("brownfield", "greenfield_backtranslated", "greenfield_pure")
+
+# Insight provenance (007 KTD5; 008 R2): manual hand-entry, reflector-mined,
+# researched via the induction door, hand-seeded, or `consolidated` (the R3
+# derive pass's batch writer — plan 009; the value is enum-legal at v6 so the
+# widened CHECK ships with the ingest gauntlet). Backfilled from batch labels.
+INSIGHT_PROVENANCES = ("manual", "reflector", "researched", "seeded", "consolidated")
+
+# Batch validation-class (007 KTD5): the tag validate.py's substrate routing
+# reads — code → frozen benchmark, elicitation → both, general → both.
+VALIDATION_CLASSES = ("code", "elicitation", "general")
+
+# Founder-model knowledge rows (007 KTD3): each registry ref the founder either
+# knows plainly, knows vaguely (cached blur), or has never thought about.
+FOUNDER_REF_KINDS = ("feat", "dec")
+FOUNDER_KNOWLEDGE_STATES = ("intact", "blurred", "dropped")
+
+# --- Plan 008 (R3 ingest gauntlet) state vocabularies ------------------------
+
+# Typed semantic edges between insights (008 R3): the gauntlet writes
+# corroborates / refines / contradicts at ingest, generalizes_from at
+# consolidation (plan 009). `similarity` is enum-legal for forward-compat but is
+# NEVER written at v1 — the KNN graph is recomputed from sqlite-vec each derive
+# pass, not materialized (DESIGN §6). Append-only for the four semantic kinds.
+INSIGHT_EDGE_KINDS = (
+    "similarity", "corroborates", "refines", "contradicts", "generalizes_from",
+)
 
 _STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in STATUSES)
 _RUN_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_STATUSES)
@@ -157,6 +211,15 @@ _RUN_MODE_SQL_ENUM = ", ".join(f"'{s}'" for s in RUN_MODES)
 _FITNESS_KIND_SQL_ENUM = ", ".join(f"'{s}'" for s in FITNESS_EVENT_KINDS)
 _WORKFLOW_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in WORKFLOW_STATUSES)
 _BATCH_VERDICT_SQL_ENUM = ", ".join(f"'{s}'" for s in BATCH_VERDICTS)
+_DEC_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in DEC_STATUSES)
+_ASSUME_STATUS_SQL_ENUM = ", ".join(f"'{s}'" for s in ASSUME_STATUSES)
+_ASSUME_RISK_SQL_ENUM = ", ".join(f"'{s}'" for s in ASSUME_RISKS)
+_WORLD_SQL_ENUM = ", ".join(f"'{s}'" for s in WORLDS)
+_INSIGHT_PROVENANCE_SQL_ENUM = ", ".join(f"'{s}'" for s in INSIGHT_PROVENANCES)
+_VALIDATION_CLASS_SQL_ENUM = ", ".join(f"'{s}'" for s in VALIDATION_CLASSES)
+_FOUNDER_REF_KIND_SQL_ENUM = ", ".join(f"'{s}'" for s in FOUNDER_REF_KINDS)
+_FOUNDER_STATE_SQL_ENUM = ", ".join(f"'{s}'" for s in FOUNDER_KNOWLEDGE_STATES)
+_INSIGHT_EDGE_KIND_SQL_ENUM = ", ".join(f"'{k}'" for k in INSIGHT_EDGE_KINDS)
 
 
 class StoreError(Exception):
@@ -735,11 +798,342 @@ ALTER TABLE skills ADD COLUMN parent_skill_id INTEGER REFERENCES skills(id);
 ALTER TABLE skills ADD COLUMN split_snapshot_id INTEGER REFERENCES snapshots(id);
 """
 
+# Plan 007 U1 (greenfield mode): the schema spine the founder simulator, decision
+# registry, assumption ledger, typed proposals, provenance, and world axis hang
+# off. Backfill-safe over a Phase 0-3b database — every change is a brand-new
+# table, an ADD COLUMN (nullable or defaulted), or the documented trace_req
+# rename-copy-drop rebuild (precedent: trace_span v2 at _SCHEMA_V2). trace_req is
+# referenced by trace_tkt_covers and trace_ac (minted in v1); `legacy_alter_table`
+# is toggled ON across the rename so the child FKs keep pointing at `trace_req`
+# (the rebuilt table) rather than being rewritten to the dropped temp table.
+_SCHEMA_V5 = f"""
+-- Decision registry (007 KTD1): a sibling of trace_feat extracted in the same
+-- pre-research pass. FEAT identity discipline as the template — digest stamp,
+-- append-only id, never deleted (deprecate instead). `category` keys into the
+-- probe-question taxonomy; `evidence_ref` is the runtime confirmation.
+CREATE TABLE trace_dec (
+    id           TEXT PRIMARY KEY CHECK (id LIKE 'DEC-%'),
+    target       TEXT,
+    digest       TEXT,
+    category     TEXT NOT NULL DEFAULT '',
+    description  TEXT NOT NULL DEFAULT '',
+    evidence_ref TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'confirmed'
+                 CHECK (status IN ({_DEC_STATUS_SQL_ENUM}))
+);
+
+CREATE TRIGGER trg_trace_dec_id_immutable
+BEFORE UPDATE OF id ON trace_dec
+BEGIN
+    SELECT RAISE(ABORT,
+        'DEC ids are append-only: never renumbered or reused (007 KTD1)');
+END;
+
+CREATE TRIGGER trg_trace_dec_no_delete
+BEFORE DELETE ON trace_dec
+BEGIN
+    SELECT RAISE(ABORT,
+        'DEC rows are never deleted: flip status to deprecated (007 KTD1)');
+END;
+
+-- DEC mentions (007 KTD1): a sibling of trace_msg_mentions with its own FK, so
+-- the per-kind FK integrity guarantee is preserved and existing consumers churn
+-- zero. An unminted DEC is unmentionable mechanically (the FK rejects it).
+CREATE TABLE trace_msg_dec_mentions (
+    msg_id TEXT NOT NULL REFERENCES trace_msg(id),
+    dec_id TEXT NOT NULL REFERENCES trace_dec(id),
+    PRIMARY KEY (msg_id, dec_id)
+);
+
+-- Assumption ledger (007 KTD2): the planner's typed assumptions as queryable
+-- rows, keyed by run_id (Phase-B toy-spec runs have no episode; episode is
+-- derivable through runs.episode_id when present). `check_plan_assumptions` is
+-- subsumed onto these rows in U2; the plan-document records become a view.
+CREATE TABLE trace_assume (
+    id              TEXT PRIMARY KEY CHECK (id LIKE 'ASSUME-%'),
+    run_id          INTEGER REFERENCES runs(id),
+    claim           TEXT NOT NULL,
+    basis           TEXT NOT NULL DEFAULT '',
+    risk_if_wrong   TEXT NOT NULL DEFAULT 'med'
+                    CHECK (risk_if_wrong IN ({_ASSUME_RISK_SQL_ENUM})),
+    cheapest_test   TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ({_ASSUME_STATUS_SQL_ENUM})),
+    confirmed_by_msg TEXT REFERENCES trace_msg(id)
+);
+CREATE INDEX idx_trace_assume_run ON trace_assume(run_id);
+
+-- Typed PROPOSAL artifact (007 KTD4/R10): the planner contract gains proposals;
+-- they are legal but unexercised until Phase D. options_json holds the option
+-- list; linked_assume_id optionally ties a proposal to the assumption it resolves.
+CREATE TABLE trace_proposal (
+    id               TEXT PRIMARY KEY CHECK (id LIKE 'PROP-%'),
+    run_id           INTEGER REFERENCES runs(id),
+    topic            TEXT NOT NULL DEFAULT '',
+    options_json     TEXT NOT NULL DEFAULT '[]',
+    recommended      TEXT NOT NULL DEFAULT '',
+    linked_assume_id TEXT REFERENCES trace_assume(id)
+);
+CREATE INDEX idx_trace_proposal_run ON trace_proposal(run_id);
+
+-- Stored adjudication verdicts (007 KTD4): the grader-side founder session maps
+-- each proposal/question to registry refs as an explicit, stored micro-judgment
+-- (oracle-check shape). Settlement and Stage A look these up; nothing
+-- text-matches at settlement time. Low-confidence rows route to the review queue.
+CREATE TABLE trace_proposal_adjudication (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposal_or_msg_id TEXT NOT NULL,
+    ref_kind          TEXT NOT NULL CHECK (ref_kind IN ({_FOUNDER_REF_KIND_SQL_ENUM})),
+    ref_id            TEXT NOT NULL,
+    verdict           TEXT NOT NULL,
+    confidence        REAL,
+    checker_meta      TEXT NOT NULL DEFAULT '{{}}',
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX idx_proposal_adjudication_ref
+    ON trace_proposal_adjudication(ref_kind, ref_id);
+
+-- Founder blur cache (007 KTD3): blur prose is cached TARGET-side, not
+-- episode-side — identical (registry digest, seed, params, prompt) yields
+-- byte-identical blur forever, so prose variance stays out of benchmark and
+-- validation runs. lint_verdict records the entailment-lint outcome.
+CREATE TABLE founder_blur_cache (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    target             TEXT NOT NULL,
+    ref_kind           TEXT NOT NULL CHECK (ref_kind IN ({_FOUNDER_REF_KIND_SQL_ENUM})),
+    ref_id             TEXT NOT NULL,
+    entry_digest       TEXT NOT NULL,
+    seed               INTEGER NOT NULL,
+    params_hash        TEXT NOT NULL,
+    prompt_set_version TEXT NOT NULL DEFAULT '',
+    blur_text          TEXT NOT NULL DEFAULT '',
+    lint_verdict       TEXT NOT NULL DEFAULT '',
+    UNIQUE (target, ref_kind, ref_id, entry_digest, seed, params_hash,
+            prompt_set_version)
+);
+
+-- Founder model (007 KTD3): one per greenfield episode. goal_statement ("what I
+-- want this product to do for me") derives from the JTBD-level registry summary,
+-- is always intact, and now has a home. params_hash pins the degradation params.
+CREATE TABLE founder_models (
+    episode_id     INTEGER PRIMARY KEY REFERENCES episodes(id),
+    target         TEXT NOT NULL,
+    seed           INTEGER NOT NULL,
+    params_hash    TEXT NOT NULL,
+    goal_statement TEXT NOT NULL DEFAULT ''
+);
+
+-- Founder knowledge (007 KTD3): the seeded degradation log — every registry ref
+-- the founder is intact / blurred / dropped on. blur_id points at the cached
+-- prose when state = blurred. Knowledge degrades; truthfulness never does.
+CREATE TABLE founder_knowledge (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL REFERENCES episodes(id),
+    ref_kind   TEXT NOT NULL CHECK (ref_kind IN ({_FOUNDER_REF_KIND_SQL_ENUM})),
+    ref_id     TEXT NOT NULL,
+    state      TEXT NOT NULL CHECK (state IN ({_FOUNDER_STATE_SQL_ENUM})),
+    blur_id    INTEGER REFERENCES founder_blur_cache(id)
+);
+CREATE INDEX idx_founder_knowledge_episode ON founder_knowledge(episode_id);
+
+-- The episode `world` axis (007 KTD6) — NOT mode. Runs/spans inherit world
+-- through episode_id (no new columns on them). Pre-007 episodes backfill
+-- 'brownfield' via the default.
+ALTER TABLE episodes ADD COLUMN world TEXT NOT NULL DEFAULT 'brownfield'
+    CHECK (world IN ({_WORLD_SQL_ENUM}));
+
+-- Insight provenance (007 KTD5): backfill predicate is explicit — batches
+-- labelled 'reflect-ep%' are the reflector's (stage_b convention); everything
+-- else is manual. researched/seeded are set going forward by af induct / the
+-- seed loader.
+ALTER TABLE insights ADD COLUMN provenance TEXT NOT NULL DEFAULT 'manual'
+    CHECK (provenance IN ({_INSIGHT_PROVENANCE_SQL_ENUM}));
+UPDATE insights SET provenance = 'reflector'
+    WHERE batch_id IN (SELECT id FROM batches WHERE label LIKE 'reflect-ep%');
+
+-- Batch validation-class (007 KTD5): the substrate-routing tag. Pre-007 batches
+-- backfill 'general' (both substrates).
+ALTER TABLE batches ADD COLUMN validation_class TEXT NOT NULL DEFAULT 'general'
+    CHECK (validation_class IN ({_VALIDATION_CLASS_SQL_ENUM}));
+
+-- Elicitation metrics block (007 KTD4/R5): settlement's world-keyed metrics ride
+-- alongside the existing report_json.
+ALTER TABLE settlement_reports
+    ADD COLUMN elicitation_metrics_json TEXT NOT NULL DEFAULT '{{}}';
+
+-- trace_req rebuild (007 KTD2): relax source_msg_id NOT NULL, add source_assume_id,
+-- and enforce exactly-one source at insert time (DB CHECK — earlier, simpler
+-- failure than a lint; the U3 lint catches it at the planner-output level first).
+-- legacy_alter_table keeps trace_tkt_covers/trace_ac FKs bound to `trace_req`.
+PRAGMA legacy_alter_table=ON;
+ALTER TABLE trace_req RENAME TO trace_req_phase4;
+CREATE TABLE trace_req (
+    id               TEXT PRIMARY KEY CHECK (id LIKE 'REQ-%'),
+    source_msg_id    TEXT REFERENCES trace_msg(id),
+    source_assume_id TEXT REFERENCES trace_assume(id),
+    CHECK ((source_msg_id IS NOT NULL) + (source_assume_id IS NOT NULL) = 1)
+);
+INSERT INTO trace_req (id, source_msg_id)
+    SELECT id, source_msg_id FROM trace_req_phase4;
+DROP TABLE trace_req_phase4;
+PRAGMA legacy_alter_table=OFF;
+"""
+
+# Plan 008 U1 (R3 ingest gauntlet): the R3 schema spine. Backfill-safe over a
+# Phase 0–007 (v1..v5) database — every change is a brand-new table, an ADD
+# COLUMN (nullable), or a documented rename-copy-drop rebuild (precedent:
+# trace_span at v2, trace_req at v5). NO column or table is dropped (R6: demote,
+# never drop — migration reversibility). Three rebuilds, all referenced tables,
+# so `legacy_alter_table=ON` keeps every child FK bound to the rebuilt table name
+# (without it the modern RENAME rewrites child FKs to the dropped temp table —
+# the v5 lesson). The migrate loop already holds `foreign_keys=OFF` for the whole
+# pass; `legacy_alter_table` (unlike `foreign_keys`) is NOT a no-op inside a
+# transaction, so it is toggled here in the DDL and always restored to OFF.
+#
+#   - insights rebuild: widen the `provenance` CHECK to include `consolidated`
+#     (R2) and add the four nullable R1 columns (negative_scope, valid_at,
+#     invalid_at, rationale). Self-FKs (duplicate_of/supersedes) and every inbound
+#     child FK survive; supersedes/duplicate_of are DEMOTED, not dropped (R6).
+#   - skills rebuild: add `level` (R1) and relax `name` to nullable for lazy
+#     naming (KTD — derived modules exist unnamed; combined into the one rebuild
+#     skills already takes for `level`).
+#   - fitness_events rebuild: widen the `kind` CHECK to include `corroborate`
+#     (R4). The append-only triggers carry FIXED names; a rename keeps them
+#     attached to the renamed table, so the same-named triggers cannot be
+#     recreated on the new table until the old ones are gone (else
+#     'trigger already exists'), and the renamed _old table must shed them before
+#     it is dropped. Dropping both triggers FIRST makes that ordering explicit
+#     (KTD: the sharpest migration risk — see test_fitness_trigger_dropped_*).
+#   - insight_edges: the new typed semantic graph (R3), append-only at v1.
+_SCHEMA_V6 = f"""
+PRAGMA legacy_alter_table=ON;
+
+-- insights rebuild (R1 columns + R2 widened provenance CHECK).
+ALTER TABLE insights RENAME TO insights_v5;
+CREATE TABLE insights (
+    id               INTEGER PRIMARY KEY,
+    precondition     TEXT NOT NULL,
+    action           TEXT NOT NULL,
+    expected_outcome TEXT NOT NULL,
+    scope_tag        TEXT,
+    content_hash     TEXT NOT NULL UNIQUE,
+    status           TEXT NOT NULL DEFAULT 'quarantined'
+                     CHECK (status IN ({_STATUS_SQL_ENUM})),
+    batch_id         INTEGER REFERENCES batches(id),
+    source_run_id    TEXT,
+    embedding_model  TEXT,
+    embedding_dim    INTEGER,
+    duplicate_of     INTEGER REFERENCES insights(id),
+    supersedes       INTEGER REFERENCES insights(id),
+    retrievals       INTEGER NOT NULL DEFAULT 0,
+    wins             INTEGER NOT NULL DEFAULT 0,
+    losses           INTEGER NOT NULL DEFAULT 0,
+    causal_blames    INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL,
+    episode_id           INTEGER REFERENCES episodes(id),
+    evidence_scenario_id TEXT REFERENCES trace_scen(id),
+    evidence_ticket_id   TEXT REFERENCES trace_tkt(id),
+    provenance       TEXT NOT NULL DEFAULT 'manual'
+                     CHECK (provenance IN ({_INSIGHT_PROVENANCE_SQL_ENUM})),
+    negative_scope   TEXT,
+    valid_at         TEXT,
+    invalid_at       TEXT,
+    rationale        TEXT
+);
+INSERT INTO insights (
+    id, precondition, action, expected_outcome, scope_tag, content_hash, status,
+    batch_id, source_run_id, embedding_model, embedding_dim, duplicate_of,
+    supersedes, retrievals, wins, losses, causal_blames, created_at, episode_id,
+    evidence_scenario_id, evidence_ticket_id, provenance)
+SELECT
+    id, precondition, action, expected_outcome, scope_tag, content_hash, status,
+    batch_id, source_run_id, embedding_model, embedding_dim, duplicate_of,
+    supersedes, retrievals, wins, losses, causal_blames, created_at, episode_id,
+    evidence_scenario_id, evidence_ticket_id, provenance
+FROM insights_v5;
+DROP TABLE insights_v5;
+
+-- skills rebuild (R1 `level` + KTD lazy naming: `name` relaxed to nullable).
+ALTER TABLE skills RENAME TO skills_v5;
+CREATE TABLE skills (
+    id                INTEGER PRIMARY KEY,
+    agent_id          INTEGER NOT NULL REFERENCES agents(id),
+    name              TEXT,
+    description       TEXT NOT NULL DEFAULT '',
+    created_batch_id  INTEGER REFERENCES batches(id),
+    token_count       INTEGER NOT NULL DEFAULT 0,
+    parent_skill_id   INTEGER REFERENCES skills(id),
+    split_snapshot_id INTEGER REFERENCES snapshots(id),
+    level             INTEGER,
+    UNIQUE (agent_id, name)
+);
+INSERT INTO skills (
+    id, agent_id, name, description, created_batch_id, token_count,
+    parent_skill_id, split_snapshot_id)
+SELECT
+    id, agent_id, name, description, created_batch_id, token_count,
+    parent_skill_id, split_snapshot_id
+FROM skills_v5;
+DROP TABLE skills_v5;
+
+-- fitness_events rebuild (R4 widened `kind` CHECK). Drop the append-only
+-- triggers FIRST (fixed names; the sharpest migration risk, KTD), then rebuild
+-- and recreate them on the new table.
+DROP TRIGGER trg_fitness_events_no_update;
+DROP TRIGGER trg_fitness_events_no_delete;
+ALTER TABLE fitness_events RENAME TO fitness_events_old;
+CREATE TABLE fitness_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    insight_id  INTEGER NOT NULL REFERENCES insights(id),
+    episode_id  INTEGER REFERENCES episodes(id),
+    mode        TEXT NOT NULL CHECK (mode IN ({_RUN_MODE_SQL_ENUM})),
+    kind        TEXT NOT NULL CHECK (kind IN ({_FITNESS_KIND_SQL_ENUM})),
+    snapshot_id INTEGER NOT NULL,
+    created_at  TEXT NOT NULL
+);
+INSERT INTO fitness_events
+    (id, insight_id, episode_id, mode, kind, snapshot_id, created_at)
+    SELECT id, insight_id, episode_id, mode, kind, snapshot_id, created_at
+    FROM fitness_events_old;
+DROP TABLE fitness_events_old;
+CREATE INDEX idx_fitness_events_insight ON fitness_events(insight_id, snapshot_id);
+CREATE INDEX idx_fitness_events_episode ON fitness_events(episode_id);
+CREATE TRIGGER trg_fitness_events_no_update
+BEFORE UPDATE ON fitness_events
+BEGIN
+    SELECT RAISE(ABORT,
+        'fitness_events is append-only: state is reconstructed, never edited (004 R1)');
+END;
+CREATE TRIGGER trg_fitness_events_no_delete
+BEFORE DELETE ON fitness_events
+BEGIN
+    SELECT RAISE(ABORT,
+        'fitness_events is append-only: events are never deleted (004 R1)');
+END;
+
+PRAGMA legacy_alter_table=OFF;
+
+-- insight_edges (R3): the typed semantic graph. Self-edges between insights;
+-- src/kind and dst/kind indexes serve the lifecycle's open-edge lookups.
+CREATE TABLE insight_edges (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    src        INTEGER NOT NULL REFERENCES insights(id),
+    dst        INTEGER NOT NULL REFERENCES insights(id),
+    weight     REAL,
+    kind       TEXT NOT NULL CHECK (kind IN ({_INSIGHT_EDGE_KIND_SQL_ENUM})),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_insight_edges_src ON insight_edges(src, kind);
+CREATE INDEX idx_insight_edges_dst ON insight_edges(dst, kind);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _SCHEMA_V1),
     (2, _SCHEMA_V2),
     (3, _SCHEMA_V3),
     (4, _SCHEMA_V4),
+    (5, _SCHEMA_V5),
+    (6, _SCHEMA_V6),
 )
 
 
@@ -784,19 +1178,31 @@ class Store:
             "SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations"
         ).fetchone()
         current = row["v"]
-        for version, ddl in MIGRATIONS:
-            if version <= current:
-                continue
-            # executescript would implicitly COMMIT a transaction opened via
-            # transaction(), so the DDL + version stamp travel as one script
-            # with the transaction inside it.
-            self.conn.executescript(
-                "BEGIN IMMEDIATE;\n"
-                f"{ddl}\n"
-                "INSERT INTO schema_migrations (version, applied_at)"
-                f" VALUES ({int(version)}, '{_utcnow()}');\n"
-                "COMMIT;"
-            )
+        # Foreign keys OFF for the duration of the migration loop, per SQLite's
+        # documented table-rebuild procedure (lang_altertable.html §7). A
+        # rename-copy-drop rebuild of a *referenced* table (trace_req in v5, with
+        # trace_tkt_covers/trace_ac children) otherwise has its child FK
+        # references rewritten to the dropped temp table when foreign_keys is ON
+        # — even with legacy_alter_table. The pragma is a no-op inside a
+        # transaction, so it must be toggled here, between the per-migration
+        # executescripts (the connection is autocommit). Always restored to ON.
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            for version, ddl in MIGRATIONS:
+                if version <= current:
+                    continue
+                # executescript would implicitly COMMIT a transaction opened via
+                # transaction(), so the DDL + version stamp travel as one script
+                # with the transaction inside it.
+                self.conn.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    f"{ddl}\n"
+                    "INSERT INTO schema_migrations (version, applied_at)"
+                    f" VALUES ({int(version)}, '{_utcnow()}');\n"
+                    "COMMIT;"
+                )
+        finally:
+            self.conn.execute("PRAGMA foreign_keys = ON")
 
     # --- transactions --------------------------------------------------------
 
@@ -931,6 +1337,12 @@ class Store:
         active_cap: int = 50,
         parent_id: int | None = None,
     ) -> int:
+        # plan-010 R7: `base_prompt_specialty` is WRITE-ONLY at runtime. Personas
+        # are removed under R3 (§3) — nothing assembles a specialty section into a
+        # prompt, and no SELECT reads this column on any runtime path. The column
+        # and any written value survive for reversibility (§4: demote, never drop);
+        # the only reader (`reflector/agent_split.check_base_prompt_residue`) was
+        # deleted in plan-009. test_demotion_finish guards the no-read invariant.
         cur = self.conn.execute(
             "INSERT INTO agents (family_id, parent_id, name, description,"
             " base_prompt_specialty, permissions, active_cap)"
@@ -973,17 +1385,83 @@ class Store:
         episode_id: int | None = None,
         evidence_scenario_id: str | None = None,
         evidence_ticket_id: str | None = None,
+        provenance: str = "manual",
+        negative_scope: str | None = None,
+        valid_at: str | None = None,
+        invalid_at: str | None = None,
+        rationale: str | None = None,
     ) -> int:
+        """Register a quarantined insight (008 R1/R10/R13).
+
+        The R3 ingest gauntlet authors the generalized atom (precondition/action/
+        expected_outcome/rationale), its ``negative_scope`` ("when NOT to apply",
+        R10 altitude audit), and ``provenance``. ``valid_at``/``invalid_at`` are
+        the append-only temporal-validity stamps (§5); ``invalid_at`` is left
+        NULL at ingest and stamped only at promotion (deferred-supersede, R12/R16
+        — see :meth:`set_invalid_at`). The provenance/edge-kind enums are enforced
+        by the column CHECKs (raw writes are backstopped the same way).
+        """
         cur = self.conn.execute(
             "INSERT INTO insights (precondition, action, expected_outcome, scope_tag,"
             " content_hash, status, batch_id, source_run_id, embedding_model,"
             " embedding_dim, duplicate_of, supersedes, episode_id,"
-            " evidence_scenario_id, evidence_ticket_id, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " evidence_scenario_id, evidence_ticket_id, provenance, negative_scope,"
+            " valid_at, invalid_at, rationale, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (precondition, action, expected_outcome, scope_tag, content_hash, status,
              batch_id, source_run_id, embedding_model, embedding_dim, duplicate_of,
              supersedes, episode_id, evidence_scenario_id, evidence_ticket_id,
+             provenance, negative_scope, valid_at, invalid_at, rationale,
              _utcnow()),
+        )
+        return cur.lastrowid
+
+    def set_invalid_at(
+        self, insight_id: int, value: str, snapshot_id: int
+    ) -> None:
+        """Stamp an insight's ``invalid_at`` (append-only temporal validity, §5).
+
+        The deferred-supersede write (008 R12/R16): a contradiction is detected at
+        ingest (recorded as a ``contradicts`` edge) but the loser is invalidated
+        only at promotion, under the minted snapshot, alongside
+        ``set_status(loser, "retired", snapshot_id)``. ``snapshot_id`` pins the
+        caller to a promotion-queue context; this writer only sets the column.
+        Must run inside a transaction (the queue block, R7).
+        """
+        self._require_transaction("set_invalid_at")
+        row = self.conn.execute(
+            "SELECT id FROM insights WHERE id = ?", (insight_id,)
+        ).fetchone()
+        if row is None:
+            raise StoreError(f"insight {insight_id} does not exist")
+        self.conn.execute(
+            "UPDATE insights SET invalid_at = ? WHERE id = ?", (value, insight_id)
+        )
+
+    def add_insight_edge(
+        self,
+        src: int,
+        dst: int,
+        kind: str,
+        weight: float | None = None,
+    ) -> int:
+        """Write a typed semantic edge between two insights (008 R3).
+
+        Append-only for the four semantic kinds (corroborates/refines/contradicts/
+        generalizes_from); ``similarity`` is enum-legal for forward-compat but is
+        never written at v1 (the KNN graph is recomputed each derive pass — plan
+        009). The src/dst insight FKs and the ``kind`` CHECK are enforced by the
+        table.
+        """
+        if kind not in INSIGHT_EDGE_KINDS:
+            raise StoreError(
+                f"unknown insight edge kind '{kind}'"
+                f" (expected one of {INSIGHT_EDGE_KINDS})"
+            )
+        cur = self.conn.execute(
+            "INSERT INTO insight_edges (src, dst, weight, kind, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (src, dst, weight, kind, _utcnow()),
         )
         return cur.lastrowid
 
@@ -998,6 +1476,11 @@ class Store:
         ).fetchone()
 
     # --- skills and membership --------------------------------------------------
+    #
+    # DEMOTED at 008 U1 (R13): the R3 ingest gauntlet authors NO group — grouping
+    # is deferred to plan 009's derive pass. ``create_skill``/``append_member``
+    # are kept (not dropped) as the batch writer that derive pass will call; no
+    # ingest path invokes them after the add_idea rewrite (008 U6).
 
     def create_skill(
         self,

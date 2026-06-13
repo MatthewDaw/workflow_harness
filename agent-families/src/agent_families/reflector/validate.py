@@ -80,6 +80,24 @@ Test-scenario / invariant (plan-004 U7) -> test (in ``tests/test_validate.py``):
   ``test_instrument_suspect_propagates_to_scores_since_last_clean``
 - the full decision table (replay × benchmark × bootstrap) has a 1:1 test:
   ``test_decision_table``
+
+Required acceptance test / invariant (plan-007 U10) -> test (in
+``tests/test_provenance_telemetry.py``):
+
+- ``test_elicitation_batch_quarantined_pre_substrate`` — before U13b's substrate
+  exists, an ``elicitation``-class batch stays quarantined with a TYPED hold
+  reason (default-deny; never silently validated on the wrong instrument).
+  [enforced by :func:`route_substrates` + the :func:`validate_batch` guard]
+
+Required acceptance test / invariant (plan-008 U8, R19) -> test (in
+``tests/test_stage_b.py``):
+
+- ``test_validation_record_names_retired_incumbent`` — promoting a reflector batch
+  that retires a contradicted incumbent (the R3 deferred-supersede) surfaces
+  ``LifecycleResult.retired_incumbent_ids`` on the :class:`BatchValidationOutcome`
+  AND names them in the persisted ``batch_validations.detail`` — the retirement is
+  named, never silent. [enforced by :func:`validate_batch` forwarding the NLI seam
+  to :func:`lifecycle.promote_batch` and threading its result through]
 """
 
 from __future__ import annotations
@@ -91,7 +109,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 from agent_families import lifecycle
-from agent_families.store import Store
+from agent_families.store import VALIDATION_CLASSES, Store
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +127,122 @@ class CosignRequiredError(ValidateError):
     Raised BEFORE any active-set mutation — the batch stays quarantined, so a
     missing co-sign defaults to deny (nothing is written).
     """
+
+
+class SubstrateHeldError(ValidateError):
+    """An elicitation-class batch was validated before its greenfield substrate
+    exists (plan-007 U13b).
+
+    Raised BEFORE any active-set mutation — the batch stays quarantined
+    (default-deny), never validated on the brownfield instrument alone (007 KTD5).
+    """
+
+
+# --- validation-class substrate routing (007 U10, KTD5) -------------------------
+#
+# One shared library serves every family by retrieval, so a greenfield-optimal
+# insight ("always propose options") can silently degrade brownfield (where the
+# explorer answers open questions perfectly), and per-batch rollback attribution
+# is gone by the time SPC curves show it. The fix is dual-substrate validation
+# keyed off ``batches.validation_class`` (007 U1):
+#
+#   code        -> the existing brownfield frozen benchmark only
+#   elicitation -> BOTH the greenfield episode benchmark (U13b) AND the brownfield
+#                  frozen benchmark, non-negative on EACH
+#   general     -> BOTH, non-negative on each (when both exist)
+#
+# The greenfield substrate does not exist until plan-007 U13b. Until then an
+# elicitation batch CANNOT be validated honestly — brownfield-alone is the WRONG
+# instrument for an insight whose training gradient is greenfield-specific — so it
+# is HELD in quarantine (default-deny) with a typed reason rather than silently
+# passed on the wrong instrument. ``code``/``general`` keep a valid brownfield
+# instrument and proceed; ``general`` additionally routes through greenfield once
+# U13b wires it. U13b flips ``greenfield_available`` true and the hold lifts.
+
+BROWNFIELD_SUBSTRATE = "brownfield_frozen_benchmark"
+GREENFIELD_SUBSTRATE = "greenfield_episode_benchmark"
+
+# The substrates each class must clear, non-negative on EACH (007 KTD5).
+_REQUIRED_SUBSTRATES: dict[str, tuple[str, ...]] = {
+    "code": (BROWNFIELD_SUBSTRATE,),
+    "elicitation": (GREENFIELD_SUBSTRATE, BROWNFIELD_SUBSTRATE),
+    "general": (GREENFIELD_SUBSTRATE, BROWNFIELD_SUBSTRATE),
+}
+
+# Classes for which the greenfield substrate is LOAD-BEARING: validating them on
+# the brownfield instrument alone would be the wrong instrument, so they are held
+# until U13b. ``code``/``general`` have a valid brownfield instrument and are not
+# held (``general`` opportunistically gains greenfield once it exists).
+_GREENFIELD_REQUIRED = frozenset({"elicitation"})
+
+
+@dataclass(frozen=True)
+class SubstrateRouting:
+    """How a batch's ``validation_class`` routes to substrates (007 KTD5)."""
+
+    validation_class: str
+    substrates: tuple[str, ...]  # the available substrates to validate against
+    held: bool  # True -> stays quarantined (a required substrate is missing)
+    hold_reason: str  # the typed hold reason when held, else ""
+
+
+def route_substrates(
+    validation_class: str, *, greenfield_available: bool
+) -> SubstrateRouting:
+    """Resolve a ``validation_class`` to the substrates it must clear (007 KTD5).
+
+    When the greenfield substrate is unavailable and the class load-bears on it
+    (``elicitation``), the routing is HELD: the batch stays quarantined rather
+    than validate on the brownfield instrument alone. ``code``/``general`` resolve
+    to the substrates that currently exist (``general`` gains greenfield at U13b).
+    """
+    if validation_class not in VALIDATION_CLASSES:
+        raise ValidateError(
+            f"unknown validation_class '{validation_class}'"
+            f" (expected one of {VALIDATION_CLASSES})"
+        )
+    if not greenfield_available and validation_class in _GREENFIELD_REQUIRED:
+        return SubstrateRouting(
+            validation_class=validation_class,
+            substrates=(),
+            held=True,
+            hold_reason=(
+                f"validation_class '{validation_class}' requires the greenfield"
+                " episode benchmark substrate (plan-007 U13b), which does not"
+                " exist yet; the batch stays quarantined (default-deny) rather"
+                " than validate on the brownfield instrument alone (KTD5)"
+            ),
+        )
+    substrates = tuple(
+        s
+        for s in _REQUIRED_SUBSTRATES[validation_class]
+        if s != GREENFIELD_SUBSTRATE or greenfield_available
+    )
+    return SubstrateRouting(
+        validation_class=validation_class,
+        substrates=substrates,
+        held=False,
+        hold_reason="",
+    )
+
+
+def _batch_validation_class(store: Store, batch_label: str) -> str:
+    row = store.conn.execute(
+        "SELECT validation_class FROM batches WHERE label = ?", (batch_label,)
+    ).fetchone()
+    if row is None:
+        raise ValidateError(f"unknown batch '{batch_label}'")
+    return row["validation_class"]
+
+
+def route_batch_substrates(
+    store: Store, batch_label: str, *, greenfield_available: bool
+) -> SubstrateRouting:
+    """Substrate routing for a stored batch, read off its ``validation_class``."""
+    return route_substrates(
+        _batch_validation_class(store, batch_label),
+        greenfield_available=greenfield_available,
+    )
 
 
 # --- tunables (caller-supplied, carried defaults; PROVENANCE per DESIGN §17) ----
@@ -387,6 +521,11 @@ class BatchValidationOutcome:
     cosigned_by: str | None
     promoted: bool
     active_insight_ids: tuple[int, ...]
+    # R3 deferred-supersede (008 R16/U8): incumbents this promotion retired (a
+    # validated challenger beat a contradicted incumbent), and contradiction-flag
+    # rows a revert closed. Surfaced so the batch_validations record NAMES them.
+    retired_incumbent_ids: tuple[int, ...] = ()
+    closed_contradiction_ids: tuple[int, ...] = ()
 
 
 CosignFn = Callable[[ValidationDecision], "str | None"]
@@ -432,12 +571,26 @@ def validate_batch(
     params: ValidateParams = ValidateParams(),
     trial_episode_id: int | None = None,
     benchmark_episode_id: int | None = None,
+    greenfield_available: bool = False,
+    nli_model: str | None = None,
+    nli_mode: str | None = None,
+    nli_fixtures_dir: object | None = None,
+    nli_confidence_threshold: float = (
+        lifecycle.SUPERSEDE_RECHECK_CONFIDENCE_DEFAULT
+    ),
+    _nli_encoder: object | None = None,
 ) -> BatchValidationOutcome:
     """Run the validation gate for one quarantined batch and enact the verdict.
 
     ``snapshot_id`` is the active snapshot the batch validates against (the
     benchmark baseline's snapshot); the promote/revert mints a NEW snapshot, and
     the ``batch_validations`` record is keyed by the validating snapshot (R17).
+
+    Substrate routing runs first (007 KTD5): an ``elicitation``-class batch whose
+    greenfield substrate does not exist yet (``greenfield_available=False`` until
+    plan-007 U13b) raises :class:`SubstrateHeldError` BEFORE any mutation — the
+    batch stays quarantined (default-deny), never validated on the brownfield
+    instrument alone. ``code``/``general`` proceed on the existing instrument.
 
     During bootstrap a **promote** requires a human co-sign (``cosign_fn`` must
     return a signer id) — a missing or refused co-sign raises
@@ -446,6 +599,15 @@ def validate_batch(
     batch out needs no human action); a provided signer is still recorded.
     """
     batch_id = _batch_id(store, batch_label)
+
+    routing = route_batch_substrates(
+        store, batch_label, greenfield_available=greenfield_available
+    )
+    if routing.held:
+        # Default-deny: nothing is written, so the batch stays quarantined until
+        # its substrate exists (007 KTD5 / U13b).
+        raise SubstrateHeldError(routing.hold_reason)
+
     bootstrap = is_bootstrap(benchmark.n_points, n_replay_pairs, params)
     decision = decide_validation(
         benchmark, bootstrap=bootstrap, params=params, replay=replay
@@ -465,9 +627,29 @@ def validate_batch(
         )
 
     if decision.promotes:
-        result = lifecycle.promote_batch(store, batch_label)
+        # Forward the NLI seam so the promotion-time deferred-supersede re-check
+        # (008 R16) replays offline; a contradiction-free batch never loads the
+        # model, so contradiction-free callers can omit these entirely.
+        result = lifecycle.promote_batch(
+            store,
+            batch_label,
+            nli_model=nli_model,
+            nli_mode=nli_mode,
+            nli_fixtures_dir=nli_fixtures_dir,
+            nli_confidence_threshold=nli_confidence_threshold,
+            _nli_encoder=_nli_encoder,
+        )
     else:
         result = lifecycle.revert_batch(store, batch_label)
+
+    retired = result.retired_incumbent_ids
+    closed = result.closed_contradiction_ids
+    detail = decision.reason
+    if retired:
+        # Name the deferred-supersede retirements in the persisted record (008 U8).
+        detail += f" | deferred-supersede retired incumbents: {list(retired)}"
+    if closed:
+        detail += f" | closed contradictions: {list(closed)}"
 
     validation_id = store.insert_batch_validation(
         batch_id,
@@ -478,7 +660,7 @@ def validate_batch(
         replay_miss=decision.replay_miss,
         bootstrap=bootstrap,
         cosigned_by=cosigned_by,
-        detail=decision.reason,
+        detail=detail,
     )
 
     active = active_batch_insight_ids(store, batch_label)
@@ -498,6 +680,8 @@ def validate_batch(
         cosigned_by=cosigned_by,
         promoted=decision.promotes,
         active_insight_ids=active,
+        retired_incumbent_ids=retired,
+        closed_contradiction_ids=closed,
     )
 
 

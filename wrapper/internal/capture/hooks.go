@@ -26,6 +26,12 @@ type HookEvent struct {
 	// the daemon routes hooks by this stable tab id when present and falls back to
 	// SessionID otherwise.
 	PinnedSessionID string `json:"claude_plus_session"`
+
+	// U7 — PostToolUse fields: tool identity and the input the model passed.
+	// These are only set when HookEventName == "PostToolUse".
+	ToolName   string `json:"tool_name"`   // e.g. "Bash", "Read"
+	ToolInput  string `json:"tool_input"`  // raw JSON string of the tool's input object
+	ToolOutput string `json:"tool_output"` // stdout/stderr of the tool invocation (PostToolUse only)
 }
 
 // settingsHook is the shape of one hook entry in settings.json.

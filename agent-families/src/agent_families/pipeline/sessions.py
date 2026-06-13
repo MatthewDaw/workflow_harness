@@ -142,7 +142,12 @@ _WRITE_TOOLS = ("Write", "Edit", "MultiEdit")
 
 @dataclass(frozen=True)
 class RoleProfile:
-    """One role's session envelope: model, turn/time budget, and tool surface.
+    """One STAGE's session envelope: model, turn/time budget, and tool surface.
+
+    plan-010 R8: ``role`` names a pipeline STAGE (planner/worker/verifier), not a
+    persona or a router-selected agent. Under the R3 reform stages differ only by
+    tools/permissions/output-contract/trust — this profile carries no knowledge,
+    so it *is* the stage definition (confirm-and-keep: no refactor, comment only).
 
     ``tools`` maps to ``--tools`` (the judge precedent: ``""`` = no tools at
     all); ``allowed_tools`` maps to ``--allowedTools`` with one specifier per

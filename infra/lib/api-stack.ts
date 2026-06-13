@@ -316,7 +316,6 @@ export class ApiStack extends cdk.Stack {
     r('/agents', [M.GET], agentsFn, 'AgentsGet', noAuth);
     r('/agents', [M.POST], agentsFn, 'AgentsPost', noAuth);
     r('/agents/{name}', [M.GET, M.PUT, M.DELETE], agentsFn, 'AgentByName', noAuth);
-    r('/agents/{name}/scope', [M.POST], agentsFn, 'AgentScope', noAuth);
     // Agent-bundle catalog verbs mirror the skills bundle verbs below.
     r('/agents/{name}/members', [M.POST], agentsFn, 'AgentMembers', noAuth);
     r('/agents/{name}/members/{member}', [M.DELETE], agentsFn, 'AgentMemberDelete', noAuth);
@@ -356,7 +355,6 @@ export class ApiStack extends cdk.Stack {
     r('/skills/{name}/members/{member}', [M.DELETE], skillsFn, 'SkillMemberDelete', noAuth);
     r('/skills/{name}/dissolve', [M.POST], skillsFn, 'SkillDissolve', noAuth);
     r('/skills/{name}/usage', [M.GET], skillsFn, 'SkillUsage', noAuth);
-    r('/skills/{name}/scope', [M.POST], skillsFn, 'SkillScope', noAuth);
     // Promote (repoint the org-wide TRUE pointer) + fold an idea into a new
     // revision (skill-idea loop, U16). BOTH are the skills Lambda (the fold reuses
     // `putNewVersion`/the built-in guard there), skill-edit gated server-side.

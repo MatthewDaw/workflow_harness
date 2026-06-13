@@ -96,6 +96,13 @@ type Runtime struct {
 	// keyed by tab session id (C6). nil when the config dir is unavailable, in which
 	// case the gate runs on ephemeral in-memory state.
 	topicStore *topic.Store
+
+	// branchSessionStore is the in-process write backend for U7 branch→session
+	// links.  It is written by the branchSessionHook callback (registered in
+	// StartRuntimeWithStore) on every successful PostToolUse "git push".  It is
+	// never nil after StartRuntimeWithStore runs — tests read from it to assert
+	// links were persisted.
+	branchSessionStore *capture.BranchSessionStore
 }
 
 // daemonTopicSignal mirrors daemon.TopicSignal locally so captureLoop owns a copy
@@ -462,16 +469,18 @@ func StartRuntime(d *Daemon, instanceID string) *Runtime {
 func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *Runtime {
 	rt := &Runtime{d: d, seq: transport.NewSeq(), stop: make(chan struct{}),
 		instanceID: instanceID, host: hostName(),
-		store:          store,
-		syncedSessions: map[string]bool{},
-		terminated:     map[string]bool{},
-		userKilled:     map[string]bool{},
-		resumeIDs:      map[string]bool{},
-		resumeOffset:   map[string]int64{},
-		resumeStarted:  map[string]time.Time{},
-		repointCh:      make(chan [2]string, 16),
-		topicCh:        make(chan daemonTopicSignal, 64),
-		judgeLimit:     topic.NewLimiter(2)}
+		store:              store,
+		syncedSessions:     map[string]bool{},
+		terminated:         map[string]bool{},
+		userKilled:         map[string]bool{},
+		resumeIDs:          map[string]bool{},
+		resumeOffset:       map[string]int64{},
+		resumeStarted:      map[string]time.Time{},
+		repointCh:          make(chan [2]string, 16),
+		topicCh:            make(chan daemonTopicSignal, 64),
+		judgeLimit:         topic.NewLimiter(2),
+		branchSessionStore: capture.NewBranchSessionStore(),
+	}
 
 	// Seed resume metadata from the store: which ids are resumed (so their tailer
 	// starts at the persisted offset, not 0) and a watcher start time per id (so the
@@ -533,6 +542,31 @@ func StartRuntimeWithStore(d *Daemon, instanceID string, store *SessionsStore) *
 	d.SetKillHook(func(sessID string) {
 		rt.markUserKilled(sessID)
 		rt.removeFromStore(sessID)
+	})
+
+	// U7 — register the branch-session link hook so a PostToolUse "git push"
+	// writes branchSessionKey → {sessionId, turnRange, distilledContext} to the
+	// in-process store (and, when external persistence is configured, to DynamoDB).
+	// Best-effort: notifyBranchSession already runs this on a goroutine so a slow
+	// or failing write never blocks the hook path.
+	d.SetBranchSessionHook(func(sessionID, repoRoot, toolInput, toolOutput string) {
+		// Look up the current turn counter from the topic store so we can record
+		// the turn-range slice relevant for distillation.  The topic store is keyed
+		// by tab/session id; if the store is unavailable the range defaults to zero
+		// values (best-effort — degrades gracefully).
+		var turnStart, turnEnd int
+		if rt.topicStore != nil {
+			if st, ok := rt.topicStore.Load(sessionID); ok {
+				turnEnd = st.TurnCounter
+			}
+		}
+
+		link, ok := capture.BuildBranchSessionLink(sessionID, repoRoot, toolInput, toolOutput, turnStart, turnEnd)
+		if !ok {
+			// Failed / detached push — write nothing (correct no-op).
+			return
+		}
+		rt.branchSessionStore.Write(link)
 	})
 
 	if cfg, ok := loadHQConfig(); ok {
@@ -771,6 +805,14 @@ func SyncMemoriesNow(repoRoot string) error {
 	// PUT clears the author's set, which is the correct full-reconcile semantics).
 	items, _ := config.ReadLocalMemories(memoryDir)
 	return config.ReconcileMemories(base, cfg.Token, config.ProjectIDFor(repoRoot), items)
+}
+
+// BranchSessionStore returns the runtime's in-process branch→session link
+// store (U7).  Tests use it to assert that links were written after a
+// PostToolUse "git push" event reaches the daemon.  Never nil after
+// StartRuntimeWithStore.
+func (rt *Runtime) BranchSessionStore() *capture.BranchSessionStore {
+	return rt.branchSessionStore
 }
 
 // syncSkillsOnce triggers the skills auto-sync the first time a given session is

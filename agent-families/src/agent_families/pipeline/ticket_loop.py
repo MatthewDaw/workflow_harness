@@ -381,6 +381,11 @@ class TicketLoopConfig:
     prompt_set_version: str | None = None
     mode: str | None = None
     script_path: Path | None = None
+    # plan-010 U1 (R2): the assign stage's per-job injection provider. Called
+    # ``assign_provider(ticket, stage)`` for stage in {"worker", "verifier"};
+    # returns the rendered ``injected_skills`` section. ``None`` (the default)
+    # keeps the seam byte-identical to today — an empty injection (R12).
+    assign_provider: Callable[[dict, str], str] | None = None
 
     def __post_init__(self) -> None:
         if not self.gate_commands:
@@ -404,6 +409,18 @@ class TicketLoop:
     def __init__(self, config: TicketLoopConfig) -> None:
         self.config = config
 
+    def _injected_skills(self, ticket: dict, stage: str) -> str:
+        """The assign stage's per-job injection for ``stage`` (R2).
+
+        Returns ``""`` when no assign provider is configured, so the existing
+        ``injected_skills=`` seam stays byte-identical to today (the seam was
+        inert; populating it with nothing must not perturb a byte).
+        """
+        provider = self.config.assign_provider
+        if provider is None:
+            return ""
+        return provider(ticket, stage)
+
     # --- worker (R11, R8) ------------------------------------------------------
 
     def worker(self, ctx: TicketContext) -> None:
@@ -414,7 +431,10 @@ class TicketLoop:
         ledger = render_ledger(ctx.store, ctx.ticket_id)
         ticket = ticket_document(ctx.store, ctx.run_id, ctx.ticket_id)
         result = run_session(
-            build_worker_prompt(ticket, ledger),
+            build_worker_prompt(
+                ticket, ledger,
+                injected_skills=self._injected_skills(ticket, "worker"),
+            ),
             WORKER_OUTPUT_SCHEMA,
             cfg.worker_profile,
             transcript_path=self._transcript(ctx, "worker"),
@@ -518,7 +538,10 @@ class TicketLoop:
                 server.start()  # readiness probe gates the verifier start (R15)
                 base_url = server.url
             result = run_session(
-                build_verifier_prompt(ticket, base_url),
+                build_verifier_prompt(
+                    ticket, base_url,
+                    injected_skills=self._injected_skills(ticket, "verifier"),
+                ),
                 VERIFIER_OUTPUT_SCHEMA,
                 cfg.verifier_profile,
                 transcript_path=self._transcript(ctx, "verifier"),

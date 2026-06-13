@@ -1,0 +1,29 @@
+# dokuwiki held-out suite target (plan-005 U1, R1/R2 — the generalization suite).
+#
+# DokuWiki is a held-out BENCHMARK target: the flat-file wiki archetype — derived
+# state (namespaces, revisions, search) on a no-database stack. It is NEVER
+# trained on (curriculum.HELD_OUT; the held-out constraint is enforced both ways
+# — see shaarli's compose header).
+#
+# Image pinned BY DIGEST (R9). suite.py carries the same pin; the generic
+# SuiteTargetEnv refuses setup on disagreement or a mismatched RepoDigest. The
+# digest is a PLACEHOLDER pending live resolution (no network/docker on this
+# host); re-pinning is a deliberate apparatus migration, not an edit.
+#
+# - named volume, NEVER a Windows bind mount (R5)
+# - host port 8084, disjoint from linkding=9090, clone=4173, kanboard=8081,
+#   shaarli=8082, privatebin=8083 by construction (suite.SUITE_PORTS asserts it)
+# - readiness is suite.py polling GET / for the "DokuWiki" marker
+name: agent-families-dokuwiki
+
+services:
+  dokuwiki:
+    image: dokuwiki/dokuwiki:2024-02-06b@sha256:d1e2f30415061728293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f03
+    ports:
+      - "8084:8080"
+    volumes:
+      - dokuwiki_data:/dokuwiki/data
+    restart: unless-stopped
+
+volumes:
+  dokuwiki_data:

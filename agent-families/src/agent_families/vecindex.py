@@ -5,21 +5,71 @@ vector row commits in the same transaction as its insight row — that one fact 
 what makes R7's registration atomicity a one-line rule. Inserts therefore refuse
 to run outside :meth:`Store.transaction`.
 
+**Three-vector shape (R5/R8) + the dedicated retrieval vector (010 U2/R4).** Each
+insight owns one row carrying its vectors in a single multi-column vec0 table, so
+every vector of an insight commits in the same transaction (the R7 atomicity
+invariant — no half-written insight is reachable). The columns:
+
+- ``key_embedding`` — the clustering vector over the rule's *identity*
+  (precondition + action). ``knn(on="key")`` collides contradictions on the rule
+  they share, which is what lets NLI separate a duplicate from a negation.
+- ``full_embedding`` — the clustering vector over the whole atom.
+- ``retrieval_embedding`` — the **dedicated** ``search_document:`` retrieval
+  vector (010 U2/R4), exposed as ``knn(on="retrieval")`` and read by
+  ``library.retrieval``. It is written equal to the legacy ``embedding`` at insert
+  time and then re-embedded with ``EmbeddingService.embed_retrieval`` by
+  :meth:`VecIndex.rebuild_retrieval_vectors` — the rebuild-migration that switches
+  retrieval off the clustering-vector stopgap onto the matched search geometry.
+- ``embedding`` — the **legacy** retrieval/search-document column kept for
+  byte-stability invariants and the raw status-filtered KNN that
+  ``lifecycle``/``maintenance`` issue directly against it (demote, never drop, R6).
+  ``retrieve`` no longer reads it; the dedicated ``retrieval_embedding`` does.
+
+**Why a 4th column, not a rename (010 U2 deviation).** The plan's R4 frames this
+as "declare 3 columns" (drop the legacy ``embedding``). But ``lifecycle`` reads the
+raw ``embedding`` column directly (``test_lifecycle.vec_dump`` /
+``knn_visible``) and those tests are out of this unit's edit scope. Renaming would
+break them, so the faithful adaptation is **additive**: keep ``embedding`` for the
+demoted raw readers and add ``retrieval_embedding`` as the dedicated column. The
+migration re-embeds only ``retrieval_embedding``; ``embedding``/``key``/``full`` are
+preserved byte-for-byte.
+
 Visibility (R13) is a query-time join, never a vec mutation: lifecycle operations
 flip insight status and the join picks it up; vec rows are written once at
 registration and never deleted or rewritten. ``statuses=None`` is the add-idea
 dedup view (all statuses, including retired — that is what triggers R14's
 revive-or-override prompt); narrower views pass an explicit status tuple.
+
+The vec0 KNN query uses ``LIMIT`` inside the subquery rather than the ``k = ?``
+form: with an outer ``ORDER BY`` and a join, SQLite's query flattener merges the
+outer ordering into the vec0 subquery and vec0 rejects the resulting second
+``ORDER BY distance``. A ``LIMIT``-carrying subquery cannot be flattened into a
+join, so the ordering stays put. (This is the documented flattener fix that the
+deleted ``pipeline._knn_dedup_view`` helper worked around out-of-band.)
 """
 
 from __future__ import annotations
 
 import sqlite3
+import struct
 from dataclasses import dataclass
 
 from agent_families.store import Store
 
 VEC_TABLE = "insight_vectors"
+
+# on= → physical column. Validated allow-list: the column is NEVER interpolated
+# from caller input, only chosen from this map (no SQL injection surface, R8).
+_VIEW_COLUMN = {
+    "key": "key_embedding",
+    "full": "full_embedding",
+    # 010 U2/R4: the dedicated search_document: retrieval vector. Before this plan
+    # "retrieval" resolved to the legacy `embedding` column (the clustering-vector
+    # stopgap); it now resolves to the re-embedded dedicated column.
+    "retrieval": "retrieval_embedding",
+    # The legacy column stays addressable for the demoted raw readers (lifecycle).
+    "legacy": "embedding",
+}
 
 
 class VecIndexError(Exception):
@@ -69,18 +119,60 @@ class VecIndex:
             conn.enable_load_extension(False)
 
     def migrate(self) -> None:
-        """Create the vec0 table if absent; dim is fixed at creation (pinned, R22)."""
+        """Create the multi-column vec0 table if absent; dim is fixed at creation."""
+        self._create_table(if_not_exists=True)
+
+    def _create_table(self, *, if_not_exists: bool) -> None:
+        """The vec0 DDL — one place so :meth:`migrate` and the rebuild-migration
+        (:meth:`rebuild_retrieval_vectors`) declare an identical schema.
+
+        Four cosine columns: ``embedding`` (legacy retrieval, kept for the demoted
+        raw readers), ``key_embedding``/``full_embedding`` (clustering), and
+        ``retrieval_embedding`` (the dedicated search_document: retrieval vector,
+        010 U2/R4). vec0 has no ALTER-ADD-COLUMN, so adding the 4th column to an
+        existing table is a deliberate DROP+CREATE+re-insert rebuild.
+        """
+        clause = "IF NOT EXISTS " if if_not_exists else ""
         self.store.conn.execute(
-            f"CREATE VIRTUAL TABLE IF NOT EXISTS {VEC_TABLE} USING vec0("
+            f"CREATE VIRTUAL TABLE {clause}{VEC_TABLE} USING vec0("
             "  insight_id INTEGER PRIMARY KEY,"
-            f"  embedding float[{self.dim}] distance_metric=cosine"
+            f"  embedding float[{self.dim}] distance_metric=cosine,"
+            f"  key_embedding float[{self.dim}] distance_metric=cosine,"
+            f"  full_embedding float[{self.dim}] distance_metric=cosine,"
+            f"  retrieval_embedding float[{self.dim}] distance_metric=cosine"
             ")"
         )
 
     # --- writes ------------------------------------------------------------------
 
-    def insert(self, insight_id: int, vector) -> None:
-        """Store an insight's embedding; must share the insight row's transaction (R7)."""
+    def insert(
+        self,
+        insight_id: int,
+        key_vector,
+        full_vector=None,
+        retrieval_vector=None,
+    ) -> None:
+        """Store an insight's vectors atomically with its insight row (R5/R7).
+
+        New (R3) form — ``insert(id, key_vector, full_vector)`` — writes the key
+        and full clustering vectors; both retrieval columns (``embedding`` legacy
+        and ``retrieval_embedding`` dedicated) fall back to the full vector unless
+        ``retrieval_vector`` is given. The dedicated ``retrieval_embedding`` is then
+        re-embedded with ``embed_retrieval`` by :meth:`rebuild_retrieval_vectors`
+        (010 U2/R4) — at insert time it equals ``embedding``, and the migration is
+        what switches it onto the matched search geometry.
+
+        Legacy single-vector form — ``insert(id, vector)`` (``full_vector`` left
+        ``None``) — fans the one vector into all four columns. The pre-R3 write
+        path (add-idea) and the demoted retrieval/maintenance readers still call
+        this form; the add-idea vector is already a ``search_document:`` embedding,
+        so its retrieval column is correct without a rebuild.
+
+        vec0 requires every declared column non-NULL per row, so all four are
+        always written. The dims are validated *before* the single ``INSERT`` is
+        issued: a partial/mismatched call raises and leaves ZERO rows for this
+        insight_id (no half-written vector — the R7 atomicity invariant).
+        """
         if not self.store.in_transaction:
             raise VecIndexError(
                 "VecIndex.insert must run inside Store.transaction() — the vec row"
@@ -88,11 +180,112 @@ class VecIndex:
             )
         import sqlite_vec
 
-        self._check_dim(vector)
+        if full_vector is None:  # legacy single-vector fan-out
+            key_v = full_v = retr_v = list(key_vector)
+        else:
+            key_v = list(key_vector)
+            full_v = list(full_vector)
+            retr_v = list(retrieval_vector) if retrieval_vector is not None else full_v
+
+        # Validate every column up front: any bad dim aborts before the write, so
+        # a rejected partial insert can never leave a row behind.
+        self._check_dim(key_v)
+        self._check_dim(full_v)
+        self._check_dim(retr_v)
+
         self.store.conn.execute(
-            f"INSERT INTO {VEC_TABLE} (insight_id, embedding) VALUES (?, ?)",
-            (insight_id, sqlite_vec.serialize_float32(list(vector))),
+            f"INSERT INTO {VEC_TABLE}"
+            " (insight_id, embedding, key_embedding, full_embedding,"
+            "  retrieval_embedding)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                insight_id,
+                sqlite_vec.serialize_float32(retr_v),
+                sqlite_vec.serialize_float32(key_v),
+                sqlite_vec.serialize_float32(full_v),
+                # Dedicated retrieval column: equal to the legacy `embedding` at
+                # insert time; rebuild_retrieval_vectors re-embeds it (010 U2/R4).
+                sqlite_vec.serialize_float32(retr_v),
+            ),
         )
+
+    # --- the retrieval-vector rebuild migration (010 U2/R4) ----------------------
+
+    def rebuild_retrieval_vectors(self, embedder, *, document_text=None) -> int:
+        """Re-embed every insight's ``retrieval_embedding`` with the dedicated
+        ``search_document:`` vector and rebuild the vec0 table (010 U2/R4).
+
+        vec0 has no ALTER-ADD-COLUMN, so this is a deliberate rebuild: snapshot
+        every row (the legacy ``embedding`` + ``key``/``full`` blobs are preserved
+        byte-for-byte), compute each insight's retrieval vector with
+        ``embedder.embed_retrieval`` over its document text, DROP and re-CREATE the
+        table, and re-insert. Switching ``library.retrieval`` off the
+        clustering-vector stopgap (``on="full"``/the legacy ``embedding``) onto this
+        dedicated column is what R4 buys.
+
+        ``document_text(insight_row) -> str`` builds the text to embed; it defaults
+        to ``pipeline.build_idea_text`` (the same whole-atom text the add-idea
+        indexer embeds, so the geometry matches). Returns the number of insights
+        re-embedded.
+
+        Idempotent: the preserved blobs and the recomputed retrieval vectors are a
+        pure function of the (unchanged) inputs, and ``insight_id`` is the primary
+        key, so a second run rebuilds an identical table — no duplicate or orphan
+        rows. An insight that lost its row (orphan vec row) keeps its legacy
+        retrieval blob as the dedicated vector (a conservative stopgap fallback).
+        """
+        import sqlite_vec
+
+        if document_text is None:
+            # Lazy import: vecindex is below pipeline in the import graph, so this
+            # stays a call-time dependency, never a module-load cycle.
+            from agent_families.pipeline import build_idea_text
+
+            def document_text(row):  # noqa: ANN001 - sqlite3.Row
+                return build_idea_text(
+                    row["precondition"], row["action"], row["expected_outcome"]
+                )
+
+        # Snapshot before any destructive step (reads are fine outside a txn).
+        existing = self.store.conn.execute(
+            f"SELECT insight_id, embedding, key_embedding, full_embedding"
+            f" FROM {VEC_TABLE} ORDER BY insight_id ASC"
+        ).fetchall()
+
+        rebuilt: list[tuple] = []
+        re_embedded = 0
+        for row in existing:
+            insight_id = row["insight_id"]
+            insight = self.store.get_insight(insight_id)
+            if insight is None:
+                # Orphan vec row: no atom to re-embed — preserve the legacy blob.
+                retrieval_blob = bytes(row["embedding"])
+            else:
+                retrieval_vector = list(embedder.embed_retrieval(document_text(insight)))
+                self._check_dim(retrieval_vector)
+                retrieval_blob = sqlite_vec.serialize_float32(retrieval_vector)
+                re_embedded += 1
+            rebuilt.append(
+                (
+                    insight_id,
+                    bytes(row["embedding"]),
+                    bytes(row["key_embedding"]),
+                    bytes(row["full_embedding"]),
+                    retrieval_blob,
+                )
+            )
+
+        with self.store.transaction():
+            self.store.conn.execute(f"DROP TABLE IF EXISTS {VEC_TABLE}")
+            self._create_table(if_not_exists=False)
+            self.store.conn.executemany(
+                f"INSERT INTO {VEC_TABLE}"
+                " (insight_id, embedding, key_embedding, full_embedding,"
+                "  retrieval_embedding)"
+                " VALUES (?, ?, ?, ?, ?)",
+                rebuilt,
+            )
+        return re_embedded
 
     # --- reads --------------------------------------------------------------------
 
@@ -101,23 +294,38 @@ class VecIndex:
         vector,
         k: int,
         statuses: tuple[str, ...] | None = None,
+        *,
+        on: str = "key",
     ) -> list[Neighbor]:
-        """K nearest neighbors by cosine distance, joined to insights for status.
+        """K nearest neighbors by cosine distance over the ``on`` column.
+
+        ``on`` selects which vector column to search — ``"key"`` (rule identity),
+        ``"full"`` (whole atom), or ``"retrieval"`` (legacy/search-document) —
+        from a fixed allow-list; an unknown value raises rather than reaching SQL,
+        so the column is never string-interpolated from caller input (R8).
 
         The status filter applies AFTER the KNN takes its k, so filtered views can
-        return fewer than k rows; callers needing exact-k-after-filter over-fetch
-        (Phase 1+ runtime-retrieval seam — Phase 0's only ANN caller is add-idea,
-        which wants the unfiltered dedup view anyway).
+        return fewer than k rows; callers needing exact-k-after-filter over-fetch.
+        ``statuses=None`` is the add-idea dedup view (all statuses).
         """
         import sqlite_vec
 
+        try:
+            column = _VIEW_COLUMN[on]
+        except KeyError:
+            raise VecIndexError(
+                f"unknown knn view {on!r}; expected one of {sorted(_VIEW_COLUMN)}"
+            ) from None
+
         self._check_dim(vector)
+        # LIMIT in the subquery (not `k = ?`) blocks the flattener from merging the
+        # outer ORDER BY into the vec0 KNN and tripping its single-ORDER-BY rule.
         sql = (
             "SELECT v.insight_id AS insight_id, v.distance AS distance,"
             "       i.status AS status"
             f" FROM (SELECT insight_id, distance FROM {VEC_TABLE}"
-            "        WHERE embedding MATCH ? AND k = ?"
-            "        ORDER BY distance) v"
+            f"        WHERE {column} MATCH ?"
+            "        ORDER BY distance LIMIT ?) v"
             " JOIN insights i ON i.id = v.insight_id"
         )
         params: list = [sqlite_vec.serialize_float32(list(vector)), int(k)]
@@ -135,6 +343,74 @@ class VecIndex:
             )
             for row in rows
         ]
+
+    def get_vector(self, insight_id: int, on: str = "full") -> list[float]:
+        """Read back the stored vector for ``insight_id`` from the ``on`` column.
+
+        The graph build (009 R4/R5) needs the raw clustering vectors to weight
+        edges by Tanimoto, so this reverses :meth:`insert`. The column comes from
+        the same fixed allow-list as :meth:`knn` (never interpolated, R8). The
+        vec0 column is stored as raw little-endian float32 (the exact bytes
+        ``sqlite_vec.serialize_float32`` produced), so ``struct.unpack`` recovers
+        the values without the precision loss of ``vec_to_json``'s 6-decimal text.
+        """
+        try:
+            column = _VIEW_COLUMN[on]
+        except KeyError:
+            raise VecIndexError(
+                f"unknown vector view {on!r}; expected one of {sorted(_VIEW_COLUMN)}"
+            ) from None
+        row = self.store.conn.execute(
+            f"SELECT {column} AS blob FROM {VEC_TABLE} WHERE insight_id = ?",
+            (insight_id,),
+        ).fetchone()
+        if row is None:
+            raise VecIndexError(f"no vec row for insight_id {insight_id}")
+        blob = row["blob"]
+        return list(struct.unpack(f"{self.dim}f", blob))
+
+    def all_neighbors(
+        self,
+        k: int,
+        *,
+        on: str = "full",
+        statuses: tuple[str, ...] | None = ("active",),
+    ) -> dict[int, list[Neighbor]]:
+        """Per-node kNN over every visible insight on the ``on`` column (009 R5).
+
+        Returns ``{insight_id: [k nearest neighbors, self dropped]}`` for every
+        insight whose status is in ``statuses`` (``None`` = all statuses) and that
+        carries a vec row. v1 is the brute-force per-node loop the plan specifies:
+        for each node we run :meth:`knn` on its own stored vector and drop the
+        self-edge (the node always matches itself at distance 0). We over-fetch
+        ``k + 1`` so dropping self still leaves up to ``k`` true neighbors.
+
+        Deterministic: nodes are visited in ascending id and :meth:`knn` already
+        breaks distance ties by ascending insight_id, so the mapping is byte-stable
+        for a fixed library snapshot. This is the input to
+        :func:`agent_families.reflector.graphbuild.build_similarity_graph`.
+        """
+        # Node set: visible insights that actually have a vector row. The status
+        # join mirrors knn's so every returned neighbor is itself a node.
+        sql = (
+            f"SELECT v.insight_id AS insight_id FROM {VEC_TABLE} v"
+            " JOIN insights i ON i.id = v.insight_id"
+        )
+        params: list = []
+        if statuses is not None:
+            placeholders = ", ".join("?" for _ in statuses)
+            sql += f" WHERE i.status IN ({placeholders})"
+            params.extend(statuses)
+        sql += " ORDER BY v.insight_id ASC"
+        node_ids = [r["insight_id"] for r in self.store.conn.execute(sql, params)]
+
+        result: dict[int, list[Neighbor]] = {}
+        for node_id in node_ids:
+            vector = self.get_vector(node_id, on=on)
+            hits = self.knn(vector, k + 1, statuses=statuses, on=on)
+            neighbors = [n for n in hits if n.insight_id != node_id][:k]
+            result[node_id] = neighbors
+        return result
 
     def count(self) -> int:
         """Total vec rows; lifecycle ops must never change this (R13 invariant)."""

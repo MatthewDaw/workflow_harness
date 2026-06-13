@@ -1,0 +1,15 @@
+{
+  "_comment": "Seed manifest for the RealWorld/Conduit CALIBRATION target (plan-005 U7, R4). Conduit is the articles archetype (a Medium clone). Unlike every other target, its ground truth is the PUBLISHED RealWorld spec, not our inference — so the grader is Gauge-R&R'd against the spec-derived verdicts in spec.json. Seeding is live/docker-required (the generic harness drives Conduit's REST API headlessly); the spec-derived calibration slice's reference verdicts are defined against THIS post-seed state. Offline the manifest is shape-validated only.",
+  "archetype": "articles",
+  "stack": "node",
+  "spec_source": "https://github.com/gothinkster/realworld (the RealWorld API + frontend spec)",
+  "users": [
+    { "username": "calibrationuser", "email": "calib@example.test" }
+  ],
+  "articles": [
+    { "title": "Calibrating a grader against a published spec", "tags": ["calibration", "spec"] },
+    { "title": "Gauge R&R for LLM verdicts", "tags": ["gauge", "calibration"] },
+    { "title": "Why the calibration target needs ground truth", "tags": ["ground-truth"] },
+    { "title": "Pre-screening spec/implementation divergences", "tags": ["prescreen", "spec"] }
+  ]
+}

@@ -70,6 +70,14 @@ type Daemon struct {
 	// critical path).
 	topicHook func(sig TopicSignal)
 
+	// branchSessionHook, when set by the Runtime, is invoked on a successful
+	// PostToolUse "git push" to write the branch→session link to the persistence
+	// store (U7). Arguments are (sessionID, repoRoot, toolInput, toolOutput) so
+	// the Runtime can resolve the branch and write the BranchSessionLink record.
+	// Best-effort and off the critical hook path: if unset, the push is silently
+	// ignored (the link degrades to absent).
+	branchSessionHook func(sessionID, repoRoot, toolInput, toolOutput string)
+
 	// memSyncMu guards the memory-sync debounce state below. End-of-turn (Stop) is
 	// the natural low-frequency point to reconcile the project's memories up to HQ,
 	// but rapid back-to-back Stops (e.g. a burst of short turns) must coalesce into
@@ -343,6 +351,30 @@ func (d *Daemon) SetTopicHook(fn func(sig TopicSignal)) {
 	d.hookMu.Unlock()
 }
 
+// SetBranchSessionHook registers the callback ingestHook invokes when a
+// PostToolUse "Bash" + "git push" is detected (U7). The Runtime uses it to write
+// the branch→session link to the persistence store (DynamoDB). Until set (no
+// Runtime, or persistence is unconfigured), the push is silently ignored and the
+// link degrades to absent — best-effort, never blocking.
+func (d *Daemon) SetBranchSessionHook(fn func(sessionID, repoRoot, toolInput, toolOutput string)) {
+	d.hookMu.Lock()
+	d.branchSessionHook = fn
+	d.hookMu.Unlock()
+}
+
+// notifyBranchSession invokes the branch-session link hook if one is wired.
+// Best-effort: runs on a goroutine so a slow/failing write never blocks the
+// hook path (the hook shim must never block a Claude Code turn).
+func (d *Daemon) notifyBranchSession(sessionID, toolInput, toolOutput string) {
+	d.hookMu.Lock()
+	fn := d.branchSessionHook
+	d.hookMu.Unlock()
+	if fn == nil {
+		return
+	}
+	go fn(sessionID, d.repoRoot, toolInput, toolOutput)
+}
+
 // forwardTopic forwards a turn-cycle signal to the topic gate if one is wired.
 // Best-effort and non-blocking from the caller's view (the hook itself must never
 // block a Claude Code turn); the Runtime's hook implementation does the
@@ -410,6 +442,20 @@ func (d *Daemon) ingestHook(raw string) {
 		// Forward the opening prompt to the topic gate so it can stash a correction
 		// smell for this turn's subsequent Stop (D1). Off the critical path.
 		d.forwardTopic(TopicSignal{Kind: TopicPrompt, TabID: h.SessionID, Prompt: h.Prompt})
+		return
+	}
+	// U7 — PostToolUse ingest path: detect a successful "git push" Bash invocation
+	// and write the branch→session link to the persistence store.  This runs BEFORE
+	// MapHook so the link is captured even though PostToolUse produces no status
+	// change.  Best-effort: a missing/failed/detached push writes nothing (the link
+	// degrades to absent, which is the correct no-op behaviour).
+	if h.HookEventName == "PostToolUse" && capture.IsBashGitPush(h) {
+		// The hook shim includes tool_output in the PostToolUse payload so we can
+		// detect a failed push.  Pass ToolInput + ToolOutput to the hook so the
+		// Runtime can inspect the output for error markers (ParsePushFailure) and
+		// skip recording on failure or detached HEAD.
+		d.notifyBranchSession(h.SessionID, h.ToolInput, h.ToolOutput)
+		// PostToolUse produces no status change; return after the side-channel write.
 		return
 	}
 	// Forward a Stop to the topic gate so captureLoop drains the tailer and runs the

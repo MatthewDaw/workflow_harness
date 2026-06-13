@@ -42,6 +42,19 @@ Plan 4 closes the loop on one target; nothing yet distinguishes learning from me
 
 **Router and agent splitting**
 
+> **SUPERSEDED BY R3 — see plan 2026-06-12-010 (Phase C) R9.** The entire
+> "Router and agent splitting" cluster below — **R12** (family router), **R13**
+> (routing replay + agent split), **R14** (agent splitting / explorer-family
+> decision), and the **R14b/R14c** family-pool retrieval + boundary-ticket
+> multi-persona refinement — is **superseded by R3** and replaced by plan
+> 2026-06-12-009 §6's Leiden *derive* pass (whole-store insight-level retrieval +
+> derived module partition). There is no per-request family router and no
+> persona/boundary path in the R3 runtime; the demoted `router.route` /
+> `run_boundary_ticket` code is kept only for reversibility (plan-009 R13/R14,
+> plan-010 R6/R7). The rest of plan 005 (R1–R11 benchmark suite, rehearsal /
+> one-shot, improvement tier, **R8 file-ownership enforcement — now the assign
+> stage's territory source**, parallel episodes, enforcement modes) still stands.
+
 - R12. The family router activates: per request, an LLM routing call over the family's agent descriptions selects the specialist; **every routing decision is logged** (request, candidates, choice) — the data agent splitting and the §6 routing replay require.
 - R13. Agent split per §6, gated on `min_routing_decisions`: silhouette over skill descriptions + minimum cluster sizes + the ≤25-word compressibility gate; contrastive sibling descriptions generated jointly; routing replay ≥90% agreement against logged decisions; transactional lineage (parent retired, children with `parent_id`, revertible until replay + one benchmark run pass); base-prompt residue check before commit.
 - R14. The explorer-family decision executes: if Plan 4's instrument-health records show idea-shaped volume (explorer prompt/answer lessons recurring), seed explorer (and grader) families through the normal taxonomy; otherwise the sink remains. A documented decision point, not an automatic.

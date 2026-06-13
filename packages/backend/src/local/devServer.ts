@@ -257,7 +257,6 @@ export const ROUTES: Route[] = [
   { re: /^\/sessions$/, handler: sessionsHandler },
 
   // Agent catalog verbs (promote + the bundle verbs) precede the bare /{name}.
-  { re: /^\/agents\/(?<name>[^/]+)\/scope$/, handler: agentsHandler },
   { re: /^\/agents\/(?<name>[^/]+)\/promote$/, handler: agentsHandler },
   { re: /^\/agents\/(?<name>[^/]+)\/members\/(?<member>[^/]+)$/, handler: agentsHandler },
   { re: /^\/agents\/(?<name>[^/]+)\/members$/, handler: agentsHandler },
@@ -288,7 +287,6 @@ export const ROUTES: Route[] = [
   { re: /^\/skills\/(?<name>[^/]+)\/members$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/dissolve$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/usage$/, handler: skillsHandler },
-  { re: /^\/skills\/(?<name>[^/]+)\/scope$/, handler: skillsHandler },
   { re: /^\/skills\/(?<name>[^/]+)\/promote$/, handler: skillsHandler },
   // Skill-idea reads (skill-idea loop): candidate-learnings (U11) + all-ideas
   // (U13) are served by the ideas Lambda, NOT the skills Lambda — mirroring how

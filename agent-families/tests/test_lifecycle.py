@@ -15,6 +15,7 @@ import sqlite_vec
 
 from agent_families.lifecycle import (
     LifecycleError,
+    demote_to_dormant,
     empty_skills,
     promote_batch,
     retire_insight,
@@ -65,6 +66,7 @@ def seed(
     skill_id: int | None = ...,
     vector=None,
     supersedes: int | None = None,
+    provenance: str = "manual",
 ) -> int:
     """Insert insight + vec row + membership — the U5 registration write shape."""
     env.counter += 1
@@ -79,6 +81,7 @@ def seed(
             status=status,
             batch_id=batch_id,
             supersedes=supersedes,
+            provenance=provenance,
         )
         env.vec.insert(insight_id, vector if vector is not None else [float(n), 1.0, 0.0, 0.0])
         if skill_id is ...:
@@ -121,9 +124,11 @@ def vec_dump(env) -> dict[int, bytes]:
 def knn_visible(env, vector, k: int, statuses: tuple[str, ...]) -> list[int]:
     """Filtered KNN per the visibility matrix (R13).
 
-    Uses the LIMIT-form vec0 subquery (the `_knn_dedup_view` workaround from
-    U5) because `VecIndex.knn`'s `k = ?` form trips the SQLite query-flattener
-    incompatibility — that fix belongs to vecindex.py's owning unit (U3).
+    Uses the LIMIT-form vec0 subquery directly against the legacy ``embedding``
+    column. As of U3 this is the same flattener-safe form `VecIndex.knn` now
+    emits (the `_knn_dedup_view` workaround is deleted); this helper stays a raw
+    query only because it filters status *inside* the KNN subquery, whereas
+    `VecIndex.knn` filters status after taking k.
     """
     placeholders = ", ".join("?" for _ in statuses)
     rows = env.store.conn.execute(
@@ -475,3 +480,261 @@ def test_random_lifecycle_sequences_preserve_invariants(env, seed_value):
         assert_snapshot_chain(env)
         assert_no_orphan_membership(env)
     assert applied > 0  # the sequence actually exercised lifecycle ops
+
+
+# --- U7: deferred-supersede at promotion + dormant (008 R16-R18) ----------------
+#
+# The NLI re-check at promotion is driven by an injected deterministic encoder
+# (passthrough mode, no fixture, no model download) so the lifecycle suite stays
+# fully offline. A contradiction-free promote never touches the encoder.
+
+
+class FakeNliEncoder:
+    """Deterministic 3-class NLI stand-in for the promotion-time re-check (R16).
+
+    Honors the seam's hard-coded label-map assertion (``id2label``) and returns a
+    dominant logit for the configured label so confidence clears any threshold.
+    """
+
+    _IDX = {"contradiction": 0, "entailment": 1, "neutral": 2}
+
+    def __init__(self, label: str = "contradiction") -> None:
+        self.label = label
+        self.config = SimpleNamespace(
+            id2label={0: "contradiction", 1: "entailment", 2: "neutral"}
+        )
+        self.calls = 0
+
+    def predict(self, pairs):
+        self.calls += len(pairs)
+        logits = [0.0, 0.0, 0.0]
+        logits[self._IDX[self.label]] = 12.0  # softmax ~1.0 on the chosen label
+        return [list(logits) for _ in pairs]
+
+
+def promote_with_nli(env, batch: str, label: str = "contradiction"):
+    """Promote a batch with the deterministic NLI re-check wired in."""
+    return promote_batch(
+        env.store,
+        batch,
+        nli_mode="passthrough",
+        _nli_encoder=FakeNliEncoder(label),
+    )
+
+
+def contradicts_edge(env, challenger_id: int, incumbent_id: int) -> int:
+    """The R3-proper contradiction record U6 writes: src=challenger, dst=incumbent."""
+    return env.store.add_insight_edge(challenger_id, incumbent_id, "contradicts")
+
+
+def record_corroborate(env, insight_id: int, count: int) -> None:
+    """Append ``count`` corroborate votes (evidence) on an insight."""
+    for _ in range(count):
+        env.store.record_fitness_event(insight_id, "corroborate", "training", 1)
+
+
+def transition_seq(env, insight_id: int, to_status: str) -> int:
+    """The status_transitions row id for a given flip (proves write ordering)."""
+    return env.store.conn.execute(
+        "SELECT id FROM status_transitions WHERE insight_id = ? AND to_status = ?"
+        " ORDER BY id DESC LIMIT 1",
+        (insight_id, to_status),
+    ).fetchone()["id"]
+
+
+def open_contradicts(env) -> list[tuple[int, int]]:
+    """(challenger, incumbent) pairs of still-open contradicts edges (R16)."""
+    rows = env.store.conn.execute(
+        "SELECT e.src AS c, e.dst AS i FROM insight_edges e"
+        " JOIN insights inc ON inc.id = e.dst"
+        " WHERE e.kind = 'contradicts' AND inc.status != 'retired'"
+        " AND inc.invalid_at IS NULL ORDER BY e.id ASC"
+    ).fetchall()
+    return [(r["c"], r["i"]) for r in rows]
+
+
+def test_unvalidated_batch_cannot_retire_incumbent(env):
+    # A challenger that does NOT pass validation (its batch is reverted, never
+    # promoted) can never invalidate the live incumbent it contradicts (R16
+    # safety regression): only a promoted challenger riding the queue's minted
+    # snapshot can retire a live rule.
+    incumbent = seed(env, status="active", provenance="reflector")
+    unvalidated = seed(env, batch="reverted", provenance="manual")
+    contradicts_edge(env, unvalidated, incumbent)
+
+    revert_batch(env.store, "reverted")  # validation failed
+
+    assert status_of(env, incumbent) == "active"
+    assert env.store.get_insight(incumbent)["invalid_at"] is None
+    assert transitions_for(env, incumbent) == []  # never touched
+
+    # Now a validated challenger (promoted) can retire it.
+    validated = seed(env, batch="promoted", provenance="manual")
+    contradicts_edge(env, validated, incumbent)
+    result = promote_with_nli(env, "promoted")
+
+    assert result.retired_incumbent_ids == (incumbent,)
+    assert status_of(env, incumbent) == "retired"
+    assert env.store.get_insight(incumbent)["invalid_at"] == f"snapshot:{result.snapshot_id}"
+
+
+def test_supersede_resolution_runs_after_admission(env):
+    # The seam runs AFTER admission (the quarantined->active flip), so the
+    # challenger is already in the surviving active set when it resolves the
+    # supersede; the loser is stamped invalid_at AND retired under the SAME
+    # minted snapshot, and the contradicts edge is closed.
+    incumbent = seed(env, status="active", provenance="reflector")
+    challenger = seed(env, batch="b1", provenance="manual")  # higher authority
+    contradicts_edge(env, challenger, incumbent)
+
+    result = promote_with_nli(env, "b1")
+
+    assert status_of(env, challenger) == "active"
+    assert status_of(env, incumbent) == "retired"
+    assert result.retired_incumbent_ids == (incumbent,)
+
+    inc = env.store.get_insight(incumbent)
+    assert inc["invalid_at"] == f"snapshot:{result.snapshot_id}"
+    # both the activation and the retirement ride the one promotion snapshot
+    assert transitions_for(env, challenger) == [
+        ("quarantined", "active", result.snapshot_id)
+    ]
+    assert transitions_for(env, incumbent) == [
+        ("active", "retired", result.snapshot_id)
+    ]
+    # admission BEFORE supersede: the challenger's activation row precedes the
+    # incumbent's retirement row in the same transaction
+    assert transition_seq(env, challenger, "active") < transition_seq(
+        env, incumbent, "retired"
+    )
+    # the contradicts edge is now closed (the incumbent is no longer live)
+    assert open_contradicts(env) == []
+    assert snapshot_count(env) == 1  # exactly the one promotion snapshot
+
+
+def test_winner_precedence_authority_evidence_recency(env):
+    # The winner is decided strictly by authority > evidence-count > recency.
+
+    # (1) Authority decides over recency: incumbent has higher authority though
+    # the challenger is newer -> incumbent wins, nothing retired.
+    inc_a = seed(env, status="active", provenance="manual")  # high authority
+    chal_a = seed(env, batch="ba", provenance="reflector")  # newer, low authority
+    contradicts_edge(env, chal_a, inc_a)
+    res_a = promote_with_nli(env, "ba")
+    assert res_a.retired_incumbent_ids == ()
+    assert status_of(env, inc_a) == "active"
+    assert env.store.get_insight(inc_a)["invalid_at"] is None
+    assert status_of(env, chal_a) == "active"  # challenger stays promoted/live
+
+    # (2) Evidence decides over recency: equal authority, incumbent has more
+    # corroboration votes though the challenger is newer -> incumbent wins.
+    inc_b = seed(env, status="active", provenance="manual")
+    record_corroborate(env, inc_b, 3)
+    chal_b = seed(env, batch="bb", provenance="manual")  # newer, zero votes
+    contradicts_edge(env, chal_b, inc_b)
+    res_b = promote_with_nli(env, "bb")
+    assert res_b.retired_incumbent_ids == ()
+    assert status_of(env, inc_b) == "active"
+
+    # (3) Challenger wins on authority -> the incumbent is retired.
+    inc_c = seed(env, status="active", provenance="reflector")
+    chal_c = seed(env, batch="bc", provenance="manual")  # higher authority
+    contradicts_edge(env, chal_c, inc_c)
+    res_c = promote_with_nli(env, "bc")
+    assert res_c.retired_incumbent_ids == (inc_c,)
+    assert status_of(env, inc_c) == "retired"
+
+
+def test_recheck_clears_stale_contradiction(env):
+    # If the promotion-time NLI re-check no longer confirms a contradiction, the
+    # live incumbent is left standing (a deferred edge is not a standing verdict).
+    incumbent = seed(env, status="active", provenance="reflector")
+    challenger = seed(env, batch="b1", provenance="manual")
+    contradicts_edge(env, challenger, incumbent)
+
+    result = promote_with_nli(env, "b1", label="neutral")  # re-check: not a contradiction
+
+    assert result.retired_incumbent_ids == ()
+    assert status_of(env, incumbent) == "active"
+    assert env.store.get_insight(incumbent)["invalid_at"] is None
+
+
+def test_demote_to_dormant_never_retires_children(env):
+    # demote_to_dormant flips children to `dormant` (NOT `retired`) under a minted
+    # snapshot and writes generalizes_from edges parent->child; revive accepts a
+    # dormant source and restores it to active.
+    parent = seed(env, status="active")
+    children = [seed(env, status="active") for _ in range(2)]
+
+    result = demote_to_dormant(env.store, tuple(children), parent)
+
+    assert result.operation == "demote_to_dormant"
+    assert result.insight_ids == tuple(children)
+    for child in children:
+        assert status_of(env, child) == "dormant"  # dormant, never retired
+        assert transitions_for(env, child) == [
+            ("active", "dormant", result.snapshot_id)
+        ]
+    # generalizes_from edges materialized from the parent to each child
+    edges = env.store.conn.execute(
+        "SELECT src, dst FROM insight_edges WHERE kind = 'generalizes_from'"
+        " ORDER BY dst ASC"
+    ).fetchall()
+    assert [(r["src"], r["dst"]) for r in edges] == [(parent, c) for c in children]
+
+    # revive a dormant child back to active
+    revived = revive_insight(env.store, children[0])
+    assert status_of(env, children[0]) == "active"
+    assert revived.operation == "revive_insight"
+    assert status_of(env, children[1]) == "dormant"  # the other stays dormant
+
+
+def test_demote_to_dormant_rejects_retired_child_and_mints_no_snapshot(env):
+    parent = seed(env, status="active")
+    retired = seed(env, status="retired")
+    before = snapshot_count(env)
+    with pytest.raises(LifecycleError, match="retired"):
+        demote_to_dormant(env.store, (retired,), parent)
+    with pytest.raises(LifecycleError, match="does not exist"):
+        demote_to_dormant(env.store, (9999,), parent)
+    with pytest.raises(LifecycleError, match="parent insight .* does not exist"):
+        demote_to_dormant(env.store, (parent,), 9999)
+    assert snapshot_count(env) == before  # failed ops mint nothing
+
+
+def test_noop_promote_mints_no_snapshot(env):
+    # A promote with no contradicts edges and the no-op cap tournament mints
+    # exactly one (the promotion) snapshot, retires nothing, and never touches
+    # the NLI encoder; the snapshot chain stays linear and gapless.
+    ids = [seed(env, batch="b1") for _ in range(2)]
+    encoder = FakeNliEncoder()
+
+    result = promote_batch(
+        env.store, "b1", nli_mode="passthrough", _nli_encoder=encoder
+    )
+
+    assert result.retired_incumbent_ids == ()
+    assert all(status_of(env, i) == "active" for i in ids)
+    assert snapshot_count(env) == 1  # the seam minted no extra snapshot
+    assert_snapshot_chain(env)
+    assert encoder.calls == 0  # no contradicts edge -> the re-check never runs
+
+
+# --- Conformance: U7 named invariants -> the test that enforces each ------------
+#
+# R16 "an unvalidated/hallucinated idea cannot retire a live incumbent"
+#   -> test_unvalidated_batch_cannot_retire_incumbent
+# R16 "supersede resolution runs AFTER admission; loser stamped invalid_at AND
+#      retired under the SAME minted snapshot; contradicts edge closed"
+#   -> test_supersede_resolution_runs_after_admission
+# R16 "winner by authority > evidence-count > recency, in that exact order;
+#      incumbent-wins leaves the challenger live and the incumbent un-invalidated"
+#   -> test_winner_precedence_authority_evidence_recency
+#      (+ test_recheck_clears_stale_contradiction: a deferred edge is not a verdict)
+# R18 "demote_to_dormant flips children to dormant (never retired) under a minted
+#      snapshot, writes generalizes_from edges; revive accepts a dormant source"
+#   -> test_demote_to_dormant_never_retires_children
+#      (+ test_demote_to_dormant_rejects_retired_child_and_mints_no_snapshot)
+# R16/R17 "no-op promote (no contradicts edges, no-op cap tournament) mints no
+#      extra snapshot, mutates no active set; chain linear/gapless"
+#   -> test_noop_promote_mints_no_snapshot

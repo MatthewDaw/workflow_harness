@@ -1,0 +1,17 @@
+{
+  "envelope": {
+    "confidence": 0.9851517939300577,
+    "label": "entailment",
+    "logits": [
+      -2.6,
+      3.9,
+      -0.4
+    ]
+  },
+  "request": {
+    "hypothesis": "An engineer sets the subprocess encoding to utf-8 on Windows.",
+    "model": "cross-encoder/nli-deberta-v3-base",
+    "premise": "A developer is pinning subprocess encoding to utf-8 on Windows."
+  },
+  "request_hash": "04dc24e97a5095b368b3cc8e7f17bfb39a02948dd2b2c9a5d1e3f3f3c509a933"
+}

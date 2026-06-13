@@ -378,6 +378,109 @@ Record the observed **score, cost** (reflection + validation are new spend, mete
 separate line items via Phase 1's cost fields), and the clone's start command under
 `## Probe findings` in PROGRESS.md before Plan 5 begins.
 
+## Phase 3b: training at scale (plan 005)
+
+Phase 3b makes the closed loop trustworthy and scalable. Plan 4 closed the loop on
+one target; Phase 3b turns that into a **training campaign**: multi-epoch runs across
+a rotated training pool, parallel episodes, a held-out generalization instrument, the
+rehearsal one-shot capability curve, improvement-tier grading, the family router with
+agent splitting, enforcement activation, and the RealWorld **calibration** target.
+
+- **The held-out suite** (`grading/suite.py`, `targets/{shaarli,privatebin,dokuwiki}/`)
+  is the generalization instrument: 3–5 archetype targets **never trained on**, each
+  with a frozen must-tier slice, scored every N episodes and control-charted per target
+  and aggregate. `curriculum.py` owns epochs, the documented held-out→training
+  migration, and **deterministic rotation** (a hash-keyed permutation per `(epoch,
+  seed)` — reproducible across processes so a parallel campaign replays identically).
+- **The rehearsal pass** (`pipeline/rehearsal.py`) is the autonomy instrument: after an
+  increment converges, every ticket re-executes as a one-shot fan-out (DAG waves, the
+  file-ownership lint promoted to enforcement), consuming the episode's run-memory
+  workflows. The **one-shot rate** (ticket / increment / episode) is the headline
+  learning curve; *passed-alone-broke-together* failures are the reflector's first
+  integration lessons.
+- **Parallel episodes + batch merging** (`pipeline/scheduler.py`) run N episodes against
+  one read-only snapshot (at most one in-flight per target), then merge validated
+  batches through registration under a **canonical order** with one joint confirmation.
+- **The router + agent splitting** (`library/router.py`, `reflector/agent_split.py`)
+  log every routing decision and, once `min_routing_decisions` accrues, let a family
+  self-reorganize: silhouette clustering + compressibility gate + routing replay +
+  benchmark, transactional and revertible until both gates pass.
+- **Enforcement activation** (`pipeline/enforcement.py`) flips the shadow detectors to
+  kill/exclusion mode from their logged distributions, and anneals the question budget
+  + persona rotation off logged telemetry — no detector is invented and enforced in the
+  same plan.
+
+### The RealWorld calibration target
+
+`targets/realworld/` onboards **RealWorld/Conduit** as the **calibration** target — the
+only target whose ground truth is a **published spec**, not our own inference. It is
+deliberately neither trained on nor a generalization-suite target. `spec.json` carries
+the spec-derived reference verdicts and a **pre-screen adjudication ledger**: before
+calibrating, the slice runs once against the pinned implementation and every
+spec/implementation divergence is hand-adjudicated and **excluded-and-recorded** from
+the **Gauge-R&R** denominator, so target error never lands in the grader's calibration
+number. The screened agreement between the grader's verdicts and the spec is the
+calibration number (`tests/test_e2e_scale.py`).
+
+### The training-operations runbook
+
+Operating a campaign is four moves; each is a thin call over the machinery above
+(`tests/test_e2e_scale.py::test_runbook_commands_execute_against_fixture_state` runs
+every one against fixture state):
+
+1. **Start a campaign.** Build the training pool and the epoch's rotation:
+   ```python
+   from agent_families.pipeline import curriculum
+   pool = curriculum.build_training_pool(qualified)          # linkding + docker-boot-qualified candidates
+   order = curriculum.rotation_order(pool, curriculum.current_epoch(store), seed)
+   ```
+   `build_training_pool` refuses any held-out name by config — admitting one is a
+   documented migration, never a flip. Schedule N parallel episodes per epoch with
+   `EpisodeScheduler`, merge their batches with `merge_batches`, and run the held-out
+   suite (`run_suite`) every N episodes, then `curriculum.advance_epoch(store)`.
+2. **Read the curves.** The generalization curve is `suite.aggregate_curve(store)` (and
+   `suite.revisit_curve(store, target)` per target); the **one-shot curve** is the
+   rehearsal metric per epoch (`rehearsal.episode_one_shot_metrics`,
+   `attach_one_shot_metrics`); `scheduler.joint_confirm_failure_rate(store)` is the
+   batch-interaction telemetry; `suite.control_limits(store, target)` are the SPC
+   limits (they recompute only on suite runs).
+3. **Suspend / resume.** An episode is suspendable mid-campaign and resumable
+   (`store.set_episode_status(ep, "suspended")` / `"running"`); the orchestrator's
+   checkpoint/resume (Phase 1) carries an in-flight increment across the pause. Quota
+   exhausted → suspend, resume when the window reopens.
+4. **Respond to instrument alarms.** A fired **tripwire** ends the Ralph loop with its
+   typed escalation, its kill threshold *derived* from the logged shadow distribution
+   (`enforcement.derive_similarity_threshold`); a verifier a mutation audit flagged
+   holds its tickets out of fitness until re-verified (`gate_suspect_fitness`);
+   `instrument_suspect` episode scores are excluded from curriculum decisions
+   (`curriculum_eligible_scores`); the question budget anneals toward the §17 floor per
+   epoch (`AnnealingSchedule`) and personas rotate only on a planner-score **plateau**
+   (`should_rotate_personas`). The converge-first → fan-out-first **crossover**
+   (`rehearsal.crossover_report`) surfaces when fan-out-first becomes cheaper — a
+   config flip, not a rule of thumb.
+
+### The offline scale e2e
+
+`tests/test_e2e_scale.py` drives the **whole campaign on fixtures** — 2 epochs × 2
+parallel episodes × deterministic rotation through suite scoring, rehearsal one-shot
+metrics, merged-batch lineage, and one completed agent split — plus the RealWorld
+Gauge-R&R calibration. It runs offline (zero quota, no Docker, no `claude`): episode
+bodies and the registration / joint-confirmation / one-shot / routing / benchmark seams
+are scripted fakes, the grader's spec observations are synthesized, and the
+suite/merge/rehearsal/split machinery is real against a real store, vec index, and git
+workspaces.
+
+### The live training campaign (manual, not CI)
+
+The documented live procedure is the project's operating manual. Prerequisites: Docker
+Desktop (the pinned training, held-out suite, and RealWorld stacks), Playwright (the
+dual-app drivers), and the claude CLI logged in on the **subscription**. Run a
+multi-epoch campaign with parallel episodes against the rotated pool, score the
+held-out suite, read the generalization and one-shot curves, Gauge-R&R the grader
+against the RealWorld spec, and respond to instrument alarms per the runbook above.
+Record the observed scores, cost, and the clone's start command under `## Probe
+findings` in PROGRESS.md.
+
 ## Layout
 
 ```text

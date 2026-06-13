@@ -7,9 +7,10 @@ import type {
 import { createHash } from 'node:crypto';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import type { AttributeValue } from '@aws-sdk/client-dynamodb';
-import { safeParseEnvelope, type Envelope, type Skill } from '@harness/shared';
+import { safeParseEnvelope, type Envelope, type Project, type Skill } from '@harness/shared';
 import type { Repo } from '../db/repo.js';
 import { applyEvent } from './projection.js';
+import { recomputeOrgRollup } from '../projections/rollupRepo.js';
 import { defaultRepo } from './runtime.js';
 import { getDb } from '../db/pg/client.js';
 import type { PgDb } from '../db/pg/migrate.js';
@@ -48,16 +49,14 @@ import {
  *    projection using the SAME pure `applyEvent` the synchronous path uses. It is
  *    seq-guarded and conditional, so re-processing a record converges to exactly
  *    the same state the inline fold produced (idempotent; never regresses).
+ *  - PROJECT records (PK `PROJ#…`, SK `META`) whose `progressPct` changed —
+ *    recompute the org objective roll-up off the EXISTING `recomputeOrgRollup`
+ *    pure logic, so "Streams drive roll-ups" actually holds.
  *
- * The objective roll-up is NO LONGER driven from a Dynamo PROJECT progress change
- * (U6): its single source of truth is now reconciled weekly commits (KTD5), so the
- * recompute runs in `/reconcile/complete` (`rest/weeklyTransitions.ts`), not here.
- * The GitHub `progressPct → rollup` consumer is removed.
- *
- * Everything else (connection records, listeners, device-auth, project writes,
- * the roll-up's own objective writes, projection writes, …) is irrelevant noise
- * and skipped. The handler is tolerant of malformed / partially-shaped records: a
- * record it can't interpret is logged and ignored rather than failing the batch.
+ * Everything else (connection records, listeners, device-auth, the roll-up's own
+ * objective writes, projection writes, …) is irrelevant noise and skipped. The
+ * handler is tolerant of malformed / partially-shaped records: a record it can't
+ * interpret is logged and ignored rather than failing the batch.
  */
 
 export interface StreamConsumerDeps {
@@ -262,21 +261,21 @@ function routeOutcomeMetric(outcome: RouteOutcome): AssociationMetricOutcome {
 }
 
 /**
- * Run the FULL topic→skill ideas pipeline for a `session.topic` event (U8→U10).
- * Builds the `TopicFinding` from the event and delegates to
- * `associateAndFinalize`, which resolves the org from the session's project
- * (NEVER `principal.org`), embeds the topic, retrieves the org's top-k
- * candidates (U8), judge-reranks to the single best skill (U9), and either
- * creates/merges the idea on that skill or routes the topic to the unassigned
- * bin (U10). End-to-end: a `session.topic` event now PRODUCES or MERGES an idea
- * (or a bin entry), not just a candidate seam.
+ * MAT-150 (R1) — The session-recurrence idea-creator pipeline is DISABLED.
  *
- *  - `routed`      → idea created/merged on the chosen skill (move-on-re-eval).
- *  - `unassigned`  → bin entry written (no candidate cleared the floor, or the
- *                    judge rejected / was below the confidence bar).
- *  - `unresolved`  → no-op (org/description unresolvable; never a wrong-org guess).
+ * The inferred-lane idea source is merged-PR distillation only (U1). Session
+ * topics survive solely as enrichment context (U7) — they are reprojected into
+ * the session record (so topic/topic-label fields stay current for U7 enrichment
+ * lookups) but they NO LONGER mint ideas via the topic-mining → associate →
+ * corroborate pipeline (plan 008). Raw session-topic recurrence must not create
+ * ideas; un-verified session ideas must not leak beside PR-gated ones.
  *
- * Errors propagate (not swallowed) so the record is redelivered/DLQ'd.
+ * The `associateAndFinalize` dep is retained on `StreamConsumerDeps` so existing
+ * tests that inject it still compile; the function is never called from
+ * `processRecord` while this flag is active. The dep and the `associateTopicEvent`
+ * helper remain for the shadow-observe path if the flag is later toggled.
+ *
+ * @deprecated Topic-based idea creation — disabled by MAT-150 (R1).
  */
 async function associateTopicEvent(
   deps: StreamConsumerDeps,
@@ -310,6 +309,38 @@ async function associateTopicEvent(
   return result;
 }
 
+/**
+ * MAT-150 (R1) — session-recurrence as an idea-creator is disabled.
+ *
+ * When `true` (the default), `processRecord` skips the `associateTopicEvent`
+ * call for `session.topic` events. The topic is still reprojected so the session
+ * record's topic/label fields stay current for U7 enrichment; the only change is
+ * that the topic no longer drives idea creation.
+ *
+ * Override to `false` (env `SESSION_TOPIC_IDEA_CREATION_DISABLED=false`) to
+ * re-enable for testing the old path or future shadow-observe work.
+ */
+function isSessionTopicIdeaCreationDisabled(): boolean {
+  const v = process.env.SESSION_TOPIC_IDEA_CREATION_DISABLED;
+  // Disabled by default (MAT-150); only re-enable with an explicit `false`.
+  return v !== 'false';
+}
+
+/** True when a PROJECT META record's roll-up-relevant fields changed. */
+function projectProgressChanged(
+  oldImg: Record<string, unknown> | undefined,
+  newImg: Record<string, unknown> | undefined,
+): boolean {
+  if (!newImg) return false; // a delete contributes nothing to recompute
+  const before = oldImg?.progressPct;
+  const after = newImg.progressPct;
+  if (before !== after) return true;
+  // Re-pointing which Supporting Outcomes the project owns also moves roll-ups.
+  return (
+    JSON.stringify(oldImg?.supportingOutcomeIds) !== JSON.stringify(newImg.supportingOutcomeIds)
+  );
+}
+
 async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): Promise<void> {
   const ddb = record.dynamodb;
   if (!ddb) return;
@@ -327,20 +358,32 @@ async function processRecord(record: DynamoDBRecord, deps: StreamConsumerDeps): 
     const parsed = safeParseEnvelope(newImg);
     if (!parsed.success) return; // not a well-formed envelope; ignore noise
     await reprojectEvent(deps.repo, parsed.data);
-    // A `session.topic` ALSO drives the FULL topic→skill ideas pipeline
-    // (U8→U10): embed the topic, retrieve the org's top-k candidate skills above
-    // the floor (U8), judge-rerank to the best skill (U9), and create/merge the
-    // idea on that skill — or route to the unassigned bin (U10). Done AFTER the
-    // reprojection so the session projection (the org-resolution path) is current.
-    if (parsed.data.event.kind === 'session.topic') {
+    // MAT-150 (R1) — session-topic recurrence is NO LONGER an idea-creator.
+    // The inferred lane's only idea source is merged-PR distillation (U1).
+    // Session topics are reprojected above (enrichment / U7 lookup), but the
+    // topic-mining → associate → corroborate pipeline (plan 008) is switched off
+    // so un-verified session ideas cannot leak beside PR-gated ones.
+    if (parsed.data.event.kind === 'session.topic' && !isSessionTopicIdeaCreationDisabled()) {
       await associateTopicEvent(deps, parsed.data.event, parsed.data.seq);
     }
     return;
   }
 
-  // NOTE: the objective roll-up is no longer driven by a Dynamo PROJECT progress
-  // change (U6) — its single source of truth is reconciled weekly commits, so the
-  // recompute runs in `/reconcile/complete` (`rest/weeklyTransitions.ts`).
+  // --- Project META record -> recompute the org objective roll-up. ---------
+  if (pk.startsWith('PROJ#') && sk === 'META') {
+    const newImg = decode(ddb.NewImage as Img);
+    const oldImg = decode(ddb.OldImage as Img);
+    if (!projectProgressChanged(oldImg, newImg)) return;
+    const project = newImg as (Project & { org?: string }) | undefined;
+    // `recomputeOrgRollup` is keyed by org (the objective tree lives in an
+    // `ORG#<org>` partition). The project item carries its owning `org` so the
+    // roll-up driver can resolve which org's tree to recompute; absent that we
+    // cannot place the project's progress into a tree, so we skip.
+    const org = typeof project?.org === 'string' ? project.org : undefined;
+    if (!org || !project?.id) return;
+    await recomputeOrgRollup(deps.db, deps.repo, org, [project.id]);
+    return;
+  }
 
   // --- Skill record -> re-embed the skill into the org's vector index. -----
   // The live skill item is `SCOPE#org#<org>` / `SKILL#<name>`. The same prefix

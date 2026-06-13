@@ -26,6 +26,19 @@ Plans 0–3 built a library nothing reads, a pipeline that doesn't learn, and a 
 
 **Retrieval into pipeline prompts**
 
+> **REWRITTEN BY R3 — see plan 2026-06-12-010 (Phase C) R10.** The
+> **family-scoped retrieval** model below (R2's "scope = the family's whole active
+> pool with an own-skills prior", R3's per-family injection scope, R4's
+> batch-keyed quarantine visibility, and R9's "explorer/grader have no library
+> family") is **rewritten to the stage / whole-store insight-level model**: under
+> R3 retrieval runs over the WHOLE store conditioned on the job query (no family
+> filter — ownership ≠ reachability becomes the default, not a special boundary
+> case), assembled by the **assign** stage (plan-010 U1) via plan 2026-06-12-009's
+> rewritten `library/retrieval.py::retrieve` + `render_injection_section`. The
+> per-family pool/own-skills-prior seam is retired; the injection-budget mechanic,
+> the reflector Stage A/B, fitness, run-memory, and the validation lifecycle below
+> all still stand unchanged.
+
 - R2. Per-family retrieval query: planner = concatenated increment-request MSGs + Q&A transcript; worker = ticket text + ACs; verifier = ACs + latest typed-failure records. Queries embed with `search_query:`; skills rank by max member-insight cosine. **Scope = the family's whole active pool with an own-skills prior** (not the agent's partition alone — ownership ≠ reachability, DESIGN §4 "What an agent is"): the working agent's own active skills are weighted up and claim most of the budget; siblings' insights enter only as a relevance-gated fallback for the remainder (the boundary-ticket case, e.g. an API contract needing both backend and frontend insights). In Phase 3a there is one generic agent per family, so own-pool = family-pool and this is a no-op seam; the prior/fallback split takes effect once agents split (Plan 5). The own-skills budget share is a config dial (start high — specialists stay sharp).
 - R3. Injection budget per session (~4k tokens, config): fill in rank order, drop whole skills (never truncate mid-skill), **log every drop** (truncation events are future split telemetry).
 - R4. Quarantined insights are retrievable only in `mode=trial` runs for their batch (the visibility-matrix exception is mode-keyed, not ambient).

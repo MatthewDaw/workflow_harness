@@ -1,0 +1,12 @@
+{
+  "envelope": {
+    "confidence": 0.85,
+    "label": "entailment"
+  },
+  "request": {
+    "hypothesis": "Prefer snake_case naming\n\nPrefer snake_case naming in Python modules and packages.",
+    "model": "cross-encoder/nli-deberta-v3-base",
+    "premise": "Always use snake_case\n\nAlways use snake_case for Python identifiers."
+  },
+  "request_hash": "63beb0cc7becb593819bc9e863c0045784579f95b3687275ee9ad5f860103a0a"
+}

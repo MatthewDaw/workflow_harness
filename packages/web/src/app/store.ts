@@ -1,6 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { setupListeners } from '@reduxjs/toolkit/query';
 import { baseApi } from '../api/baseApi.js';
+import { learningApi } from '../api/learningApi.js';
 import { authReducer } from './authSlice.js';
 import { liveEventsReducer } from './liveEventsSlice.js';
 import { liveMiddleware } from '../ws/liveMiddleware.js';
@@ -10,10 +11,12 @@ export function makeStore() {
   const store = configureStore({
     reducer: {
       [baseApi.reducerPath]: baseApi.reducer,
+      [learningApi.reducerPath]: learningApi.reducer,
       auth: authReducer,
       liveEvents: liveEventsReducer,
     },
-    middleware: (getDefault) => getDefault().concat(baseApi.middleware, liveMiddleware),
+    middleware: (getDefault) =>
+      getDefault().concat(baseApi.middleware, learningApi.middleware, liveMiddleware),
   });
   setupListeners(store.dispatch);
   return store;

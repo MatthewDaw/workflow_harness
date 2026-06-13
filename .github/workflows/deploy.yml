@@ -31,8 +31,40 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
+  # U10 / MAT-141 Gap 4: learning-service CI gate.
+  # Runs (a) the Python codegen freshness check (fails if IDL changed without
+  # regenerating py_types.py + ts_types.ts + shared/src/learning-schema.ts) and
+  # (b) the full learning-service pytest suite.  Both must pass before the TS
+  # build + CDK synth jobs run.
+  learning-service-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install learning-service + agent-families store-free core
+        working-directory: packages/learning-service
+        run: |
+          pip install -e ".[dev]"
+          # The learning loop reuses agent-families' STORE-FREE core (nli.py /
+          # judge.py). Install it editable WITHOUT its deps so the sqlite-vec /
+          # store coupling (banned from the live loop — see
+          # test_no_sqlite_vec_in_learning_service) is never pulled in; the
+          # store-free modules import fine on their own.
+          pip install -e ../../agent-families --no-deps
+      - name: Codegen freshness check (fails if IDL is stale)
+        working-directory: packages/learning-service
+        run: python -m learning_service.schema.codegen --check
+      - name: Run learning-service pytest suite
+        working-directory: packages/learning-service
+        run: python -m pytest tests/ -v --tb=short
+
   build-and-synth:
     runs-on: ubuntu-latest
+    needs: learning-service-ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,6 +75,11 @@ jobs:
         run: npm ci
       - name: Build shared + backend + web
         run: npm run build
+      # U10 / MAT-141 Gap 4: run the TS test suites so a failing test (e.g. the
+      # single-writer routing / no-hand-mirror guards) actually fails CI, not just
+      # the learning-service pytest gate above.
+      - name: Run TS test suites
+        run: npm run test
       - name: Synth all CDK stacks
         working-directory: infra
         run: npx cdk synth

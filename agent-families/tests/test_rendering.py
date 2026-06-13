@@ -178,6 +178,88 @@ def test_unknown_skill_raises(store):
         Renderer(store).render_concat(999)
 
 
+# --- derived membership: stable order + NULL-safe names (U8, R17) -----------------
+
+
+def test_render_order_is_derive_stable_not_position(store, skill_id):
+    """R17: members render in insight_id order, never skill_members.position.
+
+    A derive pass rebalances membership wholesale, so append-position is
+    meaningless. A fixture that scrambles position while preserving membership
+    must render byte-identical output — a position-ordered renderer fails here.
+    """
+    ids = [add_member(store, skill_id, k) for k in ("a", "b", "c")]
+    promote(store, ids)  # mints the snapshot membership renders at
+    before = Renderer(store).render_concat(skill_id).content
+    # Bytes are in ascending insight_id order: act-a precedes act-b precedes act-c.
+    assert before.index(b"act-a") < before.index(b"act-b") < before.index(b"act-c")
+
+    # Scramble position to the exact reverse of insight_id order, membership intact.
+    # Shift out of the live range first so the per-row UNIQUE(skill_id, position)
+    # constraint never trips mid-reassignment.
+    store.conn.execute(
+        "UPDATE skill_members SET position = position + 1000 WHERE skill_id = ?",
+        (skill_id,),
+    )
+    for pos, insight_id in enumerate(reversed(ids)):
+        store.conn.execute(
+            "UPDATE skill_members SET position = ? WHERE skill_id = ? AND insight_id = ?",
+            (pos, skill_id, insight_id),
+        )
+    store.conn.commit()
+    assert store.skill_members(skill_id) == list(reversed(ids))  # position truly reversed
+
+    after = Renderer(store).render_concat(skill_id).content  # fresh renderer: recomputes
+    assert after == before  # derive-stable order: position scramble changes nothing
+
+
+def test_unnamed_module_renders_placeholder_no_none(store):
+    """R17: a NULL-named derived module renders a placeholder, never ``None``."""
+    family_id = store.create_family("engineering")
+    agent_id = store.create_agent(family_id, "builder")
+    module_id = store.create_skill(agent_id, None, "")  # unnamed derived module
+    insight_id = add_member(store, module_id, "a")
+    promote(store, [insight_id])
+    content = Renderer(store).render_concat(module_id).content
+    assert b"None" not in content
+    assert b"# Skill: None" not in content
+    assert f"# Skill: module-{module_id}".encode() in content
+
+
+def test_cache_invalidated_only_via_snapshot(store, skill_id):
+    """R17: a membership rebalance mints a snapshot, so the cache cannot serve stale.
+
+    The render cache is keyed (skill_id, snapshot_id). Because every rebalance
+    mints a snapshot (R8), the rebalanced membership lands on a fresh key — a cache
+    miss that reflects the change — while the prior snapshot's bytes stay pinned.
+    """
+    id_a = add_member(store, skill_id, "a")
+    id_b = add_member(store, skill_id, "b")
+    snap1 = promote(store, [id_a, id_b])
+    renderer = Renderer(store)
+    first = renderer.render_concat(skill_id)
+    assert first.from_cache is False and first.snapshot_id == snap1
+    assert f"## Insight {id_b}".encode() in first.content
+
+    # Rebalance: drop b from membership inside a queue op, which mints a snapshot.
+    with store.queue_operation("derive", "rebalance") as snap2:
+        store.conn.execute(
+            "DELETE FROM skill_members WHERE skill_id = ? AND insight_id = ?",
+            (skill_id, id_b),
+        )
+    assert snap2 != snap1
+
+    rebalanced = renderer.render_concat(skill_id)  # current snapshot is now snap2
+    assert rebalanced.snapshot_id == snap2
+    assert rebalanced.from_cache is False  # new snapshot key => cache miss, fresh bytes
+    assert f"## Insight {id_b}".encode() not in rebalanced.content
+    assert f"## Insight {id_a}".encode() in rebalanced.content
+    # The prior snapshot's bytes remain pinned under their own key (distinct entries).
+    pinned = renderer.render_concat(skill_id, snapshot_id=snap1)
+    assert pinned.from_cache is True
+    assert pinned.content == first.content
+
+
 # --- compile (R16) -----------------------------------------------------------------
 
 
@@ -317,3 +399,16 @@ def test_compile_without_compiled_dir_fails_before_judge_call(
             skill_id, model=MODEL, max_retries=0, mode="replay",
             fixtures_dir=fixtures_dir,
         )
+
+
+# ## Conformance (plan-009 U8, R17)
+#
+# Each named R17 invariant maps to the behavioral test that enforces it:
+#
+# - "rendering orders members by a derive-stable key, not skill_members.position"
+#       -> test_render_order_is_derive_stable_not_position
+# - "an unnamed (NULL name/description) module renders a placeholder, never None"
+#       -> test_unnamed_module_renders_placeholder_no_none
+# - "the snapshot-keyed render cache cannot serve stale bytes for changed
+#    membership, because every rebalance mints a snapshot (R8)"
+#       -> test_cache_invalidated_only_via_snapshot

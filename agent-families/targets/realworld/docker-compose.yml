@@ -1,0 +1,45 @@
+# RealWorld / Conduit — the grader CALIBRATION target (plan-005 U7, R4).
+#
+# RealWorld ("Conduit", a Medium clone) is NOT a training target and NOT a
+# held-out generalization-suite target. It is the single CALIBRATION target: the
+# only target whose ground truth is NOT our own inference — it has a PUBLISHED
+# SPEC (https://github.com/gothinkster/realworld, the API + frontend spec). The
+# grader is Gauge-R&R'd against that spec (see targets/realworld/spec.json and
+# tests/test_e2e_scale.py): the spec-derived expected verdicts are the independent
+# reference the grader's own verdicts are measured against.
+#
+# Because it is a calibration instrument and not a curriculum member, RealWorld is
+# deliberately absent from curriculum.HELD_OUT and from suite.SUITE_REGISTRY —
+# admitting it to either would be a category error (it is neither trained on nor a
+# generalization probe).
+#
+# Image pinned BY DIGEST (R9, the Phase 2 harness contract: every cached apparatus
+# artifact is keyed to this digest; a tag alone drifts silently). Like every other
+# target, the implementation is pinned by commit/digest so the spec/implementation
+# divergences the Gauge-R&R pre-screen hand-adjudicates stay fixed.
+#
+# NOTE — the digest below is a PLACEHOLDER pending live resolution from the
+# registry (this unit's host had no network/docker; the live boot/seed and the
+# Gauge-R&R measurement against the running implementation are documented
+# pending-docker deliverables). SAFE: the generic SuiteTargetEnv/digest discipline
+# verifies the running image's RepoDigests contain the pin and refuses a mismatch,
+# so a stale placeholder can never silently calibrate against the wrong image.
+# Re-pinning is a deliberate apparatus migration, not an edit.
+#
+# - named volume, NEVER a Windows bind mount (SQLite WAL corruption risk, R5)
+# - host port 8085, disjoint from linkding=9090, clone=4173, kanboard=8081 and the
+#   held-out suite ports 8082/8083/8084 by construction
+# - readiness is polling GET / for the "Conduit" marker
+name: agent-families-realworld
+
+services:
+  realworld:
+    image: realworldapp/conduit:v1.0.0@sha256:c0ffee11d2e3f40516273849a0b1c2d3e4f5061728394a5b6c7d8e9f00112233
+    ports:
+      - "8085:3000"
+    volumes:
+      - realworld_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  realworld_data:
