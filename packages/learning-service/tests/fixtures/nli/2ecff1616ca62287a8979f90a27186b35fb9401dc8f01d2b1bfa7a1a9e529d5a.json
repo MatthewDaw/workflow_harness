@@ -1,0 +1,12 @@
+{
+  "envelope": {
+    "confidence": 0.99,
+    "label": "entailment"
+  },
+  "request": {
+    "hypothesis": "Consider using print statements for quick debug checks\n\nConsider using print() statements for quick debug checks.",
+    "model": "cross-encoder/nli-deberta-v3-base",
+    "premise": "Consider using print statements for quick debug checks\n\nConsider using print() statements for quick debug checks."
+  },
+  "request_hash": "2ecff1616ca62287a8979f90a27186b35fb9401dc8f01d2b1bfa7a1a9e529d5a"
+}

@@ -1,0 +1,12 @@
+{
+  "envelope": {
+    "confidence": 0.95,
+    "label": "contradiction"
+  },
+  "request": {
+    "hypothesis": "Avoid snake_case for Python identifiers and prefer camelCase instead\n\nAvoid snake_case for Python identifiers and prefer camelCase instead.",
+    "model": "cross-encoder/nli-deberta-v3-base",
+    "premise": "Always use snake_case\n\nAlways use snake_case for Python identifiers."
+  },
+  "request_hash": "8d49ad2828b13526dba7cc89686fbc3985c18072c7bc72510a6cf8754edbc6ce"
+}

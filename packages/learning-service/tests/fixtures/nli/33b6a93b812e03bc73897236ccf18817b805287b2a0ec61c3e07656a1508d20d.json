@@ -1,0 +1,12 @@
+{
+  "envelope": {
+    "confidence": 0.92,
+    "label": "contradiction"
+  },
+  "request": {
+    "hypothesis": "Use camelCase for all Python variables and functions\n\nUse camelCase for all Python variables and functions.",
+    "model": "cross-encoder/nli-deberta-v3-base",
+    "premise": "Always use snake_case\n\nAlways use snake_case for Python identifiers."
+  },
+  "request_hash": "33b6a93b812e03bc73897236ccf18817b805287b2a0ec61c3e07656a1508d20d"
+}

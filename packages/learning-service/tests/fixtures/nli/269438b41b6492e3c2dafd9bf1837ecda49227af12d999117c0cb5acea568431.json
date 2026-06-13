@@ -1,0 +1,12 @@
+{
+  "envelope": {
+    "confidence": 0.99,
+    "label": "entailment"
+  },
+  "request": {
+    "hypothesis": "Always use snake_case\n\nAlways use snake_case for Python identifiers.",
+    "model": "cross-encoder/nli-deberta-v3-base",
+    "premise": "Always use snake_case\n\nAlways use snake_case for Python identifiers."
+  },
+  "request_hash": "269438b41b6492e3c2dafd9bf1837ecda49227af12d999117c0cb5acea568431"
+}

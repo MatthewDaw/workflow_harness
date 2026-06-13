@@ -1,33 +1,19 @@
-"""merge_handler.py — U1: PR-merge ingestion driver (MAT-137).
+"""merge_handler.py — U1+U9: PR-merge ingestion driver + spine orchestration (MAT-137, MAT-147).
 
-One handler that turns a merged-to-main PR into distilled, anchored candidate
-insight(s).  Driven by the user-triggered replay (v1) or, later, a webhook
-(deferred continuous mode — same code path, different trigger).
+Gap 1 (U9): ``replay_merge_log`` now accepts optional pipeline components
+(classifier, credibility_store, skill_store) and runs the FULL pipeline after
+distillation — anchors (U2), locality join + NLI classify → supersession (U3/U5),
+semantic join → corroborate/create (U4), fold at verified_K with golden case capture.
 
-The handler:
-1. Checks the org-scoped idempotency cursor (``PROCESSED#<repo>#<prNumber>``).
-2. Handles non-default-base PRs (ignored — not verification).
-3. Handles closed-unmerged PRs (negative signal — recorded, not distilled).
-4. Applies the curriculum filter (skip low-signal noise; log every drop).
-5. Enriches with the U7 branch→session link (graceful degradation to PR-only).
-6. Distills from three sources (PR diff/title/desc/reviews + session context).
-7. Extracts code anchors from the diff (passed to caller for U2 write).
-8. Marks the PR as processed (idempotency cursor).
-
-Returns a ``MergeHandlerResult`` which the caller (replay loop or webhook)
-uses to decide whether to corroborate/create an idea (U4) and write anchors
-(U2).
-
-Shadow vs. enforce mode: in shadow mode the handler computes decisions and
-logs them but does NOT write to the store or mark the PR processed.  Enforce
-mode writes the cursor and the result is passed to the corroboration step.
+When the pipeline components are omitted the function behaves as before (distill only,
+returns ``MergeHandlerResult`` list) — used by unit tests that only test U1.
 """
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from learning_service.github import (
     PullRequest,
@@ -40,7 +26,12 @@ from learning_service.github import (
 )
 
 if TYPE_CHECKING:
+    from learning_service.classifier import NliClassifier
+    from learning_service.corroboration import AuthorCredibilityStore
     from learning_service.db.store import LearningStore
+    from learning_service.pipeline import PipelineResult
+    from learning_service.skills_write import SkillStore
+    from learning_service.telemetry import TelemetryAccumulator
 
 from learning_service.db.store import ProcessedPrRecord
 
@@ -241,6 +232,16 @@ def replay_merge_log(
     *,
     default_branch: str = "main",
     mode: str = "shadow",
+    # --- Pipeline components (optional — when provided, runs the FULL spine) ---
+    classifier: "NliClassifier | None" = None,
+    credibility_store: "AuthorCredibilityStore | None" = None,
+    skill_store: "SkillStore | None" = None,
+    skill_base_name: str = "default",
+    verified_k: float = 2.0,
+    unfold_mode: str = "shadow",
+    supersede_mode: str = "shadow",
+    telemetry: "TelemetryAccumulator | None" = None,
+    file_contents: "dict[str, bytes] | None" = None,
 ) -> list[MergeHandlerResult]:
     """Fold forward over an ordered list of PRs (the replay driver).
 
@@ -248,6 +249,14 @@ def replay_merge_log(
     replay order that makes re-running the same log produce the same library.
 
     Idempotency: already-processed PRs are silently skipped (the cursor).
+
+    Gap 1 (U9): When ``classifier`` and ``credibility_store`` are provided,
+    runs the FULL pipeline after distillation:
+      distill → extract anchors (U2) → locality join + NLI classify (U2/U3)
+              → supersede (U5) → corroborate/create (U4) → fold at verified_K
+              → golden case + revision write.
+
+    When omitted (legacy / unit-test usage), returns MergeHandlerResult list only.
     """
     results: list[MergeHandlerResult] = []
     for pr in pull_requests:
@@ -263,6 +272,35 @@ def replay_merge_log(
             "replay pr=%d action=%s",
             pr.number, r.action,
         )
+
+        # --- GAP 1: Run the full pipeline if components are provided -----------
+        if r.action == "distilled" and classifier is not None and credibility_store is not None:
+            from learning_service.pipeline import run_pipeline
+            pipeline_result = run_pipeline(
+                result=r,
+                org=org,
+                store=store,
+                classifier=classifier,
+                credibility_store=credibility_store,
+                skill_store=skill_store,
+                skill_base_name=skill_base_name,
+                verified_k=verified_k,
+                mode=mode,
+                unfold_mode=unfold_mode,
+                supersede_mode=supersede_mode,
+                telemetry=telemetry,
+                file_contents=file_contents,
+            )
+            logger.info(
+                "replay pipeline pr=%d idea_action=%s idea=%r folded=%s",
+                pr.number,
+                pipeline_result.idea_action,
+                pipeline_result.idea_id,
+                pipeline_result.folded,
+            )
+            # Attach pipeline result to the merge handler result for callers.
+            r._pipeline_result = pipeline_result  # type: ignore[attr-defined]
+
     return results
 
 

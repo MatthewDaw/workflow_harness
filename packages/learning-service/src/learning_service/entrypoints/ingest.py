@@ -205,16 +205,76 @@ def run_ingest(config: IngestConfig) -> int:
         resolved_modes["unfold_mode"],
     )
 
-    # --- stub: PR iteration + merge handler ------------------------------------
-    # The full implementation is U1 (PR ingestion driver).  The scaffolded loop:
-    #   for pr in list_merged_pull_requests(config.repo, since=config.since_pr):
-    #       if is_pr_processed(config.org, config.repo, pr.number):
-    #           continue  # idempotency cursor
-    #       candidates = merge_handler(pr, config, telemetry=config.telemetry)
-    #       for candidate in candidates:
-    #           corroborate_or_create(candidate, config, telemetry=config.telemetry)
-    #       mark_pr_processed(config.org, config.repo, pr.number)
-    logger.info("ingest stub: no PRs processed (U1 handler not yet wired)")
+    # --- Gap 2 (U9): Wire the real PR iteration + full pipeline ---------------
+    # In v1 the caller supplies a ``pr_log`` (list of PullRequest) via the
+    # ``config.pr_log`` attribute when calling from tests / the Lambda event.
+    # When ``config.dynamo`` is set, a DynamoLearningStore is used; otherwise
+    # an InMemoryLearningStore is used (useful for CLI dry-runs and tests).
+
+    pr_log = getattr(config, "pr_log", None) or []
+    if not pr_log:
+        logger.info(
+            "ingest: no pr_log supplied — nothing to process "
+            "(supply config.pr_log to replay a merge log)"
+        )
+    else:
+        # Build the learning store.
+        from learning_service.db.store import InMemoryLearningStore
+        store = getattr(config, "store", None) or InMemoryLearningStore()
+
+        # Build the NLI classifier (replay mode by default → offline, zero quota).
+        from learning_service.classifier import NliClassifier
+        classifier = getattr(config, "classifier", None)
+        if classifier is None:
+            nli_fixtures_dir = getattr(config, "nli_fixtures_dir", None)
+            classifier = NliClassifier(nli_mode=config.nli_mode, fixtures_dir=nli_fixtures_dir)
+
+        # Build author credibility store.
+        from learning_service.corroboration import AuthorCredibilityStore
+        credibility_store = getattr(config, "credibility_store", None) or AuthorCredibilityStore()
+
+        # Build the skill store (in-memory by default; DynamoSkillStore in prod).
+        from learning_service.skills_write import InMemorySkillStore
+        skill_store = getattr(config, "skill_store", None) or InMemorySkillStore()
+
+        skill_base_name = getattr(config, "skill_base_name", "default")
+        file_contents = getattr(config, "file_contents", None) or {}
+
+        logger.info(
+            "ingest: replaying %d PRs for org=%s repo=%s mode=%s",
+            len(pr_log),
+            config.org,
+            config.repo,
+            config.mode,
+        )
+
+        from learning_service.merge_handler import replay_merge_log
+        results = replay_merge_log(
+            pull_requests=pr_log,
+            org=config.org,
+            store=store,
+            default_branch="main",
+            mode=config.mode,
+            classifier=classifier,
+            credibility_store=credibility_store,
+            skill_store=skill_store,
+            skill_base_name=skill_base_name,
+            verified_k=config.verified_k,
+            unfold_mode=resolved_modes["unfold_mode"],
+            supersede_mode=resolved_modes["supersede_mode"],
+            telemetry=config.telemetry,
+            file_contents=file_contents,
+        )
+
+        # Summarise the run.
+        distilled = sum(1 for r in results if r.action == "distilled")
+        skipped = len(results) - distilled
+        logger.info(
+            "ingest: replay complete — distilled=%d skipped=%d total=%d",
+            distilled,
+            skipped,
+            len(results),
+        )
 
     # --- Emit calibration metrics (Gap 2) --------------------------------------
     _emit_telemetry(config, resolved_modes)
