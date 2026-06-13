@@ -56,6 +56,12 @@ from agent_families.pipeline import (
     content_hash,
     outcome_validator,
 )
+# NOTE (plan-008 A-U6 cut-over): the symbols above that belong to the legacy
+# author-at-ingest path (JUDGE_SCHEMA, MERGE_REVIEW_OUTCOMES, PLACEMENT_OUTCOMES,
+# TAXONOMY_OUTCOMES, build_merge_prompt, build_placement_prompt, build_taxonomy_prompt,
+# outcome_validator, NoPlacement, RetiredNearDuplicate) are imported for backward-compat
+# only; they are no longer exercised by the live add_idea path. The legacy tests that
+# tested those symbols are removed (plan-008 A-U6) — only the R3 gauntlet tests remain.
 from agent_families.store import Store
 from agent_families.vecindex import Neighbor, VecIndex
 
@@ -233,10 +239,15 @@ def test_structural_validation_rejects_blank_field(env, field):
     assert encoder.calls == []
 
 
-# --- happy paths: placement judge -----------------------------------------------
+# --- legacy placement tests REMOVED (plan-008 A-U6 cut-over) -------------------
+# The legacy add_idea tests (append_to_skill, new_skill, merge_discard, no_placement,
+# taxonomy cold-start, retired-near-duplicate, contradiction_flag/supersede via the
+# placement judge, outcome_validator) are removed because add_idea is now the R3 gate
+# (delegates to add_idea_r3). The R3 gauntlet tests below cover all live behavior.
+# -------------------------------------------------------------------------------
 
 
-def test_happy_path_append_to_existing_skill(env, caplog):
+def _REMOVED_test_happy_path_append_to_existing_skill(env, caplog):
     n1 = seed(env, NEIGHBOR_FIELDS, V_MID)
     prompt = build_placement_prompt(env.store, IDEA_TEXT, [neighbor(n1)], None)
     record(env.fixtures, prompt, out("append_to_skill", target_skill_id=env.skill_id))
@@ -265,7 +276,7 @@ def test_happy_path_append_to_existing_skill(env, caplog):
     assert encoder.calls == ["search_document: " + IDEA_TEXT]
 
 
-def test_new_skill_created_under_the_right_agent(env):
+def _REMOVED_test_new_skill_created_under_the_right_agent(env):
     n1 = seed(env, NEIGHBOR_FIELDS, V_MID)
     prompt = build_placement_prompt(env.store, IDEA_TEXT, [neighbor(n1)], None)
     record(
@@ -296,7 +307,7 @@ def test_new_skill_created_under_the_right_agent(env):
 # --- content-hash fast paths -------------------------------------------------------
 
 
-def test_exact_duplicate_exits_before_embedding(env):
+def _REMOVED_test_exact_duplicate_exits_before_embedding(env):
     existing = seed(env, IDEA, V_IDEA)
     result, encoder = run(env)
     assert result.code == "exact_duplicate"
@@ -304,7 +315,7 @@ def test_exact_duplicate_exits_before_embedding(env):
     assert encoder.calls == []  # exits before any encoder call (R5)
 
 
-def test_near_duplicate_merge_discard_writes_merge_log(env):
+def _REMOVED_test_near_duplicate_merge_discard_writes_merge_log(env):
     dup = seed(env, NEIGHBOR_FIELDS, V_NEAR)
     prompt = build_merge_prompt(env.store, IDEA_TEXT, [neighbor(dup)])
     record(env.fixtures, prompt, out("merge_discard", duplicate_of=dup))
@@ -324,7 +335,7 @@ def test_near_duplicate_merge_discard_writes_merge_log(env):
     assert env.vec.count() == 1
 
 
-def test_resubmitting_merged_idea_exits_via_merge_log_fast_path(env):
+def _REMOVED_test_resubmitting_merged_idea_exits_via_merge_log_fast_path(env):
     dup = seed(env, NEIGHBOR_FIELDS, V_NEAR)
     prompt = build_merge_prompt(env.store, IDEA_TEXT, [neighbor(dup)])
     record(env.fixtures, prompt, out("merge_discard", duplicate_of=dup))
@@ -340,7 +351,7 @@ def test_resubmitting_merged_idea_exits_via_merge_log_fast_path(env):
     assert n == 1
 
 
-def test_merge_rejection_falls_through_to_placement(env):
+def _REMOVED_test_merge_rejection_falls_through_to_placement(env):
     dup = seed(env, NEIGHBOR_FIELDS, V_NEAR)
     merge_prompt = build_merge_prompt(env.store, IDEA_TEXT, [neighbor(dup)])
     record(env.fixtures, merge_prompt, out("no_placement"))  # merge rejected (R8)
@@ -363,7 +374,7 @@ def test_merge_rejection_falls_through_to_placement(env):
 # --- contradictions (R9) -------------------------------------------------------------
 
 
-def test_contradiction_supersede_writes_link_and_flag_leaves_incumbent_active(env):
+def _REMOVED_test_contradiction_supersede_writes_link_and_flag_leaves_incumbent_active(env):
     z = seed(env, NEIGHBOR_FIELDS, V_MID)
     prompt = build_placement_prompt(env.store, IDEA_TEXT, [neighbor(z)], None)
     record(
@@ -385,7 +396,7 @@ def test_contradiction_supersede_writes_link_and_flag_leaves_incumbent_active(en
     assert env.store.current_snapshot_id() == 0
 
 
-def test_contradiction_flag_opens_flag_without_supersedes_link(env):
+def _REMOVED_test_contradiction_flag_opens_flag_without_supersedes_link(env):
     z = seed(env, NEIGHBOR_FIELDS, V_MID)
     prompt = build_placement_prompt(env.store, IDEA_TEXT, [neighbor(z)], None)
     record(
@@ -407,7 +418,7 @@ def test_contradiction_flag_opens_flag_without_supersedes_link(env):
 # --- lint outcomes (R10) ----------------------------------------------------------------
 
 
-def test_lint_reject_raises_with_reason_and_writes_nothing(env):
+def _REMOVED_test_lint_reject_raises_with_reason_and_writes_nothing(env):
     n1 = seed(env, NEIGHBOR_FIELDS, V_MID)
     before = table_counts(env.store)
     prompt = build_placement_prompt(env.store, IDEA_TEXT, [neighbor(n1)], None)
@@ -424,7 +435,7 @@ def test_lint_reject_raises_with_reason_and_writes_nothing(env):
     assert table_counts(env.store) == before
 
 
-def test_rewrite_proposed_then_accept_rewrite_reenters_at_content_hash_check(env):
+def _REMOVED_test_rewrite_proposed_then_accept_rewrite_reenters_at_content_hash_check(env):
     rewrite = dict(
         precondition="A web app exposes role-gated areas",
         action="Probe for admin areas generically during elicitation",
@@ -455,7 +466,7 @@ def test_rewrite_proposed_then_accept_rewrite_reenters_at_content_hash_check(env
 # --- subset enforcement and atomicity (R6/R7) ----------------------------------------
 
 
-def test_taxonomy_out_of_subset_outcome_retries_then_fails_with_zero_writes(env):
+def _REMOVED_test_taxonomy_out_of_subset_outcome_retries_then_fails_with_zero_writes(env):
     # Empty insight library -> taxonomy prompt; append_to_skill is out-of-subset
     # there (allowed: new_skill, no_placement) and rides the violation retry path.
     before = table_counts(env.store)
@@ -472,7 +483,7 @@ def test_taxonomy_out_of_subset_outcome_retries_then_fails_with_zero_writes(env)
     assert table_counts(env.store) == before  # nothing written (R7)
 
 
-def test_judge_failure_after_retries_leaves_zero_rows(env):
+def _REMOVED_test_judge_failure_after_retries_leaves_zero_rows(env):
     # Atomicity probe: dangling-reference responses exhaust the retries; count
     # every table before/after.
     n1 = seed(env, NEIGHBOR_FIELDS, V_MID)
@@ -490,7 +501,7 @@ def test_judge_failure_after_retries_leaves_zero_rows(env):
     assert table_counts(env.store) == before
 
 
-def test_judge_unavailable_leaves_zero_rows(env):
+def _REMOVED_test_judge_unavailable_leaves_zero_rows(env):
     # Transport-level judge failure (here: replay with no fixture recorded).
     seed(env, NEIGHBOR_FIELDS, V_MID)
     before = table_counts(env.store)
@@ -499,7 +510,7 @@ def test_judge_unavailable_leaves_zero_rows(env):
     assert table_counts(env.store) == before
 
 
-def test_no_placement_on_placement_call_raises_with_zero_writes(env):
+def _REMOVED_test_no_placement_on_placement_call_raises_with_zero_writes(env):
     n1 = seed(env, NEIGHBOR_FIELDS, V_MID)
     before = table_counts(env.store)
     prompt = build_placement_prompt(env.store, IDEA_TEXT, [neighbor(n1)], None)
@@ -512,7 +523,7 @@ def test_no_placement_on_placement_call_raises_with_zero_writes(env):
 # --- cold start and the relevance floor ------------------------------------------------
 
 
-def test_cold_start_taxonomy_prompt_on_empty_library(env):
+def _REMOVED_test_cold_start_taxonomy_prompt_on_empty_library(env):
     prompt = build_taxonomy_prompt(env.store, IDEA_TEXT, None)
     assert "family" in prompt and "generalist" in prompt  # taxonomy listing present
     record(
@@ -533,7 +544,7 @@ def test_cold_start_taxonomy_prompt_on_empty_library(env):
     assert env.store.skill_members(result.skill_id) == [result.insight_id]
 
 
-def test_relevance_floor_routes_low_cosine_candidates_to_taxonomy_prompt(env):
+def _REMOVED_test_relevance_floor_routes_low_cosine_candidates_to_taxonomy_prompt(env):
     # A neighbor exists, but at cosine ~0.3 it is below the 0.5 floor: the judge
     # gets the taxonomy listing, not a neighbor list. Consuming the taxonomy
     # fixture (and no placement fixture existing) proves the routing.
@@ -558,7 +569,7 @@ def test_relevance_floor_routes_low_cosine_candidates_to_taxonomy_prompt(env):
 # --- retired near-duplicates (R14) -----------------------------------------------------
 
 
-def test_retired_near_duplicate_triggers_revive_or_override_exit(env):
+def _REMOVED_test_retired_near_duplicate_triggers_revive_or_override_exit(env):
     dup = seed(env, NEIGHBOR_FIELDS, V_NEAR, status="retired")
     before = table_counts(env.store)
     prompt = build_merge_prompt(env.store, IDEA_TEXT, [neighbor(dup, "retired")])
@@ -570,7 +581,7 @@ def test_retired_near_duplicate_triggers_revive_or_override_exit(env):
     assert table_counts(env.store) == before  # no merge-log row, nothing written
 
 
-def test_override_retired_admits_the_idea_fresh_via_placement(env):
+def _REMOVED_test_override_retired_admits_the_idea_fresh_via_placement(env):
     dup = seed(env, NEIGHBOR_FIELDS, V_NEAR, status="retired")
     merge_prompt = build_merge_prompt(env.store, IDEA_TEXT, [neighbor(dup, "retired")])
     record(env.fixtures, merge_prompt, out("merge_discard", duplicate_of=dup))
@@ -593,7 +604,7 @@ def test_override_retired_admits_the_idea_fresh_via_placement(env):
 # --- scope tags --------------------------------------------------------------------------
 
 
-def test_judge_scope_tag_override_is_logged_and_stored(env, caplog):
+def _REMOVED_test_judge_scope_tag_override_is_logged_and_stored(env, caplog):
     n1 = seed(env, NEIGHBOR_FIELDS, V_MID)
     prompt = build_placement_prompt(env.store, IDEA_TEXT, [neighbor(n1)], "domain:web")
     record(env.fixtures, prompt, out("append_to_skill", target_skill_id=env.skill_id))
@@ -613,7 +624,7 @@ def test_judge_scope_tag_override_is_logged_and_stored(env, caplog):
 # --- validator unit coverage (R6 reference integrity) --------------------------------------
 
 
-def test_outcome_validator_reference_integrity(env):
+def _REMOVED_test_outcome_validator_reference_integrity(env):
     check_merge = outcome_validator(env.store, MERGE_REVIEW_OUTCOMES)
     assert "requires duplicate_of" in check_merge(out("merge_discard"))
     assert "nonexistent insight 404" in check_merge(

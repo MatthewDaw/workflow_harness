@@ -29,7 +29,9 @@ def test_shipped_template_loads_with_defaults():
     assert cfg.embedding.model == "nomic-ai/nomic-embed-text-v1.5"
     assert cfg.embedding.dim == 768
     assert cfg.embedding.device == "cpu"
-    assert cfg.merge.cosine_threshold == pytest.approx(0.92)
+    # R11 cut-over: cosine_threshold removed from toml; the live path uses candidate_floor
+    assert cfg.merge.cosine_threshold is None
+    assert cfg.merge.candidate_floor == pytest.approx(0.80)
     assert cfg.retrieval.ann_top_k == 10
     assert 0.0 <= cfg.retrieval.relevance_floor <= 1.0
     assert cfg.judge.model == "sonnet"
@@ -57,7 +59,7 @@ def test_minimal_valid_config_round_trips(tmp_path):
         dim = 768
         device = "cpu"
         [merge]
-        cosine_threshold = 0.9
+        candidate_floor = 0.80
         [retrieval]
         ann_top_k = 10
         relevance_floor = 0.5
@@ -72,7 +74,9 @@ def test_minimal_valid_config_round_trips(tmp_path):
         """,
     )
     cfg = load_config(path)
-    assert cfg.merge.cosine_threshold == pytest.approx(0.9)
+    # R11 cut-over: cosine_threshold removed; only candidate_floor remains
+    assert cfg.merge.cosine_threshold is None
+    assert cfg.merge.candidate_floor == pytest.approx(0.80)
     # [greenfield] is optional — its absence falls back to documented defaults
     assert cfg.greenfield.core_loop_n == 5
     assert cfg.greenfield.rotation_fraction == pytest.approx(0.0)
@@ -88,7 +92,7 @@ model = "nomic-ai/nomic-embed-text-v1.5"
 dim = 768
 device = "cpu"
 [merge]
-cosine_threshold = 0.92
+candidate_floor = 0.80
 [retrieval]
 ann_top_k = 10
 relevance_floor = 0.5
@@ -167,7 +171,7 @@ def test_unknown_key_in_section_names_the_key(tmp_path):
         device = "cpu"
         bogus_key = 1
         [merge]
-        cosine_threshold = 0.92
+        candidate_floor = 0.80
         [retrieval]
         ann_top_k = 10
         relevance_floor = 0.5
@@ -195,7 +199,7 @@ def test_unknown_section_names_the_section(tmp_path):
         dim = 768
         device = "cpu"
         [merge]
-        cosine_threshold = 0.92
+        candidate_floor = 0.80
         [retrieval]
         ann_top_k = 10
         relevance_floor = 0.5
@@ -221,7 +225,7 @@ def test_unknown_section_names_the_section(tmp_path):
 
 def _base_with(tmp_path: Path, section: str, key: str, value: str) -> Path:
     defaults = {
-        ("merge", "cosine_threshold"): "0.92",
+        ("merge", "candidate_floor"): "0.80",
         ("lifecycle", "active_cap"): "50",
     }
     overrides = dict(defaults)
@@ -234,7 +238,7 @@ def _base_with(tmp_path: Path, section: str, key: str, value: str) -> Path:
         dim = 768
         device = "cpu"
         [merge]
-        cosine_threshold = {overrides[("merge", "cosine_threshold")]}
+        candidate_floor = {overrides[("merge", "candidate_floor")]}
         [retrieval]
         ann_top_k = 10
         relevance_floor = 0.5
@@ -250,11 +254,12 @@ def _base_with(tmp_path: Path, section: str, key: str, value: str) -> Path:
     )
 
 
-def test_cosine_threshold_above_one_errors(tmp_path):
-    path = _base_with(tmp_path, "merge", "cosine_threshold", "1.5")
+def test_candidate_floor_above_one_errors(tmp_path):
+    # R11 cut-over: cosine_threshold removed; candidate_floor is now the validated key.
+    path = _base_with(tmp_path, "merge", "candidate_floor", "1.5")
     with pytest.raises(ConfigError) as exc:
         load_config(path)
-    assert "cosine_threshold" in str(exc.value)
+    assert "candidate_floor" in str(exc.value)
 
 
 def test_negative_active_cap_errors(tmp_path):

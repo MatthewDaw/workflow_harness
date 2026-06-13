@@ -1,29 +1,29 @@
-"""add_idea pipeline: the complete registration flow per the decision spine (R5-R11, R14).
+"""add_idea pipeline: the R3 ingest gauntlet (plan-008 A-U6 cut-over).
 
-Stage order (plan-001 flow diagram): structural validation -> content-hash fast
-path (checked against insights AND the merge log, so exact duplicates and
-previously-merged ideas exit before any embedding or judging) -> embed with the
-pinned local model (``search_document:``) -> cosine merge prefilter (judged,
-never silently auto-merged, R8) -> ANN with relevance floor -> placement prompt,
-or the cold-start taxonomy-listing prompt when no neighbor clears the floor ->
-one transaction writing insight (status=quarantined, batch ID) + vec row +
-membership + links (R7). Registration never mints a snapshot (R3).
+:func:`add_idea` IS the R3 gate. The live stage order: structural validation ->
+admission gate (Operation 1: extract / generalize / altitude-audit -> atom +
+negative_scope, BEFORE embed) -> content-hash check on the GENERALIZED atom (a hit
+corroborates the incumbent, R15) -> embed KEY + FULL clustering vectors ->
+key-collision candidate fetch at >= candidate_floor (a filter, never a verdict, R11)
+-> per-candidate local-NLI verdict (judge resolve_edge fallback only below confidence
+threshold, R12) -> ONE transaction writing a quarantined insight, its key+full vectors,
+and its typed edges (corroborates/refines/contradicts). Authors NO skill, NO membership
+(grouping deferred to plan 009); mints NO snapshot (R3); NEVER lets cosine render a
+duplicate-vs-contradiction verdict (the shipped negation-blindness bug is fixed).
 
-Judge discipline (R6): one schema for all calls (:data:`JUDGE_SCHEMA`); each
-call type carries an allowed-outcome SUBSET enforced application-side through
-``extra_validate`` (:func:`outcome_validator`) — an out-of-subset outcome or a
-dangling reference (e.g. ``append_to_skill`` naming a nonexistent skill) rides
-the same feedback-retry-then-fail path as a schema violation, with no writes in
-any failure mode. Prompts carry no volatile data — no timestamps, no absolute
-paths, and cosine values are omitted entirely (R23 fixture-key stability).
+Non-registration exits raise: :class:`StructuralValidationError`,
+:class:`LintRejected`, :class:`RewriteProposed` (re-run with ``accept_rewrite=True``,
+re-enters after structural validation). In every raising path zero rows are written (R7).
 
-Non-registration exits are typed exceptions (the CLI, U9, maps
-:class:`RegistrationRejected` to a non-zero exit): the generalization lint never
-silently rewrites — ``rewrite_proposed`` raises :class:`RewriteProposed` carrying
-the rewrite, and re-running with ``accept_rewrite=True`` re-enters the pipeline
-at the content-hash check (R10). A ``merge_discard`` whose target is retired
-raises :class:`RetiredNearDuplicate` ("revive or override?", R14);
-``override_retired=True`` admits the idea fresh via normal placement.
+``add_idea_r3`` is a backward-compat alias for :func:`add_idea` (collapsed in U6
+cut-over). The legacy author-at-ingest spine (placement/taxonomy/cosine-merge-verdict)
+is deleted; ``_add_idea_legacy`` no longer exists.
+
+Legacy symbols (``JUDGE_SCHEMA``, ``MERGE_REVIEW_OUTCOMES``, ``PLACEMENT_OUTCOMES``,
+``TAXONOMY_OUTCOMES``, ``build_merge_prompt``, ``build_placement_prompt``,
+``build_taxonomy_prompt``, ``outcome_validator``, ``NoPlacement``,
+``RetiredNearDuplicate``) are retained for backward-compat (tests that compile
+against the old API) but are no longer used by any live production path.
 """
 
 from __future__ import annotations
@@ -52,10 +52,9 @@ logger = logging.getLogger(__name__)
 
 STRUCTURAL_FIELDS = ("precondition", "action", "expected_outcome")
 
-# Per-call-type allowed-outcome subsets (R6). The merge-review call uses
-# `no_placement` as its rejection verdict: "not a duplicate — fall through to
-# normal placement" (R8). The taxonomy call is the KTD cold-start contract:
-# new_skill or no_placement only.
+# Per-call-type allowed-outcome subsets for the LEGACY author-at-ingest path
+# (retained for legacy tests that compile against the old API; ``_add_idea_legacy``
+# is DELETED — plan-008 A-U6 cut-over). NOT used by the live ``add_idea`` path.
 MERGE_REVIEW_OUTCOMES = ("merge_discard", "no_placement")
 PLACEMENT_OUTCOMES = (
     "append_to_skill",
@@ -69,6 +68,20 @@ PLACEMENT_OUTCOMES = (
 TAXONOMY_OUTCOMES = ("new_skill", "no_placement")
 CONTRADICTION_OUTCOMES = ("contradiction_flag", "contradiction_supersede")
 
+# LEGACY full outcomes for the author-at-ingest judge schema (``_add_idea_legacy``
+# is DELETED — plan-008 A-U6; retained so legacy fixtures with ``new_skill`` /
+# ``append_to_skill`` / ``merge_discard`` / ``no_placement`` still replay).
+_LEGACY_OUTCOMES = (
+    "append_to_skill",
+    "new_skill",
+    "merge_discard",
+    "contradiction_flag",
+    "contradiction_supersede",
+    "lint_reject",
+    "rewrite_proposed",
+    "no_placement",
+)
+
 _REWRITE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -80,12 +93,15 @@ _REWRITE_SCHEMA = {
     "additionalProperties": False,
 }
 
-# The judge contract: one schema, all calls (plan-001 "Judge contract"). Subsets
-# and reference integrity are enforced application-side via outcome_validator.
-JUDGE_SCHEMA = {
+# LEGACY judge schema (R14 cut-over, plan-008 A-U6): ``_add_idea_legacy`` is
+# DELETED; this schema is retained so legacy fixtures (append_to_skill, new_skill,
+# merge_discard, no_placement) still replay correctly in tests that exercise the
+# old API. The live ``add_idea`` path uses ``ADMISSION_GATE_SCHEMA`` and
+# ``RESOLVE_EDGE_SCHEMA`` from judge.py — NOT this schema.
+_LEGACY_JUDGE_SCHEMA = {
     "type": "object",
     "properties": {
-        "outcome": {"type": "string", "enum": list(OUTCOMES)},
+        "outcome": {"type": "string", "enum": list(_LEGACY_OUTCOMES)},
         "target_skill_id": {"type": "integer"},
         "new_skill": {
             "type": "object",
@@ -123,6 +139,13 @@ JUDGE_SCHEMA = {
     "required": ["outcome", "scope_tag", "lint", "confidence"],
     "additionalProperties": False,
 }
+
+# The judge contract exposed for tests that imported the legacy JUDGE_SCHEMA.
+# After the R14 cut-over the live R3 path does NOT use this schema; it is kept for
+# backward-compat with test code that directly constructs and writes fixtures against
+# the legacy schema shape. It now uses the LEGACY outcomes enum so those fixtures
+# continue to replay without schema violations.
+JUDGE_SCHEMA = _LEGACY_JUDGE_SCHEMA
 
 
 def _utcnow() -> str:
@@ -633,371 +656,7 @@ def add_idea(
     batch_label: str,
     scope_tag: str | None = None,
     accept_rewrite: bool = False,
-    override_retired: bool = False,
-    judge_mode: str | None = None,
-    judge_fixtures_dir: str | Path | None = None,
-) -> AddIdeaResult:
-    """Register one idea through the decision spine; returns only exit-0 outcomes.
-
-    Non-registration exits raise: :class:`StructuralValidationError`,
-    :class:`LintRejected`, :class:`RewriteProposed` (re-run the rewrite with
-    ``accept_rewrite=True``, which re-enters at the content-hash check, R10),
-    :class:`NoPlacement`, :class:`RetiredNearDuplicate` (R14), and any
-    :class:`~agent_families.judge.JudgeError` — in every raising path zero rows
-    are written (R7): all writes happen after the judge returns, inside one
-    transaction. ``batch_label`` is resolved to a batch row at write time so a
-    failed registration leaves no batch row either (R11).
-    """
-    if not accept_rewrite:
-        # An accepted rewrite was authored by the judge in the structural
-        # template; the flow re-enters at the content-hash check (R10).
-        _validate_structure(precondition, action, expected_outcome)
-
-    fields = {
-        "precondition": precondition,
-        "action": action,
-        "expected_outcome": expected_outcome,
-    }
-    idea_hash = content_hash(precondition, action, expected_outcome)
-
-    existing = store.find_insight_by_hash(idea_hash)
-    if existing is not None:
-        return AddIdeaResult(
-            code="exact_duplicate",
-            insight_id=existing["id"],
-            skill_id=None,
-            judge_outcome=None,
-            scope_tag=existing["scope_tag"],
-            batch_id=existing["batch_id"],
-            message=f"exact duplicate of insight {existing['id']} (content hash)",
-        )
-    merged = store.find_merge_log_by_hash(idea_hash)
-    if merged is not None:
-        return AddIdeaResult(
-            code="previously_merged",
-            insight_id=merged["duplicate_of"],
-            skill_id=None,
-            judge_outcome=None,
-            scope_tag=None,
-            batch_id=merged["batch_id"],
-            message=(
-                f"previously judged a duplicate of insight {merged['duplicate_of']}"
-                " (merge-log fast path)"
-            ),
-        )
-
-    ensure_pins(store, config.embedding)
-    idea_text = build_idea_text(precondition, action, expected_outcome)
-    vector = embedder.embed_document(idea_text)
-    # Add-idea dedup view: all statuses (R13), over the retrieval column the
-    # legacy embed_document vector lives in. The U3 flattener fix lets us call
-    # VecIndex.knn directly (the old out-of-band dedup-view helper is deleted).
-    neighbors = vec.knn(
-        vector, config.retrieval.ann_top_k, statuses=None, on="retrieval"
-    )
-
-    judge_kwargs = dict(
-        model=config.judge.model,
-        max_retries=config.judge.max_retries,
-        bare=config.judge.bare,
-        mode=judge_mode,
-        fixtures_dir=judge_fixtures_dir,
-    )
-
-    # Merge prefilter: similarity (1 - cosine distance) at or above the threshold
-    # short-circuits to merge review — judged, never silently merged (R8).
-    merge_candidates = [
-        n
-        for n in neighbors
-        if 1.0 - n.distance >= config.merge.cosine_threshold
-    ]
-    if merge_candidates:
-        result = run_judge(
-            build_merge_prompt(store, idea_text, merge_candidates),
-            JUDGE_SCHEMA,
-            extra_validate=outcome_validator(store, MERGE_REVIEW_OUTCOMES),
-            **judge_kwargs,
-        )
-        if result.output["outcome"] == "merge_discard":
-            duplicate_of = result.output["duplicate_of"]
-            duplicate = store.get_insight(duplicate_of)
-            if duplicate["status"] == "retired":
-                if not override_retired:
-                    raise RetiredNearDuplicate(duplicate_of)
-                logger.info(
-                    "overriding retired near-duplicate %d; admitting the idea fresh",
-                    duplicate_of,
-                )
-                # fall through to placement (R14 override path)
-            else:
-                with store.transaction():
-                    batch_id = store.ensure_batch(batch_label)
-                    store.insert_merge_log(
-                        content_hash=idea_hash,
-                        structural_fields_json=canonical_fields_json(
-                            precondition, action, expected_outcome
-                        ),
-                        duplicate_of=duplicate_of,
-                        batch_id=batch_id,
-                    )
-                return AddIdeaResult(
-                    code="merged",
-                    insight_id=duplicate_of,
-                    skill_id=None,
-                    judge_outcome="merge_discard",
-                    scope_tag=None,
-                    batch_id=batch_id,
-                    message=(
-                        f"judged a duplicate of insight {duplicate_of}; discarded"
-                        " with a merge-log row"
-                    ),
-                )
-        # no_placement = merge rejected: fall through to normal placement (R8).
-
-    placement_neighbors = [
-        n
-        for n in neighbors
-        if 1.0 - n.distance >= config.retrieval.relevance_floor
-    ]
-    if placement_neighbors:
-        prompt = build_placement_prompt(
-            store, idea_text, placement_neighbors, scope_tag
-        )
-        allowed = PLACEMENT_OUTCOMES
-    else:
-        prompt = build_taxonomy_prompt(store, idea_text, scope_tag)
-        allowed = TAXONOMY_OUTCOMES
-    result = run_judge(
-        prompt,
-        JUDGE_SCHEMA,
-        extra_validate=outcome_validator(store, allowed),
-        **judge_kwargs,
-    )
-    output = result.output
-    outcome = output["outcome"]
-
-    if outcome == "no_placement":
-        raise NoPlacement("judge declined to place this idea (no_placement)")
-    if outcome == "lint_reject":
-        reason = (output["lint"].get("reason") or "").strip()
-        raise LintRejected(reason or "the idea names target internals")
-    if outcome == "rewrite_proposed":
-        raise RewriteProposed(output["lint"]["rewrite"])
-
-    final_scope_tag = _resolve_scope_tag(output, scope_tag)
-    supersedes_id = (
-        output["supersedes"] if outcome == "contradiction_supersede" else None
-    )
-    incumbent_id = output["supersedes"] if outcome in CONTRADICTION_OUTCOMES else None
-
-    # The single registration transaction (R7): insight + vec + membership +
-    # links, all-or-nothing, status=quarantined, no snapshot minted (R3).
-    with store.transaction():
-        batch_id = store.ensure_batch(batch_label)
-        new_skill = output.get("new_skill")
-        if new_skill is not None:
-            skill_id = store.create_skill(
-                new_skill["agent_id"],
-                new_skill["name"],
-                new_skill["description"],
-                created_batch_id=batch_id,
-            )
-        else:
-            skill_id = output["target_skill_id"]
-        insight_id = store.insert_insight(
-            **fields,
-            content_hash=idea_hash,
-            scope_tag=final_scope_tag,
-            status="quarantined",
-            batch_id=batch_id,
-            embedding_model=config.embedding.model,
-            embedding_dim=config.embedding.dim,
-            supersedes=supersedes_id,
-        )
-        vec.insert(insight_id, vector)
-        store.append_member(skill_id, insight_id)
-        if incumbent_id is not None:
-            # Flag only: the incumbent stays active; retiring it is a manual
-            # decision surfaced by `status` (R9 — automated retirement is a
-            # Phase 3 ratchet-governance seam).
-            store.conn.execute(
-                "INSERT INTO contradictions"
-                " (challenger_id, incumbent_id, status, opened_at)"
-                " VALUES (?, ?, 'open', ?)",
-                (insight_id, incumbent_id, _utcnow()),
-            )
-
-    return AddIdeaResult(
-        code="registered",
-        insight_id=insight_id,
-        skill_id=skill_id,
-        judge_outcome=outcome,
-        scope_tag=final_scope_tag,
-        batch_id=batch_id,
-        message=(
-            f"registered insight {insight_id} (quarantined) in skill {skill_id}"
-            f" via {outcome}"
-        ),
-    )
-
-
-# =============================================================================
-# R3 ingest gauntlet (plan 008 U6) — the derive-from-graph write path.
-# =============================================================================
-#
-# This is the R3 replacement for the author-at-ingest :func:`add_idea` spine: a
-# standalone admission gate (U5) -> key-collision candidate fetch -> local-NLI
-# verdict (corroborate / refine / contradicts / unrelated, judge fallback only at
-# low NLI confidence) -> one transaction inserting a quarantined insight + its
-# key+full clustering vectors + typed edges. It authors NO skill and NO
-# membership (grouping is deferred to plan 009's derive pass), it never mints a
-# snapshot (R3), and — the shipped-bug fix — it never lets whole-atom cosine
-# render the duplicate-vs-contradiction *verdict*: cosine is only a candidate
-# filter, NLI renders the verdict, so a negation colliding at cosine ~0.95
-# becomes a `contradicts` edge instead of a silent merge (R11/R12).
-#
-# DEVIATION (008 U6 wave scope): the live cut-over — making this THE behavior of
-# ``add_idea``, deleting the placement/taxonomy/merge-verdict machinery, shrinking
-# judge ``OUTCOMES``, and re-recording every dependent fixture — touches ~5 test
-# files and ~6 source modules outside U6's three-file scope and would turn the
-# offline suite red mid-wave. So the R3 path ships here as ``add_idea_r3`` (the
-# real, tested behavior + every U6 acceptance invariant), legacy ``add_idea`` and
-# its symbols stay intact-but-demoted, and the rename/deletion + caller migration
-# ride the units that own those files (U8 reflector routing, U9 e2e + config). See
-# PROGRESS.md ## Deviations.
-
-# R11 candidate-filter floor (cosine similarity): key-collision candidates at or
-# above this similarity are *classified* (never auto-merged — that verdict is
-# NLI's). PROVENANCE: design note §2b "key-collision candidates at cosine ~0.80".
-# This module default is the seam until U9 wires it to ``config.merge``
-# (candidate_floor, repurposing the demoted 0.92 cosine_threshold). NEVER a
-# verdict — only a filter.
-CANDIDATE_FLOOR_DEFAULT = 0.80
-
-# R9/R12 NLI confidence threshold: at or above it the local NLI verdict stands; below
-# it the LLM judge resolve_edge prompt is the fallback. PROVENANCE: design note §2c
-# (NLI primary, judge fallback). Seam until U9 wires ``[nli].confidence_threshold``.
-NLI_CONFIDENCE_THRESHOLD_DEFAULT = 0.65
-
-# NLI label -> ingest move (R12). All candidates already collided on the rule's KEY
-# identity (knn on="key" >= candidate_floor), so a `neutral` verdict among them is a
-# same-key *nuance* (refine), not an unrelated rule.
-NLI_LABEL_TO_MOVE = {
-    "entailment": "corroborate",
-    "contradiction": "contradicts",
-    "neutral": "refine",
-}
-
-# Ingest move -> the typed edge it materializes (R12/R13). `unrelated` writes no
-# edge — the key collision was incidental and the new insight stands alone.
-MOVE_TO_EDGE_KIND = {
-    "corroborate": "corroborates",
-    "refine": "refines",
-    "contradicts": "contradicts",
-    "unrelated": None,
-}
-
-
-@dataclass(frozen=True)
-class CandidateMove:
-    """One key-collision candidate and the verdict rendered against it."""
-
-    candidate: Neighbor
-    move: str  # corroborate | refine | contradicts | unrelated
-    source: str  # nli | judge (which classifier rendered the verdict)
-
-
-def build_resolve_edge_prompt(incumbent_text: str, new_text: str) -> str:
-    """The Graphiti-style resolve_edge fallback prompt (R12), pure/volatile-free.
-
-    Run only when local NLI confidence is below threshold — the high-volume
-    duplicate/contradiction classification stays on the quota-free local model;
-    this LLM call is the rare tie-breaker.
-    """
-    return (
-        "You are the edge-resolution judge for an insight library. Local NLI was"
-        " not confident enough to classify the relationship between an existing"
-        " insight and a newly submitted one that collides with it on rule"
-        " identity. Decide the relationship.\n"
-        "Allowed outcomes: corroborate (the new insight agrees with / supports the"
-        " existing one — keep both, the new one is an independent vote), refine"
-        " (the same rule with added nuance — keep both), contradicts (the new"
-        " insight asserts the opposite — record the conflict, never merge),"
-        " unrelated (the identity collision is incidental; they are independent"
-        " rules).\n\n"
-        f"Existing insight:\n{incumbent_text}\n\n"
-        f"Newly submitted insight:\n{new_text}"
-    )
-
-
-def _classify_candidate(
-    config: Config,
-    *,
-    incumbent_text: str,
-    new_text: str,
-    nli_model: str,
-    nli_mode: str | None,
-    nli_fixtures_dir: str | Path | None,
-    nli_confidence_threshold: float,
-    judge_mode: str | None,
-    judge_fixtures_dir: str | Path | None,
-    _nli_encoder=None,
-) -> tuple[str, str]:
-    """Classify a key-collision candidate into one R3 move; return (move, source).
-
-    Local NLI renders the verdict; the LLM judge resolve_edge prompt is the
-    fallback used ONLY when NLI confidence is below the threshold (R9/R12). Above
-    the threshold the judge is never called.
-    """
-    result = nli.classify(
-        incumbent_text,
-        new_text,
-        model=nli_model,
-        mode=nli_mode,
-        fixtures_dir=nli_fixtures_dir,
-        _encoder=_nli_encoder,
-    )
-    if result.confidence >= nli_confidence_threshold:
-        return NLI_LABEL_TO_MOVE[result.label], "nli"
-    judged = run_judge(
-        build_resolve_edge_prompt(incumbent_text, new_text),
-        RESOLVE_EDGE_SCHEMA,
-        model=config.judge.model,
-        max_retries=config.judge.max_retries,
-        bare=config.judge.bare,
-        mode=judge_mode,
-        fixtures_dir=judge_fixtures_dir,
-    )
-    return judged.output["outcome"], "judge"
-
-
-def _corroborate_incumbent(
-    store: Store, incumbent_id: int, *, mode: str
-) -> None:
-    """Append a corroborate vote on the incumbent, stamped with the CURRENT
-    standing snapshot — duplicates are votes, not silent no-ops (R12/R15). No new
-    snapshot is minted at ingest. Caller holds the transaction."""
-    store.record_fitness_event(
-        incumbent_id,
-        "corroborate",
-        mode,
-        store.current_snapshot_id(),
-    )
-
-
-def add_idea_r3(
-    store: Store,
-    vec: VecIndex,
-    embedder: EmbeddingService,
-    config: Config,
-    *,
-    precondition: str,
-    action: str,
-    expected_outcome: str,
-    batch_label: str,
-    scope_tag: str | None = None,
-    accept_rewrite: bool = False,
-    provenance: str = "manual",
+    override_retired: bool = False,  # kept for back-compat; ignored in R3 path
     judge_mode: str | None = None,
     judge_fixtures_dir: str | Path | None = None,
     nli_model: str | None = None,
@@ -1006,9 +665,15 @@ def add_idea_r3(
     candidate_floor: float | None = None,
     nli_confidence_threshold: float | None = None,
     corroborate_mode: str = "training",
+    provenance: str = "manual",
     _nli_encoder=None,
 ) -> AddIdeaResult:
     """Register one idea through the R3 ingest gauntlet (R11–R15).
+
+    This IS the R3 gate (plan-008 A-U6 cut-over). The legacy
+    author-at-ingest spine (placement/taxonomy/cosine-merge-verdict) is deleted.
+    ``override_retired`` is accepted for back-compat but ignored (the R3 path has
+    no merge_discard verdict).
 
     Spine: admission gate (U5, BEFORE embed) -> generalized content-hash check
     (a hit corroborates the incumbent and returns it, R15) -> embed KEY + FULL
@@ -1021,9 +686,8 @@ def add_idea_r3(
     mints NO snapshot (R3); never stamps ``invalid_at`` (deferred-supersede rides
     promotion, R12/R16).
 
-    Non-registration exits raise (zero rows written, R7): the gate raises
-    :class:`StructuralValidationError` / :class:`LintRejected` /
-    :class:`RewriteProposed` before any embed/insert.
+    Non-registration exits raise (zero rows written, R7): :class:`StructuralValidationError`,
+    :class:`LintRejected`, :class:`RewriteProposed`.
     """
     floor = candidate_floor if candidate_floor is not None else CANDIDATE_FLOOR_DEFAULT
     threshold = (
@@ -1155,3 +819,134 @@ def add_idea_r3(
             f" edges: {move_summary}; no skill authored"
         ),
     )
+
+
+# Backward-compat alias: ``add_idea_r3`` is the same function as ``add_idea``
+# (plan-008 A-U6 cut-over collapsed the two). Tests and reflector code that import
+# ``add_idea_r3`` continue to work; do NOT add new callers — use ``add_idea``.
+add_idea_r3 = add_idea
+
+
+# =============================================================================
+# R3 ingest gauntlet constants and helpers
+# =============================================================================
+
+# R11 candidate-filter floor (cosine similarity): key-collision candidates at or
+# above this similarity are *classified* (never auto-merged — that verdict is
+# NLI's). PROVENANCE: design note §2b "key-collision candidates at cosine ~0.80".
+# This module default is the seam until U9 wires it to ``config.merge``
+# (candidate_floor, repurposing the demoted 0.92 cosine_threshold). NEVER a
+# verdict — only a filter.
+CANDIDATE_FLOOR_DEFAULT = 0.80
+
+# R9/R12 NLI confidence threshold: at or above it the local NLI verdict stands; below
+# it the LLM judge resolve_edge prompt is the fallback. PROVENANCE: design note §2c
+# (NLI primary, judge fallback). Seam until U9 wires ``[nli].confidence_threshold``.
+NLI_CONFIDENCE_THRESHOLD_DEFAULT = 0.65
+
+# NLI label -> ingest move (R12). All candidates already collided on the rule's KEY
+# identity (knn on="key" >= candidate_floor), so a `neutral` verdict among them is a
+# same-key *nuance* (refine), not an unrelated rule.
+NLI_LABEL_TO_MOVE = {
+    "entailment": "corroborate",
+    "contradiction": "contradicts",
+    "neutral": "refine",
+}
+
+# Ingest move -> the typed edge it materializes (R12/R13). `unrelated` writes no
+# edge — the key collision was incidental and the new insight stands alone.
+MOVE_TO_EDGE_KIND = {
+    "corroborate": "corroborates",
+    "refine": "refines",
+    "contradicts": "contradicts",
+    "unrelated": None,
+}
+
+
+@dataclass(frozen=True)
+class CandidateMove:
+    """One key-collision candidate and the verdict rendered against it."""
+
+    candidate: Neighbor
+    move: str  # corroborate | refine | contradicts | unrelated
+    source: str  # nli | judge (which classifier rendered the verdict)
+
+
+def build_resolve_edge_prompt(incumbent_text: str, new_text: str) -> str:
+    """The Graphiti-style resolve_edge fallback prompt (R12), pure/volatile-free.
+
+    Run only when local NLI confidence is below threshold — the high-volume
+    duplicate/contradiction classification stays on the quota-free local model;
+    this LLM call is the rare tie-breaker.
+    """
+    return (
+        "You are the edge-resolution judge for an insight library. Local NLI was"
+        " not confident enough to classify the relationship between an existing"
+        " insight and a newly submitted one that collides with it on rule"
+        " identity. Decide the relationship.\n"
+        "Allowed outcomes: corroborate (the new insight agrees with / supports the"
+        " existing one — keep both, the new one is an independent vote), refine"
+        " (the same rule with added nuance — keep both), contradicts (the new"
+        " insight asserts the opposite — record the conflict, never merge),"
+        " unrelated (the identity collision is incidental; they are independent"
+        " rules).\n\n"
+        f"Existing insight:\n{incumbent_text}\n\n"
+        f"Newly submitted insight:\n{new_text}"
+    )
+
+
+def _classify_candidate(
+    config: Config,
+    *,
+    incumbent_text: str,
+    new_text: str,
+    nli_model: str,
+    nli_mode: str | None,
+    nli_fixtures_dir: str | Path | None,
+    nli_confidence_threshold: float,
+    judge_mode: str | None,
+    judge_fixtures_dir: str | Path | None,
+    _nli_encoder=None,
+) -> tuple[str, str]:
+    """Classify a key-collision candidate into one R3 move; return (move, source).
+
+    Local NLI renders the verdict; the LLM judge resolve_edge prompt is the
+    fallback used ONLY when NLI confidence is below the threshold (R9/R12). Above
+    the threshold the judge is never called.
+    """
+    result = nli.classify(
+        incumbent_text,
+        new_text,
+        model=nli_model,
+        mode=nli_mode,
+        fixtures_dir=nli_fixtures_dir,
+        _encoder=_nli_encoder,
+    )
+    if result.confidence >= nli_confidence_threshold:
+        return NLI_LABEL_TO_MOVE[result.label], "nli"
+    judged = run_judge(
+        build_resolve_edge_prompt(incumbent_text, new_text),
+        RESOLVE_EDGE_SCHEMA,
+        model=config.judge.model,
+        max_retries=config.judge.max_retries,
+        bare=config.judge.bare,
+        mode=judge_mode,
+        fixtures_dir=judge_fixtures_dir,
+    )
+    return judged.output["outcome"], "judge"
+
+
+def _corroborate_incumbent(
+    store: Store, incumbent_id: int, *, mode: str
+) -> None:
+    """Append a corroborate vote on the incumbent, stamped with the CURRENT
+    standing snapshot — duplicates are votes, not silent no-ops (R12/R15). No new
+    snapshot is minted at ingest. Caller holds the transaction."""
+    store.record_fitness_event(
+        incumbent_id,
+        "corroborate",
+        mode,
+        store.current_snapshot_id(),
+    )
+
+

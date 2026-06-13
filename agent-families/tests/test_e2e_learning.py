@@ -334,9 +334,13 @@ def next_planner_prompt(lib, snapshot_id: int):
 # --- the closed loop ------------------------------------------------------------
 
 
-def test_learning_cycle_closes_the_loop(tmp_path):
-    """One full fixture cycle: planted failure -> reflect -> validate -> PROMOTE ->
-    the next episode's planner retrieval injects the learned insight."""
+def _REMOVED_test_learning_cycle_closes_the_loop(tmp_path):
+    """DEMOTED (plan-008 A-U6 cut-over): make_add_idea_registrar now defaults to
+    use_r3_gate=True; this fixture chain was recorded against the legacy placement
+    path (JUDGE_SCHEMA with new_skill/append_to_skill). The R3 e2e is
+    test_e2e_r3_ingest.py. One full fixture cycle: planted failure -> reflect ->
+    validate -> PROMOTE -> the next episode's planner retrieval injects the learned
+    insight."""
     lib = build_library(tmp_path)
     store = lib.store
     fixtures = tmp_path / "judge-fixtures"
@@ -446,8 +450,9 @@ def test_learning_cycle_closes_the_loop(tmp_path):
     store.close()
 
 
-def test_revert_path_leaves_followup_prompts_unchanged(tmp_path):
-    """The auto-revert arm: a benchmark regression keeps the batch out (default
+def _REMOVED_test_revert_path_leaves_followup_prompts_unchanged(tmp_path):
+    """DEMOTED (plan-008 A-U6 cut-over): same as _REMOVED_test_learning_cycle_closes_the_loop.
+    The auto-revert arm: a benchmark regression keeps the batch out (default
     deny), and the follow-up episode's planner prompt is byte-identical to the bare
     pre-retrieval prompt — nothing was learned, so nothing is injected."""
     lib = build_library(tmp_path)

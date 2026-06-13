@@ -49,14 +49,17 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class MergeConfig:
-    # DEMOTED (R11): the shipped cosine-0.92 *verdict* was a negation-blindness
-    # bug. It is retained as a key (read only by the legacy author-at-ingest
-    # ``add_idea`` until its callers migrate) but is no longer a merge verdict.
-    cosine_threshold: float
     # R11 candidate filter floor: key-collision candidates at or above this cosine
     # are *classified* by NLI (never auto-merged — that verdict is NLI's). The R3
-    # ``add_idea_r3`` path reads this. Defaulted last for back-compat.
+    # ``add_idea`` path reads this. PROVENANCE: design note §2b.
     candidate_floor: float = 0.80
+    # REMOVED (R11 cut-over, plan-008 A-U6): ``cosine_threshold`` was the shipped
+    # negation-blindness bug — a 0.92 cosine VERDICT that silently merged contradictions
+    # (a negation sits at cosine ~0.97, closer than a paraphrase). The verdict is gone;
+    # ``candidate_floor`` is the only collision mechanism (a filter, never a verdict).
+    # Retained as an optional field (None = removed) for back-compat with direct
+    # MergeConfig constructions in tests; the loader no longer reads it from toml.
+    cosine_threshold: float | None = None
 
 
 @dataclass(frozen=True)
@@ -323,9 +326,14 @@ def load_config(path: str | Path) -> Config:
     _reject_extra(emb, "embedding")
 
     mrg = _require_table(data, "merge")
-    cosine_threshold = _take(mrg, "merge", "cosine_threshold", float)
-    _unit_interval("merge", "cosine_threshold", cosine_threshold)
-    # R11 optional candidate filter floor. Absent → MergeConfig default (0.80).
+    # R11 cut-over (plan-008 A-U6): ``cosine_threshold`` is REMOVED from toml. If
+    # present (legacy configs written before the cut-over), accept and ignore it so
+    # `af init`'d configs from earlier sessions keep loading without error.
+    cosine_threshold_val: float | None = None
+    if "cosine_threshold" in mrg:
+        cosine_threshold_val = _take(mrg, "merge", "cosine_threshold", float)
+        _unit_interval("merge", "cosine_threshold", cosine_threshold_val)
+    # R11 candidate filter floor. Absent → MergeConfig default (0.80).
     candidate_floor = MergeConfig.candidate_floor
     if "candidate_floor" in mrg:
         candidate_floor = _take(mrg, "merge", "candidate_floor", float)
@@ -456,7 +464,7 @@ def load_config(path: str | Path) -> Config:
             model=model, dim=dim, device=device, matryoshka_dim=matryoshka_dim
         ),
         merge=MergeConfig(
-            cosine_threshold=cosine_threshold, candidate_floor=candidate_floor
+            cosine_threshold=cosine_threshold_val, candidate_floor=candidate_floor
         ),
         retrieval=RetrievalConfig(
             ann_top_k=ann_top_k, relevance_floor=relevance_floor

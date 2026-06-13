@@ -270,7 +270,8 @@ def test_init_then_status_shows_seeded_taxonomy_and_zero_insights(
     assert "insights: total=0 quarantined=0 active=0 dormant=0 retired=0" in status
     assert "pending batches: none" in status
     assert "open contradiction flags: none" in status
-    assert "merge.cosine_threshold=0.92" in status
+    # R11 cut-over: cosine_threshold removed from toml; status shows candidate_floor
+    assert "merge.candidate_floor=0.8" in status
 
 
 def test_second_init_is_safe_noop(tmp_path, monkeypatch, capsys):
@@ -348,7 +349,11 @@ def test_init_embedding_prefetch_failure_exits_nonzero_with_guidance(
 # --- the curated end-to-end chain (R24) ------------------------------------------------
 
 
-def test_curated_idea_set_end_to_end(tmp_path, monkeypatch, capsysbinary):
+def _REMOVED_test_curated_idea_set_end_to_end(tmp_path, monkeypatch, capsysbinary):
+    """DEMOTED (plan-008 A-U6 cut-over): add_idea is now the R3 gauntlet; this
+    test exercises the legacy placement spine (new_skill/append_to_skill/
+    merge_discard) via the CLI and requires fixtures the R3 path never generates.
+    The equivalent R3 e2e is tests/test_e2e_r3_ingest.py."""
     lib = tmp_path / "lib"
     lib.mkdir()
     db = lib / "library.db"

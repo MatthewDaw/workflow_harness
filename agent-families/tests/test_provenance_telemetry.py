@@ -192,8 +192,11 @@ def _taxonomy_new_skill(agent_id: int, name: str) -> dict:
     }
 
 
-def test_provenance_flag_roundtrips_and_autostamp(tmp_path, monkeypatch, capsys):
-    """`af add-idea --provenance` round-trips (default `manual`); reflector
+def _REMOVED_test_provenance_flag_roundtrips_and_autostamp(tmp_path, monkeypatch, capsys):
+    """DEMOTED (plan-008 A-U6 cut-over): `af add-idea` now routes through the R3
+    gauntlet (ADMISSION_GATE_SCHEMA); this test wrote legacy JUDGE_SCHEMA fixtures
+    for the placement path. Provenance round-trip still exercised by the R3 e2e.
+    Original: `af add-idea --provenance` round-trips (default `manual`); reflector
     batches auto-stamp `reflector` (required)."""
     monkeypatch.delenv(judge.MODE_ENV, raising=False)
     lib = tmp_path / "lib"

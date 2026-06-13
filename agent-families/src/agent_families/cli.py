@@ -154,16 +154,9 @@ device = "cpu"
 # matryoshka_dim = 256
 
 [merge]
-# DEMOTED (R11): the shipped cosine-0.92 *verdict* was a negation-blindness bug — a
-# negation sits at cosine ~0.97, CLOSER than a paraphrase at ~0.94, so the old path
-# silently merged contradictions. The R3 gauntlet (add_idea_r3) no longer treats any
-# cosine as a verdict; NLI renders the duplicate-vs-contradiction call. This key is
-# retained (read only by the legacy author-at-ingest add_idea until its callers
-# migrate). PROVENANCE: SkillRouter (arXiv 2603.22455) "cosine>0.92 merge", now
-# superseded by the NLI verdict (DESIGN §5 Op.2, R11/R12).
-cosine_threshold = 0.92
 # R11 candidate FILTER floor (never a verdict): key-collision candidates at or above
-# this cosine are *classified* by NLI. The R3 add_idea_r3 path reads this.
+# this cosine are *classified* by NLI. This is the ONLY collision mechanism — the
+# shipped cosine-0.92 *verdict* (cosine_threshold) is REMOVED (plan-008 A-U6 cut-over).
 # PROVENANCE: design note §2b "key-collision candidates at cosine ~0.80".
 # TUNING METRIC: candidate recall vs NLI-call volume on the hand-labeled pair set.
 candidate_floor = 0.80
@@ -698,7 +691,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         )
 
         lines.append(
-            f"config: merge.cosine_threshold={config.merge.cosine_threshold}"
+            f"config: merge.candidate_floor={config.merge.candidate_floor}"
             f" retrieval.relevance_floor={config.retrieval.relevance_floor}"
             f" retrieval.ann_top_k={config.retrieval.ann_top_k}"
             f" judge.model={config.judge.model}"

@@ -50,19 +50,19 @@ FIXTURES_ENV = "AF_JUDGE_FIXTURES"
 MODES = ("replay", "record", "passthrough")
 DEFAULT_FIXTURES_DIR = Path("tests") / "fixtures" / "judge"
 
-# The closed judge outcome enum (R6). Every judge schema's `outcome` field draws
-# from this; per-call-type allowed SUBSETS are enforced by the caller (pipeline)
-# through `extra_validate`, riding the same retry-then-fail path as a schema
-# violation.
+# The closed judge outcome enum (R14/plan-008 U6 cut-over). The R3 ingest gauntlet
+# cut-over removes ``append_to_skill``, ``new_skill``, and ``no_placement`` (grouping
+# is deferred to plan 009's derive pass; there is no placement at ingest). ``merge_discard``
+# is reinterpreted as ``corroborate`` (keep the new insight distinct, write a
+# ``corroborates`` edge; never discard). The remaining verdicts are the admission-gate
+# path (``lint_reject``, ``rewrite_proposed``) and the contradiction flags that ride the
+# legacy contradictions table (kept until plan 009 edge migration).
 OUTCOMES = (
-    "append_to_skill",
-    "new_skill",
-    "merge_discard",
+    "corroborate",
     "contradiction_flag",
     "contradiction_supersede",
     "lint_reject",
     "rewrite_proposed",
-    "no_placement",
 )
 
 # The admission gate (Operation 1) verdict enum (R10/R14 gate half). The gate is

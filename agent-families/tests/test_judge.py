@@ -68,7 +68,7 @@ def good_envelope(output: dict | None = None) -> dict:
         "num_turns": 1,
         "result": "ok",
         "total_cost_usd": 0.0042,
-        "structured_output": {"outcome": "new_skill", "confidence": 0.9},
+        "structured_output": {"outcome": "corroborate", "confidence": 0.9},
     }
     if output is not None:
         envelope["structured_output"] = output
@@ -116,7 +116,7 @@ def test_replay_returns_parsed_result_with_zero_subprocess_calls(
             max_retries=3,
             fixtures_dir=tmp_path,
         )
-    assert result.output == {"outcome": "new_skill", "confidence": 0.9}
+    assert result.output == {"outcome": "corroborate", "confidence": 0.9}
     assert result.attempts == 1
     assert result.cost_usd == 0.0042
     assert result.duration_ms == 1234
@@ -132,7 +132,7 @@ def test_committed_fixture_replays(fp, clean_env):
         max_retries=3,
         fixtures_dir=COMMITTED_FIXTURES_DIR,
     )
-    assert result.output["outcome"] == "new_skill"
+    assert result.output["outcome"] == "corroborate"
     assert list(fp.calls) == []
 
 
@@ -160,7 +160,7 @@ def test_fixtures_dir_resolves_from_env_var(fp, tmp_path, monkeypatch, clean_env
     write_fixture(tmp_path, "env prompt", COMMITTED_SCHEMA, "sonnet", good_envelope())
     monkeypatch.setenv(FIXTURES_ENV, str(tmp_path))
     result = run_judge("env prompt", COMMITTED_SCHEMA, "sonnet", max_retries=0)
-    assert result.output["outcome"] == "new_skill"
+    assert result.output["outcome"] == "corroborate"
 
 
 def test_invalid_mode_is_an_error(monkeypatch, tmp_path):
@@ -258,14 +258,14 @@ def test_schema_violation_retries_exactly_n_times(fp, offline_invoke, clean_env)
 
 
 def test_schema_violation_recovers_after_feedback(fp, offline_invoke, clean_env):
-    bad = {"outcome": "new_skill"}  # missing required 'confidence'
+    bad = {"outcome": "corroborate"}  # missing required 'confidence'
     fp.register(["claude", fp.any()], stdout=json.dumps(good_envelope(bad)))
     fp.register(["claude", fp.any()], stdout=json.dumps(good_envelope()))
     result = run_judge(
         "p", COMMITTED_SCHEMA, "sonnet", max_retries=3, mode="passthrough"
     )
     assert result.attempts == 2
-    assert result.output == {"outcome": "new_skill", "confidence": 0.9}
+    assert result.output == {"outcome": "corroborate", "confidence": 0.9}
     assert len(fp.calls) == 2
 
 
@@ -286,7 +286,7 @@ def test_extra_validate_rides_the_same_retry_path(fp, offline_invoke, clean_env)
     fp.register(
         ["claude", fp.any()], stdout=json.dumps(good_envelope()), occurrences=2
     )
-    subset_message = "outcome 'new_skill' is not allowed for this call type"
+    subset_message = "outcome 'corroborate' is not allowed for this call type"
     with pytest.raises(JudgeSchemaViolation, match="not allowed for this call type"):
         run_judge(
             "p",
@@ -313,7 +313,7 @@ def test_replayed_retry_chain_is_fixture_addressable(fp, tmp_path, clean_env):
         "p", COMMITTED_SCHEMA, "sonnet", max_retries=2, fixtures_dir=tmp_path
     )
     assert result.attempts == 2
-    assert result.output["outcome"] == "new_skill"
+    assert result.output["outcome"] == "corroborate"
     assert list(fp.calls) == []
 
 
@@ -442,7 +442,7 @@ def test_validator_reports_violations(instance, schema, fragment):
 def test_validator_accepts_conforming_output():
     assert (
         validate_against_schema(
-            {"outcome": "no_placement", "confidence": 0.25}, COMMITTED_SCHEMA
+            {"outcome": "corroborate", "confidence": 0.25}, COMMITTED_SCHEMA
         )
         is None
     )

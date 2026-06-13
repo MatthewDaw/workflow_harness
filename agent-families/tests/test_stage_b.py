@@ -547,7 +547,10 @@ def _record_new_skill_fixture(store, fixtures_dir, fields, agent_id):
     write_fixture(fixtures_dir, prompt, JUDGE_SCHEMA, "sonnet", envelope)
 
 
-def test_batch_lands_quarantined_with_full_provenance(store, tmp_path):
+def _REMOVED_test_batch_lands_quarantined_with_full_provenance(store, tmp_path):
+    # REMOVED (plan-008 A-U6 cut-over): relied on the legacy author-at-ingest path
+    # (use_r3_gate=False → _add_idea_legacy). The legacy path is deleted; the R3
+    # equivalent is test_r3_gate_lesson_registers_corroborate and test_r3_gate_* below.
     ep = store.create_episode("linkding", "sha256:x", 0)
     _scen_row(store, "SCEN-1", "FEAT-1", tier="must", episode_id=ep)
     sar = _stage_a_result(ep, [_attr("SCEN-1", "FEAT-1")])
@@ -560,8 +563,10 @@ def test_batch_lands_quarantined_with_full_provenance(store, tmp_path):
     }
     _record_new_skill_fixture(store, fixtures, insight_fields, env.agent_id)
 
+    # use_r3_gate=False: this test targets stage_b batch formation, not the R3
+    # gauntlet; the placement fixtures below are for the legacy path (plan-008 A-U6).
     register_fn = sb.make_add_idea_registrar(
-        store, env.vec, env.embedder, CFG, judge_fixtures_dir=fixtures
+        store, env.vec, env.embedder, CFG, use_r3_gate=False, judge_fixtures_dir=fixtures
     )
     result = sb.run_stage_b(
         store, sar, register_fn=register_fn, episode_id=ep,
@@ -584,8 +589,11 @@ def test_batch_lands_quarantined_with_full_provenance(store, tmp_path):
     assert batch["label"] == f"reflect-ep{ep}"
 
 
-def test_full_episode_every_insight_passes_registration(store, tmp_path):
-    """Verification: a full fixture episode yields a batch whose every insight
+def _REMOVED_test_full_episode_every_insight_passes_registration(store, tmp_path):
+    """REMOVED (plan-008 A-U6 cut-over): relied on the legacy author-at-ingest path
+    (use_r3_gate=False → _add_idea_legacy). The legacy path is deleted; the R3
+    equivalent is in test_r3_gate_* tests below.
+    Verification: a full fixture episode yields a batch whose every insight
     passes registration (one cluster lessons, one declares no-lesson)."""
     ep = store.create_episode("linkding", "sha256:x", 0)
     _scen_row(store, "SCEN-1", "FEAT-1", tier="must", episode_id=ep)
@@ -610,8 +618,10 @@ def test_full_episode_every_insight_passes_registration(store, tmp_path):
             return _reflection_output(insight=insight_fields)
         return _reflection_output(has_lesson=False)
 
+    # use_r3_gate=False: this test targets stage_b batch formation, not the R3
+    # gauntlet; the placement fixtures below are for the legacy path (plan-008 A-U6).
     register_fn = sb.make_add_idea_registrar(
-        store, env.vec, env.embedder, CFG, judge_fixtures_dir=fixtures
+        store, env.vec, env.embedder, CFG, use_r3_gate=False, judge_fixtures_dir=fixtures
     )
     result = sb.run_stage_b(
         store, sar, register_fn=register_fn, episode_id=ep,

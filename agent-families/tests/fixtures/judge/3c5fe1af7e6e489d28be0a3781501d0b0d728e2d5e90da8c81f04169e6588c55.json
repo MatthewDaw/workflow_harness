@@ -6,7 +6,7 @@
     "result": "ok",
     "structured_output": {
       "confidence": 0.9,
-      "outcome": "new_skill"
+      "outcome": "corroborate"
     },
     "subtype": "success",
     "total_cost_usd": 0.0042,
@@ -23,14 +23,11 @@
         },
         "outcome": {
           "enum": [
-            "append_to_skill",
-            "new_skill",
-            "merge_discard",
+            "corroborate",
             "contradiction_flag",
             "contradiction_supersede",
             "lint_reject",
-            "rewrite_proposed",
-            "no_placement"
+            "rewrite_proposed"
           ],
           "type": "string"
         }
@@ -42,5 +39,5 @@
       "type": "object"
     }
   },
-  "request_hash": "659f7cb2cdd1e9cc69b3011a57076c307af1eb70d03d932dc1c5442a4674de22"
+  "request_hash": "3c5fe1af7e6e489d28be0a3781501d0b0d728e2d5e90da8c81f04169e6588c55"
 }

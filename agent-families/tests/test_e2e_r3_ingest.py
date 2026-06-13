@@ -388,9 +388,11 @@ def run_curated_chain(env, *, promote: bool = True) -> ChainResult:
 def test_shipped_config_carries_r3_keys():
     """The shipped thresholds.toml carries the R3 keys this unit wires (R20)."""
     cfg = load_config(REPO_THRESHOLDS)
-    # candidate_floor is the FILTER (not the demoted cosine verdict).
+    # candidate_floor is the FILTER (not the removed cosine verdict).
     assert cfg.merge.candidate_floor == pytest.approx(0.80)
-    assert cfg.merge.cosine_threshold == pytest.approx(0.92)  # demoted, retained
+    # R11 cut-over (plan-008 A-U6): cosine_threshold removed from toml; loader
+    # returns None when absent (back-compat field, not a required key).
+    assert cfg.merge.cosine_threshold is None
     # [nli] renders the duplicate-vs-contradiction verdict.
     assert cfg.nli.model == "cross-encoder/nli-deberta-v3-base"
     assert 0.0 <= cfg.nli.confidence_threshold <= 1.0

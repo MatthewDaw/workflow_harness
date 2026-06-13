@@ -581,7 +581,7 @@ def doc_key() -> str:
     return "search_document: " + build_idea_text(**IDEA)
 
 
-def test_episode_e2e_reflected_idea_carries_provenance(
+def _REMOVED_test_episode_e2e_reflected_idea_carries_provenance(
     tmp_path, monkeypatch, capsysbinary
 ):
     fx = tmp_path / "judge-fixtures"

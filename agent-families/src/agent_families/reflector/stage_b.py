@@ -75,33 +75,27 @@ Test-scenario / invariant (plan-004 U6) -> test (in ``tests/test_stage_b.py``):
 R3 routing (plan-008 U8, R19)
 -----------------------------
 
-Once the R3 ingest gauntlet (plan-008 U6, :func:`agent_families.pipeline.add_idea_r3`)
-is the registration path, reflector lessons inherit Operation 1 (the admission
-gate's generalize/altitude-audit) and Operation 2 (key-collision + NLI verdict)
-**for free** — stage_b hands the raw counterfactual triple straight to the gate
-and performs NO in-reflector generalization (the gate owns it, DESIGN §13). The
-``for lesson in selected`` loop captures every non-registering gate outcome
+The R3 ingest gauntlet (:func:`agent_families.pipeline.add_idea`) is the
+registration path (plan-008 A-U6 cut-over). Reflector lessons inherit Operation 1
+(the admission gate's generalize/altitude-audit) and Operation 2 (key-collision +
+NLI verdict) **for free** — stage_b hands the raw counterfactual triple straight to
+the gate and performs NO in-reflector generalization (the gate owns it, DESIGN §13).
+The ``for lesson in selected`` loop captures every non-registering gate outcome
 (``lint_reject`` / ``rewrite_proposed`` / structural reject) as a telemetry row
 and CONTINUES with the remaining lessons — one bad lesson never crashes or
 aborts the batch. A duplicate becomes a corroboration vote on the incumbent,
 recorded through the ONE ``corroborate`` fitness-event counter inside
-``add_idea_r3`` (the §11 cross-target-recurrence substrate); stage_b adds no
+``add_idea`` (the §11 cross-target-recurrence substrate); stage_b adds no
 separate recurrence tally. A deferred-supersede (a ``contradicts`` edge written
 at ingest) lands as a normal quarantined registration whose move rides home in
 :class:`InsightProvenance`; the incumbent is invalidated only at promotion
 (``validate.py`` surfaces the retired-incumbent ids in the ``batch_validations``
 record).
 
-DEVIATION (008 U8 wave scope): U6 shipped the R3 gate as the SEPARATE
-``add_idea_r3`` (legacy ``add_idea`` intact-but-demoted), deferring the live
-cut-over + caller migration to U8/U9. The plan-004 closed-loop e2e
-(``tests/test_e2e_learning.py``) still asserts the legacy skill-authoring +
-skill-based retrieval and is outside this wave's three-file scope, so flipping
-the registrar's default to R3 here would turn it red. Smallest faithful
-adaptation: :func:`make_add_idea_registrar` gains ``use_r3_gate`` — the reflector
-routes through the R3 gate when True (U8's behavior, proven by the acceptance
-tests below) and through legacy ``add_idea`` by default (keeping the un-migrated
-e2e green). The default flip + legacy deletion ride U9's e2e/config cut-over.
+Note: ``add_idea_r3`` is now an alias for ``add_idea`` (collapsed in U6 cut-over).
+The legacy author-at-ingest path (``_add_idea_legacy``) is deleted. The ``use_r3_gate``
+parameter in :func:`make_add_idea_registrar` is a no-op (always routes through R3)
+and is retained only for backward-compat with existing test call sites.
 
 Test-scenario / invariant (plan-008 U8, R19) -> test (in ``tests/test_stage_b.py``):
 
@@ -682,7 +676,7 @@ def make_add_idea_registrar(
     embedder,
     config,
     *,
-    use_r3_gate: bool = False,
+    use_r3_gate: bool = True,  # kept for back-compat; always routes through R3 gate
     provenance: str = "reflector",
     corroborate_mode: str = "training",
     accept_rewrite: bool = False,
@@ -694,17 +688,16 @@ def make_add_idea_registrar(
 ) -> RegisterFn:
     """Bind ``add_idea`` as a Stage B registrar (R19).
 
-    With ``use_r3_gate=True`` the lesson routes through the R3 ingest gauntlet
-    (``add_idea_r3``) — inheriting Operation 1 (the admission gate's
-    generalize/altitude-audit) and Operation 2 (key-collision + NLI verdict), so
-    stage_b hands the gate the raw counterfactual triple and does NO generalization
-    of its own (DESIGN §13). With ``use_r3_gate=False`` (default) it binds the
-    legacy author-at-ingest ``add_idea`` (kept until U9's cut-over so the
-    plan-004 closed-loop e2e stays green — see the module docstring's DEVIATION).
+    The lesson routes through the R3 ingest gauntlet (``add_idea``) — inheriting
+    Operation 1 (the admission gate's generalize/altitude-audit) and Operation 2
+    (key-collision + NLI verdict), so stage_b hands the gate the raw counterfactual
+    triple and does NO generalization of its own (DESIGN §13). The ``use_r3_gate``
+    parameter is accepted for backward-compat but is a no-op — the legacy
+    author-at-ingest path is deleted (plan-008 A-U6 cut-over).
 
-    Either way the registrar returns a :class:`RegistrationOutcome`: a gate
-    rejection (lint_reject / rewrite_proposed / structural) is caught and reported
-    as a non-registering code rather than raised, so :func:`run_stage_b` can record
+    The registrar returns a :class:`RegistrationOutcome`: a gate rejection
+    (lint_reject / rewrite_proposed / structural) is caught and reported as a
+    non-registering code rather than raised, so :func:`run_stage_b` can record
     it as telemetry and continue the batch (R19). A real fault (e.g. a missing
     judge/NLI fixture) is NOT caught and propagates. Imported lazily so unit tests
     that inject a fake registrar never pull in the embedding stack.
@@ -713,46 +706,29 @@ def make_add_idea_registrar(
         RegistrationRejected,
         StructuralValidationError,
         add_idea,
-        add_idea_r3,
     )
 
     def _register(idea: RegisteredIdea) -> RegistrationOutcome:
         try:
-            if use_r3_gate:
-                result = add_idea_r3(
-                    store,
-                    vec,
-                    embedder,
-                    config,
-                    precondition=idea.precondition,
-                    action=idea.action,
-                    expected_outcome=idea.expected_outcome,
-                    batch_label=idea.batch_label,
-                    scope_tag=idea.scope_tag,
-                    accept_rewrite=accept_rewrite,
-                    provenance=provenance,
-                    corroborate_mode=corroborate_mode,
-                    judge_mode=judge_mode,
-                    judge_fixtures_dir=judge_fixtures_dir,
-                    nli_model=nli_model,
-                    nli_mode=nli_mode,
-                    nli_fixtures_dir=nli_fixtures_dir,
-                )
-            else:
-                result = add_idea(
-                    store,
-                    vec,
-                    embedder,
-                    config,
-                    precondition=idea.precondition,
-                    action=idea.action,
-                    expected_outcome=idea.expected_outcome,
-                    batch_label=idea.batch_label,
-                    scope_tag=idea.scope_tag,
-                    accept_rewrite=accept_rewrite,
-                    judge_mode=judge_mode,
-                    judge_fixtures_dir=judge_fixtures_dir,
-                )
+            result = add_idea(
+                store,
+                vec,
+                embedder,
+                config,
+                precondition=idea.precondition,
+                action=idea.action,
+                expected_outcome=idea.expected_outcome,
+                batch_label=idea.batch_label,
+                scope_tag=idea.scope_tag,
+                accept_rewrite=accept_rewrite,
+                provenance=provenance,
+                corroborate_mode=corroborate_mode,
+                judge_mode=judge_mode,
+                judge_fixtures_dir=judge_fixtures_dir,
+                nli_model=nli_model,
+                nli_mode=nli_mode,
+                nli_fixtures_dir=nli_fixtures_dir,
+            )
         except (RegistrationRejected, StructuralValidationError) as exc:
             return RegistrationOutcome(
                 insight_id=None,
