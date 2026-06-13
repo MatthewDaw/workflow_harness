@@ -65,6 +65,7 @@ from learning_service.authored import (
     make_supersede_fn,
     remember_tool,
 )
+from learning_service.telemetry import TelemetryAccumulator, to_json_dict
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,9 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
         # in production (Gap 1 + 2), injectable in tests.
         supersede_fn = event.get("_test_supersede_fn") or make_supersede_fn(store)
 
+        # R4: one accumulator per invocation — records all telemetry for this request.
+        telemetry: TelemetryAccumulator = event.get("_test_telemetry") or TelemetryAccumulator()
+
         if kind == "delete":
             un_bridged = delete_authored_source(
                 org=org,
@@ -144,26 +148,51 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
                 }),
             }
 
-        dispatch = {
-            "directive": ingest_directive,
-            "remember": remember_tool,
-            "paste": ingest_pasted_text,
-        }
-        fn = dispatch[kind]
+        # Dispatch: paste uses different param names (source_name / text vs name / content).
+        if kind == "paste":
+            result = ingest_pasted_text(
+                org=org,
+                project_id=project_id,
+                user_id=user_id,
+                source_name=name,
+                text=content,
+                skill_base_name=skill_base_name,
+                store=store,
+                mem_store=mem_store,
+                scope_tag=scope_tag,
+                nli_classify_fn=nli_classify_fn,
+                supersede_fn=supersede_fn,
+                telemetry=telemetry,
+            )
+        else:
+            # directive / remember share the same signature.
+            dispatch = {
+                "directive": ingest_directive,
+                "remember": remember_tool,
+            }
+            fn = dispatch[kind]
+            result = fn(
+                org=org,
+                project_id=project_id,
+                user_id=user_id,
+                name=name,
+                content=content,
+                skill_base_name=skill_base_name,
+                store=store,
+                mem_store=mem_store,
+                scope_tag=scope_tag,
+                nli_classify_fn=nli_classify_fn,
+                supersede_fn=supersede_fn,
+                telemetry=telemetry,
+            )
 
-        result = fn(
-            org=org,
-            project_id=project_id,
-            user_id=user_id,
-            name=name,
-            content=content,
-            skill_base_name=skill_base_name,
-            store=store,
-            mem_store=mem_store,
-            scope_tag=scope_tag,
-            nli_classify_fn=nli_classify_fn,
-            supersede_fn=supersede_fn,
-        )
+        # R4: emit accumulated telemetry as a structured log line.
+        snap = telemetry.snapshot()
+        payload = to_json_dict(snap)
+        payload["org"] = org
+        payload["skill_base_name"] = skill_base_name
+        payload["kind"] = kind
+        logger.info("TELEMETRY %s", json.dumps(payload))
 
         return {
             "statusCode": 200,

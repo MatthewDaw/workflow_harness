@@ -52,7 +52,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from learning_service.telemetry import TelemetryAccumulator
 
 from learning_service.nli import (
     NliResult,
@@ -225,6 +228,8 @@ class NliClassifier:
         self,
         premise: str,
         hypothesis: str,
+        *,
+        telemetry: "TelemetryAccumulator | None" = None,
     ) -> ClassifierResult:
         """Classify a (premise, hypothesis) pair into the 4-label verdict vocabulary.
 
@@ -262,6 +267,10 @@ class NliClassifier:
             low_conf,
             nli.request_hash,
         )
+
+        # --- Telemetry: record NLI move distribution + judge fallback -----------
+        if telemetry is not None:
+            telemetry.record_nli_verdict(verdict.value, low_confidence=low_conf)
 
         return ClassifierResult(
             verdict=verdict,

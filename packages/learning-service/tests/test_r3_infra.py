@@ -135,21 +135,38 @@ class TestNecessityScanHandler:
         assert "ideas_scanned" in body
         assert "ideas_demoted" in body
 
-    def test_handler_returns_400_when_org_missing(self):
+    def test_handler_returns_200_for_global_scan_when_org_missing(self):
+        """When org is missing, the handler performs a global scan (not 400).
+
+        The EventBridge rate(1 day) rule sends no org/skill_base_name; the
+        handler must enumerate all (org, skill) targets and return 200.
+        The MagicMock store has list_skills_with_folded_non_authored_ideas
+        returning [] (no targets), so ideas_scanned == 0.
+        """
+        from unittest.mock import MagicMock
         from learning_service.necessity import scheduled_scan_handler
 
-        store = self._make_store()
+        store = MagicMock()
+        store.list_skills_with_folded_non_authored_ideas.return_value = []
         event = {"skill_base_name": "naming-conventions", "_test_store": store}
         result = scheduled_scan_handler(event, object())
-        assert result["statusCode"] == 400
+        # Without org, skill_base_name alone is ignored → global scan → 200.
+        assert result["statusCode"] == 200
 
-    def test_handler_returns_400_when_skill_base_name_missing(self):
+    def test_handler_returns_200_for_global_scan_when_skill_base_name_missing(self):
+        """When skill_base_name is missing, the handler performs a global scan (not 400).
+
+        This mirrors the EventBridge invocation shape, which carries no skill.
+        """
+        from unittest.mock import MagicMock
         from learning_service.necessity import scheduled_scan_handler
 
-        store = self._make_store()
+        store = MagicMock()
+        store.list_skills_with_folded_non_authored_ideas.return_value = []
         event = {"org": "acme", "_test_store": store}
         result = scheduled_scan_handler(event, object())
-        assert result["statusCode"] == 400
+        # Without skill_base_name, org alone does not trigger targeted scan → global.
+        assert result["statusCode"] == 200
 
     def test_handler_accepts_necessity_sample_rate(self):
         from learning_service.necessity import scheduled_scan_handler

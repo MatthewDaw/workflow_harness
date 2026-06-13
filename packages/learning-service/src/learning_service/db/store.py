@@ -178,6 +178,16 @@ class LearningStore(Protocol):
         """Return every idea in an org (current + historical) — for history reads."""
         ...
 
+    def list_skills_with_folded_non_authored_ideas(self) -> list[tuple[str, str]]:
+        """Return (org, skill_base_name) pairs that have at least one current
+        folded non-authored idea.
+
+        Used by the EventBridge global necessity scan to enumerate all targets
+        without requiring the caller to supply org/skill_base_name explicitly.
+        The returned list may contain duplicates-free unique (org, skill) pairs.
+        """
+        ...
+
     # -- Idea sources --------------------------------------------------------
 
     def put_idea_source(self, record: IdeaSourceRecord) -> None:
@@ -368,6 +378,23 @@ class InMemoryLearningStore:
 
     def list_all_ideas_for_org(self, org: str) -> list[IdeaRecord]:
         return [r for (o, _, _), r in self._ideas.items() if o == org]
+
+    def list_skills_with_folded_non_authored_ideas(self) -> list[tuple[str, str]]:
+        """Return unique (org, skill_base_name) pairs with folded non-authored ideas."""
+        seen: set[tuple[str, str]] = set()
+        results: list[tuple[str, str]] = []
+        for (org, sbn, _), r in self._ideas.items():
+            if r.invalidAt is not None:
+                continue  # retired — skip
+            if r.status != "folded":
+                continue
+            if r.authorityKind in {"user_directive", "authored_import"} or r.authored:
+                continue
+            pair = (org, sbn)
+            if pair not in seen:
+                seen.add(pair)
+                results.append(pair)
+        return results
 
     # -- Idea sources --------------------------------------------------------
 
@@ -643,6 +670,56 @@ class DynamoLearningStore:
             ),
         )
         return [_dynamo_to_idea(item) for item in resp.get("Items", [])]
+
+    def list_skills_with_folded_non_authored_ideas(self) -> list[tuple[str, str]]:
+        """Scan the table for SCOPE#org# PKs that have folded non-authored ideas.
+
+        In production this performs a table Scan filtered to status=folded and
+        authorityKind not in authored set.  This is acceptable for a once-per-day
+        scheduled job where the table size is bounded by org activity.  For very
+        large tables a GSI on (status, authorityKind) should be added; for v1
+        the Scan is sufficient.
+        """
+        from boto3.dynamodb.conditions import Attr  # type: ignore[import]
+
+        seen: set[tuple[str, str]] = set()
+        results: list[tuple[str, str]] = []
+        authored_kinds = {"user_directive", "authored_import"}
+
+        paginator_kwargs: dict[str, Any] = {
+            "FilterExpression": (
+                Attr("SK").begins_with("IDEA#")
+                & Attr("status").eq("folded")
+                & Attr("invalidAt").not_exists()
+            ),
+            "ProjectionExpression": "PK, SK, org, skillBaseName, authorityKind, authored",
+        }
+        resp = self._table.scan(**paginator_kwargs)
+
+        def _process(items: list[dict[str, Any]]) -> None:
+            for item in items:
+                authority_kind = item.get("authorityKind", "")
+                authored = item.get("authored", False)
+                if authority_kind in authored_kinds or authored:
+                    continue
+                org = item.get("org", "")
+                sbn = item.get("skillBaseName", "")
+                if not org or not sbn:
+                    continue
+                pair = (org, sbn)
+                if pair not in seen:
+                    seen.add(pair)
+                    results.append(pair)
+
+        _process(resp.get("Items", []))
+        while "LastEvaluatedKey" in resp:
+            resp = self._table.scan(
+                **paginator_kwargs,
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            _process(resp.get("Items", []))
+
+        return results
 
     # -- Idea sources --------------------------------------------------------
 

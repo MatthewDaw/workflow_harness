@@ -1,4 +1,4 @@
-"""learning_reads — Learning read API endpoints (A1 / MAT-154).
+"""learning_reads — Learning read API endpoints (A1 / MAT-154) + telemetry dashboard (R4 / MAT-153).
 
 Two read endpoints over the learning store:
 
@@ -53,6 +53,41 @@ JSON-DTO contract (the "both sides" contract test in ``test_a1_learning_read_api
         ...
       ]
     }
+
+Telemetry dashboard endpoint (R4 / MAT-153 — Gap 4):
+
+  GET /skills/:name/telemetry-metrics
+      Returns the per-org/skill calibration metrics as a JSON dict (the R4
+      metric set).  Suitable for wiring into a CloudWatch Dashboard widget or
+      a Logs Insights query.
+
+  telemetry-metrics response:
+    {
+      "org": str,
+      "skill_base_name": str,
+      "idea_count": int,
+      "corroboration_weight_mean": float,
+      "corroboration_weight_max": float,
+      "corroboration_weight_distribution": [float, ...],
+      "distinct_pr_count_mean": float,
+      "distinct_pr_distribution": [int, ...],
+      "per_author_credibility": { "authorId": float, ... },
+      "supersede_event_count": int,
+      "unfold_count": int,
+      "revive_count": int,
+      "necessity_demotion_count": int,
+      "authored_count": int,
+      "inferred_count": int,
+      "authored_inferred_ratio": float
+    }
+
+  Gate status endpoint (R4 — Gap 3 surface):
+
+  GET /telemetry/gate-status
+      Returns the current gate-status snapshot from an empty accumulator
+      (zero counts — useful for seeing the threshold config and gate logic
+      without running an ingest job).  For a live gate reading, the ingest
+      job emits gate status in its structured log output.
 """
 from __future__ import annotations
 
@@ -62,6 +97,13 @@ from typing import Any
 
 from learning_service.db.store import InMemoryLearningStore, LearningStore
 from learning_service.schema.generated.py_types import IdeaRecord
+from learning_service.telemetry import (
+    GateConfig,
+    TelemetryAccumulator,
+    compute_org_metrics,
+    gate_status,
+    to_json_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -298,12 +340,114 @@ def handle_all_ideas(event: dict[str, Any], context: object) -> dict[str, Any]:
     return _ok({"ideas": result})
 
 
+def handle_telemetry_metrics(event: dict[str, Any], context: object) -> dict[str, Any]:
+    """GET /skills/:name/telemetry-metrics — per-org/skill R4 calibration metrics.
+
+    Computes and returns the full R4 telemetry metric set for a skill family.
+    This is the dashboard/query surface required by MAT-153 Gap 4.
+
+    The response is the ``compute_org_metrics`` output dict, which includes:
+    - Corroboration weight distribution + per-author credibility
+    - Distinct-PR distribution
+    - Supersede event count + unfold count + revive count
+    - Necessity demotion count
+    - Authored-vs-inferred ratio
+
+    These metrics are computed live from the store (read-only).  For continuous
+    monitoring, point a CloudWatch Dashboard widget at this endpoint or emit
+    the same payload via structured logs from the ingest job (which the ``TELEMETRY``
+    log line already does).
+    """
+    resolved = _resolve_org_and_skill(event)
+    if resolved is None:
+        return _error(400, "org (query param or X-Org header) and skill name (path param) are required")
+
+    org, skill_name = resolved
+    store = _resolve_store(event)
+
+    try:
+        metrics = compute_org_metrics(org, skill_name, store)
+    except Exception as exc:
+        logger.exception("compute_org_metrics failed for org=%s skill=%s", org, skill_name)
+        return _error(500, f"Failed to compute metrics: {exc}")
+
+    # Emit as a structured log line for CloudWatch Logs Insights / MetricFilter.
+    logger.info("TELEMETRY_DASHBOARD %s", json.dumps(metrics))
+
+    return _ok(metrics)
+
+
+def handle_gate_status(event: dict[str, Any], context: object) -> dict[str, Any]:
+    """GET /telemetry/gate-status — current enforce-gate configuration and status.
+
+    Returns the gate status from an empty accumulator by default (shows threshold
+    config without needing a live ingest run).  A pre-seeded accumulator can be
+    injected via event['_test_accumulator'] for testing.
+
+    This endpoint provides the REST surface for querying whether each mode-flip
+    gate is open — callable from a dashboard or monitoring system.
+    """
+    acc = event.get("_test_accumulator") or TelemetryAccumulator()
+
+    # Allow config overrides from the event (for testing different thresholds).
+    _defaults = GateConfig()
+    query = event.get("queryStringParameters") or {}
+    try:
+        fp_ceiling = float(query.get("fp_ceiling", _defaults.supersede_fp_ceiling))
+    except (TypeError, ValueError):
+        fp_ceiling = _defaults.supersede_fp_ceiling
+    try:
+        fp_min_samples = int(query.get("fp_min_samples", _defaults.supersede_fp_min_samples))
+    except (TypeError, ValueError):
+        fp_min_samples = _defaults.supersede_fp_min_samples
+    try:
+        min_anchor_samples = int(query.get("min_anchor_samples", _defaults.min_anchor_samples))
+    except (TypeError, ValueError):
+        min_anchor_samples = _defaults.min_anchor_samples
+
+    cfg = GateConfig(
+        supersede_fp_ceiling=fp_ceiling,
+        supersede_fp_min_samples=fp_min_samples,
+        min_anchor_samples=min_anchor_samples,
+    )
+
+    snap = acc.snapshot()
+    gs = gate_status(snap, config=cfg)
+
+    # Also include the current accumulator metrics so the caller can see what data
+    # informed the gate decision.
+    payload = {
+        "verified_learning_gate_open": gs.verified_learning_gate_open,
+        "verified_learning_reason": gs.verified_learning_reason,
+        "supersede_gate_open": gs.supersede_gate_open,
+        "supersede_reason": gs.supersede_reason,
+        "unfold_gate_open": gs.unfold_gate_open,
+        "unfold_reason": gs.unfold_reason,
+        "config": {
+            "supersede_fp_ceiling": cfg.supersede_fp_ceiling,
+            "supersede_fp_min_samples": cfg.supersede_fp_min_samples,
+            "min_anchor_samples": cfg.min_anchor_samples,
+        },
+        "accumulator_snapshot": to_json_dict(snap),
+    }
+
+    logger.info("GATE_STATUS %s", json.dumps({
+        "vl_open": gs.verified_learning_gate_open,
+        "sup_open": gs.supersede_gate_open,
+        "unfold_open": gs.unfold_gate_open,
+    }))
+
+    return _ok(payload)
+
+
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     """Unified Lambda handler: dispatch on path suffix.
 
     Routes:
       GET /skills/:name/candidate-learnings  → handle_candidate_learnings
       GET /skills/:name/all-ideas            → handle_all_ideas
+      GET /skills/:name/telemetry-metrics    → handle_telemetry_metrics (R4)
+      GET /telemetry/gate-status             → handle_gate_status (R4)
     """
     try:
         path = (
@@ -315,6 +459,10 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
             return handle_candidate_learnings(event, context)
         if path.endswith("/all-ideas"):
             return handle_all_ideas(event, context)
+        if path.endswith("/telemetry-metrics"):
+            return handle_telemetry_metrics(event, context)
+        if path.endswith("/gate-status") or path.endswith("/telemetry/gate-status"):
+            return handle_gate_status(event, context)
         return _error(404, f"no learning read route matched: {path}")
     except Exception as exc:
         logger.exception("Unexpected error in learning_reads handler")

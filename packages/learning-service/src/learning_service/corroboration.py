@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from learning_service.db.store import LearningStore
+    from learning_service.telemetry import TelemetryAccumulator
 
 from learning_service.db.store import (
     InMemoryLearningStore,
@@ -319,6 +320,7 @@ def corroborate(
     verified_k: float = DEFAULT_VERIFIED_K,
     now_ms: int | None = None,
     max_retries: int = MAX_OCC_RETRIES,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> CorroborationResult:
     """Record one corroboration vote on an existing idea.
 
@@ -460,6 +462,21 @@ def corroborate(
             should_fold,
         )
 
+        # --- Telemetry: record corroboration-weight + per-author credibility ---
+        if telemetry is not None and wrote_new_source:
+            telemetry.record_corroboration_weight(
+                weight,
+                distinct_pr_count=distinct_pr_count(sources),
+            )
+            # Per-author credibility: rung × credibility broken out by coder.
+            cred = credibility_store.get(
+                request.author_id,
+                has_reviewer=request.has_reviewer,
+            )
+            telemetry.record_author_credibility(request.author_id, cred)
+            # Track this as an inferred idea.
+            telemetry.record_idea_authority(request.authority_kind)
+
         return CorroborationResult(
             action=action,
             idea_id=request.idea_id,
@@ -498,6 +515,7 @@ def create_idea_from_pr(
     has_reviewer: bool = False,
     now_ms: int | None = None,
     verified_k: float = DEFAULT_VERIFIED_K,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> CorroborationResult:
     """Create a brand-new idea record from the first PR hit and record its source.
 
@@ -552,6 +570,12 @@ def create_idea_from_pr(
         w,
         should_fold,
     )
+
+    # --- Telemetry: record initial corroboration weight + author credibility ---
+    if telemetry is not None:
+        telemetry.record_corroboration_weight(w, distinct_pr_count=1)
+        telemetry.record_author_credibility(author_id, cred)
+        telemetry.record_idea_authority(authority_kind)
 
     return CorroborationResult(
         action="folded" if should_fold else "created",

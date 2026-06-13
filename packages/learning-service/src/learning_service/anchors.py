@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from learning_service.db.store import LearningStore
+    from learning_service.telemetry import TelemetryAccumulator
 
 from learning_service.db.store import OrgGuardError
 from learning_service.schema.generated.py_types import AnchorRecord
@@ -445,6 +446,8 @@ def write_anchors_on_fold(
     owner_repo: str,
     idea_id: str,
     anchors: list[Anchor],
+    *,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> None:
     """Write one AnchorRecord per anchor to the store (on idea fold).
 
@@ -453,6 +456,9 @@ def write_anchors_on_fold(
 
     Each record is written with ``active=True``.  If the same (file, symbol)
     appears multiple times (shouldn't, but be safe), duplicates are skipped.
+
+    Telemetry: records each anchor's symbol-vs-file resolution rate via the
+    accumulator (resolving at real decision time, not in tests).
     """
     if not org or not org.strip():
         raise OrgGuardError("write_anchors_on_fold")
@@ -481,6 +487,12 @@ def write_anchors_on_fold(
             anchor.file,
             anchor.symbol,
         )
+
+        # --- Telemetry: record anchor symbol-vs-file resolution --------------------
+        if telemetry is not None:
+            telemetry.record_anchor_resolution(
+                resolved_as_symbol=(anchor.resolution == "symbol")
+            )
 
 
 def retire_anchors_on_unfold(

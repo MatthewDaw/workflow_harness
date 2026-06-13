@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from learning_service.db.store import LearningStore
+    from learning_service.telemetry import TelemetryAccumulator
 
 from learning_service.db.store import OrgGuardError, VersionConflictError
 from learning_service.schema.generated.py_types import IdeaRecord, IdeaSourceRecord
@@ -717,6 +718,7 @@ def ingest_directive(
     supersede_fn: Callable[..., Any] | None = None,
     now_ms: int | None = None,
     idea_id_override: str | None = None,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> AuthoredIngestionResult:
     """Ingest a user directive: persist to MEM# KV + bridge into the graph.
 
@@ -807,6 +809,10 @@ def ingest_directive(
     )
     store.put_idea_source(src)
 
+    # --- Telemetry: record authored idea -----------------------------------------
+    if telemetry is not None:
+        telemetry.record_idea_authority(AUTHORITY_USER_DIRECTIVE)
+
     node = AuthoredNode(
         idea_id=idea_id,
         authority_kind=AUTHORITY_USER_DIRECTIVE,
@@ -871,6 +877,7 @@ def ingest_pasted_text(
     supersede_fn: Callable[..., Any] | None = None,
     now_ms: int | None = None,
     idea_id_factory: Callable[[], str] | None = None,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> AuthoredIngestionResult:
     """Ingest pasted prose text: split into N atomic authored_import nodes.
 
@@ -974,6 +981,10 @@ def ingest_pasted_text(
             source_name=source_name,
             is_new=True,
         ))
+
+        # --- Telemetry: record authored_import idea --------------------------------
+        if telemetry is not None:
+            telemetry.record_idea_authority(AUTHORITY_AUTHORED_IMPORT)
 
         # Semantic scan for each new node.
         inferred_superseded = _run_authored_semantic_scan(
@@ -1100,6 +1111,7 @@ def remember_tool(
     supersede_fn: Callable[..., Any] | None = None,
     now_ms: int | None = None,
     idea_id_override: str | None = None,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> AuthoredIngestionResult:
     """Agent-native 'remember' tool — identical to ingest_directive.
 
@@ -1121,4 +1133,5 @@ def remember_tool(
         supersede_fn=supersede_fn,
         now_ms=now_ms,
         idea_id_override=idea_id_override,
+        telemetry=telemetry,
     )

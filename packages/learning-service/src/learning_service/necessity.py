@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from learning_service.db.store import LearningStore
+    from learning_service.telemetry import TelemetryAccumulator
 
 from learning_service.db.store import VersionConflictError
 from learning_service.schema.generated.py_types import (
@@ -314,6 +315,7 @@ def assess_necessity(
     fp_gate: NecessityFpGate | None = None,
     score_diff_threshold: float = NECESSITY_SCORE_DIFF_THRESHOLD,
     now_ms: int | None = None,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> NecessityVerdict:
     """Assess the necessity of one folded idea against its golden case.
 
@@ -417,6 +419,10 @@ def assess_necessity(
             score_diff,
         )
 
+    # --- Telemetry: record necessity demotion ------------------------------------
+    if telemetry is not None and demoted:
+        telemetry.record_necessity_demotion()
+
     return NecessityVerdict(
         idea_id=idea.ideaId,
         outcome=outcome,
@@ -504,6 +510,7 @@ def run_necessity_scan(
     necessity_min_firings: int = 0,
     score_diff_threshold: float = NECESSITY_SCORE_DIFF_THRESHOLD,
     now_ms: int | None = None,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> ScanResult:
     """Run the daily necessity scan over folded ideas for one skill family.
 
@@ -560,6 +567,7 @@ def run_necessity_scan(
             fp_gate=fp_gate,
             score_diff_threshold=score_diff_threshold,
             now_ms=now_ms,
+            telemetry=telemetry,
         )
 
         result.verdicts.append(verdict)
@@ -593,14 +601,33 @@ def run_necessity_scan(
 def scheduled_scan_handler(event: dict, context: object) -> dict:
     """Lambda handler for the daily necessity scan (EventBridge trigger).
 
-    Expected event shape::
+    Expected event shapes:
+
+    Targeted scan (explicit org + skill)::
 
         {
             "org": "<org>",
-            "skill_base_name": "<name>",  # optional; if absent, scans all skills
-            "necessity_sample_rate": 1.0, # optional
-            "necessity_min_firings": 0,   # optional
+            "skill_base_name": "<name>",
+            "necessity_sample_rate": 1.0,  # optional
+            "necessity_min_firings": 0,    # optional
         }
+
+    Global scan (EventBridge scheduled invocation — no org/skill supplied)::
+
+        {
+            "source": "eventbridge.scheduled",
+            "detail-type": "NecessityScanScheduled",
+            "detail": {
+                "necessity_sample_rate": 1.0,
+                "necessity_min_firings": 0,
+            }
+        }
+
+    When ``org`` or ``skill_base_name`` are absent (or empty), the handler
+    performs a **global scan**: it enumerates every (org, skill_base_name) pair
+    that has at least one current folded non-authored idea, then runs
+    ``run_necessity_scan`` for each.  This is the correct behaviour for the
+    EventBridge ``rate(1 day)`` rule, which carries no org/skill payload.
 
     The store and judge are wired from environment variables at cold start.
     This handler is a thin wrapper — the real logic is in run_necessity_scan().
@@ -612,14 +639,18 @@ def scheduled_scan_handler(event: dict, context: object) -> dict:
 
     test_store = event.pop("_test_store", None)
     test_judge_fn = event.pop("_test_judge_fn", None)
+    test_telemetry = event.pop("_test_telemetry", None)
 
+    # Support both top-level keys (targeted) and EventBridge detail envelope.
+    detail = event.get("detail", {}) or {}
     org = event.get("org", "")
     skill_base_name = event.get("skill_base_name", "")
-    necessity_sample_rate = float(event.get("necessity_sample_rate", 1.0))
-    necessity_min_firings = int(event.get("necessity_min_firings", 0))
-
-    if not org or not skill_base_name:
-        return {"statusCode": 400, "body": json.dumps({"error": "org and skill_base_name required"})}
+    necessity_sample_rate = float(
+        event.get("necessity_sample_rate", detail.get("necessity_sample_rate", 1.0))
+    )
+    necessity_min_firings = int(
+        event.get("necessity_min_firings", detail.get("necessity_min_firings", 0))
+    )
 
     if test_store is None:
         # Production: wire boto3 store from env.
@@ -630,22 +661,65 @@ def scheduled_scan_handler(event: dict, context: object) -> dict:
     else:
         store = test_store
 
-    scan_result = run_necessity_scan(
-        org,
-        skill_base_name,
-        store,
-        run_judge_fn=test_judge_fn,
-        necessity_sample_rate=necessity_sample_rate,
-        necessity_min_firings=necessity_min_firings,
-        # Use a calibrated fp_gate in production — advisory by default.
-        fp_gate=NecessityFpGate(),
-    )
+    fp_gate = NecessityFpGate()
+
+    # R4: one accumulator per invocation — records demotions for telemetry emission.
+    from learning_service.telemetry import TelemetryAccumulator, to_json_dict
+    telemetry: TelemetryAccumulator = test_telemetry or TelemetryAccumulator()
+
+    if org and skill_base_name:
+        # Targeted scan: single (org, skill) pair.
+        scan_result = run_necessity_scan(
+            org,
+            skill_base_name,
+            store,
+            run_judge_fn=test_judge_fn,
+            necessity_sample_rate=necessity_sample_rate,
+            necessity_min_firings=necessity_min_firings,
+            fp_gate=fp_gate,
+            telemetry=telemetry,
+        )
+        aggregated = scan_result
+    else:
+        # Global scan: enumerate all (org, skill_base_name) pairs with folded
+        # non-authored ideas, then run a scan for each.
+        targets = store.list_skills_with_folded_non_authored_ideas()
+        logger.info(
+            "necessity global scan: found %d (org, skill) targets to scan",
+            len(targets),
+        )
+        aggregated = ScanResult()
+        for target_org, target_skill in targets:
+            partial = run_necessity_scan(
+                target_org,
+                target_skill,
+                store,
+                run_judge_fn=test_judge_fn,
+                necessity_sample_rate=necessity_sample_rate,
+                necessity_min_firings=necessity_min_firings,
+                fp_gate=fp_gate,
+                telemetry=telemetry,
+            )
+            aggregated.ideas_scanned += partial.ideas_scanned
+            aggregated.ideas_demoted += partial.ideas_demoted
+            aggregated.no_signal += partial.no_signal
+            aggregated.scope_miss += partial.scope_miss
+            aggregated.exempt += partial.exempt
+            aggregated.verdicts.extend(partial.verdicts)
+
+    # R4: emit accumulated telemetry as a structured log line.
+    snap = telemetry.snapshot()
+    telem_payload = to_json_dict(snap)
+    telem_payload["org"] = org or "global"
+    telem_payload["skill_base_name"] = skill_base_name or "global"
+    telem_payload["ideas_demoted"] = aggregated.ideas_demoted
+    logger.info("TELEMETRY %s", json.dumps(telem_payload))
 
     summary = {
-        "ideas_scanned": scan_result.ideas_scanned,
-        "ideas_demoted": scan_result.ideas_demoted,
-        "no_signal": scan_result.no_signal,
-        "scope_miss": scan_result.scope_miss,
-        "exempt": scan_result.exempt,
+        "ideas_scanned": aggregated.ideas_scanned,
+        "ideas_demoted": aggregated.ideas_demoted,
+        "no_signal": aggregated.no_signal,
+        "scope_miss": aggregated.scope_miss,
+        "exempt": aggregated.exempt,
     }
     return {"statusCode": 200, "body": json.dumps(summary)}

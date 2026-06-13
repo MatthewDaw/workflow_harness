@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from learning_service.db.store import LearningStore
     from learning_service.skills_write import SkillStore
+    from learning_service.telemetry import TelemetryAccumulator
 
 from learning_service.db.store import (
     OrgGuardError,
@@ -284,6 +285,7 @@ def supersede(
     skill_store: "SkillStore | None" = None,
     now_ms: "int | None" = None,
     apply_lesson_delta: "Callable[[str, str], str] | None" = None,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> SupersedeResult:
     """Execute a supersession decision on the incumbent idea.
 
@@ -498,6 +500,10 @@ def supersede(
         idea_id=incumbent.ideaId,
     )
 
+    # --- Telemetry: record supersede event + un-fold ----------------------------
+    if telemetry is not None:
+        telemetry.record_supersede_event(unfold_executed=unfold_rev is not None)
+
     return SupersedeResult(
         action="superseded",
         incumbent_idea_id=request.incumbent_idea_id,
@@ -662,6 +668,7 @@ def revive(
     *,
     thrash_tracker: "AntiThrashTracker | None" = None,
     now_ms: "int | None" = None,
+    telemetry: "TelemetryAccumulator | None" = None,
 ) -> ReviveResult:
     """Revive a superseded idea when a new verified PR re-teaches the pattern.
 
@@ -739,6 +746,10 @@ def revive(
 
     if thrash_tracker is not None:
         thrash_tracker.record_flip(request.idea_id, now_ms)
+
+    # --- Telemetry: record revive event ----------------------------------------
+    if telemetry is not None:
+        telemetry.record_revive()
 
     logger.info("revive: idea=%r revivedAt=%d", idea.ideaId, now_ms)
     return ReviveResult(action="revived", idea_id=request.idea_id, revived_at=now_ms)
