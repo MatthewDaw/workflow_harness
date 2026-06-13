@@ -9,6 +9,7 @@ Provides:
   * ``generalize_repo_specifics`` — typed-placeholder substitution for private-repo leak guard.
   * ``infer_verification_rung`` — diff + PR metadata → test | normal | bare (never 0).
   * ``is_curriculum_noise`` — curriculum filter (dependency bumps, lockfiles, etc.).
+  * ``distill_pr`` — LLM-backed distillation of a PR into a ``DistillationResult``.
 
 All secrets-bearing fields are scrubbed BEFORE being embedded in any
 ``IdeaSourceRecord`` or idea body.  The generalization pass replaces
@@ -249,6 +250,8 @@ _NOISE_TITLE_RE = re.compile(
     r"bump\s+|"
     r"chore(?:\s*\(deps?\)|:\s*deps?\s)|"
     r"update\s+(?:dep(?:endenc(?:y|ies))?|lock(?:file)?|package)|"
+    r"update\s+\S+\s+to\s+|"          # "Update <pkg> to <version>" (Renovate style)
+    r"update\s+dependency\s+|"        # "Update dependency <pkg>" (Renovate style)
     r"(?:lock)?file\s+update|"
     r"release\s+v?\d|"
     r"version\s+bump|"
@@ -263,6 +266,11 @@ _NOISE_FILE_ONLY_RE = re.compile(
     re.MULTILINE,
 )
 
+# Bot authors that almost exclusively open dependency-bump PRs.
+_NOISE_BOT_LOGINS: frozenset[str] = frozenset(
+    {"renovate", "renovate[bot]", "dependabot", "dependabot[bot]"}
+)
+
 
 def is_curriculum_noise(pr: PullRequest) -> tuple[bool, str]:
     """Return ``(True, reason)`` if the PR should be skipped by the curriculum filter.
@@ -270,18 +278,28 @@ def is_curriculum_noise(pr: PullRequest) -> tuple[bool, str]:
     Skipped PRs are logged (the filter is auditable/tunable).  Never skips on
     diff *size* — only on low-signal markers.
 
+    Filtered signals (in priority order):
+    1. Title matches a dependency-bump/release/generated pattern.
+    2. Author is a known dependency-bot (Renovate, Dependabot).
+    3. Diff touches only lockfiles / generated files.
+
     Returns ``(False, "")`` for PRs that should be ingested.
     """
     # Version/dependency bump title signals
     if _NOISE_TITLE_RE.match(pr.title):
         return True, f"curriculum_noise: title matches noise pattern: {pr.title!r}"
 
+    # Bot author — Renovate and Dependabot open dependency-bump PRs exclusively.
+    author_lower = pr.author_login.lower()
+    if author_lower in _NOISE_BOT_LOGINS:
+        return True, f"curriculum_noise: bot author {pr.author_login!r}"
+
     # Diff is only lockfiles / generated files
     diff_files = re.findall(r"^\+\+\+ b/(.+)$", pr.diff, re.MULTILINE)
     if diff_files and all(
         _NOISE_FILE_ONLY_RE.match(f"+++ b/{f}") for f in diff_files
     ):
-        return True, f"curriculum_noise: diff only touches lockfiles/generated files"
+        return True, "curriculum_noise: diff only touches lockfiles/generated files"
 
     return False, ""
 
@@ -346,25 +364,143 @@ def _build_insight_body(pr: PullRequest, is_bugfix: bool, session_ctx: str | Non
     return generalized
 
 
+# ---------------------------------------------------------------------------
+# LLM distillation schema (structured output from the claude CLI judge)
+# ---------------------------------------------------------------------------
+
+# The JSON schema for the LLM distillation response. The LLM turns the PR
+# title + body + diff into a semantic insight atom with rung and kind inferred
+# from diff evidence rather than from simple heuristics.
+_DISTILL_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "insight": {
+            "type": "string",
+            "description": (
+                "A single, transferable engineering insight extracted from the PR. "
+                "Ground it in concrete diff evidence. For bug-fix PRs phrase as a "
+                "failure-mode description: what broke and the guard that prevents it."
+            ),
+        },
+        "rung": {
+            "type": "string",
+            "enum": ["test", "normal", "bare"],
+            "description": (
+                "Verification rung: 'test' if tests are added/modified or if this is "
+                "a targeted bug-fix; 'bare' for trivial changes (typo/docs/format); "
+                "'normal' otherwise."
+            ),
+        },
+        "kind": {
+            "type": "string",
+            "enum": ["normal", "bugfix-failure-mode"],
+            "description": (
+                "'bugfix-failure-mode' if the PR fixes a concrete bug and the insight "
+                "describes the failure mode; 'normal' otherwise."
+            ),
+        },
+    },
+    "required": ["insight", "rung", "kind"],
+    "additionalProperties": False,
+}
+
+_DISTILL_MODEL = "claude-sonnet-4-5"
+
+_DIFF_PREVIEW_CHARS = 3000  # max diff chars sent to LLM to limit cost
+
+
+def _distill_via_llm(
+    pr: PullRequest,
+    session_ctx: str | None,
+    is_bugfix: bool,
+) -> dict | None:
+    """Attempt an LLM distillation call via the authed claude CLI.
+
+    Returns the structured output dict ``{insight, rung, kind}`` on success, or
+    ``None`` if the LLM is unavailable or judge mode is replay and no fixture
+    exists (so the caller can fall back to template distillation).
+    """
+    try:
+        from learning_service.judge import JudgeError, run_judge
+    except ImportError:
+        logger.debug("learning_service.judge unavailable; skipping LLM distill")
+        return None
+
+    diff_preview = pr.diff[:_DIFF_PREVIEW_CHARS]
+    if len(pr.diff) > _DIFF_PREVIEW_CHARS:
+        diff_preview += "\n... [diff truncated]"
+
+    # Scrub and generalize before sending to the LLM.
+    safe_title = generalize_repo_specifics(scrub_secrets(pr.title), pr.owner_repo)
+    safe_body = generalize_repo_specifics(scrub_secrets(pr.body), pr.owner_repo)
+    safe_diff = generalize_repo_specifics(scrub_secrets(diff_preview), pr.owner_repo)
+
+    session_line = f"\nSession context: {session_ctx}" if session_ctx else ""
+    bugfix_hint = " (this is a targeted bug-fix PR)" if is_bugfix else ""
+
+    prompt = (
+        f"You are a senior engineer reviewing a merged pull request{bugfix_hint}.\n"
+        f"Extract a single, transferable engineering insight from it.\n\n"
+        f"PR title: {safe_title}\n"
+        f"PR description:\n{safe_body or '(none)'}\n\n"
+        f"Unified diff (may be truncated):\n```diff\n{safe_diff}\n```"
+        f"{session_line}\n\n"
+        "Respond with a JSON object matching the required schema."
+    )
+
+    try:
+        result = run_judge(
+            prompt=prompt,
+            schema=_DISTILL_SCHEMA,
+            model=_DISTILL_MODEL,
+            max_retries=1,
+        )
+        return result.output
+    except JudgeError as exc:
+        logger.warning("LLM distill failed (%s); falling back to template", exc)
+        return None
+
+
 def distill_pr(
     pr: PullRequest,
     session_context: str | None = None,
 ) -> DistillationResult:
     """Distill a merged PR into a candidate insight.
 
+    Prefers an LLM-backed call (via the authed claude CLI judge) that grounds
+    the insight in concrete diff evidence.  If the LLM is unavailable or the
+    judge fixture is missing in replay mode, falls back to the template-based
+    ``_build_insight_body`` path so the pipeline never hard-fails on connectivity
+    issues.
+
     Sources (richest available, graceful degradation):
-    (a) PR diff + title + description + review comments + linked issues (always).
-    (b) Session context from the U7 branch→session link (when present).
+    (a) LLM: PR diff + title + description → semantic insight (preferred).
+    (b) Template: PR title + body + review comments + linked issues (fallback).
+    (c) Session context from the U7 branch→session link (always appended when present).
 
     Bug-fix PRs are phrased as verifiable failure-mode descriptions and tagged
     ``kind='bugfix-failure-mode'`` so they are preferentially retrieved when an
     agent is instructed to verify code.
     """
     is_bugfix = _is_targeted_bugfix(pr)
-    kind = "bugfix-failure-mode" if is_bugfix else "normal"
     rung = infer_verification_rung(pr)
 
-    body = _build_insight_body(pr, is_bugfix=is_bugfix, session_ctx=session_context)
+    llm_output = _distill_via_llm(pr, session_ctx=session_context, is_bugfix=is_bugfix)
+
+    if llm_output is not None:
+        # Use LLM-produced values for insight body, rung, and kind.
+        body = llm_output["insight"]
+        if session_context:
+            body = f"{body}\n\nSession context: {session_context}"
+        # Honour LLM's rung/kind judgement but clamp to known values.
+        rung = llm_output.get("rung", rung)
+        kind_raw = llm_output.get("kind", "normal")
+        kind = kind_raw if kind_raw in ("normal", "bugfix-failure-mode") else "normal"
+        is_bugfix = kind == "bugfix-failure-mode"
+    else:
+        # Template fallback.
+        kind = "bugfix-failure-mode" if is_bugfix else "normal"
+        body = _build_insight_body(pr, is_bugfix=is_bugfix, session_ctx=session_context)
 
     return DistillationResult(
         pr_number=pr.number,
@@ -389,13 +525,24 @@ FetchFn = Callable[[str, dict[str, str]], Any]
 
 
 def _default_fetch(url: str, headers: dict[str, str]) -> Any:
-    """Production fetch via urllib (no requests dependency)."""
+    """Production fetch via urllib (no requests dependency).
+
+    When the request Accept header is ``application/vnd.github.v3.diff``, the
+    GitHub API returns raw unified-diff text rather than JSON.  In that case the
+    raw string is returned directly — json.loads() would raise on it.  For all
+    other endpoints the response body is JSON-decoded as usual.
+    """
     import json
     import urllib.request
 
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        body_bytes = resp.read()
+        # Check whether we requested a diff (raw text) or JSON.
+        accept = headers.get("Accept", "")
+        if "vnd.github.v3.diff" in accept:
+            return body_bytes.decode("utf-8")
+        return json.loads(body_bytes.decode("utf-8"))
 
 
 class PublicGitHubReader:
@@ -427,14 +574,30 @@ class PublicGitHubReader:
     def list_merged_pull_requests(
         self,
         owner_repo: str,
+        *,
         default_branch: str = "main",
         since_pr: int | None = None,
+        max_prs: int | None = None,
     ) -> list[PullRequest]:
         """Return merged-to-default-branch PRs in ascending PR-number order.
 
         Paginates through the GitHub PR list API (closed PRs, sorted by
         updated desc, filtered to merged).  Returns only PRs whose
         ``base.ref == default_branch``.
+
+        Parameters
+        ----------
+        owner_repo:
+            ``"owner/repo"`` string.
+        default_branch:
+            Only include PRs that target this branch (e.g. ``"main"``).
+        since_pr:
+            Skip PRs with number <= this value (cursor-based resumption).
+        max_prs:
+            Hard cap on the number of merged PRs collected.  Pagination stops
+            as soon as this many merged PRs have been gathered, avoiding
+            exhausting the unauthenticated 60 req/hr GitHub quota on large
+            repos.  ``None`` means unbounded (original behaviour).
         """
         prs: list[PullRequest] = []
         page = 1
@@ -454,6 +617,10 @@ class PublicGitHubReader:
                 if since_pr is not None and pr.number <= since_pr:
                     continue
                 prs.append(pr)
+                if max_prs is not None and len(prs) >= max_prs:
+                    # Enough merged PRs collected — stop paginating immediately.
+                    prs.sort(key=lambda p: p.number)
+                    return prs
             if len(items) < self.PER_PAGE:
                 break
             page += 1

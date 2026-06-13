@@ -7,6 +7,10 @@ dependencies = [
     # NLI cross-encoder (sentence-transformers); bundled in the container image.
     # NOTE: sqlite-vec / vecindex / store are NOT listed here — only the store-free core.
     "sentence-transformers[onnx]>=5.0",
+    # einops is imported transitively by nomic-ai/nomic-embed-text-v1.5 (trust_remote_code=True
+    # path inside sentence-transformers).  sentence-transformers does not declare it, so we pin
+    # it explicitly here to ensure it is present in the container image.
+    "einops>=0.7",
     # DynamoDB single-table + S3 Vectors persistence (F2 / MAT-149).  The
     # production DynamoLearningStore / S3VectorStore speak boto3 directly.
     "boto3>=1.34",

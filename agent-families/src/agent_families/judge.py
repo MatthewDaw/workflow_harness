@@ -50,6 +50,12 @@ FIXTURES_ENV = "AF_JUDGE_FIXTURES"
 MODES = ("replay", "record", "passthrough")
 DEFAULT_FIXTURES_DIR = Path("tests") / "fixtures" / "judge"
 
+# Structured-output calls require at least one tool-use round-trip, so a single
+# turn is never enough.  Two turns cover most cases; three is the safe default
+# (initial response + schema-feedback retry + final answer).  Callers may override
+# via the ``max_turns`` argument to :func:`run_judge`.
+DEFAULT_MAX_TURNS = 3
+
 # The closed judge outcome enum (R14/plan-008 U6 cut-over). The R3 ingest gauntlet
 # cut-over removes ``append_to_skill``, ``new_skill``, and ``no_placement`` (grouping
 # is deferred to plan 009's derive pass; there is no placement at ingest). ``merge_discard``
@@ -353,7 +359,7 @@ def _type_ok(type_name: str, value) -> bool:
 # --- invocation ---------------------------------------------------------------
 
 
-def _build_argv(schema_json: str, model: str, bare: bool) -> list[str]:
+def _build_argv(schema_json: str, model: str, bare: bool, max_turns: int = DEFAULT_MAX_TURNS) -> list[str]:
     argv = resolve_claude_argv() + [
         "-p",
         "--output-format",
@@ -364,7 +370,7 @@ def _build_argv(schema_json: str, model: str, bare: bool) -> list[str]:
         "",
         "--strict-mcp-config",
         "--max-turns",
-        "1",
+        str(max_turns),
         "--no-session-persistence",
         "--model",
         model,
@@ -378,11 +384,11 @@ def _build_argv(schema_json: str, model: str, bare: bool) -> list[str]:
 
 
 def _invoke(
-    prompt: str, schema_json: str, model: str, bare: bool, max_retries: int
+    prompt: str, schema_json: str, model: str, bare: bool, max_retries: int, max_turns: int = DEFAULT_MAX_TURNS
 ) -> dict:
     """Run the CLI once, retrying a malformed envelope; returns the parsed envelope."""
     preflight()
-    argv = _build_argv(schema_json, model, bare)
+    argv = _build_argv(schema_json, model, bare, max_turns)
     snippet = ""
     for _attempt in range(max_retries + 1):
         try:
@@ -464,6 +470,7 @@ def run_judge(
     model: str,
     *,
     max_retries: int,
+    max_turns: int = DEFAULT_MAX_TURNS,
     bare: bool = False,
     extra_validate: Callable[[dict], str | None] | None = None,
     mode: str | None = None,
@@ -473,10 +480,15 @@ def run_judge(
 
     ``max_retries`` comes from config (judge.max_retries) — a schema-violating
     response is fed back that many times before :class:`JudgeSchemaViolation`,
-    with no side effects. ``extra_validate`` lets the caller enforce per-call-type
-    allowed-outcome subsets and reference integrity (R6): returning a violation
-    message routes through the same feedback-retry path. Each feedback retry has a
-    distinct prompt, hence its own fixture key — the retry path replays offline.
+    with no side effects. ``max_turns`` controls the ``--max-turns`` flag passed
+    to the claude CLI (default :data:`DEFAULT_MAX_TURNS` = 3).  Structured-output
+    calls require at least one tool-use round-trip, so the old hardcoded value of 1
+    always failed with ``error_max_turns``; the new default of 3 covers the normal
+    initial-response + schema-feedback-retry + final-answer cycle.
+    ``extra_validate`` lets the caller enforce per-call-type allowed-outcome subsets
+    and reference integrity (R6): returning a violation message routes through the
+    same feedback-retry path. Each feedback retry has a distinct prompt, hence its
+    own fixture key — the retry path replays offline.
     """
     resolved_mode = _resolve_mode(mode)
     fixtures = (
@@ -494,7 +506,7 @@ def run_judge(
         if resolved_mode == "replay":
             envelope = _load_fixture(fixtures, h)
         else:
-            envelope = _invoke(current_prompt, schema_json, model, bare, max_retries)
+            envelope = _invoke(current_prompt, schema_json, model, bare, max_retries, max_turns)
             if resolved_mode == "record":
                 write_fixture(fixtures, current_prompt, schema, model, envelope)
         _check_envelope(envelope)
