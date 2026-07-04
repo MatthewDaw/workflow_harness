@@ -1,0 +1,35 @@
+<!-- 13 · Necessity gate -->
+<section class="slide" id="slide-13" data-title="Necessity gate"
+  data-narration="Finally, a necessity gate prunes. On a schedule, it checks whether each folded lesson actually improves outcomes. The ones that don't earn their keep are demoted. This keeps the knowledge base lean and high-signal, instead of an ever-growing pile of trivia.">
+  <style>
+    #slide-13 .stage{height:min(42vh,380px)}
+    #slide-13 .keep{fill:rgba(52,211,153,.12);stroke:var(--green)}
+    #slide-13 .weak{fill:rgba(255,255,255,.04);stroke:var(--line)}
+    #slide-13.active .demote{animation:s13drop 1.8s ease-in 1s forwards}
+    #slide-13 .demote{opacity:1}
+    @keyframes s13drop{to{transform:translateY(120px);opacity:.08}}
+  </style>
+  <h2 class="headline reveal" style="--d:.05s">Keep only what earns its place</h2>
+  <div class="stage">
+    <svg viewBox="0 0 820 320" width="100%" height="100%">
+      <!-- gate -->
+      <g class="reveal" style="--d:.3s">
+        <rect x="330" y="40" width="160" height="48" rx="12" fill="url(#s13g)"/>
+        <defs><linearGradient id="s13g" x1="0" x2="1"><stop offset="0" stop-color="var(--teal)"/><stop offset="1" stop-color="var(--violet)"/></linearGradient></defs>
+        <text x="410" y="70" text-anchor="middle" fill="#06121a" font-size="14" font-weight="800">necessity scan</text>
+        <text x="410" y="108" text-anchor="middle" fill="var(--mut)" font-size="12">does it improve outcomes?</text>
+      </g>
+
+      <!-- kept ideas -->
+      <g font-size="12" text-anchor="middle">
+        <g class="pop" style="--d:.6s"><circle class="keep" cx="170" cy="190" r="34"/><text x="170" y="194" fill="var(--green)">helps ✓</text></g>
+        <g class="pop" style="--d:.75s"><circle class="keep" cx="290" cy="210" r="34"/><text x="290" y="214" fill="var(--green)">helps ✓</text></g>
+        <g class="pop" style="--d:.9s"><circle class="keep" cx="560" cy="210" r="34"/><text x="560" y="214" fill="var(--green)">helps ✓</text></g>
+        <g class="pop" style="--d:1.05s"><circle class="keep" cx="660" cy="190" r="34"/><text x="660" y="194" fill="var(--green)">helps ✓</text></g>
+        <!-- demoted -->
+        <g class="demote pop" style="--d:.95s"><circle class="weak" cx="415" cy="200" r="34" stroke-dasharray="4 4"/><text x="415" y="196" fill="var(--mut)">no</text><text x="415" y="212" fill="var(--mut)">signal</text></g>
+      </g>
+      <text x="415" y="300" text-anchor="middle" fill="var(--mut)" font-size="13" class="fade" style="--d:1.4s">dead weight demoted · graph stays lean</text>
+    </svg>
+  </div>
+</section>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verified Learning — How it works</title>
+<style>
+/*__STYLES__*/
+</style>
+</head>
+<body>
+<div id="bg" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+
+<div id="app">
+  <div id="deck"><!--__SLIDES__--></div>
+
+  <div id="chrome">
+    <div id="captionWrap"><p id="caption"></p></div>
+
+    <div id="bar">
+      <button class="ctl" id="btnPrev"   title="Previous (←)"  aria-label="Previous">⏮</button>
+      <button class="ctl big" id="btnPlay" title="Play / Pause (Space)" aria-label="Play">▶</button>
+      <button class="ctl" id="btnNext"   title="Next (→)"      aria-label="Next">⏭</button>
+      <button class="ctl" id="btnRestart" title="Restart (R)"  aria-label="Restart">↺</button>
+      <button class="ctl" id="btnMute"   title="Mute narration (M)" aria-label="Mute">🔊</button>
+      <div id="title"></div>
+      <div id="counter">1 / 1</div>
+    </div>
+
+    <div id="progress"><div id="progressBar"></div></div>
+  </div>
+
+  <div id="startOverlay">
+    <div class="startCard">
+      <div class="startKicker">An explainer video</div>
+      <h1 class="startTitle">Verified&nbsp;Learning</h1>
+      <p class="startSub">Turning your repository's merged pull requests into knowledge agents can trust.</p>
+      <button id="startBtn">▶ &nbsp;Play the explainer</button>
+      <p class="startHint">~3 min · narrated · best with sound on</p>
+    </div>
+  </div>
+</div>
+
+<script>
+/*__PLAYER__*/
+</script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!-- 07 · Author credibility -->
+<section class="slide" id="slide-07" data-title="Credibility"
+  data-narration="That base weight is then scaled by how much you trust the author. A curated credibility score lets a senior engineer's merges count for more, and a single-author change for a little less. And when the same lesson keeps recurring, it earns a bonus — repetition is its own kind of evidence.">
+  <style>
+    #slide-07 .stage{height:min(40vh,360px)}
+    #slide-07 .tok{fill:var(--card);stroke:var(--line)}
+    #slide-07 .op{font-size:32px;font-weight:800;fill:var(--mut)}
+    #slide-07.active .result{animation:s07glow 2.4s ease-in-out infinite}
+    @keyframes s07glow{0%,100%{filter:drop-shadow(0 0 0 rgba(45,212,191,0))}50%{filter:drop-shadow(0 0 16px rgba(45,212,191,.7))}}
+  </style>
+  <h2 class="headline reveal" style="--d:.05s">Trust shapes the score</h2>
+  <div class="stage">
+    <svg viewBox="0 0 880 280" width="100%" height="100%">
+      <!-- base weight -->
+      <g class="pop" style="--d:.3s">
+        <rect class="tok" x="20" y="96" width="150" height="88" rx="14"/>
+        <text x="95" y="132" text-anchor="middle" fill="#cdd7f5" font-size="14">rung weight</text>
+        <text x="95" y="164" text-anchor="middle" fill="var(--blue)" font-size="24" font-weight="800">0.6</text>
+      </g>
+      <text class="op pop" style="--d:.45s" x="200" y="152" text-anchor="middle">×</text>
+      <!-- credibility -->
+      <g class="pop" style="--d:.6s">
+        <rect class="tok" x="240" y="96" width="180" height="88" rx="14" stroke="var(--violet)"/>
+        <text x="330" y="124" text-anchor="middle" fill="var(--violet)" font-size="13">author credibility</text>
+        <text x="330" y="156" text-anchor="middle" fill="var(--violet)" font-size="22" font-weight="800">1.5</text>
+        <text x="330" y="176" text-anchor="middle" fill="var(--mut)" font-size="11">you curate this</text>
+      </g>
+      <text class="op pop" style="--d:.75s" x="450" y="152" text-anchor="middle">+</text>
+      <!-- recurrence -->
+      <g class="pop" style="--d:.9s">
+        <rect class="tok" x="490" y="104" width="150" height="72" rx="14" stroke="var(--amber)"/>
+        <text x="565" y="132" text-anchor="middle" fill="var(--amber)" font-size="13">recurrence</text>
+        <text x="565" y="160" text-anchor="middle" fill="var(--amber)" font-size="20" font-weight="800">+0.2</text>
+      </g>
+      <text class="op pop" style="--d:1.05s" x="672" y="152" text-anchor="middle">=</text>
+      <!-- result -->
+      <g class="result pop" style="--d:1.2s">
+        <rect class="tok" x="712" y="92" width="150" height="96" rx="14" fill="rgba(45,212,191,.12)" stroke="var(--teal)"/>
+        <text x="787" y="124" text-anchor="middle" fill="var(--teal)" font-size="13">trusted weight</text>
+        <text x="787" y="160" text-anchor="middle" fill="var(--teal)" font-size="26" font-weight="800">1.1</text>
+      </g>
+    </svg>
+  </div>
+  <p class="sub reveal" style="--d:1.4s">Single-author code still learns — reviewed &amp; senior code just counts for more.</p>
+</section>

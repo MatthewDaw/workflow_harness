@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Essay math figures — snip these as images</title>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  /* Medium-style: white, serif, generous */
+  body { background:#ffffff; color:#242424; margin:0;
+    font-family: Georgia, "Source Serif Pro", Charter, "Times New Roman", serif; }
+  .wrap { max-width: 740px; margin: 0 auto; padding: 48px 24px 120px; }
+  .note { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 14px; color:#6b6b6b;
+    border-left: 3px solid #e0e0e0; padding-left: 14px; margin-bottom: 40px; line-height: 1.5; }
+
+  /* each figure = one snippable block */
+  .fig { background:#ffffff; padding: 34px 28px; margin: 36px 0; }
+  .fig-label { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 13px;
+    letter-spacing: .04em; color:#9a9a9a; text-transform: uppercase; margin-bottom: 6px; }
+  .fig .math { font-size: 170%; text-align: center; padding: 18px 0 6px; }
+  .fig .cap { text-align:center; font-size: 16px; color:#6b6b6b; font-style: italic; margin-top: 14px; }
+
+  /* legend table, Medium-ish */
+  table { border-collapse: collapse; width: 100%; margin: 14px 0 4px; font-size: 18px; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid #e6e6e6; vertical-align: top; }
+  thead th { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 13px; letter-spacing: .08em;
+    text-transform: uppercase; color:#6b6b6b; border-bottom: 2px solid #242424; font-weight: 600; }
+  td:first-child { white-space: nowrap; width: 9ch; }
+  td .sym { font-size: 120%; }
+  hr.sep { border:none; border-top:1px dashed #d9d9d9; margin: 8px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="note">Each block below is one image for the essay — zoom the page to taste (Ctrl +), then snip
+(Win + Shift + S) just inside the white space around each block. The labels above each block are for you;
+crop them out or keep them.</p>
+
+<!-- LEGEND TABLE -->
+<div class="fig">
+  <div class="fig-label">figure — symbol legend</div>
+  <table>
+    <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><span class="sym">\( q \)</span></td><td>the input you're running right now (the "query") — a vector</td></tr>
+      <tr><td><span class="sym">\( y \)</span></td><td>the model's output — a vector</td></tr>
+      <tr><td><span class="sym">\( W \)</span></td><td>the weight matrix: the model's entire memory</td></tr>
+      <tr><td><span class="sym">\( x_i \)</span></td><td>training example number \(i\) (the cat photo, the feature description)</td></tr>
+      <tr><td><span class="sym">\( \sigma_i \)</span></td><td>the <em>error signal</em> for example \(i\) — how wrong the model was on it, and in which direction to correct</td></tr>
+      <tr><td><span class="sym">\( x_i^{\top} q \)</span></td><td>a dot product — a single number scoring how <em>similar</em> the new input is to training example \(i\)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- LINE 1 -->
+<div class="fig">
+  <div class="fig-label">line 1 — the model is just a transformation</div>
+  <div class="math">\[ y = W q \]</div>
+</div>
+
+<!-- LINE 2 -->
+<div class="fig">
+  <div class="fig-label">line 2 — one training example writes one correction</div>
+  <div class="math">\[ W \;\leftarrow\; W + \sigma_i\, x_i^{\top} \]</div>
+</div>
+
+<!-- LINE 3 -->
+<div class="fig">
+  <div class="fig-label">line 3 — training is the accumulation of those lessons</div>
+  <div class="math">\[ W_T \;=\; W_0 + \sigma_1 x_1^{\top} + \sigma_2 x_2^{\top} + \cdots + \sigma_T x_T^{\top} \;=\; W_0 + \sum_{i=1}^{T} \sigma_i\, x_i^{\top} \]</div>
+  <div class="cap">one term per training example — each a stored capability</div>
+</div>
+
+<!-- LINE 4 -->
+<div class="fig">
+  <div class="fig-label">line 4 — inference replays every lesson, weighted by similarity</div>
+  <div class="math">\[ W_T\, q \;=\; W_0\, q \;+\; \sum_{i=1}^{T} \sigma_i \,\bigl(x_i^{\top} q\bigr) \]</div>
+  <div class="cap">base response&nbsp;+&nbsp;each lesson, scaled by how much the new input resembles its example</div>
+</div>
+
+<!-- LINE 5 -->
+<div class="fig">
+  <div class="fig-label">line 5 — and that is exactly attention</div>
+  <div class="math">\[ W_T\, q \;=\; W_0\, q \;+\; \mathrm{Attention}\bigl(\,\text{query}=q;\ \text{keys}=\{x_i\},\ \text{values}=\{\sigma_i\}\,\bigr) \]</div>
+  <div class="cap">a trained network&nbsp;=&nbsp;an attention lookup over its own training data</div>
+</div>
+
+<!-- BONUS: compact 4-line stack, if you'd rather use one image -->
+<div class="fig">
+  <div class="fig-label">alternative — all four lines as one image</div>
+  <div class="math">\[
+  \begin{aligned}
+  y &= W q && \text{the model}\\[6pt]
+  W &\leftarrow W + \sigma_i x_i^{\top} && \text{one example, one correction}\\[6pt]
+  W_T &= W_0 + \textstyle\sum_i \sigma_i x_i^{\top} && \text{training accumulates them}\\[6pt]
+  W_T\, q &= W_0\, q + \textstyle\sum_i \sigma_i \bigl(x_i^{\top} q\bigr) && \text{inference: similarity-weighted replay}
+  \end{aligned}
+  \]</div>
+</div>
+
+<hr style="border:none; border-top:2px solid #242424; margin:64px 0 40px;">
+<p class="note">Part two — attention as capability coordination (Equations 5–9).</p>
+
+<!-- LEGEND TABLE 2 -->
+<div class="fig">
+  <div class="fig-label">figure — additional symbols for part two</div>
+  <table>
+    <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><span class="sym">\( P \)</span></td><td>the prompt — every context token, stacked as the columns of one matrix (tokens \(p_j\))</td></tr>
+      <tr><td><span class="sym">\( W_K, W_V \)</span></td><td>the <em>coordination weights</em> — learned by gradient descent, frozen at inference</td></tr>
+      <tr><td><span class="sym">\( k_j = W_K p_j \)</span></td><td>token \(j\)'s <em>key</em> — what it advertises itself as being about</td></tr>
+      <tr><td><span class="sym">\( v_j = W_V p_j \)</span></td><td>token \(j\)'s <em>value</em> — what it contributes if it's listened to</td></tr>
+      <tr><td><span class="sym">\( P_0,\ C \)</span></td><td>the prompt you already had, and the context you <em>add</em></td></tr>
+      <tr><td><span class="sym">\( \Delta W_C \)</span></td><td>the <em>context patch</em> — an operator assembled at runtime from the added context</td></tr>
+      <tr><td><span class="sym">\( \tilde q \)</span></td><td>the enriched query after attention (residual connection): \( \tilde q = q + F(q) \)</td></tr>
+      <tr><td><span class="sym">\( \theta \)</span></td><td>a latent <em>skill</em> — one of the behaviors training wrote into the model</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- EQ 5 -->
+<div class="fig">
+  <div class="fig-label">equation 5 — the self-attention layer</div>
+  <div class="math">\[ F(q) \;=\; W_V\, P\,\bigl(W_K\, P\bigr)^{\top} q \]</div>
+  <div class="cap">trained machinery (\(W_K, W_V\)) operating on runtime content (\(P\))</div>
+</div>
+
+<!-- EQ 6 -->
+<div class="fig">
+  <div class="fig-label">equation 6 — one steering term per token</div>
+  <div class="math">\[ F(q) \;=\; \sum_{j} \bigl(W_V\, p_j\bigr)\bigl(W_K\, p_j\bigr)^{\top} q \;=\; \sum_{j} v_j\,\bigl(k_j^{\top} q\bigr) \]</div>
+  <div class="cap">"if the query resembles \(k_j\), push the computation toward \(v_j\)"</div>
+</div>
+
+<!-- EQ 7 -->
+<div class="fig">
+  <div class="fig-label">equation 7 — adding context adds an operator</div>
+  <div class="math">\[
+  \begin{gathered}
+  P = \bigl[\, P_0 \;\|\; C \,\bigr] \quad\Longrightarrow\quad
+     F(q) \;=\; W_{P_0}\, q \;+\; \Delta W_C\, q \\[10pt]
+  \Delta W_C \;=\; \sum_{c \,\in\, C} \bigl(W_V c\bigr)\bigl(W_K c\bigr)^{\top}
+  \end{gathered}
+  \]</div>
+  <div class="cap">the added context collapses into its own matrix — assembled on the fly, never trained</div>
+</div>
+
+<!-- EQ 8 -->
+<div class="fig">
+  <div class="fig-label">equation 8 — context biases which capabilities fire</div>
+  <div class="math" style="font-size:135%">\[
+  \begin{gathered}
+  \tilde q \;=\; q + F(q) \\[12pt]
+  \underbrace{x_i^{\top}\tilde q}_{\text{capability } i}
+     \;=\; \underbrace{x_i^{\top} q}_{\text{input}}
+     \;+\; \underbrace{x_i^{\top} W_{P_0}\, q}_{\text{prompt}}
+     \;+\; \underbrace{x_i^{\top} \Delta W_C\, q}_{\text{added context}}
+  \end{gathered}
+  \]</div>
+  <div class="cap">added context cannot write a new lesson — it adds a bias to every lesson's trigger score</div>
+</div>
+
+<!-- EQ 8 TERM-BY-TERM LIST -->
+<div class="fig">
+  <div class="fig-label">figure — equation 8, term by term</div>
+  <ul style="list-style:none; padding:0 0 0 8px; margin:10px 0 0; font-size:19px; line-height:1.65;">
+    <li style="margin-bottom:16px;">
+      <span style="font-size:115%;">\( x_i^{\top} q \)</span> — how much the raw input resembles lesson \(i\). This is what fires &ldquo;on average,&rdquo; with no help.
+    </li>
+    <li style="margin-bottom:16px;">
+      <span style="font-size:115%;">\( x_i^{\top} W_{P_0}\, q \)</span> — the steering your original prompt already applied.
+    </li>
+    <li>
+      <span style="font-size:115%;">\( x_i^{\top} \Delta W_C\, q \)</span> — <em>the added context's entire effect</em>: a bias term, injected into the activation score of every capability the model owns.
+    </li>
+  </ul>
+</div>
+
+<!-- EQ 9 -->
+<div class="fig">
+  <div class="fig-label">equation 9 — the same statement, one level up</div>
+  <div class="math" style="font-size:135%">\[ p\,(y \mid q,\, C) \;=\; \sum_{\theta} \; \underbrace{p\,(y \mid q,\, \theta)}_{\text{written by training}} \;\cdot\; \underbrace{p\,(\theta \mid C)}_{\text{selected by context}} \]</div>
+  <div class="cap">training edits the skills; context edits only the belief about which skill is in play</div>
+</div>
+
+<!-- EQ 10: signal vs noise in the context patch -->
+<div class="fig">
+  <div class="fig-label">equation 10 — every loaded token steers, for good or ill</div>
+  <div class="math" style="font-size:135%">\[
+  \Delta W_C \;=\; \underbrace{\sum_{c \,\in\, \text{relevant}} v_c\, k_c^{\top}}_{\text{signal — biases the capabilities you need}}
+  \;+\; \underbrace{\sum_{c \,\in\, \text{junk}} v_c\, k_c^{\top}}_{\text{noise — steers anyway}}
+  \]</div>
+  <div class="cap">context bloat doesn't just waste room — every irrelevant token adds its own push to every activation score</div>
+</div>
+
+<!-- BONUS 2: part-two stack -->
+<div class="fig">
+  <div class="fig-label">alternative — part two as one image</div>
+  <div class="math">\[
+  \begin{aligned}
+  F(q) &= W_V P (W_K P)^{\top} q && \text{self-attention}\\[6pt]
+  F(q) &= \textstyle\sum_j v_j (k_j^{\top} q) && \text{one steering term per token}\\[6pt]
+  F(q) &= W_{P_0} q + \Delta W_C\, q && \text{added context = an added operator}\\[6pt]
+  x_i^{\top}\tilde q &= x_i^{\top} q + x_i^{\top} W_{P_0} q + x_i^{\top} \Delta W_C\, q && \text{context biases every capability's trigger}
+  \end{aligned}
+  \]</div>
+</div>
+
+<hr style="border:none; border-top:2px solid #242424; margin:64px 0 40px;">
+<p class="note">Part three — the equation after gradient descent (Equations 11–14).</p>
+
+<!-- PART THREE LEGEND -->
+<div class="fig">
+  <div class="fig-label">figure — symbols for part three</div>
+  <table>
+    <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><span class="sym">\( q \)</span></td><td>a job — the next small unit of work (the "query" is now a whole task)</td></tr>
+      <tr><td><span class="sym">\( G \)</span></td><td>the organization of your knowledge — the files, the links, the hierarchy, the partition into specialists</td></tr>
+      <tr><td><span class="sym">\( K_G(q) \)</span></td><td>the knowledge the organization makes findable for job \(q\)</td></tr>
+      <tr><td><span class="sym">\( C \)</span></td><td>the context chosen for the job — bounded by noise, not by a size limit</td></tr>
+      <tr><td><span class="sym">\( D(q, C) \)</span></td><td>the job's measured loss given context \(C\) — did the build pass, did the tests go green, did the work land</td></tr>
+      <tr><td><span class="sym">\( \lambda \)</span></td><td>the price of structure — what a unit of organization costs to carry</td></tr>
+      <tr><td><span class="sym">\( L(G),\ L(\text{traces} \mid G) \)</span></td><td>description lengths — the bits to describe the organization, and the bits to describe your actual retrieval history given it</td></tr>
+      <tr><td><span class="sym">\( m(q),\ s(\cdot),\ r(\cdot) \)</span></td><td>the module (specialist) that handles job \(q\); search cost within a module; routing cost between modules</td></tr>
+      <tr><td><span class="sym">\( V(s),\ s' \)</span></td><td>the value of the project in state \(s\); \(s'\) is the state after the job lands</td></tr>
+      <tr><td><span class="sym">\( \ell(\text{job}, C) \)</span></td><td>the cost of doing one job with context \(C\)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- EQ 11 -->
+<div class="fig">
+  <div class="fig-label">equation 11 — what comes after gradient descent</div>
+  <div class="math" style="font-size:125%">\[
+  \begin{aligned}
+  \textbf{training:}\qquad & W^{*} \;=\; \operatorname*{arg\,min}_{W}\; \mathbb{E}_{x}\Bigl[\; \mathcal{L}\bigl(f_{W}(x)\bigr) \;\Bigr] \\[14pt]
+  \textbf{context engineering:}\qquad & G^{*} \;=\; \operatorname*{arg\,min}_{G}\; \Bigl\{\; \mathbb{E}_{q}\Bigl[\; \min_{C \,\subseteq\, K_G(q)} D(q,\, C) \;\Bigr] \;+\; \lambda\, L(G) \;\Bigr\}
+  \end{aligned}
+  \]</div>
+  <div class="cap">the same nesting, one level up — gradient descent searches the weights; context engineering searches the organization of your knowledge</div>
+</div>
+
+<!-- EQ 12 -->
+<div class="fig">
+  <div class="fig-label">equation 12 — the cost of an organization</div>
+  <div class="math">\[ \mathrm{cost}(G) \;=\; L(G) \;+\; L(\text{traces} \mid G) \]</div>
+  <div class="cap">storage and access are two levels of one code, measured on what your agents actually retrieved</div>
+</div>
+
+<!-- EQ 13 -->
+<div class="fig">
+  <div class="fig-label">equation 13 — why specialists exist</div>
+  <div class="math" style="font-size:130%">\[
+  \mathrm{cost}(\text{partition}) \;=\; \mathbb{E}_{q}\Bigl[\;
+  \underbrace{s\bigl(|K_{m(q)}|\bigr)}_{\text{search within the module}}
+  \;+\;
+  \underbrace{r\bigl(\mathrm{depth}(m(q))\bigr)}_{\text{route between modules}}
+  \;\Bigr]
+  \]</div>
+  <div class="cap">one giant module and one-idea modules both blow up; a hierarchy of specialists is the minimum</div>
+</div>
+
+<!-- EQ 14 -->
+<div class="fig">
+  <div class="fig-label">equation 14 — the last equation</div>
+  <div class="math" style="font-size:135%">\[
+  V(s) \;=\;
+  \underbrace{\min_{\text{job}}}_{\text{the next small job}}\;
+  \underbrace{\min_{C}}_{\text{the best context for it}}\;
+  \Bigl[\; \ell(\text{job},\, C) \;+\; V(s') \;\Bigr]
+  \]</div>
+  <div class="cap">s = the project as it stands; s′ = the project after the job lands</div>
+</div>
+
+</div>
+</body>
+</html>

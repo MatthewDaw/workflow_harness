@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>From the attention patch to a gradient step</title>
+<script>
+  window.MathJax = { tex:{ inlineMath:[['\\(','\\)']], displayMath:[['\\[','\\]']] }, svg:{ fontCache:'global' } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  :root{ --bg:#0b0e14; --panel:#131826; --ink:#e8edf7; --muted:#8b97ad; --line:#232a3b;
+    --w:#E0863B; --d:#3FB97E; --v:#3E7BD6; }
+  body{ background:var(--bg); color:var(--ink); margin:0; line-height:1.6;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif; }
+  .wrap{ max-width:900px; margin:0 auto; padding:5vh 6vw 14vh; }
+  h1{ font-size:1.9rem; letter-spacing:-.01em; }
+  h2{ font-size:1.25rem; margin-top:2.2em; color:#cdd6e6; border-bottom:1px solid var(--line); padding-bottom:.3em; }
+  p{ margin:.85em 0; }
+  .lead{ color:var(--muted); font-size:1.05rem; }
+  .muted{ color:var(--muted); }
+  .eqbox{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:.3em 1em; margin:1em 0; overflow-x:auto; }
+  .box{ border:1px solid var(--d); border-radius:12px; background:rgba(63,185,126,.07); padding:.2em 1em; margin:1.3em 0; }
+  .warnbox{ border:1px solid #4a3a1f; border-radius:12px; background:#15110a; padding:.6em 1.2em; margin:1.3em 0; color:#d9c7a8; }
+  .key{ display:flex; flex-wrap:wrap; gap:.4rem 1.5rem; font-family:ui-monospace,Consolas,monospace;
+    font-size:.88rem; color:var(--muted); margin:1.2em 0 0; }
+  .key b{ margin-right:.35em; } .kw{color:var(--w)} .kd{color:var(--d)} .kv{color:var(--v)}
+  hr{ border:none; border-top:1px solid var(--line); margin:2.4em 0; }
+  .tag{ font-family:ui-monospace,Consolas,monospace; font-size:.85rem; letter-spacing:.04em; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>From the attention patch to a gradient step</h1>
+<p class="lead">Slide 22 ends at the in-context patch \(\color{#E0863B}{\Delta W}_{\mathrm{ctx}}=\sum_i \color{#3E7BD6}{v_i}\otimes\color{#3FB97E}{k_i}\), then drops \(\color{#E0863B}{\Delta W}_{\mathrm{GD}}\) beside it. This fills the gap: first <b>earn</b> \(\color{#E0863B}{\Delta W}_{\mathrm{GD}}\) from a loss, then find <b>exactly when</b> the two are equal.</p>
+
+<div class="key">
+  <span><b class="kw">W</b> weights</span>
+  <span><b class="kd">x, k, y</b> input · key · label</span>
+  <span><b class="kv">v, e</b> value · error signal</span>
+</div>
+
+<h2>Part A — what one gradient step actually is</h2>
+
+<p>Take the same linear model, \(\hat y=\color{#E0863B}{W}\color{#3FB97E}{x}\), and train it on the examples \((\color{#3FB97E}{x_i},\color{#3FB97E}{y_i})\) with squared loss:</p>
+<div class="eqbox">\[ \mathcal L(\color{#E0863B}{W})=\tfrac12\sum_i\big\|\,\color{#E0863B}{W}\color{#3FB97E}{x_i}-\color{#3FB97E}{y_i}\,\big\|^2. \]</div>
+
+<p>Differentiate. The gradient is a sum of outer products:</p>
+<div class="eqbox">\[ \nabla_{\!\color{#E0863B}{W}}\,\mathcal L=\sum_i(\color{#E0863B}{W}\color{#3FB97E}{x_i}-\color{#3FB97E}{y_i})\,\color{#3FB97E}{x_i}^{\top}. \]</div>
+
+<p>Name the bracket the <b>error signal</b> (the residual — how wrong the model is on example \(i\)):</p>
+<div class="eqbox">\[ \color{#3E7BD6}{e_i}\;=\;\color{#E0863B}{W}\color{#3FB97E}{x_i}-\color{#3FB97E}{y_i}\qquad\Longrightarrow\qquad \nabla_{\!\color{#E0863B}{W}}\mathcal L=\sum_i \color{#3E7BD6}{e_i}\,\color{#3FB97E}{x_i}^{\top}. \]</div>
+
+<p>One gradient-descent step (rate \(\eta\)) is \(\color{#E0863B}{W}\leftarrow\color{#E0863B}{W}-\eta\,\nabla\mathcal L\), so the update is:</p>
+<div class="box">\[ \color{#E0863B}{\Delta W}_{\mathrm{GD}}\;=\;-\eta\sum_i \color{#3E7BD6}{e_i}\otimes\color{#3FB97E}{x_i}. \]</div>
+<p class="muted">(Fold the \(-\eta\) into \(\color{#3E7BD6}{e_i}\) and this is the slide's \(\sum_i \color{#3E7BD6}{e_i}\otimes\color{#3FB97E}{x_i}\) — the same \(\color{#3E7BD6}{\sigma_i}=-\eta\,\color{#3E7BD6}{e_i}\) that appeared on slide 21.)</p>
+
+<p><b>The thing to notice:</b> \(\color{#3E7BD6}{e_i}=\color{#E0863B}{W}\color{#3FB97E}{x_i}-\color{#3FB97E}{y_i}\) depends on the <b>label</b> \(\color{#3FB97E}{y_i}\). The error signal is <b>target-aware</b> — it knows the right answer. Hold that thought.</p>
+
+<h2>Part B — line the two up, term by term</h2>
+
+<div class="eqbox">\[
+\begin{aligned}
+\text{attention patch:}&\qquad \color{#E0863B}{\Delta W}_{\mathrm{ctx}}=\sum_i \color{#3E7BD6}{v_i}\otimes\color{#3FB97E}{k_i},
+   \qquad \color{#3E7BD6}{v_i}=\color{#E0863B}{W}_{\!V}\color{#3FB97E}{x_i},\ \ \color{#3FB97E}{k_i}=\color{#E0863B}{W}_{\!K}\color{#3FB97E}{x_i}\\[4pt]
+\text{gradient step:}&\qquad \color{#E0863B}{\Delta W}_{\mathrm{GD}}=\sum_i \color{#3E7BD6}{e_i}\otimes\color{#3FB97E}{x_i}.
+\end{aligned}
+\]</div>
+
+<p>The colours already show the correspondence: <span style="color:var(--d)">green&nbsp;slot</span> \(\leftrightarrow\) <span style="color:var(--d)">green&nbsp;slot</span> (key ↔ input), <span style="color:var(--v)">blue&nbsp;slot</span> \(\leftrightarrow\) <span style="color:var(--v)">blue&nbsp;slot</span> (value ↔ error). The two matrices are <b>equal term-by-term</b> exactly when both slots match:</p>
+
+<div class="eqbox">\[
+\underbrace{\color{#3FB97E}{k_i}=\color{#3FB97E}{x_i}}_{\text{green: easy}}
+\qquad\text{and}\qquad
+\underbrace{\color{#3E7BD6}{v_i}=\color{#3E7BD6}{e_i}}_{\text{blue: the whole question}}.
+\]</div>
+
+<p><b>Green slot (easy).</b> \(\color{#3FB97E}{k_i}=\color{#E0863B}{W}_{\!K}\color{#3FB97E}{x_i}=\color{#3FB97E}{x_i}\) just needs \(\color{#E0863B}{W}_{\!K}=I\) (the key carries the input). No problem.</p>
+
+<p><b>Blue slot (the real work).</b> We need the value to <b>compute the residual</b>:</p>
+<div class="eqbox">\[ \color{#3E7BD6}{v_i}=\color{#E0863B}{W}_{\!V}\color{#3FB97E}{x_i}\;\overset{!}{=}\;\color{#3E7BD6}{e_i}=\color{#E0863B}{W}\color{#3FB97E}{x_i}-\color{#3FB97E}{y_i}. \]</div>
+<p>But \(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{x_i}\) is a fixed projection of the example — it has no \(\color{#3FB97E}{y_i}\) in it. For the value to equal \(\color{#E0863B}{W}\color{#3FB97E}{x_i}-\color{#3FB97E}{y_i}\), two things must hold:</p>
+<ol>
+  <li>the token must <b>carry the label</b> \(\color{#3FB97E}{y_i}\) — i.e. each in-context example is an \((\text{input},\text{label})\) pair, not just an input; and</li>
+  <li>\(\color{#E0863B}{W}_{\!V}\) must be <b>arranged to output prediction \(-\) label</b>.</li>
+</ol>
+
+<h2>Part C — the construction that makes it exact</h2>
+
+<p>This is the von Oswald / Dai construction. Stack each context token as the pair \((\color{#3FB97E}{x_i},\color{#3FB97E}{y_i})\); choose \(\color{#E0863B}{W}_{\!K}\) to read the input and \(\color{#E0863B}{W}_{\!V}\) to compute the residual. Then \(\color{#3E7BD6}{v_i}=\color{#3E7BD6}{e_i}\), and:</p>
+<div class="box">\[ \color{#E0863B}{\Delta W}_{\mathrm{ctx}}=\sum_i \color{#3E7BD6}{v_i}\otimes\color{#3FB97E}{k_i}
+   \;=\;\sum_i \color{#3E7BD6}{e_i}\otimes\color{#3FB97E}{x_i}\;=\;\color{#E0863B}{\Delta W}_{\mathrm{GD}}. \]</div>
+<p>One attention pass over the prompt \(=\) one gradient step on the in-context loss. Trained toy transformers converge to exactly this on in-context regression.</p>
+
+<h2>Part D — the honest caveat</h2>
+<div class="warnbox">
+For a generic free-text prompt there is no label \(\color{#3FB97E}{y_i}\), so \(\color{#3E7BD6}{e_i}\) isn't even defined and \(\color{#3E7BD6}{v_i}\) is just a projection. Then \(\color{#E0863B}{\Delta W}_{\mathrm{ctx}}\) and \(\color{#E0863B}{\Delta W}_{\mathrm{GD}}\) share the <b>form</b> \(\sum(\cdot)\otimes(\cdot)\) but are <b>not the same matrix</b>. Same shape, different content — the equality is a property of the construction, not of every prompt.
+</div>
+
+<hr>
+
+<h2>So, in one breath</h2>
+<p>A gradient step is \(\sum_i \color{#3E7BD6}{e_i}\otimes\color{#3FB97E}{x_i}\) where \(\color{#3E7BD6}{e_i}\) is the label-aware residual. The attention patch is \(\sum_i \color{#3E7BD6}{v_i}\otimes\color{#3FB97E}{k_i}\). The keys already match the inputs; the only question is whether the <b>value computes the residual</b>. Arrange the tokens as \((\text{input},\text{label})\) pairs and the value to output prediction\(-\)label, and the two become identical. Otherwise they only rhyme.</p>
+
+<div class="warnbox" style="border-color:#2c3650; background:#10131c; color:var(--ink)">
+<b>Slide options.</b> (1) Keep slide 22 as-is and add <em>one</em> intermediate line — \(\color{#E0863B}{\Delta W}_{\mathrm{GD}}=\nabla_{\!\color{#E0863B}{W}}\,\tfrac12\sum\|\color{#E0863B}{W}\color{#3FB97E}{x_i}-\color{#3FB97E}{y_i}\|^2=\sum \color{#3E7BD6}{e_i}\otimes\color{#3FB97E}{x_i}\) — so the GD matrix is derived, not asserted. (2) Add a short follow-up slide stating the match condition \(\color{#3FB97E}{k_i}=\color{#3FB97E}{x_i},\ \color{#3E7BD6}{v_i}=\color{#3E7BD6}{e_i}\) and the \((\text{input},\text{label})\) construction. Say which and I'll wire it into the deck.
+</div>
+
+</div>
+</body>
+</html>

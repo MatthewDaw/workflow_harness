@@ -1,0 +1,51 @@
+<!-- 08 · Anchor -->
+<section class="slide" id="slide-08" data-title="Anchor"
+  data-narration="Next, the lesson is pinned to the code it came from. A tree-sitter parser walks the diff and anchors the insight to real symbols — the exact function or class it touches, like calculate_total. These anchors are how the system later recognizes when a new change lands on the same spot.">
+  <style>
+    #slide-08 .stage{height:min(44vh,400px)}
+    #slide-08 .panel{fill:var(--card);stroke:var(--line)}
+    #slide-08 .code{font-family:"JetBrains Mono",monospace;font-size:13px;fill:#cdd7f5}
+    #slide-08 .node{fill:var(--card2);stroke:var(--line)}
+    #slide-08 .edge{stroke:var(--line);stroke-width:1.5}
+    #slide-08.active .pin{animation:s08pin 2s ease-in-out infinite}
+    @keyframes s08pin{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+  </style>
+  <h2 class="headline plain reveal" style="--d:.05s">Pin the lesson to a <span class="t-teal">symbol</span></h2>
+  <div class="stage">
+    <svg viewBox="0 0 880 340" width="100%" height="100%">
+      <!-- code -->
+      <g class="reveal" style="--d:.3s">
+        <rect class="panel" x="20" y="40" width="320" height="240" rx="14"/>
+        <text class="code" x="44" y="84">def <tspan fill="#2dd4bf">calculate_total</tspan>(items):</text>
+        <text class="code" x="60" y="112">total = 0</text>
+        <text class="code" x="60" y="140">for it in items:</text>
+        <text class="code" x="76" y="168" fill="#34d399">total += it.price</text>
+        <text class="code" x="60" y="196">return total</text>
+        <text class="code" x="44" y="246" fill="var(--mut)" font-size="11">billing.py · changed lines</text>
+      </g>
+
+      <!-- arrow to AST -->
+      <line class="draw" style="--d:.7s" x1="342" y1="160" x2="406" y2="160" stroke="var(--mut)" stroke-width="3" pathLength="1"/>
+      <text x="374" y="150" text-anchor="middle" fill="var(--mut)" font-size="11" class="fade" style="--d:.8s">parse</text>
+
+      <!-- AST -->
+      <g class="reveal" style="--d:.9s">
+        <g class="edge"><line x1="540" y1="80" x2="470" y2="150"/><line x1="540" y1="80" x2="610" y2="150"/><line x1="610" y1="150" x2="560" y2="220"/><line x1="610" y1="150" x2="660" y2="220"/></g>
+        <g class="node"><circle cx="540" cy="80" r="24"/></g><text x="540" y="85" text-anchor="middle" fill="var(--mut)" font-size="11">module</text>
+        <g class="node"><circle cx="470" cy="150" r="22"/></g><text x="470" y="154" text-anchor="middle" fill="var(--mut)" font-size="10">import</text>
+        <g class="node" style="stroke:var(--teal)"><circle cx="610" cy="150" r="26" fill="rgba(45,212,191,.14)"/></g><text x="610" y="146" text-anchor="middle" fill="var(--teal)" font-size="10">func</text><text x="610" y="160" text-anchor="middle" fill="var(--teal)" font-size="9">def</text>
+        <g class="node"><circle cx="560" cy="220" r="18"/></g><text x="560" y="224" text-anchor="middle" fill="var(--mut)" font-size="9">for</text>
+        <g class="node"><circle cx="660" cy="220" r="18"/></g><text x="660" y="224" text-anchor="middle" fill="var(--mut)" font-size="9">ret</text>
+        <text x="540" y="280" text-anchor="middle" fill="var(--mut)" font-size="12">tree-sitter AST</text>
+      </g>
+
+      <!-- anchor pin -->
+      <g class="pin pop" style="--d:1.3s">
+        <line x1="700" y1="150" x2="770" y2="150" stroke="var(--teal)" stroke-width="2" stroke-dasharray="4 5"/>
+        <rect x="772" y="120" width="96" height="60" rx="12" fill="rgba(45,212,191,.12)" stroke="var(--teal)"/>
+        <text x="820" y="146" text-anchor="middle" font-size="18">📌</text>
+        <text x="820" y="168" text-anchor="middle" fill="var(--teal)" font-size="11" font-family="monospace">calculate_total</text>
+      </g>
+    </svg>
+  </div>
+</section>

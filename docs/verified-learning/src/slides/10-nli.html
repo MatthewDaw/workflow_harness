@@ -1,0 +1,45 @@
+<!-- 10 · NLI verdict -->
+<section class="slide" id="slide-10" data-title="NLI verdict"
+  data-narration="But similarity is not agreement. So a natural-language-inference model judges the actual relationship between the new lesson and the existing one. Does it corroborate, refine, or contradict? This is how the system tells 'use snake case' apart from 'avoid snake case' — two statements that look almost identical but mean the opposite.">
+  <style>
+    #slide-10 .stage{height:min(44vh,400px)}
+    #slide-10 .stmt{fill:var(--card);stroke:var(--line)}
+    #slide-10 .nli{fill:url(#s10g)}
+    #slide-10 .verd{fill:var(--card2);stroke:var(--line)}
+    #slide-10.active .nli{animation:s10p 2s ease-in-out infinite}
+    @keyframes s10p{0%,100%{filter:drop-shadow(0 0 0 rgba(96,165,250,0))}50%{filter:drop-shadow(0 0 16px rgba(96,165,250,.7))}}
+    #slide-10.active .win{animation:s10win 1.8s ease-in-out infinite}
+    @keyframes s10win{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+    #slide-10 .win{transform-origin:center}
+  </style>
+  <h2 class="headline plain reveal" style="--d:.05s">Similar ≠ <span class="t-rose">agreeing</span></h2>
+  <div class="stage">
+    <svg viewBox="0 0 900 360" width="100%" height="100%">
+      <defs><linearGradient id="s10g" x1="0" x2="1"><stop offset="0" stop-color="var(--blue)"/><stop offset="1" stop-color="var(--teal)"/></linearGradient></defs>
+      <!-- two near-identical statements -->
+      <g class="reveal" style="--d:.3s"><rect class="stmt" x="20" y="70" width="250" height="60" rx="12"/><text x="145" y="106" text-anchor="middle" fill="#cdd7f5" font-size="14">"use snake_case"</text></g>
+      <g class="reveal" style="--d:.45s"><rect class="stmt" x="20" y="200" width="250" height="60" rx="12" stroke="var(--rose)"/><text x="145" y="236" text-anchor="middle" fill="#f3c7cd" font-size="14">"avoid snake_case"</text></g>
+      <text x="145" y="300" text-anchor="middle" fill="var(--mut)" font-size="12" class="fade" style="--d:.6s">cosine ≈ 0.95 · nearly identical</text>
+
+      <line class="draw" style="--d:.8s" x1="272" y1="100" x2="360" y2="150" stroke="var(--line)" stroke-width="2" pathLength="1"/>
+      <line class="draw" style="--d:.8s" x1="272" y1="230" x2="360" y2="180" stroke="var(--line)" stroke-width="2" pathLength="1"/>
+
+      <!-- NLI -->
+      <g class="nli pop" style="--d:1s">
+        <rect x="362" y="128" width="130" height="76" rx="16"/>
+        <text x="427" y="162" text-anchor="middle" fill="#06121a" font-size="15" font-weight="800">NLI</text>
+        <text x="427" y="184" text-anchor="middle" fill="#06121a" font-size="11" font-weight="600">judge relation</text>
+      </g>
+      <line class="draw" style="--d:1.2s" x1="494" y1="166" x2="560" y2="166" stroke="var(--mut)" stroke-width="3" pathLength="1"/>
+
+      <!-- verdicts -->
+      <g font-size="13" text-anchor="middle">
+        <g class="pop" style="--d:1.35s"><rect class="verd" x="572" y="58"  width="150" height="40" rx="10" stroke="var(--green)"/><text x="647" y="84" fill="var(--green)">corroborate</text></g>
+        <g class="pop" style="--d:1.5s"><rect class="verd" x="572" y="110" width="150" height="40" rx="10" stroke="var(--blue)"/><text x="647" y="136" fill="var(--blue)">refine</text></g>
+        <g class="win pop" style="--d:1.65s"><rect class="verd" x="560" y="162" width="174" height="46" rx="11" fill="rgba(251,113,133,.14)" stroke="var(--rose)"/><text x="647" y="190" fill="var(--rose)" font-weight="800">supersede ✓</text></g>
+        <g class="pop" style="--d:1.8s"><rect class="verd" x="572" y="220" width="150" height="40" rx="10"/><text x="647" y="246" fill="var(--mut)">neutral</text></g>
+      </g>
+      <text x="647" y="290" text-anchor="middle" fill="var(--rose)" font-size="12" class="fade" style="--d:2s">contradiction caught — not merged in</text>
+    </svg>
+  </div>
+</section>

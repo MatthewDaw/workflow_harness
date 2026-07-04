@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Slide 22 — connecting line 1 to line 2</title>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" id="MathJax-script" async></script>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#131826; --ink:#e8edf7; --muted:#8b97ad;
+    --w:#E0863B;  /* weights */ --d:#3FB97E; /* data/query/keys */ --v:#3E7BD6; /* values/error */
+    --line:#232a3b;
+  }
+  body{ background:var(--bg); color:var(--ink); margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    line-height:1.6; }
+  .wrap{ max-width:880px; margin:0 auto; padding:5vh 6vw 12vh; }
+  h1{ font-size:1.9rem; letter-spacing:-.01em; }
+  h2{ font-size:1.3rem; margin-top:2.4em; color:#cdd6e6; border-bottom:1px solid var(--line); padding-bottom:.3em; }
+  p{ margin:.9em 0; }
+  .muted{ color:var(--muted); }
+  .lead{ color:var(--muted); font-size:1.05rem; }
+  mjx-container{ color:var(--ink); }
+  .eqbox{ background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:.4em 1em; margin:1.1em 0; overflow-x:auto; }
+  .key{ display:flex; flex-wrap:wrap; gap:.4rem 1.6rem; font-family:ui-monospace,Consolas,monospace;
+    font-size:.9rem; color:var(--muted); margin:1.4em 0 0; }
+  .key b{ font-weight:700; margin-right:.35em; }
+  .kw{ color:var(--w); } .kd{ color:var(--d); } .kv{ color:var(--v); }
+  .box{ border:1px solid var(--d); border-radius:12px; background:rgba(63,185,126,.07); padding:.2em 1em; margin:1.4em 0; }
+  hr{ border:none; border-top:1px solid var(--line); margin:2.6em 0; }
+  .note{ background:#15110a; border:1px solid #4a3a1f; border-radius:12px; padding:1em 1.3em; color:#d9c7a8; }
+  code{ font-family:ui-monospace,Consolas,monospace; color:#cdd6e6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Slide 22 — connecting line&nbsp;1 to line&nbsp;2</h1>
+<p class="lead">The jump hides two moves: a matrix identity, then a split of the prompt into base + examples.</p>
+
+<div class="key">
+  <span><b class="kw">W</b> weights / projections</span>
+  <span><b class="kd">q, P, x</b> query · prompt · examples</span>
+  <span><b class="kv">σ, e</b> error signal</span>
+</div>
+
+<h2>The two lines on the slide</h2>
+
+<p>Line 1 — self-attention over the prompt:</p>
+<div class="eqbox">
+\[
+  F(\color{#3FB97E}{q}) \;=\; \color{#E0863B}{W}_{\!V}\,\color{#3FB97E}{P}\,(\color{#E0863B}{W}_{\!K}\,\color{#3FB97E}{P})^{\top}\,\color{#3FB97E}{q}
+\]
+</div>
+
+<p>Line 2 — after splitting the prompt:</p>
+<div class="eqbox">
+\[
+  F(\color{#3FB97E}{q}) \;=\; \color{#E0863B}{W}_{\mathrm{ZS}}\,\color{#3FB97E}{q}
+  \;+\; \sum_{i}(\color{#E0863B}{W}_{\!V}\,\color{#3FB97E}{x_i})(\color{#E0863B}{W}_{\!K}\,\color{#3FB97E}{x_i})^{\top}\,\color{#3FB97E}{q}
+\]
+</div>
+
+<hr>
+
+<h2>The identity you’re missing</h2>
+<p>A matrix times another matrix’s transpose equals the <b>sum of the outer products of their columns</b>. For two \(d\times N\) matrices \(A=[a_1\ \cdots\ a_N]\) and \(B=[b_1\ \cdots\ b_N]\):</p>
+<div class="eqbox">
+\[
+  A\,B^{\top} \;=\; \sum_{j=1}^{N} a_j\,b_j^{\top}.
+\]
+</div>
+<p>Check on a single entry \((r,c)\):</p>
+<div class="eqbox">
+\[
+  (A B^{\top})_{rc} = \sum_{j} A_{rj}\,B_{cj} = \sum_{j} (a_j)_r\,(b_j)_c = \sum_{j} (a_j b_j^{\top})_{rc}. \quad\checkmark
+\]
+</div>
+<p>This is the same outer-product fact that built the trained weights on slide 21 (\(\color{#E0863B}{W}_T=\color{#E0863B}{W}_0+\sum_i \color{#3E7BD6}{\sigma_i}\color{#3FB97E}{x_i}^{\top}\)) — here it runs in reverse: a matrix product <em>unpacks into</em> a sum of outer products.</p>
+
+<h2>Step 1 — regroup line 1 as “build a matrix, then apply it to \(\color{#3FB97E}{q}\)”</h2>
+<p>Matrix multiplication is associative, so bracket line 1 as the effective matrix first:</p>
+<div class="eqbox">
+\[
+  F(\color{#3FB97E}{q})=\Big[\,(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{P})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{P})^{\top}\,\Big]\,\color{#3FB97E}{q}
+  \qquad\text{(a } d\times d \text{ matrix, then } \times\,\color{#3FB97E}{q}\text{)}
+\]
+</div>
+<p>Apply the identity with \(A=\color{#E0863B}{W}_{\!V}\color{#3FB97E}{P}\) (columns \(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{p_j}\)) and \(B=\color{#E0863B}{W}_{\!K}\color{#3FB97E}{P}\) (columns \(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{p_j}\)):</p>
+<div class="eqbox">
+\[
+  (\color{#E0863B}{W}_{\!V}\color{#3FB97E}{P})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{P})^{\top}
+   = \sum_{j=1}^{N}(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{p_j})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{p_j})^{\top}.
+\]
+</div>
+<p>So attention over the whole prompt is a sum, over every prompt token \(\color{#3FB97E}{p_j}\), of (its value) \(\otimes\) (its key):</p>
+<div class="eqbox">
+\[
+  F(\color{#3FB97E}{q})=\sum_{j=1}^{N}(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{p_j})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{p_j})^{\top}\,\color{#3FB97E}{q}.
+\]
+</div>
+<p class="muted">Still line 1 — just one outer-product term per token.</p>
+
+<h2>Step 2 — split the prompt’s columns into base + demos</h2>
+<p>The prompt \(\color{#3FB97E}{P}\) is just columns. Cut them into two groups:</p>
+<div class="eqbox">
+\[
+  \color{#3FB97E}{P}=\big[\;\underbrace{\color{#3FB97E}{p_1}\ \cdots\ \color{#3FB97E}{p_{N_0}}}_{\text{base / instructions}}
+        \;\big\|\;
+        \underbrace{\color{#3FB97E}{x_1}\ \cdots\ \color{#3FB97E}{x_m}}_{\text{in-context examples}}\;\big]
+\]
+</div>
+<p>The sum over <em>all</em> tokens splits into base tokens plus demo tokens:</p>
+<div class="eqbox">
+\[
+  F(\color{#3FB97E}{q})=
+  \underbrace{\sum_{j\in\text{base}}(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{p_j})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{p_j})^{\top}}_{\textstyle \text{call this } \color{#E0863B}{W}_{\mathrm{ZS}}}\,\color{#3FB97E}{q}
+  \;+\;
+  \sum_{i\in\text{demos}}(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{x_i})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{x_i})^{\top}\,\color{#3FB97E}{q}.
+\]
+</div>
+
+<h2>Step 3 — name the base part \(\color{#E0863B}{W}_{\mathrm{ZS}}\)</h2>
+<p>The first sum doesn’t involve the examples at all — it’s the fixed matrix you’d get from the base prompt <em>alone</em> (no demonstrations). That is the “zero-shot” model, so name it \(\color{#E0863B}{W}_{\mathrm{ZS}}\):</p>
+<div class="eqbox">
+\[
+  \color{#E0863B}{W}_{\mathrm{ZS}}=\sum_{j\in\text{base}}(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{p_j})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{p_j})^{\top}.
+\]
+</div>
+<p>Substitute the name, and you have <b>line 2 exactly</b>:</p>
+<div class="box">
+\[
+  F(\color{#3FB97E}{q})=\color{#E0863B}{W}_{\mathrm{ZS}}\,\color{#3FB97E}{q}+\sum_{i}(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{x_i})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{x_i})^{\top}\,\color{#3FB97E}{q}
+\]
+</div>
+
+<hr>
+
+<h2>The whole connection in one sentence</h2>
+<p>Attention over the prompt is a sum of one (value \(\otimes\) key) term per token (the matrix identity); split those tokens into base + examples, and the base terms collapse into a fixed matrix \(\color{#E0863B}{W}_{\mathrm{ZS}}\) while the example terms stay as an explicit sum — which is line 2.</p>
+<p>That leftover example-sum, \(\sum_i(\color{#E0863B}{W}_{\!V}\color{#3FB97E}{x_i})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{x_i})^{\top}\), is the patch \(\color{#E0863B}{\Delta W}\) — a weight matrix with the same outer-product shape as a gradient step \(\big(\color{#E0863B}{\Delta W}_{\mathrm{GD}}=\sum_i \color{#3E7BD6}{e_i}\otimes \color{#3FB97E}{x_i}\big)\).</p>
+
+<div class="note">
+<b>Optional slide fix.</b> Add the per-token line
+\(F(\color{#3FB97E}{q})=\sum_j (\color{#E0863B}{W}_{\!V}\color{#3FB97E}{p_j})(\color{#E0863B}{W}_{\!K}\color{#3FB97E}{p_j})^{\top}\,\color{#3FB97E}{q}\)
+<em>between</em> the current lines 1 and 2, so the split is shown rather than implied. Say the word and I’ll insert it.
+</div>
+
+</div>
+</body>
+</html>

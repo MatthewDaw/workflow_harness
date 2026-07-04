@@ -1,0 +1,43 @@
+<!-- 09 · Join -->
+<section class="slide" id="slide-09" data-title="Join"
+  data-narration="Now the key question: have we seen this lesson before? Two joins answer it. The locality join matches by shared symbols — did this change touch the same function as an existing idea? The semantic join compares meaning, using embeddings, even when the code is different. Together they find the existing idea this new evidence belongs to.">
+  <style>
+    #slide-09 .stage{height:min(44vh,400px)}
+    #slide-09 .node{fill:var(--card2);stroke:var(--line)}
+    #slide-09 .new{fill:rgba(251,191,36,.14);stroke:var(--amber)}
+    #slide-09.active .beam{animation:s09beam 1.4s ease-in-out infinite alternate}
+    @keyframes s09beam{from{opacity:.35}to{opacity:1}}
+  </style>
+  <h2 class="headline reveal" style="--d:.05s">Have we seen this before?</h2>
+  <div class="stage">
+    <svg viewBox="0 0 860 360" width="100%" height="100%">
+      <!-- existing graph -->
+      <g class="reveal" style="--d:.4s">
+        <line class="" x1="600" y1="90" x2="700" y2="170" stroke="var(--line)"/><line x1="700" y1="170" x2="620" y2="250" stroke="var(--line)"/><line x1="700" y1="170" x2="780" y2="250" stroke="var(--line)"/>
+        <circle class="node" cx="600" cy="90" r="26"/><circle class="node" cx="700" cy="170" r="30" fill="rgba(45,212,191,.10)" stroke="var(--teal)"/><circle class="node" cx="620" cy="250" r="24"/><circle class="node" cx="780" cy="250" r="24"/>
+        <text x="700" y="175" text-anchor="middle" fill="var(--teal)" font-size="12">idea</text>
+        <text x="700" y="312" text-anchor="middle" fill="var(--mut)" font-size="13">existing knowledge graph</text>
+      </g>
+
+      <!-- new idea -->
+      <g class="pop" style="--d:.7s">
+        <circle class="new" cx="120" cy="170" r="40"/>
+        <text x="120" y="166" text-anchor="middle" fill="var(--amber)" font-size="13" font-weight="700">new</text>
+        <text x="120" y="184" text-anchor="middle" fill="var(--amber)" font-size="13" font-weight="700">idea</text>
+        <text x="120" y="245" text-anchor="middle" fill="var(--mut)" font-size="13">from this PR</text>
+      </g>
+
+      <!-- locality beam -->
+      <g class="beam">
+        <path class="draw" style="--d:1s" d="M160,150 C360,90 480,120 674,162" stroke="var(--teal)" stroke-width="2.5" fill="none" pathLength="1"/>
+      </g>
+      <g class="chip-svg fade" style="--d:1.2s"><rect x="350" y="78" width="170" height="34" rx="17" fill="rgba(45,212,191,.12)" stroke="var(--teal)"/><text x="435" y="100" text-anchor="middle" fill="var(--teal)" font-size="13">locality · same symbol 📌</text></g>
+
+      <!-- semantic beam -->
+      <g class="beam">
+        <path class="draw" style="--d:1.2s" d="M160,196 C360,260 500,230 676,182" stroke="var(--violet)" stroke-width="2.5" fill="none" pathLength="1"/>
+      </g>
+      <g class="fade" style="--d:1.4s"><rect x="350" y="250" width="180" height="34" rx="17" fill="rgba(167,139,250,.12)" stroke="var(--violet)"/><text x="440" y="272" text-anchor="middle" fill="var(--violet)" font-size="13">semantic · embeddings</text></g>
+    </svg>
+  </div>
+</section>

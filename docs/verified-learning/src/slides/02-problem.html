@@ -1,0 +1,36 @@
+<!-- 02 · The problem -->
+<section class="slide" id="slide-02" data-title="The problem"
+  data-narration="Every merged pull request encodes a decision — a bug fixed, a pattern chosen, a mistake avoided. But that knowledge is scattered across thousands of commits, and a coding agent starts every task blind to all of it. The lessons are right there in your history; nobody is reading them back.">
+  <style>
+    #slide-02 .stage{height:min(44vh,400px)}
+    #slide-02 .commit{fill:var(--card2);stroke:var(--line)}
+    #slide-02 .bulb{font-size:18px;opacity:.25}
+    #slide-02 .rail{stroke:var(--line);stroke-width:3}
+    #slide-02 .agent{fill:rgba(251,113,133,.10);stroke:var(--rose)}
+    #slide-02.active .qq{animation:s02q 1.8s ease-in-out infinite}
+    @keyframes s02q{0%,100%{opacity:.4}50%{opacity:1}}
+  </style>
+  <h2 class="headline plain reveal" style="--d:.05s">The lessons are already there —<br><span class="t-rose">but agents start blind</span></h2>
+  <div class="stage">
+    <svg viewBox="0 0 820 320" width="100%" height="100%">
+      <line class="rail draw" style="--d:.3s" x1="40" y1="120" x2="600" y2="120" pathLength="1"/>
+      <g class="pop" style="--d:.5s"><circle class="commit" cx="90"  cy="120" r="22"/><text class="bulb" x="90"  y="127" text-anchor="middle">💡</text></g>
+      <g class="pop" style="--d:.62s"><circle class="commit" cx="190" cy="120" r="22"/><text class="bulb" x="190" y="127" text-anchor="middle">💡</text></g>
+      <g class="pop" style="--d:.74s"><circle class="commit" cx="290" cy="120" r="22"/><text class="bulb" x="290" y="127" text-anchor="middle">💡</text></g>
+      <g class="pop" style="--d:.86s"><circle class="commit" cx="390" cy="120" r="22"/><text class="bulb" x="390" y="127" text-anchor="middle">💡</text></g>
+      <g class="pop" style="--d:.98s"><circle class="commit" cx="490" cy="120" r="22"/><text class="bulb" x="490" y="127" text-anchor="middle">💡</text></g>
+      <g class="pop" style="--d:1.1s"><circle class="commit" cx="590" cy="120" r="22"/><text class="bulb" x="590" y="127" text-anchor="middle">💡</text></g>
+      <text x="320" y="195" text-anchor="middle" fill="var(--mut)" font-size="15" class="fade" style="--d:1.2s">merged PRs · years of decisions</text>
+
+      <!-- agent, disconnected -->
+      <g class="reveal" style="--d:1.4s">
+        <rect class="agent" x="660" y="78" width="130" height="86" rx="16"/>
+        <text x="725" y="118" text-anchor="middle" font-size="26">🤖</text>
+        <text x="725" y="150" text-anchor="middle" fill="#cdd7f5" font-size="13">new task</text>
+        <text class="qq" x="725" y="58" text-anchor="middle" fill="var(--rose)" font-size="30" font-weight="800">?</text>
+      </g>
+      <path class="draw" style="--d:1.6s" d="M620,120 C645,120 645,121 660,121" stroke="var(--rose)" stroke-width="2.5" fill="none" stroke-dasharray="6 7" pathLength="1"/>
+      <text x="643" y="250" text-anchor="middle" fill="var(--rose)" font-size="13" class="fade" style="--d:1.8s">never read back</text>
+    </svg>
+  </div>
+</section>

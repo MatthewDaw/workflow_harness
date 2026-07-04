@@ -1,0 +1,127 @@
+/* ============================================================
+   Verified Learning explainer — global theme, player UI,
+   and animation utilities shared by every slide.
+   Per-slide diagram styles live inside each slide's own <style>.
+   ============================================================ */
+
+:root{
+  --bg0:#0a0e1a; --bg1:#0e1426; --ink:#eaf0ff; --mut:#93a0c4;
+  --line:#26314f; --card:rgba(255,255,255,.04); --card2:rgba(255,255,255,.07);
+  --teal:#2dd4bf; --violet:#a78bfa; --blue:#60a5fa; --amber:#fbbf24;
+  --rose:#fb7185; --green:#34d399;
+  --grad:linear-gradient(100deg,var(--teal),var(--violet));
+  --shadow:0 18px 50px rgba(0,0,0,.45);
+  --r:18px; --fs: clamp(15px, 1.7vw, 21px);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:radial-gradient(120% 120% at 70% -10%,#131a30 0%,var(--bg1) 40%,var(--bg0) 100%);
+  color:var(--ink); font:var(--fs)/1.5 "Segoe UI",Inter,system-ui,-apple-system,sans-serif;
+  overflow:hidden;
+}
+
+/* floating background blobs */
+#bg{position:fixed;inset:0;overflow:hidden;z-index:0}
+#bg span{position:absolute;width:46vmax;height:46vmax;border-radius:50%;filter:blur(80px);opacity:.22;
+  background:var(--teal);animation:float 26s ease-in-out infinite}
+#bg span:nth-child(1){top:-18vmax;left:-10vmax;background:var(--violet)}
+#bg span:nth-child(2){bottom:-22vmax;right:-12vmax;background:var(--teal);animation-delay:-8s}
+#bg span:nth-child(3){top:30%;right:18%;background:var(--blue);width:30vmax;height:30vmax;animation-delay:-14s}
+#bg span:nth-child(4){bottom:8%;left:14%;background:var(--violet);width:26vmax;height:26vmax;animation-delay:-4s}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(4vmax,-3vmax) scale(1.12)}}
+
+#app{position:fixed;inset:0;z-index:1;display:flex;flex-direction:column}
+
+/* ---------------- deck / slides ---------------- */
+#deck{position:relative;flex:1;min-height:0}
+.slide{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:clamp(14px,2.4vh,30px);padding:clamp(20px,4vw,60px) clamp(20px,6vw,90px) 8px;
+  opacity:0;visibility:hidden;transform:scale(.985);
+  transition:opacity .6s ease, transform .6s ease, visibility 0s linear .6s;
+  text-align:center;
+}
+.slide.active{opacity:1;visibility:visible;transform:none;transition:opacity .7s ease,transform .7s ease}
+
+.kicker{letter-spacing:.28em;text-transform:uppercase;font-size:.66em;font-weight:700;color:var(--mut)}
+.headline{
+  margin:0;font-size:clamp(26px,4.4vw,52px);font-weight:800;line-height:1.08;letter-spacing:-.02em;
+  background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;max-width:18ch;
+}
+.headline.plain{background:none;color:var(--ink);-webkit-text-fill-color:var(--ink)}
+.sub{margin:0;color:var(--mut);max-width:34ch;font-size:.96em}
+.stage{position:relative;width:min(1100px,94vw);display:flex;align-items:center;justify-content:center}
+
+/* cards / chips reusable across slides */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+.chip{display:inline-flex;align-items:center;gap:.5em;border:1px solid var(--line);background:var(--card2);
+  border-radius:999px;padding:.32em .8em;font-size:.8em;font-weight:600}
+.mono{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace}
+.t-teal{color:var(--teal)}.t-violet{color:var(--violet)}.t-amber{color:var(--amber)}
+.t-rose{color:var(--rose)}.t-green{color:var(--green)}.t-blue{color:var(--blue)}
+
+/* ---------------- animation utilities (run only when slide is active) -----
+   Use: <div class="reveal" style="--d:.4s"> ... </div>
+   SVG draw: give the path pathLength="1" and class "draw".
+   --------------------------------------------------------------------------*/
+.slide .reveal{opacity:0;transform:translateY(20px)}
+.slide.active .reveal{animation:reveal .7s cubic-bezier(.2,.75,.2,1) forwards;animation-delay:var(--d,0s)}
+@keyframes reveal{to{opacity:1;transform:none}}
+
+.slide .pop{opacity:0;transform:scale(.6)}
+.slide.active .pop{animation:pop .55s cubic-bezier(.2,1.4,.4,1) forwards;animation-delay:var(--d,0s)}
+@keyframes pop{to{opacity:1;transform:none}}
+
+.slide .draw{stroke-dasharray:1;stroke-dashoffset:1}
+.slide.active .draw{animation:draw 1s ease forwards;animation-delay:var(--d,0s)}
+@keyframes draw{to{stroke-dashoffset:0}}
+
+.slide .fade{opacity:0}
+.slide.active .fade{animation:fade .9s ease forwards;animation-delay:var(--d,0s)}
+@keyframes fade{to{opacity:1}}
+
+.slide.active .pulse{animation:pulse 2s ease-in-out infinite;animation-delay:var(--d,0s)}
+@keyframes pulse{0%,100%{filter:drop-shadow(0 0 0 rgba(45,212,191,0))}50%{filter:drop-shadow(0 0 14px rgba(45,212,191,.8))}}
+
+/* ---------------- caption + controls ---------------- */
+#chrome{position:relative;z-index:2;padding:0 clamp(14px,3vw,34px) clamp(12px,2vh,22px)}
+#captionWrap{display:flex;justify-content:center;min-height:3.2em}
+#caption{
+  margin:0 0 10px;max-width:62ch;text-align:center;color:#cdd7f5;font-size:clamp(14px,1.55vw,19px);
+  line-height:1.45;opacity:.0;transition:opacity .4s ease;
+  background:rgba(8,12,24,.5);border:1px solid var(--line);border-radius:14px;padding:.7em 1.1em;backdrop-filter:blur(6px)
+}
+#caption.show{opacity:1}
+
+#bar{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap}
+.ctl{
+  width:46px;height:46px;border-radius:50%;border:1px solid var(--line);background:var(--card2);color:var(--ink);
+  font-size:18px;cursor:pointer;display:grid;place-items:center;transition:.18s;backdrop-filter:blur(6px)
+}
+.ctl:hover{background:var(--card);border-color:var(--violet);transform:translateY(-2px)}
+.ctl.big{width:60px;height:60px;font-size:24px;background:var(--grad);border:none;color:#06121a;box-shadow:0 8px 24px rgba(45,212,191,.35)}
+.ctl:active{transform:translateY(0)}
+#title{margin-left:14px;font-weight:700;color:var(--mut);font-size:.82em;letter-spacing:.04em;min-width:8ch;text-align:right}
+#counter{margin-left:6px;color:var(--mut);font-size:.82em;font-variant-numeric:tabular-nums}
+
+#progress{margin-top:12px;height:5px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}
+#progressBar{height:100%;width:0;background:var(--grad);border-radius:999px;transition:width .5s ease}
+
+/* ---------------- start overlay ---------------- */
+#startOverlay{position:fixed;inset:0;z-index:9;display:grid;place-items:center;
+  background:radial-gradient(80% 80% at 50% 30%,rgba(14,20,38,.7),rgba(8,12,24,.93));backdrop-filter:blur(8px);transition:opacity .6s ease}
+#startOverlay.hide{opacity:0;pointer-events:none}
+.startCard{text-align:center;max-width:min(560px,90vw);padding:10px}
+.startKicker{letter-spacing:.3em;text-transform:uppercase;color:var(--mut);font-size:.7em;font-weight:700;margin-bottom:.6em}
+.startTitle{margin:0;font-size:clamp(40px,9vw,86px);font-weight:900;letter-spacing:-.03em;background:var(--grad);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.startSub{color:var(--mut);max-width:34ch;margin:.7em auto 1.6em}
+#startBtn{font:inherit;font-weight:800;font-size:1.05em;padding:.85em 1.6em;border-radius:999px;border:none;cursor:pointer;
+  background:var(--grad);color:#06121a;box-shadow:0 14px 40px rgba(124,109,242,.45);transition:.2s}
+#startBtn:hover{transform:translateY(-2px) scale(1.02)}
+.startHint{color:var(--mut);font-size:.8em;margin-top:1.2em}
+
+@media (max-width:640px){ #title{display:none} .sub{font-size:.9em} }
+@media (prefers-reduced-motion:reduce){ *{animation-duration:.001s!important;transition-duration:.2s!important} #bg span{animation:none} }

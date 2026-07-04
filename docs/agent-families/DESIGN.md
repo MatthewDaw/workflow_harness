@@ -1,19 +1,21 @@
 # Agent Families: A Self-Growing Agent System for Reverse-Coding Applications
 
 **Status:** Design — pre-implementation
-**Revision:** 2 — 2026-06-10. Incorporates the external-research review (skill-library governance, judge reliability, multi-agent failure taxonomies, improvement-oriented grading), the reflector specification, the episode-based training-loop execution model, and parallel-experiment readiness. Revision 1 sections amended in place; research citations in §18.
+**Revision:** 3 — 2026-06-12. Reorganizes the system around two pivots, grounded in a literature + OSS-source study (`2026-06-11-memory-store-simplification-design-note.md`): **(1) agents → stages** — the runtime is a fixed `plan → assign → work → verify` pipeline differing by tools/permissions/contract/trust, never by knowledge; runtime personas and the family router are removed. **(2) specialists → the knowledge graph** — groups (modules/skills) are *derived* from the insight graph by hierarchical Leiden and named lazily, **never authored at ingest** (Ontology B), because LLM-authored taxonomies measurably degrade (Library Drift +0.0pp; Skill Shadowing −21%). §3–§6 and §6a are R3; the heuristics (cap ~50, silhouettes 0.3/0.35) are replaced by one organization objective (§6a). The lifecycle (§5), traceability (§12), grading (§10), and training-loop (§11) machinery carry forward from R2. Revision 2 citations in §18; R3 citations in the design note.
+
+**R2 → R3 superseded:** §3 (agent families → stages), §4 "What an agent is" (persona-lens → derived module), §4 boundary-ticket multi-persona refinement (removed), §4 routing signal's cosine-0.92 dedup (→ key/value + NLI, §5), §6 silhouette splitting (→ Leiden partitioning scored by §6a). Everything else in R2 stands.
 
 ## 1. Vision
 
-Build a tool that can reverse-code any application by observing it the way a user would — clicking around, seeing the features — and then rebuilding it in a modern stack. The system is organized as **agent families** (plan, work, verify, plus a shared context retriever), and it improves itself through exactly one operation: **adding an idea**. Ideas accumulate into skills, skills accumulate into agents, and agents split into specialists as their skill sets grow — so the system's capability taxonomy grows automatically from a stream of insights, driven by an automated training loop that builds clones of real apps and grades the results.
+Build a tool that can reverse-code any application by observing it the way a user would — clicking around, seeing the features — and then rebuilding it in a modern stack. The runtime is a fixed pipeline of **stages** — plan → assign → work → verify (plus a shared read-only retriever) — and the system improves itself through exactly one operation: **adding an idea**. Ideas are atomic records in a self-organizing knowledge graph; the graph's structure (modules, and the human-facing skills exported from them) is **derived** from the ideas and their usage, by community detection — never authored by hand at ingest. Specialization lives in the *index*, not the staffing: every job's context is retrieved per-job from the whole store, conditioned on the job. An automated training loop builds clones of real apps and grades the results, feeding the graph through the one `add_idea` door.
 
 ## 2. The core reframe: this is not RL
 
 Nothing in this system updates model weights. There is no gradient, no policy, no reward model to train. It is an **evolving skill library with text-based credit assignment**. The learnable parameters are:
 
-1. The skill texts (grown by adding insights)
-2. The routing index (embeddings over insights)
-3. The agent taxonomy (which splits over time)
+1. The insight texts (grown by adding insights)
+2. The index (embeddings over insights — key & full vectors, §4/§5)
+3. The derived module hierarchy (Leiden communities over the insight graph, maintained by the §6a objective)
 
 The "reward" is the grading agent's rubric score; the "update operator" is `add_idea()`.
 
@@ -21,24 +23,35 @@ The "reward" is the grading agent's rubric score; the "update operator" is `add_
 
 The research's strongest warning, adopted throughout this revision: **LLM-authored skill libraries are worth approximately nothing without governance** (Library Drift: +0.0pp vs. +16.2pp human-curated; flipped to +0.328 vs +0.002 by cap + retirement + structural schema), and **library size itself degrades routing** (Skill Shadowing: 21% pass-rate drop at 202 skills; selection accuracy 88%→53%). Dedup and pruning matter as much as adding — and *bounding* matters more than both.
 
-## 3. Agent families
+**(R3) — this warning is now structural, not just a guardrail.** The R3 study confirmed the failure mode is *authoring groups at ingest*: not one of six surveyed memory/RAG systems (mem0, Graphiti, GraphRAG, LightRAG, Cognee) names groups per-add; all author only nodes+edges and derive named communities in a separate batch pass. R2's design was the lone author-at-ingest outlier (the placement judge minted a named skill per `add_idea`). R3 moves grouping out of ingest entirely (§4 "What a module is," §6): ingest adds an insight node + edges; Leiden derives modules; names are lazy. The cap/silhouette heuristics R2 used to *fight* drift are replaced by an objective that never lets the drift form (§6a).
 
-An **agent family** is a router plus N specialist agents. The router receives a request and fans it out; specialists complete work and return a unified response; a Ralph loop (§7) reruns work until a checker confirms completion. Each family starts with one generic specialist and no skills, and grows via idea registration and splitting.
+## 3. Stages (R3 — replaces "Agent families")
 
-### Pipeline families (the deployed system)
+The runtime is a **fixed pipeline of stages**, not a router over specialist agents. A stage is a fresh session with a defined act, tool/permission surface, output contract, and trust position. **Stages differ by what they do and what they may touch — never by what they know.** Knowledge is not a property of a stage; it is retrieved per-job from the whole store (§4, §5). There is no family router, no preset domain bias, and no persistent persona; what R2 called an "agent" dissolves (its knowledge → the graph, its identity → a stage). A Ralph loop (§7) reruns a stage until a checker confirms completion.
 
-| Family | Role | Writes | Executes |
+Why stages survive when agents don't: the *bias* an agent carried (a domain prior baked into a prompt) is redundant under a good fast loop — per-job retrieval computes a better, job-specific bias. What cannot be retrieved into existence is **trust structure**: the verifier must be a *different session* than the producer. That independence is the load-bearing reason the pipeline has seams at all.
+
+### Pipeline stages (the deployed system)
+
+| Stage | Act | Writes | Executes |
 |---|---|---|---|
-| **Planner** | Turn a request + Q&A into a fleshed-out, ticketed feature list divided into units of work | Tickets only | Nothing |
-| **Worker** | Take a ticket + retrieved context and code it | Code + tests | Its own unit tests only (scoped — see §8) |
-| **Verifier** | Check work against codebase conventions, requirements, unit correctness, and integration | Verdicts | Build, integration tests, browser |
-| **Context retriever** | Answer questions from the codebase, the internet, or (in training) the human simulator. Called by plan/work/verify; never routes work itself | — | Read-only research |
+| **Plan** | Turn a request + Q&A into a fleshed-out, ticketed feature list divided into units of work | Tickets only | Nothing |
+| **Assign** | Give each ticket its context: per-job retrieval (§5) over the whole store conditioned on the ticket, plus **file-territory** allocation for parallel work (the only "routing" that remains) | Assignments | Nothing |
+| **Work** | Take a ticket + its assigned context and code it | Code + tests | Its own unit tests only (scoped — see §8) |
+| **Verify** | Check work against codebase conventions, requirements, unit correctness, and integration | Verdicts | Build, integration tests, browser |
+| **Retriever** | Answer questions from the codebase, the internet, or (in training) the human simulator. A read-only oracle called by any stage; never routes work itself | — | Read-only research |
 
-The workflow is always **plan → work → verify**.
+The workflow is always **plan → assign → work → verify**. Per-job context conditioning lives in *assign* (it replaces the family router); knowledge specialization lives in the *index* (§4), not in any stage.
 
-### Training-only families
+### Persistent specialist sessions are contingent optimizations (added back only when measured)
 
-| Family | Role |
+R2's persistent personas are not a runtime primitive in R3. A long-lived specialized session is reintroduced *only* when a measurement justifies it: (1) KV-cache prefix economics, (2) parallel write ownership (file territories — already in *assign*), (3) judgment/persona on genuine boundary work, (4) cold-start before retrieval traffic exists. Each is an optimization over the stage pipeline, never a return to knowledge-partitioned staffing.
+
+### Training-only stage-roles
+
+These remain as defined in R2 (they are training-time roles, not runtime knowledge partitions):
+
+| Role | Function |
 |---|---|
 | **Explorer (human simulator)** | Looks at a target app through the UI only; maintains the exploration frontier; writes a human-style build prompt; answers clarifying questions in natural language; performs acceptance (UAT) on delivered increments |
 | **Grader** | Builds the per-target feature registry; after each episode, compares the built app against the target across every instrument available and produces rubric scores plus improvement-tier scores |
@@ -46,83 +59,84 @@ The workflow is always **plan → work → verify**.
 
 ## 4. Data model
 
-**The single most important structural decision: never dissolve insights into skills.** Insights are atomic records, forever. A skill is a *view* — a named, ordered group over its member insights.
+**The single most important structural decision: never dissolve insights into skills.** Insights are atomic, immutable records, forever — the substrate every surveyed memory tool lacks (mem0 fuses fact+context into prose; Graphiti mutates edges in place; Cognee has no atomic record). Immutability is what makes rollback, quarantine, snapshot-keyed parallel episodes, and per-insight causal attribution possible. A **module/skill is a *derived* group — never authored at ingest** (R3 — see "What a module is" below): a community of insights produced by the §6 Leiden pass and named lazily.
 
 ```
-Insight  { id, text, embedding, scope_tag, source_run_id, created_at,
-           status: quarantined | active | dormant | retired,
-           fitness: { retrievals, wins, losses, causal_blames } }
-Skill    { id, agent_id, name, description, insight_ids[], token_count }
-Agent    { id, family_id, parent_id?, description, base_prompt_specialty,
-           permissions, skill_ids[], active_cap }
-Family   { id, charter, router_prompt, agent_ids[] }
+Insight  { id, precondition, action, expected_outcome, negative_scope, scope_tag,  # R3: schema'd atom + "when NOT to apply" (§5 Op.1)
+           key_vector, full_vector,                                 # R3: two embeddings — key=precond+action, full=all (§5/§2b)
+           valid_at, invalid_at,                                    # R3: world/version validity, append-only (§5)
+           provenance: manual|reflector|researched|seeded|consolidated,  # R3: consolidated = a slow-loop general parent (§6/§5 Op.3)
+           source_run_id, created_at,
+           status: quarantined | active | dormant | retired,        # dormant = a consolidated parent's preserved children (§5 Op.3)
+           fitness: { retrievals, wins, losses, causal_blames, corroborations } }   # R3: corroborations = recurrence votes (§5 Op.2)
+InsightEdge { src, dst, weight,
+              kind: similarity|corroborates|refines|contradicts|generalizes_from }  # R3: similarity=derived for Leiden; rest=semantic, append-only (§5)
+Module   { id, level, parent_module?, name?, description?, member_insight_ids[] }  # R3: DERIVED by Leiden, named lazily
 ```
 
-Atomic insights are what make everything downstream possible: re-clustering, splitting, dedup, contradiction repair, per-insight fitness tracking, and **rollback** (disable a batch of insight IDs if validation fails).
+`Module` replaces R2's `Skill`/`Agent`/`Family` triple. It is the output of the §6 partition pass, not an ingest-time entity: a *level* of the hierarchical-Leiden partition (coarse level = what R2 called an agent's domain; leaf community = a skill; a leaf's lazy summary = the `SKILL.md` export). `name`/`description` are nullable because they are filled lazily, only when a name is needed for display or routing. Atomic insights are what make everything downstream possible: re-clustering, partitioning, dedup, contradiction repair, per-insight fitness tracking, and **rollback** (disable a batch of insight IDs if validation fails).
 
-### What an agent is (R3 — evolved definition)
+*Note on the existing Phase-0 tables:* the shipped `skills`/`agents` tables survive physically (R3 demotes, doesn't drop, to keep the migration reversible — §16/the design note R3 list). `skills` becomes the derived-module table (its per-add `create_skill` writer is removed; a batch writer replaces it); `agents`/`families` lose their runtime/persona semantics and the family router (`library/router.py`) is demoted to dead code behind the *assign* stage.
 
-Earlier shorthand treated an agent as "a directional prompt with privately registered skills" — a capability *container*. That fused three things better kept separate: identity, what it owns, and what it can reach. The current definition: **an agent is a specialist *lens* over its family's shared knowledge**, with four decoupled facets:
+### What a module is (R3 — replaces "What an agent is")
 
-- **Persona** — a thin base prompt (frozen family template + generated specialty section, §6) that fixes its role, domain, and *judgment*. Specialization lives primarily here: two agents handed identical retrieved insights reason differently because of it.
-- **Owned skill cluster** — the coherent insight group it owns (`skill_ids[]`). Ownership is for *bookkeeping*: the active cap, fitness accounting, retirement, split lineage, and the clean `SKILL.md` export. The cluster is also the agent's **retrieval prior**.
-- **Routing identity** — its `description` and taxonomy position, which the family router selects on.
-- **Retrieval policy** — own-skills-first (weighted, claims most of the token budget), with a **relevance-gated, budget-capped fallback to the rest of the family's active pool** for boundary tickets.
+R2 defined an *agent* as a specialist lens with four facets (persona, owned cluster, routing identity, retrieval policy). R3 removes the persona and the family-scoped retrieval entirely; what remains is a **module: a derived community of atomic insights serving as a placement/routing/governance unit** — structure in the index, not staffing in the org chart.
 
-Three invariants keep it a specialist, not a generalist:
+- **Derived, not authored.** A module is the output of the §6 Leiden pass over the insight graph; it is *discovered*, not chosen at ingest. Hierarchical Leiden yields levels for free, so "module" (coarse) and "skill" (leaf) are levels of one partition, not two designed entities.
+- **Named lazily.** A module's `name`/`description` are generated by a brief LLM pass over the cluster's central insights, only when a name is needed (display, the `SKILL.md` export, or coarse routing) — never at ingest. (GraphRAG/Graphiti/Cognee all name groups *after* clustering; GitNexus ships exactly this — Leiden over a codebase graph → per-community `SKILL.md` for Claude Code.)
+- **A governance unit, not a retrieval wall.** Modules carry the bookkeeping R2 hung on agents — fitness roll-ups, retirement, lineage, the `SKILL.md` export boundary.
 
-- **Ownership ≠ reachability.** An insight is owned by exactly one agent (for governance) but retrievable by any sibling in its family by relevance. The partition organizes; it does not blindfold. This corrects the earlier "retrieve only the agent's own active set" wording, which stranded jointly-needed knowledge at agent boundaries — e.g., an API-contract ticket needs both backend-limitation and frontend-UX insights, which live in different specialists.
-- **Specialization is a dial, not a wall** — the own-skills share of the retrieval budget. Tighten it and the specialist stays sharp; the fallback only fires when a cross-domain insight out-scores the in-domain margin (a genuine seam), so it is invisible on ordinary tickets.
-- **The agent stays thin.** Knowledge lives in retrieved insights, not the prompt; the persona carries role and judgment, not facts.
+Two invariants, restated for the store:
 
-**Why this does not bloat context:** injected context is bounded by the *token budget*, independent of pool size — a wider pool changes *which* insights are eligible (better candidates at a boundary), not *how many* are injected. Relevance gating means a normal specialist ticket retrieves the same focused own-domain set it always would. ANN over the whole family pool is the same cost as over a partition at this scale; the scope is the agent's *family* pool, never planner/verifier insights.
+- **Ownership ≠ reachability — now total.** Retrieval (the *assign* stage / fast loop, §5) reaches the **whole store**, at **insight** granularity, conditioned on the actual job. A module organizes and governs; it never blindfolds retrieval. This fully resolves R2's own "ownership ≠ reachability" concession — there is no family-pool scope left to leak across.
+- **Insights, not modules, carry knowledge.** A stage retrieves insights; modules are how the slow loop *organizes* those insights, not a thing a stage reasons "as."
 
-### Boundary tickets: multi-persona refinement (R3)
+**Why this does not bloat context:** injected context is bounded by the *token budget* and selected per-job by relevance over the whole active set; deriving groups changes *how the store is organized for cheap retrieval* (§6a), not *how many* insights a job loads. Insight-level retrieval (not whole-skill retrieval) is also what the granularity research endorses (the proposition is the retrieval unit).
 
-Some tickets are inherently cross-cutting — an API contract, a shared schema, an auth boundary — and are *negotiations between two legitimate lenses* (backend wants minimal coupling/load; frontend wants ergonomic responses), not just facts to merge in one head. Retrieval-with-fallback gets the *knowledge* to one agent, but a single persona may blend the perspectives into a bland compromise rather than a sharp negotiated result. The sanctioned answer is **rare, artifact-mediated, verifier-gated**:
-
-- **Trigger (rare by design):** a ticket is flagged cross-cutting only when routing is ambiguous *or* its retrieved insights span ≥2 agent clusters. The default path stays single-persona; this fires only at genuine seams.
-- **Mechanism = Ralph iterations over the shared artifact, never context-relay.** The primary persona owns the ticket, drafts/edits the artifact, and commits; at most **one or two** additional personas (those on the other side of the boundary) each read the *committed artifact* and refine it, committing in turn; the verifier gates. Agents communicate only through the durable work product. The failure mode MAST/Cognition condemn is *relayed context* ("let me explain what I was thinking"), not iterative refinement of a legible artifact — the same artifact-mediated principle as the plan→work→verify pipeline itself.
-- **Hard terminator (anti-thrash):** at most 1–2 cross-persona passes; the verifier's acceptance criteria arbitrate; the §7 no-progress tripwire catches oscillation (A simplifies, B re-complicates). An optional final reconciler pass converges a contested artifact.
-- **Composes with retrieval:** each pass uses prior+fallback retrieval to be competent in its lens; the multi-pass adds the second lens. This is *not* splitting a task across agents — one persona owns the ticket; the others are bounded consultations on the shared artifact.
-
-Phase 5 machinery (needs the router + the cross-cutting trigger); Plans 0–4 run single-persona.
+*(R2's "boundary tickets: multi-persona refinement" is removed in R3. With no runtime personas there is nothing to negotiate between; a cross-cutting ticket is handled by per-job retrieval reaching the whole store plus file-territory allocation in the *assign* stage. The artifact-mediated, verifier-gated discipline survives as the general plan→assign→work→verify contract, not as a special persona-consultation mode.)*
 
 ### Structural insight schema (new in R2)
 
-Every insight is authored against a fixed structural template: **precondition / action-pattern / expected-outcome** (plus scope tag). This is the "meta-skill structural prior" from Library Drift — under it, explicit dedup machinery becomes largely unnecessary, because structurally homogeneous insights collide visibly. The reflector (§12) and any manual `add_idea` caller must emit this shape; the registration judge rejects free-prose insights.
+Every insight is authored against a fixed structural template: **precondition / action-pattern / expected-outcome** (plus scope tag). This is the "meta-skill structural prior" from Library Drift, and the R3 study sharpened *why* it matters: the schema admits a **key/value decomposition** — `key = precondition + action` ("when it applies + what to do"), `value = expected_outcome (+ scope_tag)`. That decomposition is what makes dedup and contradiction tractable (§5): same key + same value = duplicate, same key + *opposite* value = contradiction, different key = unrelated — conflicts collide on the key instead of hiding behind cosine (the schema-grounded-memory result: 97% vs 87% F1 *because* the schema makes conflicts collide). The reflector (§12) and any manual `add_idea` caller must emit this shape; registration rejects free-prose insights. **(R3 minor, open):** consider an explicit `rationale` ("because Z") field — the granularity research finds the rationale load-bearing for code-rule reuse; currently implicit in `expected_outcome`. Decide at the schema pass.
 
 ### Ratchet governance: the active set is bounded (new in R2)
 
-The library breathes in both directions:
+The library breathes in both directions. **(R3): the cap and the silhouette/cosine heuristics that drove this in R2 become *moves scored against one objective* (§6a), not standalone thresholds.** What survives unchanged is the *shape* of the breathing:
 
-- **Active cap:** each agent's *active* skill set is bounded (start ~50 skills; a tunable, not a principle — but the existence of a cap is a principle). Routing and retrieval operate only over **active-status** insights (active vs. dormant/quarantined). Note on *scope*: retrieval reaches the whole **family** active pool with an own-skills prior (§4 "What an agent is"), not just the agent's own partition — ownership is a governance/cap boundary, not a retrieval wall.
-- **Outcome-driven retirement:** insights/skills that stop earning retrievals-with-wins are demoted to a **dormant archive** — preserved, searchable, revivable, but out of the routed index. Admission of a new skill beyond the cap displaces the weakest incumbent (tournament admission).
-- Fitness pruning remains, but it is no longer the load-bearing defense; the cap is. Library *size*, not registration quality, is the empirically dominant failure mode.
+- **Bounding is still a principle** — an unbounded active set degrades retrieval (Skill Shadowing). But the bound is no longer a fixed per-agent cap of ~50; it is whatever the §6a objective (storage codelength + expected access cost on real traces) settles to. Retrieval operates only over **active-status** insights; reachability is the whole store conditioned on the job (§4 "What a module is").
+- **Outcome-driven retirement → usage-conditioned survival.** Insights that stop earning retrievals-with-wins are demoted to a **dormant archive** (preserved, searchable, revivable, out of the active index) by a censored-survival rule on usage, not a counter threshold. Admission pressure is resolved by the objective, not a fixed tournament size.
+- Fitness pruning remains; the load-bearing defense is now that **groups are never authored at ingest** (§4/§6) — the drift the cap fought in R2 cannot form, because there is no incrementally-grown taxonomy to drift.
 
 ### Skills: group is the noun, compile is a patch operator
 
-Three layers, kept distinct:
+Three layers, kept distinct. **(R3): membership is *derived* by the §6 Leiden pass, not authored at ingest** — but once a module exists, its rendering/export story is unchanged from R2:
 
-1. **Storage (the definition):** pure membership — `{name, description, ordered insight_ids[]}`.
-2. **Runtime rendering (derived, cached):** concatenation is the v1 renderer — lossless, transparent, debuggable. When a skill crosses a size threshold, a **compile step** renders the group into a clean document with per-section provenance annotations back to insight IDs. **(Amended in R2):** compilation is **delta-patching, never full re-render** — a new insight produces a localized section edit; untouched sections stay byte-identical. Full re-render happens only at skill splits or explicit maintenance. Rationale: ACE documents "context collapse" under iterative full rewrites (detail silently erodes), and full rebuilds defeat the byte-stability that keeps prompt caching alive — exactly when the library churns most. The compiler never edits insights; insights stay the source of truth, or rollback is lost.
-3. **Export:** a skill group maps directly onto the Claude Code skill format — `SKILL.md` with `name:`/`description:` frontmatter, body = compiled rendering. The whole project can be exported as a set of real skills for real users.
+1. **Storage (the definition):** membership — `{level, parent_module?, name?, description?, ordered member_insight_ids[]}`. The membership set is the output of the partition pass (§6), recomputed/rebalanced per derive run, not appended per `add_idea`. (This is the one place the R2→R3 change is a behavioral rewrite, not a schema swap: module *identity* must be tracked across derive runs — see §6 / the design note's "durable identity" caveat.)
+2. **Runtime rendering (derived, cached):** concatenation is the v1 renderer — lossless, transparent, debuggable. When a module crosses a size threshold, a **compile step** renders the group into a clean document with per-section provenance annotations back to insight IDs. Compilation is **delta-patching, never full re-render** — untouched sections stay byte-identical (ACE "context collapse" under full rewrites; byte-stability keeps prompt caching alive). The compiler never edits insights; insights stay the source of truth, or rollback is lost. (LightRAG's threshold-gated re-summary is the adopted economics: don't re-render a module until N new members accumulate.)
+3. **Export:** a leaf module maps directly onto the Claude Code skill format — `SKILL.md` with `name:`/`description:` frontmatter, body = compiled rendering. The lazy-named leaf community *is* the exportable skill. The whole project can be exported as a set of real skills for real users.
 
-### Routing signal (amended in R2)
+### Index and matching signal (R3 — replaces "Routing signal")
 
-Routing — for idea placement, runtime retrieval, and split replay — operates on **full insight/skill text, not description centroids**. SkillRouter measured a 31–44pp routing-accuracy loss when skill bodies are dropped from the signal. Descriptions remain the human-facing layer and the agent-split compressibility probe, but they are no longer the retrieval substrate. Additionally, a deterministic prefilter runs before any LLM judging: **cosine > 0.92 between a new idea and an existing insight short-circuits to merge review**.
+The index operates on **full insight text, not description centroids** (SkillRouter: 31–44pp accuracy loss when bodies are dropped). R3 makes two changes the storage study forced:
+
+- **Three vectors per insight, one task-prefix per master (the prefixes change geometry — §13).** A **`clustering:` key vector** (`precondition + action`) is the dedup/contradiction blocking filter (§5); a **`clustering:` full vector** (whole atom) feeds the §6 partition graph; a separate **`search_document:` retrieval vector** (whole atom, added with the *assign* stage, matched by `search_query:` queries) serves per-job retrieval. Never retrieve on a clustering vector. The two clustering vectors are the v1 organization need; the retrieval vector is additive (Phase 1+).
+- **Cosine never renders a verdict.** R2's "cosine > 0.92 short-circuits to merge" is **unsafe and removed**: sentence embeddings are negation-blind — a statement sits *closer* to its negation (~0.97) than to its paraphrase (~0.94), so a cosine gate silently merges contradictions as duplicates. R3 demotes cosine to a *candidate filter* (key-vector neighbors ≥ ~0.80) and lets a **local NLI cross-encoder** make the duplicate/contradiction/unrelated call (§5). Cosine retrieves; NLI (and the §5 temporal layer) decides.
 
 ## 5. Idea registration and lifecycle
 
-The one operation: `add_idea(text)` — but an idea now has a *lifecycle*, not just a placement.
+The one operation: `add_idea(text)` — but an idea has a *lifecycle*, not a placement. **(R3): ingest authors no group.** The placement/taxonomy judge (R2 steps 3–4, which minted a named skill per add) is removed; grouping is the §6 batch pass. Ingest reduces to admit → key-collision → classify → insert node. There is no `append_to_skill`/`new_skill` decision.
 
-### Registration
+### Registration (R3 pipeline)
 
-1. **Schema check:** the idea must arrive in the structural template (§4). Free prose is bounced to its author for restructuring.
-2. **Cosine prefilter:** > 0.92 against an existing insight → auto-propose merge; the LLM judge only adjudicates ambiguous placements.
-3. **Embed; ANN-search the insight index** (full text). Top ~10 hits yield candidate (family, agent, skill) triples.
-4. **LLM judge decides:** append to skill X / create new skill under agent Y / duplicate of Z — merge or discard / contradicts Z — replace or flag.
-5. **Generalization lint** (anti-leak): reject or rewrite ideas that name target internals. "Web apps commonly have role-gated admin areas; ask about them during elicitation" passes; "this app's admin is at /wp-admin" is target trivia. The reflector *proposes* a scope tag (`universal` / `stack:<x>` / `domain:<y>`) with justification; the judge — which holds the library context — confirms or overrides. The judge-override rate on scope tags is tracked as reflector-drift telemetry.
+1. **Schema check:** the idea must arrive in the structural template (§4). Free prose is bounced for restructuring.
+2. **Admission gate = extraction + generalization (the original piece — Operation 1).** Messy, hyper-specific raw material (a whole transcript, a PR thread) is rewritten into a clean, *transferable* schema'd atom in three sub-stages: **(a) extract by contrast** — segment, label outcomes, extract the lesson by comparing what worked vs what failed (ExpeL / MACLA); **(b) generalize by typed substitution** — replace instance trivia (file paths, repo names, values) with typed placeholders, keep load-bearing preconditions (AWM beats human-authored workflows +7.6pp doing exactly this); **(c) decontextualize + altitude-audit** — rewrite as a self-contained proposition (Dense X), then audit "one over-general misfire, one over-specific non-application" to tighten the precondition and emit the **`negative_scope`** ("when NOT to apply"). The generalization lint (anti-leak) is sub-stage (b)'s filter: "this app's admin is at /wp-admin" is stripped; "web apps commonly have role-gated admin areas" passes. Proposes a scope tag (`universal`/`stack:<x>`/`domain:<y>`); override rate is reflector-drift telemetry. No surveyed memory tool has a precision admission gate — one of the three things R3 stays original about.
+3. **Content-hash fast path + key-collision candidate fetch:** embed the **key vector** (§4); fetch key-near neighbors at cosine ≥ ~0.80 (a *candidate filter*, not a verdict — contradictions live at 0.90+, so a tight gate would discard them).
+4. **Classify each candidate with a local NLI cross-encoder** (`cross-encoder/nli-deberta-v3-base`, ~5ms CPU, no quota) into one of four **append-only** moves — *never an in-place merge* (mutating two records into one breaks immutability and loses provenance; the literature is unanimous against it — **Operation 2**): **entailment / near-identical → corroborate** (keep the new record distinct, add a `corroborates` edge, increment the incumbent's corroboration count — duplicates are *votes*, the §11 cross-target-recurrence signal); **same key + nuance → refine** (keep both, `refines` edge); **same key + opposite value → supersede (deferred — the stamp does NOT happen at ingest)**: record the `contradicts` edge only; the new insight is `quarantined`, so it must not touch active state. The `invalid_at` stamp that retires the incumbent is applied at **promotion**, through the single-writer queue (minting a snapshot), *after* the batch passes validation — so an unvalidated or hallucinated idea cannot silently kill a live rule, and registration stays snapshot-free (§5 lifecycle, §15 queue). At promotion the contradiction is re-checked and the winner decided (recency / source authority / evidence count); **different key → unrelated**. (Corroborate and refine are safe at ingest: a corroboration is an append-only `fitness_event`, not an active-set mutation, and a `refines`/`corroborates` edge is metadata — neither flips an incumbent's status.) The LLM judge + the adopted Graphiti `resolve_edge` prompt are the **fallback** for low-confidence NLI calls, not the workhorse — decisive under the one-Max-subscription ceiling. (NLI beats GPT-4 on short pairwise conflict, 90.9 vs 76.4 F1.)
+5. **Insert** the insight node `status: quarantined` with both vectors; materialize its typed edges (similarity lazily / semantic from step 4). No module is touched at ingest.
+
+**Operation 3 — slow-loop consolidation (additive, in the §6 derive pass).** When a community accumulates many corroborating/refining specifics, synthesize a **new general parent insight** (`provenance: consolidated`) with `generalizes_from` edges to its children. **Children are never destroyed** — demoted to `dormant` (out of the active index, preserved as evidence), never `retired`. Destroying specifics measurably hurts (TriMem −14.5% answer tokens; GAM −37% F1; rare-but-critical rules vanish by the 3rd compression pass); consolidation helps *only when additive* (TiMem +2.12% at 52% fewer tokens). The parent transfers; the children are the auditable evidence base. Consolidation is scored by §6a — a parent subsuming N now-dormant specifics lowers `cost(G)`, so it is an objective-driven move, not a separate heuristic.
+
+This is the write path; the §6 derive pass turns the accumulating node+edge graph into named modules.
 
 ### Lifecycle: quarantine → validate → promote (or auto-revert) (new in R2)
 
@@ -130,7 +144,7 @@ Reflector batches do **not** enter the active library on registration. The defau
 
 1. **Quarantine:** the batch registers with `status: quarantined` — retrievable only in designated trial runs, tagged in every trajectory it touches.
 2. **Validation:** (a) *optional causal check* — replay the source episode's failed slice (the failing tickets/scenarios only) with the batch active: do these ideas actually address these failures? (b) *required generalization check* — a held-out micro-benchmark must show non-negative delta vs. the incumbent library.
-3. **Promote or auto-revert.** Reversion is the default outcome of a failed validation, not a manual rescue. Promoted insights become `active` (subject to the cap's tournament admission).
+3. **Promote or auto-revert.** Reversion is the default outcome of a failed validation, not a manual rescue. Promoted insights become `active`. **(R3):** admission is governed by the §6a objective (usage-conditioned survival), not R2's fixed-cap tournament; promotion is also where a deferred supersede applies its incumbent's `invalid_at` (§5 step 4) — both run through the single-writer queue, minting the snapshot.
 
 This is TextGrad's validation-based reversion applied to the library, and it is the structural answer to Huang et al.: reflector ideas are self-generated refinements, the exact class of edit that degrades without external grounded validation. It also gives clean per-batch causal attribution — "which batch broke things" is a lookup, not forensics.
 
@@ -138,35 +152,41 @@ This is TextGrad's validation-based reversion applied to the library, and it is 
 
 Benchmark-driven rollback decisions use **control limits, not raw thresholds** (statistical process control): act on special-cause variation, not run-to-run grader noise. Reacting to common-cause variance as if it were signal provably destabilizes the process (Deming's funnel), and grader noise (§10) is comparable in magnitude to per-batch effects.
 
-## 6. Splitting
+## 6. Partitioning (R3 — replaces "Splitting"; the slow loop)
 
-### Skill split (deterministic trigger)
+R2 grew structure by *splitting* author-at-ingest groups on geometric triggers (silhouette 0.3/0.35, token/insight counts, k-means). R3 inverts this: structure is **derived** by a batch community-detection pass over the whole insight graph, and every structural move is scored against one objective (§6a) rather than a threshold. There is no skill-split or agent-split trigger; there is a `derive_skills` pass.
 
-Split when `token_count > ~2,000` OR `insight_count > ~25`. Mechanism: k-means (k=2) on member insight embeddings; accept if silhouette > ~0.3, else LLM thematic split. LLM generates the two new names/descriptions. **(R2 note:)** do not evaluate split candidacy until the skill has accumulated a minimum observation count; clustering metrics on small N are noise, and the cosine merge prefilter (§5) should prevent most premature growth in the first place.
+### The derive pass
 
-### Agent split
+1. **Build the graph** from the active insights' full vectors (§4): a **mutual-kNN / SNN graph at k≈15**, edges re-weighted by the **Tanimoto coefficient** (beats raw cosine and Jaccard for clean communities — CosTaL). At our scale (<50k nodes) the graph is recomputed from sqlite-vec each pass — sub-second; no materialized edge table, no dynamic-Leiden machinery until >100k nodes.
+2. **Propose partitions.** Run **hierarchical Leiden** (`graspologic_native.hierarchical_leiden`, Constant Potts Model — modularity's resolution limit swallows small-but-real clusters) across a small **resolution sweep**, producing several candidate *whole* partitions (each call returns the full hierarchy `level` / `parent_cluster` / `is_final_cluster`: coarse levels = modules, leaf communities = skills). Leiden is a **proposal generator, not the objective**: because §6a's objective is map-equation codelength, **Infomap** (which optimizes exactly that) is the matched alternative proposer to A/B against Leiden — both feed the same scorer.
+3. **Select by the objective — whole-partition, never per-move.** Score each candidate partition with §6a's `cost(G)` on the traces and **adopt the lowest-cost candidate only if it beats the incumbent partition**. Do **not** cherry-pick individual community boundaries from a proposal — accepting some moves of a partition and rejecting others would yield a partition no proposer generated (the failure this rule exists to prevent). The only **per-move** operations are the incremental deltas — **consolidate** (synthesize a general parent over corroborating specifics, §5 Op.3) and **retire** — each scored in isolation as a `cost(G)` delta against the standing partition. Retirement is usage-conditioned survival (§4 governance), not a counter; consolidation demotes its children to `dormant` (preserved), never `retired`.
+4. **Name lazily.** A brief LLM pass over each changed community's central insights fills `name`/`description` (GraphRAG `create_community_reports` / Graphiti `generate_summary_description` shape) — only for communities whose membership changed, only when a name is needed.
+5. **Track identity across passes.** Communities are matched to the prior partition (majority-overlap) so a module's fitness roll-ups, lineage, and `SKILL.md` export stay stable run-to-run. This is the load-bearing piece of the R2→R3 migration (durable identity for re-derivable groups); the schema delta is small, the identity-tracking behavior is new.
 
-Periodically embed the agent's *skill descriptions*; compute silhouette for k=2..4. Trigger when:
+The derive pass runs as **one promotion-queue operation** (it mutates the active set, so it mints a snapshot — unlike snapshot-free registration). Cadence: after every N inserts, or scheduled; warm-start is unnecessary at current scale (full re-Leiden is sub-second).
 
-- (a) best silhouette > ~0.35, **and**
-- (b) each cluster would have ≥ 3 skills, **and**
-- (c) an LLM gate confirms: ask an LLM to write a ≤25-word description covering all the agent's skills, then ask a judge whether it actually covers them. Failure to compress = split signal.
+The `reflector/agent_split.py` machinery is repurposed as this partition-move engine; the routing-replay validation R2 used at split time is subsumed by the objective (§6a) plus the lazy-naming pass.
 
-Hard cap regardless: if (base prompt + skill index) exceeds the context budget, force a split. **(R2 note:)** once routing telemetry exists (Phase 3+), evaluate **routing contention** — two skills repeatedly competing for the same incoming ideas — as a complementary split/merge trigger; shadowing is fundamentally a routing failure, and a routing-behavior-derived signal targets it more directly than static geometry. Deferred until the telemetry exists.
+## 6a. The organization objective (R3 — new; the one scorer)
 
-### Rewriting descriptions and prompts after a split
+Every structural move — split, merge, retire, re-home, the bound on the active set — is scored against a single objective, promoted from the theory program (essay Eq 12) to a system spec:
 
-- **Derive bottom-up, never edit the parent's text.** Generate each child's description fresh from its cluster's contents (the ≤25-word compressibility test *is* the generator, run per cluster).
-- **Write the siblings jointly and contrastively**, in one LLM call, with the rest of the family's descriptions in context. "Not responsible for X — that's handled by [sibling]" clauses are encouraged.
-- **Validate with a routing replay before committing.** Re-run the router (over full text, per §4) against historical routing decisions and cluster membership; require ~90% agreement. Below that, regenerate; if it won't converge, the clusters weren't separable — reject the split.
-- **Base prompts are three parts**, so a split only regenerates the thin middle layer:
-  1. *Family template* (shared, frozen): role, workflow position, permissions, output contract, Ralph completion contract.
-  2. *Specialty section* (generated): the description expanded to a paragraph, plus: out-of-scope requests are returned to the router, never attempted.
-  3. *Skill index* (derived from the cluster's skills).
-- **Keep base prompts thin.** Anything substantive hand-patched into a base prompt doesn't travel through a split — knowledge belongs in insights. At split time, diff the parent prompt against the family template; flag non-template residue for conversion into insights before the split commits.
-- **Lineage:** retire the parent (frozen, with history); create children with `parent_id`. The split is a transaction — revertible until the new pair passes the routing replay *and* one benchmark run.
+```
+cost(G) = L(G) + L(traces | G)
+```
 
-The family router updates for free: it is just a prompt listing agent descriptions.
+storage codelength `L(G)` (the size of the organized graph) plus expected access cost `L(traces | G)` (how dearly the fast loop pays to retrieve, measured on **real usage traces** — the `fitness_events` log, which already exists). It is code-relative (an MDL hedge), and it is the one place R3 is original about *structure*: Leiden's own objective (graph modularity) is **access-blind**, so the partition primitive is adopted but the function that decides which partition to keep is ours.
+
+**v1 operational definition (this is the part to nail before any code — everything in §4–§6 defers to it):** model the fast loop as a **random walker over a flow graph** whose nodes are insights and whose edge weights are the *flow* between them — in v1 the mutual-kNN similarity weights (§6), and once `fitness_events` accumulate, **co-retrieval frequency** (how often two insights are pulled into the same job; §6a edge-weight seam below).
+
+- **`L(traces | G)` = the map equation** (Rosvall & Bergström) of that walker under partition `G` = between-module **routing** bits + within-module **locate** bits. Per access, concretely: `≈ log2(#modules the trajectory enters) + log2(|module containing the insight|)`. A partition that co-locates co-retrieved insights in small modules pays fewer bits. This is exactly Eq 13's *search-within + route-between* (Garicano), and it is why **Infomap is the matched optimizer** (it minimizes precisely this).
+- **`L(G)` = storage bits:** the active insights plus a per-module codebook/description overhead (a module costs bits to name and index). This term is what penalizes *both* extremes — over-splitting (many modules → routing term blows up) and under-splitting (giant modules → locate term blows up) — so the minimum is interior, no arbitrary cap needed.
+- **Acceptance semantics (resolves the §6 propose-vs-score gap):** the objective **selects whole partitions** (lowest `cost(G)` among the proposers' candidates, adopted only if it beats the incumbent) and scores **consolidate/retire as isolated per-move deltas**. It never edits a proposed partition move-by-move.
+
+- **Edge weights, v1 → later.** The graph (§6) is built on embedding **similarity** first (available before any traces exist), so the slow loop runs from day one. Once `fitness_events` accumulate, blend in **co-retrieval** ("these insights get pulled into the same job") — which is what the access term actually rewards. This is the seam between the adopted primitive and the original objective.
+- **Why it replaces the heuristics.** R2's cap ~50, silhouettes 0.3/0.35, and the compressibility gate were proxies for "is this organized well?" The objective measures that directly. A move that lowers `cost(G)` on the traces is adopted; one that doesn't is rejected — the proxies become consequences, not rules.
+- **Honesty (from the theory program):** the job distribution is unknown and drifting, so the slow loop is a self-organizing rule with a splay-tree-style amortized guarantee, not a one-shot optimum — which is *why* it is a loop, run between episodes, never mid-episode (the library stays frozen during an episode for clean attribution, §11).
 
 ## 7. Ralph loops
 
@@ -194,9 +214,9 @@ Rules:
 - **Step-repetition tripwire:** the orchestrator embeds each iteration's diff/approach summary; iteration N ≈ N−1 (cosine above threshold) → kill the loop *now* with a typed `REPEATED_ATTEMPT` escalation instead of burning to MAX_ITERS. Step repetition (15.7%) and termination-unawareness (12.4%) are the top two failure modes in 1600+ annotated multi-agent traces, and wasted iterations are this system's scarcest resource (§15).
 - **No-progress detector:** identical failure set across two consecutive iterations, or diff churn with no verdict movement → early escalation.
 
-"Machine-checkable" means *checkable by something other than the producer's self-report* — a spectrum: deterministic validator > independent judge > self-report. Each family's contract sits as far toward deterministic as its artifact allows.
+"Machine-checkable" means *checkable by something other than the producer's self-report* — a spectrum: deterministic validator > independent judge > self-report. Each stage's contract sits as far toward deterministic as its artifact allows.
 
-### Per-family contracts
+### Per-stage contracts
 
 **Worker → Verifier (code):** worker emits diff + "done" claim; verifier executes build/tests/browser and returns an evidence-backed typed verdict; failures become next-iteration feedback. A **deterministic harness gate** (orchestrator-run compile/typecheck/lint, optionally the unit suite) bounces trivial failures straight back to the worker without waking the verifier.
 
@@ -352,7 +372,7 @@ The system's headline goal is to approach **one-shotting an entire codebase**. E
 
 **Rehearsal failure is signal, not a loop.** The rehearsal is never iterated. The convergence pass already produced a working integrated artifact — that is the **fallback**, so the episode always advances. Rehearsal failures form a distinct, valuable failure class for the reflector: *passed alone, broke together* — integration knowledge that sequential building masks. Unit-level lessons come from the convergence pass; integration-level lessons come from the rehearsal.
 
-**Planner cooperation:** the plan-checker gains a **file-ownership lint** — two tickets claiming the same files are flagged or serialized — and the dependency DAG (already linted) defines the rehearsal waves. Side effect: the lint pressures the planner family toward genuinely parallelizable decompositions, itself a step toward one-shot-ability.
+**Planner cooperation:** the plan-checker gains a **file-ownership lint** — two tickets claiming the same files are flagged or serialized — and the dependency DAG (already linted) defines the rehearsal waves. Side effect: the lint pressures the planner stage toward genuinely parallelizable decompositions, itself a step toward one-shot-ability.
 
 **Cost control:** the rehearsal is additive (~N single-shot executions), so (a) **sample it** — every Kth increment is enough once the rate is being tracked; (b) **graduate adaptively** — once one-shot rates are high, invert the order: fan-out first, and drop into sequential convergence only for tickets that fail. Early training: converge-then-rehearse. Late training: one-shot-first, repair the residue. The graduation point is decided by the metric below.
 
@@ -380,7 +400,7 @@ The reflector's attribution is specified in §12. Supporting infrastructure:
 
 - **Fixed held-out benchmark suite:** 3–5 targets never trained on; full suite every N episodes; **control-charted** (§5) so only special-cause regressions trigger rollback. **Composition (decided):** qualification rule — boots via docker-compose with seed data in under ~2 minutes (*re*-boot time; first-boot setup amortizes into the per-target cache), feature registry lands at 15–60 entries, license permits local use. **Opening sequence (decided):** (1) **linkding** (github.com/sissbruecker/linkding — Django/SQLite bookmarks; ~20–25-feature registry, holdable in one head) as the machinery-shakedown target; (2) **Kanboard** (github.com/kanboard/kanboard — PHP/SQLite kanban) as the first full-coverage target: adds multi-user roles/permissions (unlocking cross-session authz scenarios and IDOR-class baseline probes), derived state (boards, dashboards), and the legacy-PHP cross-stack box; (3) a **RealWorld implementation** (spec: github.com/gothinkster/realworld; implementations: codebase.show/projects/realworld) for grader calibration against the published spec. **Rotation pool candidates** (admit after the docker-boot check): PrivateBin (github.com/PrivateBin/PrivateBin), Shaarli (github.com/shaarli/Shaarli), DokuWiki (github.com/dokuwiki/dokuwiki), Mealie (github.com/mealie-recipes/mealie), Tandoor (github.com/TandoorRecipes/recipes), Monica (github.com/monicahq/monica), InvoiceShelf (github.com/InvoiceShelf/InvoiceShelf — the maintained Crater fork; a stalled upstream is fine for oracles, but InvoiceShelf has cleaner Docker tooling). Held-out set: one per major archetype, same archetypes as training but *different instances* (measures generalization, not novelty shock). Special pick: a **RealWorld/Conduit implementation** — a published fixed app spec with dozens of cross-stack implementations, giving (a) free cross-stack targets with known-identical behavior and (b) the grader-calibration target: Gauge-R&R the grader against a published spec rather than our own inference of the app's behavior. **Flagship target: OpenEMR** (github.com/openemr/openemr) — a genuinely legacy, economically real PHP codebase with official Docker images and demo data. Far too large to be a whole target (registry would land in the hundreds), it is instead partitioned into **module-scoped virtual targets** that individually pass the qualification rule — "build a patient-scheduling tool" (calendar module), "patient registration," "prescription tracking" — each a 15–60-feature slice with the full app as behavioral oracle, the frontier ledger scoped to the module, and `domain:healthcare` tags in play. Graduated ladder: small standalone apps (Phase 2–3, machinery validation) → OpenEMR module episodes (mid-training, real legacy complexity at bounded scope) → periodic multi-module OpenEMR episodes as the **north-star eval** for the one-shot capability curve. (Qualification-rule note: the 2-minute boot is read as *re*-boot time — first-boot setup cost is paid once into the per-target grader cache.)
 - **Per-insight fitness:** retrievals, wins/losses, and **causal blames** (§12's `implicated_existing_insights` gives causally-grounded losses, not just co-occurrence).
-- **Overfitting detector:** positive fitness on one target, neutral-or-negative elsewhere → memorized a repo → retire automatically. **Cross-target recurrence** (the same lesson independently arising on ≥k targets) is the strongest *promotion* evidence — the evidence-based complement to the generalization lint's prediction.
+- **Overfitting detector:** positive fitness on one target, neutral-or-negative elsewhere → memorized a repo → retire automatically. **Cross-target recurrence** (the same lesson independently arising on ≥k targets) is the strongest *promotion* evidence — the evidence-based complement to the generalization lint's prediction. **(R3): this is the same quantity as §5 Operation 2's `corroborations` count — they are one mechanism, not two.** A recurring lesson arrives as a near-duplicate, gets classified `corroborate`, and increments the incumbent's corroboration count (the new record kept as distinct provenance); "cross-target recurrence ≥ k" is just "`corroborations` ≥ k from distinct targets." Build one counter, on `fitness_events`.
 
 ## 12. The reflector (new in R2 — resolves the R1 open question)
 
@@ -434,7 +454,7 @@ Per failed scenario `SCEN-x` testing `FEAT-y`:
 
 Steps 1–6 are lookups. Step 7's discriminator is **mechanical re-execution** (this is why CHK stores a repro command). Exactly **two micro-judgments** remain, both narrow classifications: *elicitability* (mostly table-driven — maintain a fixed probe-question taxonomy, tag each FEAT with its probe category at registration; the LLM fires only for out-of-taxonomy features) and *answer contradiction* (binary, both artifacts in hand).
 
-Attribution output is `{primary, contributing[]}` — a primary owner for routing pressure, with contributing factors (NTSB-style) so multi-causal failures don't starve secondary families of signal.
+Attribution output is `{primary, contributing[]}` — a primary owner for routing pressure, with contributing factors (NTSB-style) so multi-causal failures don't starve secondary stages of signal.
 
 ### 12.3 Stage B: counterfactual reflection (LLM)
 
@@ -467,11 +487,16 @@ Attribution output is `{primary, contributing[]}` — a primary owner for routin
 ### Two-tier memory
 
 - **Run-scoped working memory (fast loop):** during an episode, successful trajectories are distilled online into reusable workflows ("how auth-gated CRUD works in this build") available to later tickets *in the same episode*. Allowed to be target-specific — it never passes registration and **dies at episode end**. This gives the within-run gains the generalization lint otherwise forbids, and resolves the R1 tension where the most immediately useful knowledge had nowhere legal to live.
-- **Permanent library (slow loop):** at settlement, the reflector nominates run-memory survivors for generalization through the normal `add_idea` gauntlet — arriving with nonzero evidence (they already won at least once), and subject to cross-target recurrence promotion (§11).
+- **Permanent library (slow loop):** at settlement, the reflector nominates run-memory survivors for generalization through the normal `add_idea` gauntlet — arriving with nonzero evidence (they already won at least once), and subject to cross-target recurrence promotion (§11). **(R3): the reflector is not exempt from the admission gate.** Its `counterfactual_insight` (§12.3) re-enters through `add_idea` and passes §5 Operation 1 (generalize by typed substitution + altitude-audit → `negative_scope`) and Operation 2 (key-collision → NLI → corroborate/refine/supersede). The reflector produces a *candidate* in the structural schema; §5 — the one door — does the generalization and the dup/contradiction classification. Generalization is owned by the gate, not duplicated in the reflector.
 
 ### Embedding and vector stack (decided)
 
-- **Embedder: `nomic-embed-text-v1.5`** — Apache 2.0, 137M params, 768-dim (Matryoshka-reducible), CPU-friendly (~20–80ms per 200-token text), and the only model in its tier with a dedicated `clustering:` task prefix — directly relevant since k-means/silhouette on insight embeddings drives the splitting machinery. Use `search_document:` at index time, `search_query:` at routing time, `clustering:` for split evaluation. Runner-up: Qwen3-Embedding-0.6B (higher retrieval ceiling, heavier, weaker fit for clustering).
+- **Embedder: `nomic-embed-text-v1.5`** — Apache 2.0, 137M params, 768-dim (Matryoshka-reducible), CPU-friendly (~20–80ms per 200-token text), with dedicated task prefixes that **genuinely change the embedding geometry** — so a vector built for one job is not optimal for another. **(R3) — three vectors per insight, one prefix per master (decided; supersedes R2's single-prefix story and the deleted k-means/silhouette split machinery):**
+  1. **`clustering:` key vector** (`precondition + action`) — dedup/contradiction blocking (§5).
+  2. **`clustering:` full vector** (whole atom) — the §6 partition graph.
+  3. **`search_document:` retrieval vector** (whole atom) — per-job retrieval, matched by `search_query:`-embedded job queries at the *assign* stage.
+
+  Never retrieve on a clustering vector or partition on a retrieval vector — the prefixes are not interchangeable. The two clustering vectors are the v1 ingestion/organization need; the retrieval vector lands with the *assign* stage (Phase 1+), so v1 stores two and the third is additive. The three-vector cost is trivial at our scale (sqlite-vec brute-force, one extra encode at the cold ingest path; the hot retrieval path touches only vector 3). **Validate the geometry split on the ~50 hand-labeled pair set (§17)** — if clustering-prefixed retrieval turns out adequate, vector 3 can be dropped, but the default is the un-compromised split because the fast loop is the system's hottest, most important path. Runner-up embedder: Qwen3-Embedding-0.6B (heavier, weaker clustering fit); gte/bge-base-en-v1.5 score ~4pts higher on MTEB clustering if community separation needs it.
 - **Runtime:** in-process via sentence-transformers (ONNX backend, 1.4–3× CPU speedup) — natural fit with the Python orchestrator (§15); no sidecar service needed.
 - **Vector store: `sqlite-vec`, brute-force, in the same SQLite database as everything else.** At 10–50k vectors of dim 768, brute-force KNN is milliseconds; ANN only matters past ~100–200k (revisit then). Keeping vectors in the one snapshot-keyed store preserves the parallelism invariants for free. *Pinecone was considered and rejected:* it is a vector store, not an embedder (the model choice remains either way); it adds a cloud dependency and recurring cost to a system whose only paid AI is the Claude subscription; and it splits library state out of the snapshot-keyed SQLite store that rollback, quarantine, and parallel-episode keying all depend on.
 - **Pinning discipline:** `embedding_model` + `embedding_dim` columns on every vector-bearing row; never mix models in one index; a model swap is a deliberate migration — full re-embed + recalibration of all cosine thresholds against the held-out labeled pair set (§17).
@@ -480,7 +505,7 @@ Attribution output is `{primary, contributing[]}` — a primary owner for routin
 
 Cross-stack training (e.g., PHP target → React build) does not destroy signal — the signal never touches target code. The explorer's output is a behavioral spec; the grader compares behavior against behavior. Cross-stack is the best anti-overfitting tool available: surviving insights must be about process, not repo quirks.
 
-- **Vary the target stack, fix the output stack** (initially). Worker/verifier families accumulate on a consistent substrate; planner/retriever families generalize across diverse inputs. Diversify the output stack later.
+- **Vary the target stack, fix the output stack** (initially). Worker/verifier stages accumulate on a consistent substrate; planner/retriever stages generalize across diverse inputs. Diversify the output stack later.
 - **The output stack (decided): React + Vite + TypeScript (strict) + Hono (Express as fallback) + Drizzle + SQLite + Tailwind + shadcn/ui, tested with Vitest + Playwright.** Evidence: the major agent app builders (v0, Lovable, Bolt) independently converged on React + Vite/Next + Tailwind + shadcn — teams optimizing for exactly our metric (LLM generation reliability); WebGen-Bench's best-performing agent generates React + Vite + TS; Tailwind/shadcn minimize hallucination surface (atomic utility tokens, components inlined as editable JSX rather than opaque APIs); Drizzle publishes `llms-full.txt` and keeps schema + queries in one language. **Plain SPA + API rather than Next.js**: the App Router's churn (async `params` breaking change in 15+, RSC `"use client"` boundaries) is a documented "model knows the old API" failure class — a smaller, stabler surface beats marginally higher training coverage when one-shot rate is the goal. Exact versions live in a pinned template repo; version bumps are deliberate migrations (model priors lag framework churn — the pin is a harness responsibility).
 - **Scope tags** keep stack-specific insights in stack-named skills.
 - Cross-stack, the grader's source-reading is for **discovery and ambiguity resolution**, never code diffing.
@@ -531,7 +556,7 @@ Quota reality: parallel sessions share one account-level pool — parallelism co
 
 ## 16. Build order
 
-- **Phase 0 — the heart, standalone:** data model + `add_idea` CLI: embedding index (full-text), cosine prefilter, routing judge (placement + dedup + contradiction + generalization lint + scope tags), structural insight schema, skill rendering with delta-patch compilation, export to SKILL.md, **span/traceability SQLite schema, snapshot-ID keying, single-writer promotion queue**. Testable with hand-written ideas before any pipeline exists.
+- **Phase 0 — the heart, standalone:** data model + `add_idea` CLI: embedding index (full-text), cosine prefilter, routing judge (placement + dedup + contradiction + generalization lint + scope tags), structural insight schema, skill rendering with delta-patch compilation, export to SKILL.md, **span/traceability SQLite schema, snapshot-ID keying, single-writer promotion queue**. Testable with hand-written ideas before any pipeline exists. **(R3 reconciliation):** the shipped Phase 0 implements the *author-at-ingest* path (the routing/placement judge that mints a named skill per add). R3 keeps the data-model spine (atomic insights, snapshots, promotion queue, structural schema, render/export) but replaces the ingest brain: the placement judge is removed, dedup/contradiction becomes key-collision + local NLI (§5), and grouping moves to the §6 derive pass. The session-transcript adapter (design note §8) is the shortest path to dogfooding the R3 write path; the §6 Leiden pass + §6a objective land once traces accumulate.
 - **Phase 1 — pipeline skeleton:** plan → work → verify on toy tasks; hardcoded generic prompts; headless `claude -p`; harness gate; Ralph loop with typed failures + tripwires; **full trace capture from the first run**.
 - **Phase 2 — one target, manual ideas:** registry pre-research + frontier ledger; explorer + grader on **linkding** (target #1 — small enough to hand-check every registry entry and grader verdict); episode/increment structure; **you act as the reflector** — reading traces (human viewing layer) and hand-writing ideas validates the registration machinery and *records the navigation moves the automated reflector's tools should mimic*. Mutation-seeded verifier audits start here (the reward model must be calibrated before it trains anything). Graduate to **Kanboard** (full grading-pattern coverage, legacy PHP) and then the **RealWorld implementation** (grader calibration) per §11's opening sequence.
 - **Phase 3 — close the loop:** automated reflector (Stage A + Stage B); quarantine/validation/promotion lifecycle; ratchet governance (cap + retirement); splitting; held-out benchmark + control charts; improvement tier; parallel episodes.
@@ -544,11 +569,11 @@ Every formerly-open question now carries either a decision or a default-plus-tri
 
 **Hyperparameters (tune as we work — the obligation is tunability, not the values):**
 
-- All thresholds (active cap ~50, cosine merge ~0.92, step-repetition similarity, gate pass-rate, …) live in **one config file**, each entry carrying its default's provenance and its tuning metric. Decisions are logged with the threshold value that made them, so changing a value shows what would have flipped.
+- All thresholds (active cap ~50, cosine merge ~0.92, step-repetition similarity, gate pass-rate, …) live in **one config file**, each entry carrying its default's provenance and its tuning metric. Decisions are logged with the threshold value that made them, so changing a value shows what would have flipped. **(R3):** several of these are demoted: the active cap ~50 and silhouettes 0.3/0.35 → moves scored against the §6a objective (no fixed cap); cosine merge ~0.92 → a *candidate filter* at ~0.80, with a local NLI cross-encoder rendering the duplicate/contradiction verdict (§5). New R3 config: three vectors per insight — key & full use `clustering:`, the per-job retrieval vector uses `search_document:`/`search_query:` (§13, one prefix per master); optional 256-dim Matryoshka truncation; the NLI confidence threshold for LLM-judge fallback; and the §6 graph params (k≈15, Tanimoto). The geometry split is validated on the hand-labeled pair set.
 - Cosine thresholds are **not portable across embedding models** — recalibrate against ~50 hand-labeled duplicate pairs whenever the embedder changes.
 - **Every tripwire ships in shadow mode first** (log, don't kill) — a misfiring kill-switch is worse than a missing one. The step-repetition threshold is set from the logged similarity distribution of productive iterations.
 - The gate pass-rate is derived from measured grader noise (frozen replay set), not chosen independently; must-tier failures get panel adjudication rather than counting against a percentage.
-- **Model-version and prompt-set changes are instrument events.** The resolved Claude model version is stamped on every span and episode; likewise every harness prompt template (family templates, pipeline prompts, judge/resolver/reflector/induction prompts) is content-hashed into a versioned **prompt-set manifest** — registered with stored content at orchestrator startup, stamped on every span/episode, and revertible as a first-class operation (activate any prior set). A change to either annotates the SPC charts (limits recompute), triggers fixture re-records, and is reported alongside the curves — score movement across an instrument change is never attributed to the library. (The *learned* prompt material — skills, descriptions, specialty sections — is already versioned and revertible via snapshots and split lineage; the manifest covers the harness side.)
+- **Model-version and prompt-set changes are instrument events.** The resolved Claude model version is stamped on every span and episode; likewise every harness prompt template (stage templates, pipeline prompts, judge/resolver/reflector/induction prompts) is content-hashed into a versioned **prompt-set manifest** — registered with stored content at orchestrator startup, stamped on every span/episode, and revertible as a first-class operation (activate any prior set). A change to either annotates the SPC charts (limits recompute), triggers fixture re-records, and is reported alongside the curves — score movement across an instrument change is never attributed to the library. (The *learned* prompt material — insights, and the modules/descriptions derived from them — is already versioned and revertible via snapshots and module lineage; the manifest covers the harness side.)
 
 **Decided:**
 
@@ -587,3 +612,17 @@ Every formerly-open question now carries either a decision or a default-plus-tri
 **Behavioral cloning & testing:** Mechanical Orchard — "the running system is the better spec," I/O equivalence capture; AWS Transform — functional equivalence as first-class artifact; metamorphic testing (Chen 1998+); WebArena.
 
 **Simulated users:** Lost in Simulation — goal distortion over long interactions (2601.17087); DuetSim — generator+verifier fidelity pattern.
+
+### R3 sources (the memory-store refactor — full provenance + adopt/adapt/build table in `2026-06-11-memory-store-simplification-design-note.md`)
+
+**OSS systems studied (build-vs-adopt):** mem0 — live path is ADD-only, the 4-op merge is orphaned (2504.19413); Graphiti/Zep — bi-temporal edges, invalidate-not-delete, `resolve_edge` dedup/contradiction prompt, 94.8% DMR (2501.13956); Microsoft GraphRAG — hierarchical Leiden + community reports (2404.16130); LightRAG — incremental merge, threshold-gated re-summary (2410.05779); Cognee, HippoRAG (PPR). Verdict: keep the SQLite atomic-insight core; adopt leaf algorithms (`graspologic_native` Leiden, Graphiti's prompt, LightRAG re-summary), not frameworks.
+
+**Ontology — derive-from-graph, not author-at-ingest:** no surveyed system names groups per-add; Library Drift +0.0pp vs +16.2pp (2605.19576); Skill Shadowing −21% / 68% from name-collision (2605.24050); TaxoAdapt — corpus-derived beats static LLM taxonomy 26–50% (2506.10737); SkillGraph — derived edges +31.2pts (2605.12039); CommunityKG-RAG — community retrieval +16.45pp (2408.08535); GitNexus — Leiden→per-community SKILL.md, in production.
+
+**Atom granularity & schema:** Dense X Retrieval — propositions +12 Recall@5, self-contained (2312.06648); schema-grounded memory (xmemory) — 97% vs 87% F1, conflicts collide on a key (2604.27906); structural-memory granularity comparison (2412.15266); FActScore atomic facts (2305.14251).
+
+**Storage/index & contradiction:** negation blindness — a negation is cosine-closer than a paraphrase (HEROS 2306.05083; Semantic-Adapter 2504.00584); NLI cross-encoder beats GPT-4 on short pairwise conflict 90.9 vs 76.4 F1 (ECon 2410.04068; deberta-v3 ~92% MNLI); DiffCSE/SNCSE negation-aware embeddings (2204.10298, 2201.05979); SemDeDup threshold fragility (2303.09540); graph-from-embeddings — mutual-kNN + Tanimoto (CosTaL, bbad157); dynamic Leiden 3.9–6.1× (2410.15451); `clustering:` prefix geometry (nomic 2402.01613; intrinsic-dim 2506.01435); Matryoshka (2205.13147).
+
+**Generalization & consolidation (Operation 1/3):** AWM — typed-variable abstraction beats human workflows +7.6pp (2409.07429); MACLA — contrastive precondition tightening, over-abstraction → 51% reusability (2512.18950); WALL-E / Guideline-Learning — instance-stripping, negative scope (2410.07484, 2310.05066); Generative-Agents reflection — additive, originals never deleted (2304.03442); TriMem — fact-only loses 14.5% answer tokens (2605.19952); GAM — removing the specific layer −37% F1 (2604.12285); TiMem — additive hierarchy +2.12% at 52% fewer tokens (2601.02845); ExpeL UPVOTE = corroboration votes (2308.10144); provenance-aware append-only tiering (2602.17913).
+
+**Organization objective (§6a):** the map equation / Infomap — codelength = routing + locate (Rosvall & Bergström, *PNAS* 2008); Garicano — knowledge hierarchy as search-within + route-between (2006). The outer objective `G* = argmin_G E_q[min_C D(q,C)] + λL(G)` is formally open in the RAG literature (survey 2507.13334; REPLUG; IB-RAG) — the inner bracket is the field's canonical objective, the outer is the original lane.

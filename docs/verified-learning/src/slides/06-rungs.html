@@ -1,0 +1,32 @@
+<!-- 06 · Rungs -->
+<section class="slide" id="slide-06" data-title="Evidence rungs"
+  data-narration="Not every lesson carries equal weight. A change backed by a test scores highest. A normal reviewed change counts for less. A bare change less still. But because it was actually merged, a lesson is never worthless — the floor is never zero.">
+  <style>
+    #slide-06 .stage{height:min(44vh,400px)}
+    #slide-06 .bar{rx:12}
+    #slide-06.active .grow{animation:s06grow .9s cubic-bezier(.2,.8,.2,1) forwards;transform-box:fill-box;transform-origin:bottom}
+    #slide-06 .grow{transform:scaleY(0)}
+    @keyframes s06grow{to{transform:scaleY(1)}}
+  </style>
+  <h2 class="headline plain reveal" style="--d:.05s">Weight the evidence —<br><span class="t-amber">but never to zero</span></h2>
+  <div class="stage">
+    <svg viewBox="0 0 760 320" width="100%" height="100%">
+      <line x1="70" y1="270" x2="690" y2="270" stroke="var(--line)" stroke-width="2"/>
+      <!-- test 1.0 -->
+      <g class="grow" style="animation-delay:.4s"><rect class="bar" x="120" y="70" width="120" height="200" fill="rgba(52,211,153,.18)" stroke="var(--green)"/></g>
+      <text x="180" y="58" text-anchor="middle" fill="var(--green)" font-size="24" font-weight="800" class="fade" style="--d:1s">1.0</text>
+      <text x="180" y="296" text-anchor="middle" fill="#cdd7f5" font-size="15" class="fade" style="--d:1s">test-backed</text>
+      <!-- normal 0.6 -->
+      <g class="grow" style="animation-delay:.6s"><rect class="bar" x="320" y="150" width="120" height="120" fill="rgba(96,165,250,.18)" stroke="var(--blue)"/></g>
+      <text x="380" y="138" text-anchor="middle" fill="var(--blue)" font-size="24" font-weight="800" class="fade" style="--d:1.2s">0.6</text>
+      <text x="380" y="296" text-anchor="middle" fill="#cdd7f5" font-size="15" class="fade" style="--d:1.2s">normal</text>
+      <!-- bare 0.4 -->
+      <g class="grow" style="animation-delay:.8s"><rect class="bar" x="520" y="190" width="120" height="80" fill="rgba(167,139,250,.18)" stroke="var(--violet)"/></g>
+      <text x="580" y="178" text-anchor="middle" fill="var(--violet)" font-size="24" font-weight="800" class="fade" style="--d:1.4s">0.4</text>
+      <text x="580" y="296" text-anchor="middle" fill="#cdd7f5" font-size="15" class="fade" style="--d:1.4s">bare</text>
+      <!-- floor note -->
+      <line class="draw" style="--d:1.6s" x1="70" y1="270" x2="690" y2="270" stroke="var(--amber)" stroke-width="2" stroke-dasharray="4 6" pathLength="1"/>
+      <text x="380" y="312" text-anchor="middle" fill="var(--amber)" font-size="13" class="fade" style="--d:1.7s">a merge always means something → floor &gt; 0</text>
+    </svg>
+  </div>
+</section>

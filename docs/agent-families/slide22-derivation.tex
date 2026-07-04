@@ -1,0 +1,140 @@
+\documentclass[12pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+
+% colours matching the slide
+\definecolor{wcol}{HTML}{E0863B}   % weights  (warm)
+\definecolor{dcol}{HTML}{3FB97E}   % data / keys / query (cool green)
+\definecolor{vcol}{HTML}{3E7BD6}   % values / error signal (blue)
+
+\newcommand{\W}[1]{\textcolor{wcol}{#1}}
+\newcommand{\D}[1]{\textcolor{dcol}{#1}}
+\newcommand{\V}[1]{\textcolor{vcol}{#1}}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\title{Slide 22: connecting line 1 to line 2}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\textbf{The two lines on the slide.}
+
+\medskip
+
+Line 1 (self-attention):
+\[
+  F(\D{q}) \;=\; \W{W}_{\!V}\,\D{P}\,(\W{W}_{\!K}\,\D{P})^{\top}\,\D{q}
+\]
+
+Line 2 (after splitting the prompt):
+\[
+  F(\D{q}) \;=\; \W{W}_{\mathrm{ZS}}\,\D{q}
+  \;+\; \sum_{i}(\W{W}_{\!V}\,\D{x_i})(\W{W}_{\!K}\,\D{x_i})^{\top}\,\D{q}
+\]
+
+The jump hides two moves: a matrix identity, then a split.
+
+\hrulefill
+
+\section*{The identity you're missing}
+
+A matrix times another matrix's transpose equals the sum of the outer
+products of their columns. For two $d\times N$ matrices
+$A=[a_1\ \cdots\ a_N]$ and $B=[b_1\ \cdots\ b_N]$ (columns $a_j,b_j$):
+\[
+  A\,B^{\top} \;=\; \sum_{j=1}^{N} a_j\,b_j^{\top}.
+\]
+
+Check on a single entry $(r,c)$:
+\[
+  (A B^{\top})_{rc}
+   = \sum_{j} A_{rj}\,B_{cj}
+   = \sum_{j} (a_j)_r\,(b_j)_c
+   = \sum_{j} (a_j b_j^{\top})_{rc}. \qquad\checkmark
+\]
+
+This is the same outer-product fact that built the trained weights on the
+previous slide ($\W{W}_T=\W{W}_0+\sum_i \V{\sigma_i}\D{x_i}^{\top}$) --- here it
+runs in reverse: a matrix product \emph{unpacks into} a sum of outer products.
+
+\section*{Step 1 — regroup line 1 as ``build a matrix, then apply it to $\D q$''}
+
+Matrix multiplication is associative, so bracket line 1 as the effective
+matrix first:
+\[
+  F(\D q)=\Big[\underbrace{(\W{W}_{\!V}\D P)(\W{W}_{\!K}\D P)^{\top}}_{d\times d \text{ matrix}}\Big]\,\D q .
+\]
+
+Apply the identity with $A=\W{W}_{\!V}\D P$ (columns $\W{W}_{\!V}\D{p_j}$) and
+$B=\W{W}_{\!K}\D P$ (columns $\W{W}_{\!K}\D{p_j}$):
+\[
+  (\W{W}_{\!V}\D P)(\W{W}_{\!K}\D P)^{\top}
+   = \sum_{j=1}^{N}(\W{W}_{\!V}\D{p_j})(\W{W}_{\!K}\D{p_j})^{\top}.
+\]
+
+So attention over the whole prompt is a sum, over every prompt token
+$\D{p_j}$, of (its value)\,$\otimes$\,(its key):
+\[
+  F(\D q)=\sum_{j=1}^{N}(\W{W}_{\!V}\D{p_j})(\W{W}_{\!K}\D{p_j})^{\top}\,\D q .
+\]
+Still line 1 --- just one outer-product term per token.
+
+\section*{Step 2 — split the prompt's columns into base + demos}
+
+The prompt $\D P$ is just columns. Cut them into two groups:
+\[
+  \D P=\big[\;\underbrace{\D{p_1}\ \cdots\ \D{p_{N_0}}}_{\text{base / instructions}}
+        \;\;\big\|\;\;
+        \underbrace{\D{x_1}\ \cdots\ \D{x_m}}_{\text{in-context examples}}\;\big]
+\]
+
+The sum over \emph{all} tokens splits into base tokens plus demo tokens:
+\[
+  F(\D q)=
+  \underbrace{\sum_{j\in\text{base}}(\W{W}_{\!V}\D{p_j})(\W{W}_{\!K}\D{p_j})^{\top}}_{\textstyle \text{call this } \W{W}_{\mathrm{ZS}}}\,\D q
+  \;+\;
+  \sum_{i\in\text{demos}}(\W{W}_{\!V}\D{x_i})(\W{W}_{\!K}\D{x_i})^{\top}\,\D q .
+\]
+
+\section*{Step 3 — name the base part $\W{W}_{\mathrm{ZS}}$}
+
+The first sum doesn't involve the examples at all --- it's the fixed matrix you
+would get from the base prompt \emph{alone} (no demonstrations). That is the
+``zero-shot'' model, so name it $\W{W}_{\mathrm{ZS}}$:
+\[
+  \W{W}_{\mathrm{ZS}}=\sum_{j\in\text{base}}(\W{W}_{\!V}\D{p_j})(\W{W}_{\!K}\D{p_j})^{\top}.
+\]
+
+Substitute the name, and you have line 2 exactly:
+\[
+  \boxed{\,F(\D q)=\W{W}_{\mathrm{ZS}}\,\D q+\sum_{i}(\W{W}_{\!V}\D{x_i})(\W{W}_{\!K}\D{x_i})^{\top}\,\D q\,}
+\]
+
+\hrulefill
+
+\section*{The whole connection in one sentence}
+
+Attention over the prompt is a sum of one (value\,$\otimes$\,key) term per
+token (the matrix identity); split those tokens into base + examples, and the
+base terms collapse into a fixed matrix $\W{W}_{\mathrm{ZS}}$ while the example
+terms stay as an explicit sum --- which is line 2.
+
+That leftover example-sum,
+$\sum_i(\W{W}_{\!V}\D{x_i})(\W{W}_{\!K}\D{x_i})^{\top}$, is the patch
+$\W{\Delta W}$ --- a weight matrix with the same outer-product shape as a
+gradient step.
+
+\medskip
+
+\textbf{Optional slide fix.} Add the per-token line
+$F(\D q)=\sum_j (\W{W}_{\!V}\D{p_j})(\W{W}_{\!K}\D{p_j})^{\top}\,\D q$
+\emph{between} the current lines 1 and 2, so the split is shown rather than
+implied.
+
+\end{document}

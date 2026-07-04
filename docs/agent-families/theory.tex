@@ -1,0 +1,1107 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% ---------- theorem environments ----------
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{fact}[theorem]{Fact} % imported results, stated without proof
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\newtheorem{problem}[theorem]{Problem}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% ---------- macros ----------
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\one}{\mathbf{1}}
+\newcommand{\cI}{\mathcal{I}}
+\newcommand{\cL}{\mathcal{L}}
+\newcommand{\cT}{\mathcal{T}}
+\newcommand{\cS}{\mathcal{S}}
+\newcommand{\cM}{\mathcal{M}}
+\newcommand{\cH}{\mathcal{H}}
+\newcommand{\cD}{\mathcal{D}}
+\newcommand{\cA}{\mathcal{A}}
+\newcommand{\cP}{\mathcal{P}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\TV}{\mathrm{TV}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+\title{A Mathematical Framework for Agent Families:\\
+\large Library Learning as Budgeted Zeroth-Order Stochastic Optimization\\
+under a Noisy, Adversarially-Maintained Instrument}
+\author{Working notes --- agent-families project}
+\date{June 2026 --- draft 0}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We formalize the agent-families system (DESIGN.md, Rev.~2) as a constrained
+stochastic optimization problem over a discrete space of text libraries,
+evaluated through a noisy and gameable instrument under a hard token budget.
+Part~I states the system \emph{as it exists} in precise mathematical terms.
+Part~II develops theory against that formalization: well-posedness of the
+problem and of its behavioral objective (Banach fixed point); fundamental
+sample-complexity limits on learning rate (Bretagnolle--Huber); anytime-valid
+promotion gates with exact error control (Ville's inequality, e-value
+composition, e-BH); unbiased causal credit (randomized masking) with
+Monte-Carlo Shapley sample complexity; conditional approximation guarantees for
+library growth (submodular greedy, with explicit noise degradation);
+a convergence theorem for the learning loop (occupation-time bound on
+non-stationary libraries); an exploitability bound for the grader as a
+no-regret adversary; and the impossibility boundary (Rice, no-free-lunch,
+Kolmogorov) that delimits what any such theory can claim. Every empirical
+constant the theorems consume is mapped to a quantity the system already
+measures (the Assumption Ledger, \S\ref{sec:ledger}).
+\end{abstract}
+
+\tableofcontents
+
+%======================================================================
+\section{Introduction, scope, and reading map}
+%======================================================================
+
+Three kinds of statement appear below, always labeled:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Proved here.} Self-contained proofs from stated assumptions
+        (most are short; the value is that the assumptions are \emph{ours},
+        chosen to be enforceable or estimable by the harness).
+  \item \textbf{Imported} (environment \emph{Fact}). Classical theorems used as
+        black boxes, with citation.
+  \item \textbf{Assumed} (environment \emph{Assumption}). Empirical hypotheses
+        about LLM-dependent objects. These cannot be proved even in principle
+        (\S\ref{sec:impossibility}); each is paired with its estimator in
+        \S\ref{sec:ledger}.
+\end{itemize}
+
+The headline results:
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Claim & Result & Status \\
+\midrule
+Problem is well-posed & Prop.~\ref{prop:exists}, Thm.~\ref{thm:bisim} & proved \\
+Learning rate is measurement-limited & Thm.~\ref{thm:lowerbound} & proved \\
+Gates are valid under optional stopping & Thm.~\ref{thm:ville}, \ref{thm:ebh} & proved \\
+Gates are sample-optimal & Fact~\ref{fact:wald}, Cor.~\ref{cor:orderopt} & imported + proved \\
+Credit is unbiased and computable & Prop.~\ref{prop:ipw}, \ref{prop:shapley-mc} & proved \\
+Library growth is near-optimal (conditional) & Thm.~\ref{thm:greedy}, Lem.~\ref{lem:epsgreedy} & proved, under Asm.~\ref{asm:submod} \\
+The loop converges to statistical stationarity & Thm.~\ref{thm:drift} & proved \\
+The grader's gameability is bounded & Thm.~\ref{thm:exploit} & proved \\
+What cannot be proved & \S\ref{sec:impossibility} & impossibility \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\part{The system as it exists}
+%======================================================================
+
+%----------------------------------------------------------------------
+\section{Primitive spaces and the data model}\label{sec:primitives}
+%----------------------------------------------------------------------
+
+\begin{definition}[Insights and libraries]\label{def:library}
+Fix a finite alphabet $\Sigma$ and a maximum insight length $\ell$. The
+\emph{insight space} is $\cI = \Sigma^{\le \ell}$, a finite set. A
+\emph{library state} is a pair $L = (I, \sigma)$ where $I \subseteq \cI$ is
+finite and $\sigma : I \to \{\textsf{quarantined}, \textsf{active},
+\textsf{dormant}, \textsf{retired}\}$ assigns lifecycle status. Write
+$\mathrm{act}(L) = \sigma^{-1}(\textsf{active})$. The system additionally
+maintains a partition of $\mathrm{act}(L)$ into skills and of skills into
+agents; for the results below only the \emph{active multiset and its cap}
+matter, so we suppress the partition except where noted. The \emph{library
+space} is
+\[
+  \cL \;=\; \bigl\{\, L \;:\; |\mathrm{act}(L)| \le k \,\bigr\},
+\]
+where $k$ is the active cap (DESIGN \S4). Since $\cI$ is finite and statuses
+are finitely many, $\cL$ is a \textbf{finite} set. This triviality does real
+work in Proposition~\ref{prop:exists}.
+\end{definition}
+
+\begin{definition}[Retrieval]\label{def:retrieval}
+A \emph{retrieval policy} is a map $R : Q \times \cL \to 2^{\cI}$ from queries
+to subsets of active insights, subject to a token budget
+$\sum_{i \in R(q,L)} |i| \le b$. In the implemented system $R$ is
+embedding-KNN with an own-skills prior (DESIGN \S4); for the theory it is an
+arbitrary measurable selection rule satisfying the budget.
+\end{definition}
+
+%----------------------------------------------------------------------
+\section{The pipeline, episodes, and Ralph loops}\label{sec:pipeline}
+%----------------------------------------------------------------------
+
+\begin{definition}[Build pipeline as a stochastic kernel]\label{def:pipeline}
+Let $\cT$ denote the set of \emph{targets} (apps presented through the
+explorer's text channel) and $\cA$ the set of \emph{artifacts} (codebases).
+The plan--work--verify pipeline with library $L$ defines a Markov kernel
+\[
+  A_L : \cT \to \Delta(\cA),
+  \qquad
+  A_L(T) = \mathrm{Law}\bigl(\text{artifact} \mid \text{target } T,\
+  \text{library snapshot } L,\ \text{seed } \omega\bigr),
+\]
+where $\omega$ captures all sampling randomness (LLM decoding, scheduling).
+The library is frozen within an episode (DESIGN \S11), so $A_L$ is a fixed
+kernel per episode --- this is what makes the episode the unit of statistical
+analysis.
+\end{definition}
+
+\begin{definition}[Ralph loop]\label{def:ralph}
+Within one unit of work, iteration produces a sequence of states in a finite
+set $\cS_{\mathrm{loop}} = \{\text{typed failure kinds}\} \cup
+\{\textsf{pass}\}$, with $\textsf{pass}$ absorbing. We model the iteration as
+a time-homogeneous Markov chain with transition matrix
+$P = \begin{psmallmatrix} Q & r \\ 0 & 1 \end{psmallmatrix}$,
+where $Q$ is substochastic over failure kinds
+(Assumption~\ref{asm:markov}; Proposition~\ref{prop:absorb}).
+\end{definition}
+
+%----------------------------------------------------------------------
+\section{The objective and the instrument}\label{sec:objective}
+%----------------------------------------------------------------------
+
+\begin{definition}[True grade and true objective]\label{def:objective}
+Let $G^\ast : \cA \times \cT \to [0,1]$ denote the \emph{true grade}: the
+behavioral-equivalence functional with its lexicographic quality tier
+(formalized as a metric and a constrained program in
+\S\ref{sec:wellposed}). The \emph{true objective} of a library is
+\[
+  J(L) \;=\; \E_{T \sim \cD}\;\E_{X \sim A_L(T)}\bigl[\,G^\ast(X, T)\,\bigr]
+  \;\in\; [0,1],
+\]
+where $\cD$ is the (formally inaccessible) task distribution. $J$ is the
+quantity the system is built to increase; it is \textbf{never observed}.
+\end{definition}
+
+\begin{definition}[Instrument]\label{def:instrument}
+The grader provides, per episode on target $T$, an observation
+\[
+  \widehat{G}(X, T) \;=\; G^\ast(X, T) \;+\; b(X, T) \;+\; \varepsilon,
+  \qquad \E[\varepsilon] = 0,\ \operatorname{Var}(\varepsilon) = \sigma^2,
+\]
+where $b$ is instrument bias (judge style bias, registry gaps; partially
+removed by calibration, DESIGN \S10) and $\sigma^2$ decomposes by variance
+components (judge $\times$ scenario $\times$ occasion $\times$
+build-replicate; the G-theory model). All statistical guarantees below are
+stated relative to this instrument model; \S\ref{sec:ledger} lists how $b$
+and $\sigma^2$ are estimated by the frozen replay set, mutation audits, and
+replicate episodes.
+\end{definition}
+
+%----------------------------------------------------------------------
+\section{The learning operator and the optimization problem}\label{sec:problem}
+%----------------------------------------------------------------------
+
+\begin{definition}[Proposal--test--promote dynamics]\label{def:loop}
+Learning proceeds in rounds $t = 0, 1, 2, \dots$ At round $t$:
+\begin{enumerate}[label=(\roman*),leftmargin=2.5em]
+  \item the reflector emits a candidate move
+        $m_t \sim q(\cdot \mid \mathrm{trace}(L_t))$, where a \emph{move} is
+        an admissible edit of $L_t$ (add a quarantined batch, retire, split,
+        merge) and $q$ is an LLM-induced proposal distribution
+        (Assumption~\ref{asm:proposal});
+  \item a \emph{gate} evaluates the move by running episodes/benchmarks
+        through the instrument and outputs $\textsf{accept}$ or
+        $\textsf{revert}$;
+  \item $L_{t+1} = L_t \oplus m_t$ if accepted, else $L_{t+1} = L_t$.
+\end{enumerate}
+This is exactly the quarantine $\to$ validate $\to$ promote lifecycle of
+DESIGN \S5, viewed as a Markov chain on the finite space $\cL$.
+\end{definition}
+
+\begin{problem}[The system, as an optimization program]\label{prob:main}
+\[
+\begin{aligned}
+  \text{maximize}_{\,\pi}\quad
+    & \E\bigl[\,J(L_{\tau_B})\,\bigr] \\
+  \text{subject to}\quad
+    & L_{t+1} = L_t \oplus m_t \cdot \one\{\text{gate}_t = \textsf{accept}\},
+      && m_t \sim q(\cdot \mid \mathrm{trace}(L_t)),\\
+    & |\mathrm{act}(L_t)| \le k && \text{(cap)},\\
+    & \textstyle\sum_{t \le \tau_B} c_t \le B && \text{(token budget)},
+\end{aligned}
+\]
+where the policy $\pi$ chooses the gate design, the experiment allocation
+(which targets, how many replications, when to stop each test), and the
+governance moves; $c_t$ is the token cost of round $t$ and $\tau_B$ the
+budget-exhaustion time. The objective $J$ is observable only through
+$\widehat G$. \emph{No gradient of $J$ exists}: $\cL$ is discrete and $J$ has
+no exploitable algebraic structure in $L$ beyond what is assumed in
+\S\ref{sec:structure}.
+\end{problem}
+
+\begin{remark}
+Problem~\ref{prob:main} identifies the system as \emph{budgeted zeroth-order
+stochastic optimization with learned proposals over a finite combinatorial
+space, evaluated by a biased noisy oracle}. Each clause picks out the body of
+theory used in Part~II: finite space $\Rightarrow$ well-posedness
+(\S\ref{sec:wellposed}); noisy oracle $\Rightarrow$ information bounds and
+sequential tests (\S\ref{sec:measurement}); learned proposals $\Rightarrow$
+drift analysis (\S\ref{sec:dynamics}); gameable oracle $\Rightarrow$ games and
+regret (\S\ref{sec:adversarial}); set-valued decisions $\Rightarrow$
+submodularity (\S\ref{sec:structure}).
+\end{remark}
+
+%======================================================================
+\part{Theory developed against the formalization}
+%======================================================================
+
+%----------------------------------------------------------------------
+\section{Well-posedness}\label{sec:wellposed}
+%----------------------------------------------------------------------
+
+\subsection{Existence}
+
+\begin{proposition}[The problem is well-posed]\label{prop:exists}
+$J : \cL \to [0,1]$ is well-defined and attains its maximum; an optimal
+library $L^\ast \in \argmax_{L \in \cL} J(L)$ exists. Moreover every
+quantity in Problem~\ref{prob:main} is measurable and bounded, so the
+optimal value is finite and the expectations exist.
+\end{proposition}
+
+\begin{proof}
+$G^\ast$ is bounded and measurable by construction
+(Definition~\ref{def:objective}); $A_L(T)$ is a probability measure for each
+$(L,T)$; hence the iterated expectation defining $J(L)$ exists and lies in
+$[0,1]$. By Definition~\ref{def:library}, $\cL$ is finite; a real function on
+a finite set attains its maximum.
+\end{proof}
+
+\begin{remark}
+Uniqueness is neither available nor needed: the system seeks
+\emph{improvement} under a budget, not the argmax. The substantive content of
+well-posedness lives in the next subsection: that the behavioral part of
+$G^\ast$ is itself a well-defined mathematical object.
+\end{remark}
+
+\subsection{The behavioral objective is a metric (and the suite estimates it)}
+
+We model each app, at the granularity of the feature registry, as a finite
+deterministic Mealy machine: states are abstracted UI/data states, inputs are
+user actions, outputs are observations (rendered a11y-tree facts).
+
+\begin{definition}[Behavioral distance operator]\label{def:bisimop}
+Let $M_1 = (S_1, A, \delta_1, \lambda_1)$, $M_2 = (S_2, A, \delta_2,
+\lambda_2)$ be finite Mealy machines over a common action alphabet $A$, with
+outputs in a space $(O, d_O)$, $d_O \le 1$. Fix $\gamma \in (0,1)$. On the
+set $\cP$ of pseudometrics $d : (S_1 \sqcup S_2)^2 \to [0,1]$, define
+\[
+  (F d)(s, t) \;=\; \max_{a \in A}\,
+    \Bigl[\, (1-\gamma)\, d_O\bigl(\lambda(s,a), \lambda(t,a)\bigr)
+      \;+\; \gamma\, d\bigl(\delta(s,a), \delta(t,a)\bigr) \,\Bigr].
+\]
+\end{definition}
+
+\begin{theorem}[Existence, uniqueness, and meaning of the behavioral metric]
+\label{thm:bisim}
+$F$ has a unique fixed point $d_\gamma \in \cP$; iterates $F^n d_0$ converge
+to it geometrically at rate $\gamma^n$ from any $d_0$. Moreover, for initial
+states $s_0, t_0$:
+\begin{enumerate}[label=(\alph*),leftmargin=2.5em]
+  \item $d_\gamma(s_0, t_0) = 0$ if and only if the two machines are trace
+        equivalent (identical outputs on every input word);
+  \item if some input word $w = a_1 \cdots a_n$ produces outputs differing by
+        $d_O$-distance $\eta$ at its last step, then
+        $d_\gamma(s_0, t_0) \;\ge\; (1-\gamma)\,\gamma^{\,n-1}\eta$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+\emph{Contraction.} For $d, d' \in \cP$ and any $(s,t)$, each bracketed term
+differs between $d$ and $d'$ by at most $\gamma \|d - d'\|_\infty$, and
+$\max_a$ is $1$-Lipschitz with respect to uniform perturbation of its
+arguments; hence $\|F d - F d'\|_\infty \le \gamma \|d - d'\|_\infty$.
+$\cP$ is a closed subset of the complete space of bounded functions on a
+finite square under the sup norm (symmetry, the triangle inequality, and the
+bound $[0,1]$ are preserved under uniform limits), and $F$ maps $\cP$ into
+$\cP$: symmetry and boundedness are immediate; for the triangle inequality,
+fix $s,u$ and let $a^\ast$ attain $(Fd)(s,u)$; then
+\[
+  (Fd)(s,u) = (1-\gamma) d_O(\lambda(s,a^\ast), \lambda(u,a^\ast))
+            + \gamma\, d(\delta(s,a^\ast), \delta(u,a^\ast))
+\]
+is bounded, using the triangle inequalities of $d_O$ and $d$ through any
+intermediate $t$, by the corresponding $a^\ast$-terms for $(s,t)$ and
+$(t,u)$, hence by $(Fd)(s,t) + (Fd)(t,u)$. Banach's fixed point theorem gives
+existence, uniqueness, and geometric convergence.
+
+\emph{(a), $\Leftarrow$.} If $s_0, t_0$ are trace equivalent then so are
+$\delta(s_0,a), \delta(t_0,a)$ for every $a$, with equal outputs. Starting
+from $d_0 \equiv 0$, induction gives $(F^n d_0)(s,t) = 0$ for every
+trace-equivalent pair and every $n$; the limit $d_\gamma$ vanishes there.
+
+\emph{(a), $\Rightarrow$ and (b).} Unroll the fixed-point equation along
+$w$: for each prefix, $d_\gamma(s,t) \ge (1-\gamma)\, d_O(\cdot) + \gamma\,
+d_\gamma(\text{successors}) \ge \gamma\, d_\gamma(\text{successors})$, and at
+the final step $d_\gamma \ge (1-\gamma)\eta$. Composing the $n-1$ discount
+factors yields (b); in particular a distinguishing word forces
+$d_\gamma(s_0,t_0) > 0$, which is the contrapositive of (a),
+$\Rightarrow$.
+\end{proof}
+
+\begin{corollary}[What the grader's tiers estimate]\label{cor:estimators}
+Each executed scenario is an input word; by Theorem~\ref{thm:bisim}(b) a
+failed scenario yields a \emph{certified lower bound} on
+$d_\gamma(\mathrm{target}, \mathrm{clone})$, while the registry suite as a
+whole is a Monte-Carlo lower-bound estimator under the registry's sampling
+measure. A falsifier (\S\ref{sec:adversarial}) estimates
+$\sup_w$-type lower bounds. Quantitative (robustness-graded) verdicts refine
+$\eta$ from $\{0,1\}$ to $[0,1]$, strictly increasing the information per
+scenario at identical execution cost.
+\end{corollary}
+
+\begin{remark}[Modeling status]
+Theorem~\ref{thm:bisim} is unconditional \emph{given} the Mealy abstraction;
+the abstraction itself (finite registry-scoped state space, deterministic
+transitions after seeding) is Assumption~\ref{asm:mealy}. Nondeterminism is
+handled in practice by seeded resets; the probabilistic generalization
+replaces $d$ on successors with a Wasserstein term and the same Banach
+argument applies (imported: bisimulation metrics are optimal-transport
+distances and are efficiently computable~\cite{ot-bisim}).
+\end{remark}
+
+%----------------------------------------------------------------------
+\section{Measurement limits and valid gates}\label{sec:measurement}
+%----------------------------------------------------------------------
+
+\subsection{The learning rate is measurement-limited}
+
+\begin{theorem}[Sample-complexity lower bound for detecting improvement]
+\label{thm:lowerbound}
+Let episode scores be observed through the instrument of
+Definition~\ref{def:instrument} with noise dominated by a Gaussian of
+variance $\sigma^2$ (conservative; subgaussian suffices with the same
+constants). Any procedure that, from $n$ episodes, decides between
+\[
+  H_0 : J(L') \le J(L)
+  \qquad\text{and}\qquad
+  H_1 : J(L') \ge J(L) + \Delta
+\]
+with both error probabilities at most $\delta < 1/4$ requires
+\[
+  n \;\ge\; \frac{2\sigma^2}{\Delta^2}\,\ln\!\frac{1}{4\delta}.
+\]
+\end{theorem}
+
+\begin{proof}
+Reduce to the two simple hypotheses $P = \mathcal N(\mu, \sigma^2)^{\otimes n}$
+and $Q = \mathcal N(\mu + \Delta, \sigma^2)^{\otimes n}$, for which
+$\KL(P \,\|\, Q) = n\Delta^2 / (2\sigma^2)$. By the Bretagnolle--Huber
+inequality~\cite{bh79,tsybakov}, every test $\psi$ satisfies
+\[
+  P(\psi = 1) + Q(\psi = 0) \;\ge\; \tfrac12\, e^{-\KL(P \| Q)}.
+\]
+If both errors are $\le \delta$ then $2\delta \ge \frac12
+e^{-n\Delta^2/(2\sigma^2)}$, i.e.\
+$n \ge \frac{2\sigma^2}{\Delta^2} \ln \frac{1}{4\delta}$.
+\end{proof}
+
+\begin{corollary}[Budgeted improvement bound]\label{cor:budget}
+With per-episode cost $c$ and budget $B$, the number of improvement steps of
+size $\Delta$ that can be \emph{verified} (at fixed $\delta$) during training
+is at most
+\[
+  \frac{B}{c} \cdot \frac{\Delta^2}{2\sigma^2 \ln(1/4\delta)} .
+\]
+Halving instrument noise $\sigma$ is worth exactly a $4\times$ budget
+multiplier. This is the formal sense in which the grader is the binding
+component: \emph{no} change to the learner can beat this bound; only
+instrument improvements move it.
+\end{corollary}
+
+\subsection{Anytime-valid gates}
+
+\begin{definition}[e-process]\label{def:eprocess}
+Let $\cH_0$ be a (possibly composite) null hypothesis. A nonnegative process
+$(E_t)_{t \ge 0}$ adapted to the data filtration is an \emph{e-process} for
+$\cH_0$ if $\E_P[E_\tau] \le 1$ for every $P \in \cH_0$ and every stopping
+time $\tau$. (It suffices that $E_t$ is dominated by a nonnegative
+supermartingale with initial value $1$ under every $P \in \cH_0$.)
+\end{definition}
+
+\begin{theorem}[Ville's inequality; validity of the promotion gate]
+\label{thm:ville}
+Let $(M_t)$ be a nonnegative supermartingale with $M_0 = 1$ under
+$P \in \cH_0$. Then
+\[
+  \Prob_P\Bigl( \sup_{t \ge 0} M_t \ge 1/\alpha \Bigr) \;\le\; \alpha .
+\]
+Consequently the gate ``promote the batch the first time its e-process
+reaches $1/\alpha$, with no constraint on when or whether you stop'' has
+type-I error at most $\alpha$, \emph{uniformly over all stopping rules}.
+\end{theorem}
+
+\begin{proof}
+Let $\tau = \inf\{t : M_t \ge 1/\alpha\}$. For each finite horizon $n$,
+optional stopping for nonnegative supermartingales at the bounded time
+$\tau \wedge n$ gives $\E[M_{\tau \wedge n}] \le \E[M_0] = 1$. On the event
+$\{\tau \le n\}$ we have $M_{\tau \wedge n} = M_\tau \ge 1/\alpha$, so
+$1 \ge \E[M_{\tau \wedge n}] \ge \alpha^{-1} \Prob(\tau \le n)$, i.e.\
+$\Prob(\tau \le n) \le \alpha$ for every $n$. Monotone convergence as
+$n \to \infty$ completes the proof.
+\end{proof}
+
+\begin{proposition}[Evidence composes across targets]\label{prop:eproduct}
+If $E^{(1)}, \dots, E^{(m)}$ are e-values (e-processes at their stopping
+times) for the same null, computed from \emph{independent} targets, then
+$\prod_{j=1}^m E^{(j)}$ is an e-value. In particular ``the same insight
+validated on $m$ independent targets'' multiplies evidence; the DESIGN
+\S11 cross-target recurrence rule is the discretization of this statement.
+\end{proposition}
+
+\begin{proof}
+By independence, $\E\bigl[\prod_j E^{(j)}\bigr] = \prod_j \E[E^{(j)}] \le 1$.
+\end{proof}
+
+\begin{theorem}[Batch promotion with false-discovery control: e-BH]
+\label{thm:ebh}
+Let $E_1, \dots, E_m$ be e-values for nulls $H_1, \dots, H_m$ (\emph{arbitrary
+dependence} permitted). Order them decreasingly $E_{(1)} \ge \cdots \ge
+E_{(m)}$, set $\hat k = \max\{k : E_{(k)} \ge \tfrac{m}{\alpha k}\}$ (and
+$\hat k = 0$ if none), and reject the $\hat k$ hypotheses with the largest
+e-values. Then $\mathrm{FDR} \le \alpha$.
+\end{theorem}
+
+\begin{proof}[Proof~\cite{ebh}]
+Let $V$ be the number of true nulls rejected. If a true null $H_j$ is
+rejected then $E_j \ge \frac{m}{\alpha \hat k}$, equivalently
+$\frac{1}{\hat k} \le \frac{\alpha E_j}{m}$. Hence on $\{\hat k \ge 1\}$,
+\[
+  \frac{V}{\hat k}
+  \;=\; \sum_{j \in \cH_0,\, \text{rejected}} \frac{1}{\hat k}
+  \;\le\; \sum_{j \in \cH_0} \frac{\alpha E_j}{m},
+\]
+and taking expectations, $\mathrm{FDR} = \E[V / (\hat k \vee 1)] \le
+\frac{\alpha}{m} \sum_{j \in \cH_0} \E[E_j] \le \alpha \frac{m_0}{m} \le
+\alpha$.
+\end{proof}
+
+\begin{corollary}[False-promotion budget]\label{cor:falseprom}
+If every promotion in rounds $1, \dots, T$ passes a level-$\alpha$ gate, the
+expected number of promoted harmful batches is at most $\alpha T$ (linearity
+of expectation; no independence needed). Under e-BH the realized
+false-discovery \emph{rate} among promotions is $\le \alpha$ even with
+arbitrarily dependent batches (parallel episodes against one snapshot).
+\end{corollary}
+
+\subsection{Efficiency of the gate}
+
+\begin{fact}[Wald--Wolfowitz optimality of the SPRT~\cite{wald48}]
+\label{fact:wald}
+Among all tests (sequential or fixed-sample) of a simple null versus simple
+alternative with type errors at most $(\alpha, \beta)$, the sequential
+probability ratio test simultaneously minimizes $\E_0[N]$ and $\E_1[N]$, with
+\[
+  \E_1[N] \;\approx\; \frac{(1-\beta)\ln\frac{1-\beta}{\alpha} +
+  \beta \ln\frac{\beta}{1-\alpha}}{\KL(P_1 \| P_0)} .
+\]
+\end{fact}
+
+\begin{corollary}[The gate is order-optimal]\label{cor:orderopt}
+For the Gaussian episode model, $\KL(P_1 \| P_0) = \Delta^2 / (2\sigma^2)$
+per episode, so the SPRT/e-process gate decides in
+$O\!\bigl(\tfrac{\sigma^2}{\Delta^2} \ln \tfrac1\alpha\bigr)$ expected
+episodes --- matching the lower bound of Theorem~\ref{thm:lowerbound} up to
+constants. \emph{No measurement policy can improve the exponent; only
+$\sigma$ (instrument quality) and $\Delta$ (effect size per batch) are
+levers.}
+\end{corollary}
+
+\subsection{Conformal triage of judge verdicts}
+
+\begin{theorem}[Split-conformal coverage]\label{thm:conformal}
+Let $S_1, \dots, S_n$ be nonconformity scores of calibration verdicts
+(hand-adjudicated frozen replay pairs) and $S_{n+1}$ the score of a fresh
+verdict, with $(S_1, \dots, S_{n+1})$ exchangeable. Let $\hat q$ be the
+$\lceil (1-\alpha)(n+1) \rceil$-th smallest calibration score ($\hat q =
++\infty$ if the index exceeds $n$). Then
+\[
+  \Prob\bigl( S_{n+1} \le \hat q \bigr) \;\ge\; 1 - \alpha .
+\]
+Hence ``escalate to a panel exactly when $S_{n+1} > \hat q$'' guarantees that
+non-escalated verdicts carry miscoverage at most $\alpha$, with no
+distributional assumption on the judge.
+\end{theorem}
+
+\begin{proof}
+By exchangeability the rank of $S_{n+1}$ among the $n+1$ scores (ties broken
+uniformly) is uniform on $\{1, \dots, n+1\}$. The event $\{S_{n+1} \le \hat
+q\}$ contains $\{\mathrm{rank}(S_{n+1}) \le \lceil (1-\alpha)(n+1) \rceil\}$,
+whose probability is $\lceil (1-\alpha)(n+1)\rceil / (n+1) \ge 1-\alpha$.
+\end{proof}
+
+%----------------------------------------------------------------------
+\section{Causal credit assignment}\label{sec:credit}
+%----------------------------------------------------------------------
+
+\begin{proposition}[Unbiased per-insight effects from randomized masking]
+\label{prop:ipw}
+In a quarantine validation run, mask each insight $i$ of the batch
+independently with known probability $p \in (0,1)$ (include $i$ iff $Z_i =
+1$). Let $Y_t(z)$ denote the (bounded) potential outcome of trial $t$ under
+mask $z$, and define the estimand
+$\tau_i = \E\bigl[ Y(Z_{-i}, 1) - Y(Z_{-i}, 0) \bigr]$
+(the average effect of $i$ over the design distribution of its co-insights).
+The Horvitz--Thompson estimator
+\[
+  \hat\tau_i \;=\; \frac1n \sum_{t=1}^n Y_t
+  \Bigl( \frac{\one\{Z_{t,i}=1\}}{p} - \frac{\one\{Z_{t,i}=0\}}{1-p} \Bigr)
+\]
+satisfies $\E[\hat\tau_i] = \tau_i$ exactly, for every $n \ge 1$.
+\end{proposition}
+
+\begin{proof}
+$Z_{t,i}$ is independent of $(Z_{t,-i}, Y_t(\cdot))$ by design. Hence
+$\E\bigl[ Y_t \one\{Z_{t,i}=1\}/p \bigr]
+ = \E\bigl[ Y_t(Z_{t,-i},1) \bigr] \E[\one\{Z_{t,i}=1\}]/p
+ = \E[ Y_t(Z_{-i},1) ]$, and symmetrically for the second term. Subtract and
+average.
+\end{proof}
+
+\begin{remark}
+Observational fitness counters (wins/losses by co-occurrence) admit no such
+statement: identification fails under co-retrieval confounding. Randomization
+is the assumption, and it is one the \emph{scheduler} enforces, not one the
+world must grant. This is the formal content of ``quarantine trials are
+already an RCT in all but name.''
+\end{remark}
+
+\begin{fact}[Shapley uniqueness~\cite{shapley53}]\label{fact:shapley}
+Let $v : 2^{[N]} \to \R$ be a coalition value (here: expected episode outcome
+as a function of the active insight subset, estimated via
+Proposition~\ref{prop:ipw}-style designs). The Shapley value is the unique
+allocation satisfying efficiency, symmetry, dummy, and additivity.
+\end{fact}
+
+\begin{proposition}[Monte-Carlo Shapley sample complexity]\label{prop:shapley-mc}
+Suppose $|v(S \cup \{i\}) - v(S)| \le r$ for all $S, i$. Sample $m$ uniform
+permutations and average $i$'s marginal contributions. If
+\[
+  m \;\ge\; \frac{2 r^2}{\epsilon^2} \ln\frac{2N}{\delta},
+\]
+then with probability $\ge 1 - \delta$, simultaneously for all $N$ insights,
+$|\hat\varphi_i - \varphi_i| \le \epsilon$.
+\end{proposition}
+
+\begin{proof}
+Each permutation yields, for each $i$, an independent bounded draw with mean
+$\varphi_i$ (the Shapley value is exactly the permutation-average of marginal
+contributions). Hoeffding's inequality gives
+$\Prob(|\hat\varphi_i - \varphi_i| > \epsilon) \le 2 e^{-m\epsilon^2 /
+(2r^2)}$; a union bound over $N$ insights gives the claim.
+\end{proof}
+
+%----------------------------------------------------------------------
+\section{Structural hypotheses: the library as submodular maximization}
+\label{sec:structure}
+%----------------------------------------------------------------------
+
+The results in this section are \emph{conditional}: they trade one clearly
+stated empirical hypothesis for strong guarantees. The hypothesis is
+estimable from the system's own ablation data.
+
+\begin{definition}[Submodularity; weak submodularity]
+$f : 2^{\cI} \to \R_{\ge0}$ is \emph{monotone} if $f(S) \le f(T)$ for $S
+\subseteq T$, and \emph{submodular} if for all $S \subseteq T$ and $e \notin
+T$, $\;f(S \cup e) - f(S) \ge f(T \cup e) - f(T)$ (diminishing returns). For
+$\gamma \in (0,1]$, $f$ is \emph{$\gamma$-weakly submodular} if for all
+disjoint $S, U$:
+$\;\sum_{e \in U} \bigl[f(S \cup e) - f(S)\bigr] \ge \gamma\,\bigl[f(S \cup
+U) - f(S)\bigr]$.
+\end{definition}
+
+\begin{assumption}[Diminishing returns of insights]\label{asm:submod}
+$J$, viewed as a function of the active insight set (other structure held
+fixed), is monotone and $\gamma$-weakly submodular for some $\gamma > 0$.
+\emph{Rationale}: redundant insights add less the fuller the library --- the
+empirical phenomena the design already names (dedup pressure, shadowing,
+cap necessity) are qualitative signatures of diminishing returns.
+\emph{Estimator}: $\gamma$ is bounded from randomized-ablation data
+(\S\ref{sec:ledger}).
+\end{assumption}
+
+\begin{theorem}[Greedy guarantee~\cite{nwf78}; proof included]\label{thm:greedy}
+Let $f$ be monotone submodular with $f(\emptyset) = 0$ and let $S_k$ be the
+greedy set after $k$ steps (each step adds the element of largest marginal
+gain). Then for the optimum $S^\ast$ over sets of size $k$:
+\[
+  f(S_k) \;\ge\; \Bigl(1 - \tfrac1e\Bigr)\, f(S^\ast).
+\]
+Under $\gamma$-weak submodularity the bound becomes $1 - e^{-\gamma}$
+\textup{(imported~\cite{daskempe})}.
+\end{theorem}
+
+\begin{proof}
+Write $\delta_t = f(S^\ast) - f(S_t)$. By monotonicity and submodularity,
+\[
+  f(S^\ast) \;\le\; f(S_t \cup S^\ast)
+  \;\le\; f(S_t) + \sum_{e \in S^\ast \setminus S_t}
+          \bigl[f(S_t \cup e) - f(S_t)\bigr]
+  \;\le\; f(S_t) + k \bigl[f(S_{t+1}) - f(S_t)\bigr],
+\]
+the last step because greedy picks the largest of at most $k$ such gains.
+Rearranging, $\delta_{t+1} \le (1 - 1/k)\, \delta_t$, hence $\delta_k \le
+(1-1/k)^k \delta_0 \le e^{-1} f(S^\ast)$.
+\end{proof}
+
+\begin{lemma}[Noise degrades greedy gracefully]\label{lem:epsgreedy}
+If each greedy step selects an element whose true marginal gain is within
+$\epsilon$ of the best (an ``$\epsilon$-approximate step''), then
+\[
+  f(S_k) \;\ge\; \bigl(1 - \tfrac1e\bigr) f(S^\ast) \;-\; k\,\epsilon .
+\]
+\end{lemma}
+
+\begin{proof}
+The recursion becomes $\delta_{t+1} \le (1 - 1/k)\delta_t + \epsilon$;
+unrolling, $\delta_k \le e^{-1} f(S^\ast) + \epsilon \sum_{j=0}^{k-1} (1 -
+1/k)^j \le e^{-1} f(S^\ast) + k\epsilon$.
+\end{proof}
+
+\begin{lemma}[Implementing $\epsilon$-approximate steps with the noisy oracle]
+\label{lem:select}
+Suppose marginal-gain evaluations are $\sigma$-subgaussian around their
+means. Estimating each of $N$ candidates' gains with
+\[
+  n_0 \;\ge\; \frac{8\sigma^2}{\epsilon^2} \ln\frac{2N}{\delta'}
+\]
+episodes each, and selecting the empirical argmax, yields an
+$\epsilon$-approximate step with probability $\ge 1 - \delta'$. Over $k$
+steps, all succeed with probability $\ge 1 - k\delta'$
+\textup{(union bound)}, so Lemma~\ref{lem:epsgreedy} applies with that
+probability.
+\end{lemma}
+
+\begin{proof}
+Hoeffding for subgaussian means: each estimate is within $\epsilon/2$ of its
+mean with probability $\ge 1 - \delta'/N$; on the intersection (union bound)
+the empirical argmax has true gain within $\epsilon$ of the best.
+\end{proof}
+
+\begin{fact}[The cap's tournament is streaming submodular maximization~\cite{badan14}]
+\label{fact:streaming}
+Insights arrive online; only $k$ may be retained. Threshold-based
+swap rules achieve a $\tfrac12$-approximation to the best size-$k$ subset in
+one pass with $O(k)$ memory, for monotone submodular objectives. Hence the
+ratchet (tournament admission + displacement of the weakest incumbent), with
+swap decisions made by the gates of \S\ref{sec:measurement}, inherits a
+constant-factor guarantee under Assumption~\ref{asm:submod}.
+\end{fact}
+
+\begin{remark}[What this buys]
+The cap stops being a defensive heuristic and becomes the memory parameter of
+an online algorithm with a competitive ratio. The empirical task it induces
+--- estimate $\gamma$, monitor whether marginal gains in fact diminish --- is
+exactly the ablation telemetry the system already collects.
+\end{remark}
+
+%----------------------------------------------------------------------
+\section{Dynamics: convergence of the learning loop}\label{sec:dynamics}
+%----------------------------------------------------------------------
+
+\subsection{The loop converges to statistical stationarity}
+
+\begin{assumption}[Gate and proposal regularity]\label{asm:gate}
+There exist $\Delta > 0$, $\alpha, \beta \in (0,1)$, $h \in (0,1]$ such that
+for every round $t$ and every admissible move $m$:
+\begin{enumerate}[label=(D\arabic*),leftmargin=3em]
+  \item $J \in [0,1]$ (normalization).
+  \item \emph{Level}: if $\Delta J(m \mid L_t) \le 0$ then
+        $\Prob(\textsf{accept}) \le \alpha$
+        \textup{(guaranteed by Theorem~\ref{thm:ville} given the instrument
+        model)}. \emph{Power}: if $\Delta J(m \mid L_t) \ge \Delta$ then
+        $\Prob(\textsf{accept}) \ge 1 - \beta$ \textup{(an experiment-design
+        property: allocate episodes per Corollary~\ref{cor:orderopt})}.
+  \item \emph{Bounded harm}: $\Delta J(m \mid L_t) \ge -h$ for every
+        admissible move \textup{(enforced by bounded batch size, the joint
+        confirmation run, and revertibility; $h$ is estimable from reverted
+        batches)}.
+\end{enumerate}
+Define the \emph{proposal quality at scale $\Delta$}:
+$\;p_\Delta(L) = \Prob_{m \sim q(\cdot \mid L)}\bigl( \Delta J(m \mid L) \ge
+\Delta \bigr)$ --- the probability that the reflector can still find a
+$\Delta$-improvement. This is the irreducibly empirical quantity
+(Assumption~\ref{asm:proposal}).
+\end{assumption}
+
+\begin{theorem}[Occupation-time convergence]\label{thm:drift}
+Under Assumption~\ref{asm:gate}, fix any $c > 0$ and define the
+\emph{$(\Delta, c)$-stationary set}
+\[
+  \cS_c \;=\; \Bigl\{ L \in \cL \;:\;
+  p_\Delta(L) \;\le\; \frac{(1+c)\,\alpha h}{(1-\beta)\,\Delta} \Bigr\}.
+\]
+Let $V_T = \#\{ t < T : L_t \notin \cS_c \}$ be the time spent at
+non-stationary libraries. Then for every $T$:
+\[
+  \E[V_T] \;\le\; \frac{T}{c} \;+\; \frac{1 - J(L_0)}{c\,\alpha h},
+  \qquad\text{hence}\qquad
+  \limsup_{T \to \infty} \frac{\E[V_T]}{T} \;\le\; \frac1c .
+\]
+\end{theorem}
+
+\begin{proof}
+Decompose the one-step drift at $L_t = L$. Moves with $\Delta J \ge \Delta$
+are proposed with probability $p_\Delta(L)$ and accepted with probability
+$\ge 1 - \beta$, contributing at least $p_\Delta(L)(1-\beta)\Delta$. Moves
+with $0 < \Delta J < \Delta$ contribute nonnegatively. Moves with $\Delta J
+\le 0$ are accepted with probability $\le \alpha$ and each costs at most $h$,
+contributing at least $-\alpha h$. Hence
+\[
+  \E\bigl[ J(L_{t+1}) - J(L_t) \mid L_t = L \bigr]
+  \;\ge\; p_\Delta(L)\,(1-\beta)\,\Delta \;-\; \alpha h .
+\]
+If $L \notin \cS_c$, the right side is $\ge (1+c)\alpha h - \alpha h = c\,
+\alpha h$; in all cases it is $\ge -\alpha h$. Telescoping over $t < T$ and
+using $J \le 1$:
+\[
+  1 - J(L_0) \;\ge\; \E\bigl[J(L_T)\bigr] - J(L_0)
+  \;\ge\; c\,\alpha h\, \E[V_T] \;-\; \alpha h \bigl( T - \E[V_T] \bigr)
+  \;\ge\; c\,\alpha h\, \E[V_T] - \alpha h\, T .
+\]
+Rearranging yields the bound; divide by $T$ and let $T \to \infty$ for the
+limit statement.
+\end{proof}
+
+\begin{remark}[Interpretation]
+This is the zeroth-order, discrete analogue of ``SGD converges to first-order
+stationary points'': global optimality is unavailable (and provably cannot be
+certified, \S\ref{sec:impossibility}), but the chain provably spends all but
+an arbitrarily small fraction of its time at libraries where
+\emph{the reflector can no longer find improvements of size $\Delta$ except
+with probability $O(\alpha h / ((1-\beta)\Delta))$}. Every knob is visible:
+tightening $\alpha$ or boosting power $1-\beta$ shrinks the stationary set
+(better final libraries) at a per-test episode cost given exactly by
+Corollary~\ref{cor:orderopt}; larger detectable effects $\Delta$ make the
+target easier but coarser. The theorem turns ``is it still learning?'' into
+the measurable question ``has $p_\Delta(L_t)$ --- the validation pass rate of
+fresh batches --- decayed to its floor?''
+\end{remark}
+
+\subsection{Inner-loop mathematics}
+
+\begin{assumption}[Markov typed-failure dynamics]\label{asm:markov}
+Within a Ralph loop, the typed verdict sequence is Markov with a
+time-homogeneous transition matrix per (family, failure-kind) stratum.
+\end{assumption}
+
+\begin{proposition}[Expected iterations, in closed form]\label{prop:absorb}
+Under Assumption~\ref{asm:markov}, write the chain as
+$P = \begin{psmallmatrix} Q & r \\ 0 & 1 \end{psmallmatrix}$ with $Q$ the
+substochastic transient block. If absorption is certain (spectral radius
+$\rho(Q) < 1$), then $N = \sum_{j \ge 0} Q^j = (I - Q)^{-1}$ exists and the
+expected iterations-to-pass from transient state $i$ is $(N \one)_i$;
+absorption probabilities are $N r$. \textup{(Neumann series; standard, e.g.\
+\cite{kemenysnell}.)} Consequently \textsc{max\_iters} and escalation
+thresholds are functionals of an estimable matrix, not free constants.
+\end{proposition}
+
+\begin{fact}[Universal restarts are near-optimal~\cite{luby93}]\label{fact:luby}
+For a Las Vegas process with unknown runtime distribution, the Luby schedule
+achieves expected total time $O(\ell^\ast \log \ell^\ast)$, where $\ell^\ast$
+is the expected time of the optimal fixed-cutoff restart policy, and no
+universal schedule can do better than $\Omega(\ell^\ast \log \ell^\ast)$.
+Fresh-context Ralph iterations approximately satisfy the i.i.d.\ restart
+premise (Assumption ledger, \S\ref{sec:ledger}); the schedule then gives a
+principled stuck-loop policy with a worst-case guarantee, replacing the flat
+cap.
+\end{fact}
+
+%----------------------------------------------------------------------
+\section{Adversarial grading: a quantitative anti-Goodhart bound}
+\label{sec:adversarial}
+%----------------------------------------------------------------------
+
+\begin{definition}[The grading game]\label{def:game}
+Fix a scenario/probe class $\cS$ (finite, or totally bounded with the bound
+applied at covering resolution). Let $D(L, s) \in [0,1]$ denote the certified
+divergence that probe $s$ extracts from the clone built with library $L$
+(e.g.\ the robustness-violation magnitude, or the metric lower bound of
+Corollary~\ref{cor:estimators}). At round $t$ the falsifier picks $s_t \in
+\cS$ (knowing past observations), then observes $D(L_t, s_t)$. The
+falsifier's \emph{external regret} is
+\[
+  R_T \;=\; \max_{s \in \cS} \sum_{t=1}^T D(L_t, s)
+  \;-\; \sum_{t=1}^T D(L_t, s_t).
+\]
+\end{definition}
+
+\begin{theorem}[Exploitability is bounded by the falsifier's regret]
+\label{thm:exploit}
+For any sequence of libraries $(L_t)$ --- in particular, one produced by an
+optimizer adapting against the grader ---
+\[
+  \frac1T \sum_{t=1}^T D(L_t, s_t)
+  \;\;\ge\;\;
+  \max_{s \in \cS}\, \frac1T \sum_{t=1}^T D(L_t, s)
+  \;-\; \frac{R_T}{T}.
+\]
+Hence if the \emph{measured} average divergence is kept below $\epsilon$, the
+true average divergence against \emph{every fixed probe in $\cS$} is below
+$\epsilon + R_T / T$. With a no-regret falsifier (e.g.\ EXP3 over $\cS$:
+$R_T = O(\sqrt{T\, |\cS| \ln |\cS|})$~\cite{exp3}), the gameability of the
+grader vanishes at rate $O(T^{-1/2})$.
+\end{theorem}
+
+\begin{proof}
+Immediate rearrangement of Definition~\ref{def:game}.
+\end{proof}
+
+\begin{remark}[Sharpness of the caveat]
+The guarantee is over the class $\cS$ the falsifier searches. A static test
+suite is the degenerate case $|\cS| = $ suite, falsifier non-adaptive, $R_T =
+\Theta(T)$: \emph{unbounded} exploitability --- the formal statement of ``a
+fixed benchmark will be Goodharted.'' Growing $\cS$ by promoting discovered
+counterexamples (the data flywheel) widens the quantifier of the theorem over
+time. What no theorem can give is coverage of behaviors outside any probe
+class ever searched; that residue is governed by
+\S\ref{sec:impossibility}.
+\end{remark}
+
+%----------------------------------------------------------------------
+\section{The impossibility boundary}\label{sec:impossibility}
+%----------------------------------------------------------------------
+
+These delimit, with standard results, the claims no extension of this
+framework can make. They justify treating the corresponding objects as
+\emph{estimated} rather than derived.
+
+\begin{fact}[Rice's theorem $\Rightarrow$ exact grading is uncomputable]
+Every nontrivial semantic property of programs is undecidable; in particular
+exact behavioral equivalence of two programs is undecidable. Hence $G^\ast$
+admits no exact decision procedure, and all grading is estimation of the
+metric of Theorem~\ref{thm:bisim} relative to an observation measure (random
+suite) or a search class (falsifier). ``Testing shows the presence, not the
+absence, of bugs'' is the informal corollary.
+\end{fact}
+
+\begin{fact}[No free lunch $\Rightarrow$ structure must be assumed, then measured]
+Averaged uniformly over all objectives, all black-box search algorithms have
+identical performance~\cite{nfl}. Therefore \emph{any} claimed efficiency of
+the loop (Theorems~\ref{thm:greedy}, \ref{thm:drift}) must rest on structural
+hypotheses about $J$ --- here Assumptions~\ref{asm:submod} and
+\ref{asm:proposal} --- and the scientifically honest posture is to estimate
+those hypotheses from data rather than posit them silently. The Assumption
+Ledger is the instrument of that honesty.
+\end{fact}
+
+\begin{fact}[Kolmogorov complexity is uncomputable $\Rightarrow$ MDL is code-relative]
+No algorithm computes (or usefully lower-bounds, infinitely often) the
+Kolmogorov complexity of strings. Hence ``the truly minimal library'' is not
+a well-defined computational target; MDL-style governance is coherent only
+relative to a fixed, declared coding scheme (Kraft inequality supplies the
+accounting), and its role here is as a consistent \emph{criterion}, not an
+optimality \emph{certificate}.
+\end{fact}
+
+\begin{assumption}[LLM-as-oracle]\label{asm:proposal}
+The reflector's proposal distribution $q$, the judges' error rates, and the
+resolver's fidelity have no derivable characterization. They enter every
+theorem above only through scalar parameters
+($p_\Delta(L)$, $\alpha$-validity of the e-construction, $\sigma$, $r$),
+each of which the harness estimates (\S\ref{sec:ledger}). All guarantees are
+conditional on those estimates in the usual sense of applied statistics.
+\end{assumption}
+
+\begin{assumption}[Mealy abstraction]\label{asm:mealy}
+Registry-scoped app behavior is adequately modeled by a finite deterministic
+Mealy machine after seeding/reset discipline. Violations (true
+nondeterminism, hidden state) degrade Theorem~\ref{thm:bisim} to its
+probabilistic generalization~\cite{ot-bisim}.
+\end{assumption}
+
+%----------------------------------------------------------------------
+\section{The Assumption Ledger}\label{sec:ledger}
+%----------------------------------------------------------------------
+
+Every empirical constant consumed by Part II, with the telemetry that
+estimates it. This table is the contract between the theory and the running
+system: each row is a number the harness must produce before the
+corresponding guarantee is invoked outside shadow mode.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.30\textwidth}p{0.22\textwidth}p{0.40\textwidth}@{}}
+\toprule
+\textbf{Assumed quantity} & \textbf{Used in} & \textbf{Estimator in the system} \\
+\midrule
+Instrument noise $\sigma^2$ (by variance component) &
+Thm.~\ref{thm:lowerbound}, Lem.~\ref{lem:select}, Cor.~\ref{cor:orderopt} &
+Replicate episodes at fixed snapshot; G-theory fit on frozen replay set \\
+\addlinespace
+Judge error rates / e-construction validity &
+Thm.~\ref{thm:ville}, \ref{thm:ebh} &
+Mutation-seeded audits (false-pass rate); frozen replay re-judging \\
+\addlinespace
+Exchangeability of judge scores &
+Thm.~\ref{thm:conformal} &
+Drift monitors on the calibration stream; re-split on prompt-set change \\
+\addlinespace
+Bounded harm $h$ per accepted move &
+Thm.~\ref{thm:drift} &
+Outcome distribution of reverted batches; joint-confirmation failures \\
+\addlinespace
+Power $1-\beta$ at effect $\Delta$ &
+Thm.~\ref{thm:drift} &
+Designed from $\hat\sigma$ via Cor.~\ref{cor:orderopt} (episode allocation) \\
+\addlinespace
+Proposal quality $p_\Delta(L)$ &
+Thm.~\ref{thm:drift} (stationarity diagnosis) &
+Validation pass rate of fresh reflector batches per epoch \\
+\addlinespace
+Weak-submodularity constant $\gamma$ &
+Thm.~\ref{thm:greedy}, Fact~\ref{fact:streaming} &
+Randomized-ablation marginal-gain curvature (Prop.~\ref{prop:ipw} data) \\
+\addlinespace
+Markov property of typed failures &
+Prop.~\ref{prop:absorb} &
+Order-1 vs.\ order-2 likelihood-ratio test on span sequences \\
+\addlinespace
+I.i.d.\ restart premise &
+Fact~\ref{fact:luby} &
+Correlation of successive fresh-context iteration outcomes \\
+\addlinespace
+Probe-class coverage $\cS$ &
+Thm.~\ref{thm:exploit} &
+Irreducible; mitigated by counterexample promotion (growing $\cS$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%----------------------------------------------------------------------
+\section{Outlook: what a paper can claim}\label{sec:outlook}
+%----------------------------------------------------------------------
+
+The defensible composite claim, assembled from the parts:
+
+\begin{quote}
+\itshape
+The agent-families loop is a well-posed budgeted zeroth-order optimization
+(Prop.~\ref{prop:exists}) of a well-defined behavioral objective
+(Thm.~\ref{thm:bisim}). Its measurement layer is provably valid under
+continuous monitoring and optional stopping (Thms.~\ref{thm:ville},
+\ref{thm:ebh}, \ref{thm:conformal}) and order-optimal in sample complexity
+(Thm.~\ref{thm:lowerbound} with Cor.~\ref{cor:orderopt}). Its credit
+assignment is exactly unbiased by design (Prop.~\ref{prop:ipw}) with
+controlled approximation cost (Prop.~\ref{prop:shapley-mc}). Conditional on a
+measured diminishing-returns constant, its governance is
+constant-factor-competitive (Thm.~\ref{thm:greedy},
+Fact~\ref{fact:streaming}). The loop provably concentrates its time on
+libraries at which no detectable improvement remains proposable
+(Thm.~\ref{thm:drift}), and the grader's gameability decays at the
+falsifier's regret rate (Thm.~\ref{thm:exploit}). The residue --- proposal
+quality, oracle fidelity, out-of-class behavior, and global optimality ---
+is provably beyond proof (\S\ref{sec:impossibility}) and is therefore
+estimated, continuously, by the Assumption Ledger.
+\end{quote}
+
+Open problems worth working: (i) estimate $\gamma$ and test
+Assumption~\ref{asm:submod} on real ablation data --- the single hypothesis
+carrying the most theory; (ii) sharpen Theorem~\ref{thm:drift} with
+state-dependent harm under the rollback mechanism (the $-h$ bound is
+loose when reversion is fast); (iii) extend Theorem~\ref{thm:exploit} to
+bandit feedback over a structured continuous probe space via covering
+numbers; (iv) a two-timescale stochastic-approximation treatment of
+calibrating $\widehat G$ while $L_t$ moves (Borkar conditions); (v) the
+restless-bandit (Whittle) formulation of curriculum as a corollary layer over
+Theorem~\ref{thm:lowerbound}'s per-target information accounting.
+
+%======================================================================
+\begin{thebibliography}{99}\small
+
+\bibitem{bh79} J.~Bretagnolle and C.~Huber.
+Estimation des densit\'es: risque minimax.
+\emph{Z.\ Wahrscheinlichkeitstheorie verw.\ Gebiete}, 47:119--137, 1979.
+
+\bibitem{tsybakov} A.~Tsybakov.
+\emph{Introduction to Nonparametric Estimation}. Springer, 2009. (Ch.~2 for
+Bretagnolle--Huber and two-point lower bounds.)
+
+\bibitem{ville} J.~Ville.
+\emph{\'Etude critique de la notion de collectif}. Gauthier-Villars, 1939.
+(Ville's inequality.)
+
+\bibitem{ramdas} A.~Ramdas, P.~Gr\"unwald, V.~Vovk, G.~Shafer.
+Game-theoretic statistics and safe anytime-valid inference.
+\emph{Statistical Science}, 38(4), 2023. (Modern e-process treatment.)
+
+\bibitem{ebh} R.~Wang and A.~Ramdas.
+False discovery rate control with e-values.
+\emph{J.\ Royal Statistical Society B}, 84(3):822--852, 2022.
+
+\bibitem{wald48} A.~Wald and J.~Wolfowitz.
+Optimum character of the sequential probability ratio test.
+\emph{Ann.\ Math.\ Statist.}, 19(3):326--339, 1948.
+
+\bibitem{vovk-conformal} V.~Vovk, A.~Gammerman, G.~Shafer.
+\emph{Algorithmic Learning in a Random World}. Springer, 2005. (Conformal
+prediction.)
+
+\bibitem{neyman} J.~Neyman.
+On the application of probability theory to agricultural experiments (1923).
+Translated in \emph{Statistical Science}, 5(4):465--472, 1990.
+
+\bibitem{shapley53} L.~S.~Shapley.
+A value for $n$-person games. In \emph{Contributions to the Theory of Games
+II}, 307--317. Princeton, 1953.
+
+\bibitem{nwf78} G.~Nemhauser, L.~Wolsey, M.~Fisher.
+An analysis of approximations for maximizing submodular set functions---I.
+\emph{Mathematical Programming}, 14:265--294, 1978.
+
+\bibitem{daskempe} A.~Das and D.~Kempe.
+Submodular meets spectral: greedy algorithms for subset selection, sparse
+approximation and dictionary selection. \emph{ICML}, 2011. (Weak
+submodularity / submodularity ratio.)
+
+\bibitem{badan14} A.~Badanidiyuru, B.~Mirzasoleiman, A.~Karbasi, A.~Krause.
+Streaming submodular maximization: massive data summarization on the fly.
+\emph{KDD}, 2014.
+
+\bibitem{kemenysnell} J.~Kemeny and J.~Snell.
+\emph{Finite Markov Chains}. Springer, 1976. (Absorbing-chain fundamental
+matrix.)
+
+\bibitem{luby93} M.~Luby, A.~Sinclair, D.~Zuckerman.
+Optimal speedup of Las Vegas algorithms.
+\emph{Information Processing Letters}, 47(4):173--180, 1993.
+
+\bibitem{exp3} P.~Auer, N.~Cesa-Bianchi, Y.~Freund, R.~Schapire.
+The nonstochastic multiarmed bandit problem.
+\emph{SIAM J.\ Computing}, 32(1):48--77, 2002.
+
+\bibitem{ot-bisim} S.~Calo et al.
+Bisimulation metrics are optimal transport distances, and can be computed
+efficiently. \emph{NeurIPS}, 2024. arXiv:2406.04056.
+
+\bibitem{nfl} D.~Wolpert and W.~Macready.
+No free lunch theorems for optimization.
+\emph{IEEE Trans.\ Evolutionary Computation}, 1(1):67--82, 1997.
+
+\bibitem{golovin} D.~Golovin and A.~Krause.
+Adaptive submodularity: theory and applications in active learning and
+stochastic optimization. \emph{JAIR}, 42:427--486, 2011. (For the outlook's
+VOI-greedy claim.)
+
+\bibitem{borkar} V.~Borkar.
+\emph{Stochastic Approximation: A Dynamical Systems Viewpoint}. Cambridge,
+2008. (Two-timescale SA, for the outlook.)
+
+\end{thebibliography}
+
+\end{document}

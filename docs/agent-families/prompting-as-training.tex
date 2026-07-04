@@ -1,0 +1,668 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% ---------- theorem environments ----------
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{fact}[theorem]{Fact}            % imported results
+\newtheorem{principle}[theorem]{Principle}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\newtheorem{prediction}[theorem]{Prediction}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% ---------- macros ----------
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\cC}{\mathcal{C}}
+\newcommand{\cD}{\mathcal{D}}
+\newcommand{\cF}{\mathcal{F}}
+\newcommand{\cL}{\mathcal{L}}
+\newcommand{\cT}{\mathcal{T}}
+\newcommand{\cY}{\mathcal{Y}}
+\newcommand{\cX}{\mathcal{X}}
+\newcommand{\cR}{\mathcal{R}}
+\newcommand{\post}{\Pi}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+\title{Prompting as Training:\\
+\large Context Optimization as Learning in a Semi-Parametric Predictive Model}
+\author{Working notes --- agent-families project}
+\date{June 2026 --- draft 0}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We reframe the agent-families system's learning mechanism --- accumulating a
+governed library of textual insights injected into context --- as
+\emph{model training in a different coordinate system}. The foundational
+frame is Bayesian (\S\ref{sec:frame}): a prompt is a conditioning operation
+on a predictive distribution, a weight update is a reparameterization of the
+same distribution, and in an idealized exchangeable predictive model the two
+operators \emph{coincide} on predictives (the Equivalence Principle,
+Proposition~\ref{prop:definetti}). This idealization is supported from below
+by exact dual-form theorems for linear attention
+(\S\ref{sec:dual}: a trained linear layer \emph{is} attention over its
+training data, Theorem~\ref{thm:dualform}) and bounded from above by
+elicitation-ceiling results (\S\ref{sec:ceiling}: context can only elicit
+what the frozen model represents). Within this frame the skill library is
+the trainable nonparametric component of a semi-parametric model, and every
+mechanism of the system acquires a training-theoretic dual
+(\S\ref{sec:dictionary}). The reframe yields falsifiable predictions
+(\S\ref{sec:predictions}) and a precise answer to the question ``is this
+just a poor man's SGD?'' (\S\ref{sec:regime}: no --- it is training in a
+\emph{regime} of few, large, semantically generated, individually
+hypothesis-tested updates, where the dual representation dominates).
+Earlier results --- the measurement-theoretic outer loop of
+\texttt{theory.tex} --- remain valid and are catalogued as companion modules
+to revisit (\S\ref{sec:revisit}).
+\end{abstract}
+
+\tableofcontents
+
+%======================================================================
+\section{Thesis and relation to prior work in this repository}
+%======================================================================
+
+\paragraph{Thesis.} The agent-families system does not merely \emph{use} an
+LLM with helpful context; it \emph{trains a model}. The trainable parameters
+are not weights but the contents of a curated text library $L$, consulted by
+retrieval at inference time. The claim made precise in this document:
+\begin{quote}\itshape
+Conditioning a predictive model on curated context and updating its
+parameters on curated data are two coordinate representations of the same
+learning operation. The system performs the former; consequently the
+mathematics of the latter --- learning curves, capacity control,
+regularization, forgetting, curriculum, distillation --- transfers, with the
+translation dictionary of \S\ref{sec:dictionary} and the regime caveats of
+\S\ref{sec:regime}.
+\end{quote}
+
+\paragraph{Relation to \texttt{theory.tex}.} The companion document
+formalizes the \emph{outer loop}: a budgeted zeroth-order optimization with
+anytime-valid gates, drift convergence, submodular governance, and an
+adversarially maintained instrument. Nothing there is displaced. This
+document supplies what the outer loop treated as opaque: the
+\emph{semantics of the update operator} --- what kind of object a promoted
+insight is, and why moves on $L$ are training steps in a rigorous sense.
+Pointers to the retained modules are collected in \S\ref{sec:revisit}.
+
+\paragraph{Status conventions.} As in the companion document:
+\emph{proved here} (self-contained proofs), \emph{imported}
+(\textbf{Fact} environments with citations), \emph{assumed}
+(\textbf{Assumption} environments; empirical, estimable).
+
+%======================================================================
+\section{The foundational frame: one predictive distribution, two update
+operators}\label{sec:frame}
+%======================================================================
+
+\subsection{Setup}
+
+\begin{definition}[Predictive model; the two operators]\label{def:operators}
+Let $p(\,y \mid x,\, C\,;\, \theta\,)$ be a conditional predictive
+distribution over outputs $y \in \cY$ given an input $x \in \cX$ and a
+context $C \in \cC$ (a finite token sequence), with parameters $\theta$.
+Two update operators act on the induced predictive:
+\[
+  \underbrace{T_{\mathrm{ctx}}[D]\,:\; p(\cdot \mid x) \;\longmapsto\;
+  p(\cdot \mid x,\, D)}_{\text{conditioning (prompting / retrieval)}}
+  \qquad\qquad
+  \underbrace{T_{\mathrm{wt}}[D]\,:\; \theta \;\longmapsto\;
+  \theta'(D)}_{\text{parameter update (training)}}
+\]
+where $D$ is data (demonstrations, instructions, insights). The system under
+study applies only $T_{\mathrm{ctx}}$, with $D$ drawn from a library $L$ by a
+retrieval policy $R$.
+\end{definition}
+
+\subsection{The Equivalence Principle}
+
+The cleanest general statement lives in the Bayesian idealization. Recall de
+Finetti's representation theorem: an infinitely exchangeable sequence
+$(Y_1, Y_2, \dots)$ admits a representation as a mixture of i.i.d.\ models,
+\[
+  p(y_1, \dots, y_n) \;=\; \int \prod_{i=1}^{n} p(y_i \mid \vartheta)\;
+  d\post(\vartheta),
+\]
+for a unique mixing measure $\post$ over a latent parameter $\vartheta$
+\cite{definetti,bernardosmith}.
+
+\begin{proposition}[Equivalence Principle: conditioning $=$ training, on
+predictives]\label{prop:definetti}
+Let the data-generating process for a task family be exchangeable with de
+Finetti measure $\post$ over a latent task/parameter $\vartheta$. For a
+dataset $D = (d_1, \dots, d_n)$ define:
+\begin{enumerate}[label=(\roman*),leftmargin=2.5em]
+  \item the \emph{context-updated} predictive
+        $p_{\mathrm{ctx}}(y \mid x) = p(y \mid x, D)$, obtained by
+        conditioning the joint exchangeable model on $D$;
+  \item the \emph{parameter-updated} predictive
+        $p_{\mathrm{wt}}(y \mid x) = \int p(y \mid x, \vartheta)\,
+        d\post(\vartheta \mid D)$, obtained by replacing the prior $\post$
+        with the posterior $\post(\cdot \mid D)$ and integrating it out.
+\end{enumerate}
+Then $p_{\mathrm{ctx}} = p_{\mathrm{wt}}$ identically: \emph{learning by
+conditioning and learning by parameter update induce the same predictive
+distribution.}
+\end{proposition}
+
+\begin{proof}
+By the representation theorem, conditioning the mixture on $D$ yields
+\[
+  p(y \mid x, D)
+  \;=\; \frac{\int p(y \mid x, \vartheta) \prod_i p(d_i \mid \vartheta)\,
+  d\post(\vartheta)}{\int \prod_i p(d_i \mid \vartheta)\, d\post(\vartheta)}
+  \;=\; \int p(y \mid x, \vartheta)\; d\post(\vartheta \mid D),
+\]
+where the second equality is Bayes' rule applied to the mixing measure. The
+right side is precisely $p_{\mathrm{wt}}(y \mid x)$.
+\end{proof}
+
+\begin{remark}[Why this is the right foundation]
+Proposition~\ref{prop:definetti} is elementary, but it is the load-bearing
+reframe: \emph{prompting and training are not analogous; in the exchangeable
+ideal they are equal as operators on predictives}. Everything else in this
+document manages the two directions of departure from the ideal: real
+attention mechanisms only approximate the conditioning operator
+(\S\ref{sec:dual}, \S\ref{sec:defect}), and real weight updates can exceed
+it in expressivity (\S\ref{sec:ceiling}).
+\end{remark}
+
+\subsection{LLMs as approximate posterior simulators}\label{sec:defect}
+
+\begin{fact}[ICL as implicit Bayesian inference~\cite{xie}]\label{fact:xie}
+For data generated by a mixture of HMMs (latent concept $\vartheta$),
+a sequence model fit to the pretraining distribution performs implicit
+Bayesian inference at prompt time: as in-context evidence grows, its
+predictive converges to the Bayes-optimal predictor
+$\int p(y \mid x, \vartheta)\, d\post(\vartheta \mid \mathrm{prompt})$,
+even under distribution mismatch between prompts and pretraining data.
+\end{fact}
+
+\begin{definition}[Simulation defect]\label{def:defect}
+For a concrete LLM $q_{\theta_0}$, define its \emph{simulation defect} on a
+task family as
+\[
+  \varepsilon_{\mathrm{sim}}(D)
+  \;=\; \sup_{x}\;
+  d_{\mathrm{TV}}\Bigl( q_{\theta_0}(\cdot \mid x, D),\;
+  p_{\mathrm{ctx}}(\cdot \mid x) \Bigr),
+\]
+the distance between what the model does with context $D$ and what ideal
+conditioning would do. All equivalence claims in this document degrade by at
+most $\varepsilon_{\mathrm{sim}}$; it plays the role the instrument-noise
+$\sigma$ plays in the companion document --- \emph{an empirical constant to
+be estimated, not assumed zero}. Documented deviations of real ICL from
+idealized learning~\cite{shen} are measurements of
+$\varepsilon_{\mathrm{sim}} > 0$, not refutations of the frame.
+\end{definition}
+
+%======================================================================
+\section{Exact equivalence in the dual regime}\label{sec:dual}
+%======================================================================
+
+The Bayesian frame says conditioning and training agree at the level of
+predictive distributions. Remarkably, for linear attention the agreement
+holds at the level of \emph{mechanism}: stored context consulted by
+attention and a weight update computed from the same data are the same
+algebraic object.
+
+\begin{theorem}[The dual form: a GD-trained linear layer \emph{is} attention
+over its training data~\cite{irie}]\label{thm:dualform}
+Let a linear layer $y = W x$, $W \in \R^{m \times n}$, be trained by $T$
+steps of gradient descent from $W_0$ on examples $x_1, \dots, x_T \in \R^n$,
+producing error signals $\sigma_i \in \R^m$ (the learning-rate-scaled output
+deltas $\sigma_i = -\eta_i\, \nabla_{y} \ell_i$). Then for every query
+$x \in \R^n$:
+\[
+  W_T\, x
+  \;=\; W_0\, x \;+\; \sum_{i=1}^{T} \bigl( x_i^{\top} x \bigr)\, \sigma_i
+  \;=\; W_0\, x \;+\;
+  \mathrm{LinAttn}\bigl( \text{query } x;\ \text{keys } \{x_i\},\
+  \text{values } \{\sigma_i\} \bigr).
+\]
+That is, the trained network is \emph{exactly} the initial network plus
+unnormalized linear attention over the training set.
+\end{theorem}
+
+\begin{proof}
+Each GD step adds a rank-one update: $W_{i} = W_{i-1} + \sigma_i x_i^{\top}$.
+Summing, $W_T = W_0 + \sum_{i=1}^T \sigma_i x_i^{\top}$. Applying to $x$ and
+using $(\sigma_i x_i^{\top}) x = (x_i^{\top} x)\, \sigma_i$ gives the
+expression; the right-hand sum is by definition linear attention with keys
+$x_i$, values $\sigma_i$, and similarity $\langle \cdot, \cdot \rangle$.
+\end{proof}
+
+\begin{remark}
+Theorem~\ref{thm:dualform} is an identity, not an approximation. It licenses
+the central reading of this document: \textbf{an item retrieved into context
+and attended over is, in the linear regime, literally the weight update that
+training on it would have produced} --- applied transiently, at inference
+time, and removed afterwards. ``Adding context'' and ``taking a gradient
+step'' differ in \emph{persistence and coordinates}, not in kind.
+\end{remark}
+
+\begin{fact}[Transformers implement learning algorithms in context]
+\label{fact:icl-gd}
+(i) There exist transformer weights under which one linear self-attention
+layer applied to a context of $(x_i, y_i)$ pairs computes the prediction of
+one gradient-descent step on the in-context least-squares loss; stacking $L$
+layers yields $L$ steps, and \emph{trained} linear-attention models converge
+to this construction on toy regression~\cite{vonoswald}. (ii) Transformers
+trained on in-context regression learn to match gradient descent, ridge
+regression, or exact least squares depending on depth~\cite{akyurek}.
+(iii) The global minima of the in-context linear-regression training
+objective implement \emph{preconditioned} gradient descent~\cite{ahn}.
+(iv) Real-scale evidence: a context induces a compact, transplantable
+activation-space \emph{task vector} that reproduces much of the context's
+effect --- context compiling to a transient low-rank functional
+patch~\cite{taskvectors,functionvectors}. (v) Caveat: pretrained LLM ICL
+deviates measurably from exact GD equivalence outside the linear
+regime~\cite{shen}; in the present framework these deviations are the
+simulation defect of Definition~\ref{def:defect}.
+\end{fact}
+
+%======================================================================
+\section{The system as a semi-parametric learner}\label{sec:semiparam}
+%======================================================================
+
+\begin{definition}[Semi-parametric policy class]\label{def:semiparam}
+Fix a frozen base model $\theta_0$. The system's policy class is
+\[
+  \cF \;=\; \Bigl\{\, f_{L, R} \;:\;
+  f_{L,R}(x) = q_{\theta_0}\bigl( \cdot \mid x,\; R(x, L) \bigr)
+  \;\Bigm|\; L \in \cL,\ R \in \cR \,\Bigr\},
+\]
+where $L$ is the insight library (the \emph{nonparametric component}: it
+grows with experience, has no fixed dimension, and stores raw knowledge
+atoms) and $R$ is the retrieval policy (bounded context budget, as in the
+companion document). \emph{Training} is movement in $\cL$ via the governed
+operators (insert after quarantine, retire, split, merge); $\theta_0$ never
+moves. By Theorem~\ref{thm:dualform} and Fact~\ref{fact:icl-gd}, each
+retrieved insight acts as a transient, rank-limited functional update
+applied conditionally on the input --- i.e., $\cF$ is a frozen backbone
+equipped with a learned, input-gated bank of adapters, stored in the dual
+(text) coordinates. The lineage of frozen-core-plus-growing-memory models
+(kNN-LM and successors~\cite{knnlm}) is the same architecture one level
+down.
+\end{definition}
+
+\begin{remark}[``This is not RL,'' upgraded]
+The design document's slogan (``no gradient, no policy, no reward model'')
+is rhetorically true and semantically misleading. The correct statement:
+\emph{this is training} --- of the nonparametric component of
+Definition~\ref{def:semiparam}, by discrete, tested updates, in coordinates
+where each update is legible. The system's reward signal (the grader) is a
+loss; its add/retire operators are steps; its capability curve is a training
+curve. What it is \emph{not} is parametric gradient training.
+\end{remark}
+
+%======================================================================
+\section{The translation dictionary}\label{sec:dictionary}
+%======================================================================
+
+The Equivalence Principle makes the following more than analogy: each row
+pairs the two coordinate representations of one operation on the predictive
+distribution.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.40\textwidth}p{0.52\textwidth}@{}}
+\toprule
+\textbf{Weight training} & \textbf{Library learning (the dual)} \\
+\midrule
+gradient step on a batch &
+validated insight insertion (reflector counterfactual) \\
+gradient oracle (backprop) &
+abduction over traces: a \emph{semantic} gradient, computed by a reasoning
+engine with priors \\
+step accepted unconditionally &
+step accepted only past a level-$\alpha$ anytime-valid gate
+(\texttt{theory.tex} \S5) \\
+learning rate / trust region &
+quarantine strictness $\alpha$, batch size cap \\
+early stopping on validation loss &
+validation-based reversion (promote-or-revert) \\
+regularization; pruning &
+generalization lint (prior); retirement / dormancy \\
+capacity control (parameter count) &
+active cap $k$; streaming-submodular tournament \\
+conditional computation / MoE gating &
+retrieval policy $R$ (input-dependent adapter selection) \\
+catastrophic forgetting (destructive interference in weight space) &
+\emph{absent by construction} (append-only store); interference reappears as
+routing degradation (shadowing) --- measurable and governable \\
+per-example credit: influence functions (approximate, expensive, post hoc) &
+per-insight credit: event ledger $+$ randomized ablation (exact by design;
+\texttt{theory.tex} \S6) \\
+curriculum (data ordering) &
+episode/target selection; question-budget annealing \\
+training curve (loss vs.\ steps) &
+capability curve (ability vs.\ episodes; IRT-anchored) \\
+overfitting to the training set &
+target memorization (overfitting detector; cross-target recurrence as the
+generalization test) \\
+checkpoint; learned object dies with it &
+library: portable across base-model upgrades \\
+distillation into a student &
+(future) consolidation of the validated library into weights --- the same
+information changing coordinates \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{remark}[Two rows are improvements, not translations]
+In the dual coordinates, two operations are \emph{strictly better} than
+their weight-space counterparts: (i) per-update credit is exact (a ledger
+row and a designed experiment) where influence functions are heuristic; and
+(ii) forgetting is structurally impossible, with its failure energy
+displaced into routing, where the companion document's telemetry
+(entropy, shadowing margins) can see it. These two rows are the system's
+genuine comparative advantages and should anchor the paper's claims.
+\end{remark}
+
+%======================================================================
+\section{The ceiling: what context optimization cannot do}\label{sec:ceiling}
+%======================================================================
+
+\begin{fact}[Elicitation, not creation~\cite{petrov}]\label{fact:petrov}
+Context/prefix conditioning of a frozen transformer acts as a bias on the
+attention mechanism: it cannot alter the relative attention pattern over
+content tokens. Consequently prompting can \emph{elicit} skills represented
+by the pretrained model but cannot \emph{create} computational patterns
+absent from it. (Prompt tuning approaches fine-tuning quality empirically as
+scale grows~\cite{lester}, consistent with large models representing more
+elicitable skills, not with the ceiling being void.)
+\end{fact}
+
+\begin{proposition}[Context optimization is bounded by weight
+optimization]\label{prop:ceiling}
+Let $J(f)$ be any performance functional on policies, and suppose the weight
+class is \emph{emulation-complete}: for every context policy $(L, R)$ there
+exist weights $\theta'$ with
+$q_{\theta'}(\cdot \mid x) = q_{\theta_0}(\cdot \mid x, R(x, L))$ for all
+$x$. Then
+\[
+  J^{\ast}_{\mathrm{ctx}}
+  \;\coloneqq\; \sup_{L, R}\, J\bigl(f_{L,R}\bigr)
+  \;\;\le\;\;
+  \sup_{\theta'}\, J\bigl(q_{\theta'}\bigr)
+  \;\eqqcolon\; J^{\ast}_{\mathrm{wt}} .
+\]
+By Fact~\ref{fact:petrov} the inclusion is in general strict.
+\end{proposition}
+
+\begin{proof}
+Under emulation-completeness, $\{f_{L,R}\} \subseteq \{q_{\theta'}\}$ as
+sets of policies; a supremum over a subset is no larger.
+\end{proof}
+
+\begin{corollary}[Capability decomposition and the saturation--jump law]
+\label{cor:saturation}
+Write the attainable objective as $J^\ast_{\mathrm{ctx}}(\theta_0)$ ---
+a function of the frozen base model. Library learning moves $J$ toward a
+\emph{base-model-dependent frontier} and can go no further; upgrading
+$\theta_0$ lifts the frontier while the library (text, model-agnostic up to
+re-validation) carries over. The capability curve should therefore show
+\emph{saturation toward an asymptote within a base model, and a discrete
+jump with library carryover across base-model upgrades}. This is the formal
+content of the scaffold-vs-model ability decomposition the measurement layer
+estimates psychometrically~\cite{agentpsych}.
+\end{corollary}
+
+\begin{remark}[Why the concession is affordable here]
+The ceiling binds on \emph{capability} (computational patterns); the
+system's accumulated knowledge is overwhelmingly \emph{procedural and
+factual} (conventions, pitfalls, workflows, elicitation tactics) --- squarely
+inside the elicitable class. The design constraints (no weight access,
+subscription budget, auditability, surgical rollback) make weight training
+unavailable regardless; Proposition~\ref{prop:ceiling} then prices what is
+being given up, and Corollary~\ref{cor:saturation} says how to detect when
+the price starts to bind: stalling $p_\Delta$ (companion document,
+Thm.~9.2) \emph{with} failure clusters concentrating in
+capability-shaped failure kinds.
+\end{remark}
+
+%======================================================================
+\section{The regime argument: why this does not collapse into poor man's
+SGD}\label{sec:regime}
+%======================================================================
+
+If conditioning and training are the same operation, is a context-trained
+system simply a worse-optimized model? The answer is a regime comparison,
+not a verdict.
+
+\begin{definition}[Update regimes]
+Call a learning process \emph{averaging-controlled} if it takes many small
+updates of low individual semantic content, with quality enforced by
+aggregation (SGD: noise averages out; CLT-style analyses apply). Call it
+\emph{selection-controlled} if it takes few large updates of high individual
+semantic content, with quality enforced by per-update acceptance testing
+(this system: each update passes a level-$\alpha$ gate; drift/occupation
+analyses apply, cf.\ companion Thm.~9.2).
+\end{definition}
+
+\begin{remark}[Where each regime dominates]
+Per-update testing costs
+$\Theta\bigl(\tfrac{\sigma^2}{\Delta^2}\log\tfrac1\alpha\bigr)$ evaluations
+(companion Thm.~5.1/Cor.~5.7); amortizing it requires updates that are
+\emph{few and individually valuable} --- exactly what an abductive proposal
+engine with world knowledge produces (each ``gradient'' is computed by
+reasoning over a failure trace, not by differentiating; the observed
+order-of-magnitude rollout efficiencies of reflective prompt evolution over
+RL-style search are this effect). Conversely, averaging control needs
+update volume that no quota-bound, per-update-tested process can match;
+at data scale, parametric training wins. The system's data regime ---
+a handful of validated insights per episode --- is the selection-controlled
+regime. \textbf{The collapse claim fails not because the equivalence fails,
+but because ``poor man's'' presumes the averaging regime, and the system
+does not operate there.} What survives of the collapse worry is precisely
+Proposition~\ref{prop:ceiling} (the expressivity ceiling) and
+Definition~\ref{def:defect} (the simulation defect) --- both quantified,
+both monitored.
+\end{remark}
+
+\begin{remark}[The distillation corollary]
+By the Equivalence Principle, a validated library is simultaneously a
+curated dataset: every promoted insight is a (context, behavior) training
+pair with a measured causal effect. Consolidation into weights --- when data
+scale or the ceiling warrants it --- is the same information changing
+coordinates, and the gates' statistics transfer as data-quality
+certificates. ``Library learning now, weight learning later'' is therefore
+not a pivot but a staged use of one object.
+\end{remark}
+
+%======================================================================
+\section{Falsifiable predictions}\label{sec:predictions}
+%======================================================================
+
+The reframe earns its keep by predicting things the system can test.
+
+\begin{prediction}[Saturation--jump]\label{pred:jump}
+Within a fixed base model, the IRT ability curve saturates toward an
+asymptote as the library grows; upgrading the base model with the library
+held fixed produces a discontinuous ability jump exceeding the recent
+within-model trend; library effects (per-insight ablation values) carry over
+across the upgrade with mostly preserved sign. (From
+Corollary~\ref{cor:saturation}.)
+\end{prediction}
+
+\begin{prediction}[Elicitable-failure concentration]\label{pred:elicit}
+Library gains concentrate on failure kinds that encode missing
+\emph{knowledge or procedure} (convention violations, missed elicitation,
+known-pitfall bugs) and are weak on failure kinds that encode missing
+\emph{computation} (deep multi-step reasoning shortfalls). The typed failure
+taxonomy makes this measurable as a per-failure-kind treatment-effect
+profile. (From Fact~\ref{fact:petrov}.)
+\end{prediction}
+
+\begin{prediction}[Patch behavior]\label{pred:patch}
+A high-value insight's effect behaves like a transient functional patch:
+its presence-vs-absence effect on the worker's outputs is reproducible,
+approximately localized (affects its scope tag's task cluster, little
+else), and approximately additive with unrelated insights --- while
+near-duplicate insights interact subadditively (shadowing). Measurable from
+the randomized-ablation ledger; subadditivity is the empirical signature of
+the submodularity assumption in the companion document
+(\texttt{theory.tex} Asm.~8.2). (From Theorem~\ref{thm:dualform}'s
+rank-limited-update reading and Fact~\ref{fact:icl-gd}(iv).)
+\end{prediction}
+
+\begin{prediction}[Defect scaling]\label{pred:defect}
+Where the simulation defect $\varepsilon_{\mathrm{sim}}$ is small
+(short, well-structured contexts; tasks resembling pretraining), measured
+insight effects track the idealized conditioning account (stable across
+paraphrase, order-insensitive); where contexts are long and heterogeneous,
+order- and interference-effects grow. This yields a practical design rule
+the system already follows for other reasons: \emph{small, structurally
+templated, deduplicated insights minimize the defect} --- the structural
+schema is, in this frame, defect control.
+\end{prediction}
+
+%======================================================================
+\section{Ideas retained for further development}\label{sec:revisit}
+%======================================================================
+
+Nothing in the earlier line of work is invalidated by the reframe; it
+becomes the statistical mechanics of the outer loop around the present
+semantics. Retained, with pointers:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{The measurement-limited learning rate}
+        (\texttt{theory.tex} Thm.~5.1, Cor.~5.2) --- now reads as: the
+        \emph{trainer's} step-validation bandwidth is bounded by instrument
+        noise; in training language, the gate is the system's
+        learning-rate schedule.
+  \item \textbf{Anytime-valid gates, e-value composition, e-BH}
+        (\texttt{theory.tex} \S5) --- per-step validation tests; in this
+        frame, a provably safe optimizer in the selection-controlled
+        regime.
+  \item \textbf{Causal credit: randomized masking, Shapley}
+        (\texttt{theory.tex} \S6) --- the dual's exact replacement for
+        influence functions.
+  \item \textbf{Submodular governance of the cap}
+        (\texttt{theory.tex} \S7) --- capacity control of the nonparametric
+        component; Prediction~\ref{pred:patch} ties its key assumption to
+        the patch picture.
+  \item \textbf{Drift/occupation convergence} (\texttt{theory.tex}
+        Thm.~9.2) --- convergence of selection-controlled training to
+        statistical stationarity; $p_\Delta$ decay is the training-loss
+        plateau, and \S\ref{sec:ceiling} now distinguishes \emph{two}
+        plateau causes (proposal exhaustion vs.\ elicitation ceiling) with
+        Prediction~\ref{pred:elicit} as the discriminator.
+  \item \textbf{The adversarial instrument and exploitability bound}
+        (\texttt{theory.tex} \S10) --- in training language: a
+        non-stationary loss that provably resists reward hacking at the
+        falsifier's regret rate.
+  \item \textbf{The grader-as-loss program} (ideation record
+        2026-06-10): STL robustness margins (differentiable --- and now
+        doubly motivated: a graded loss is what a future weight-coordinate
+        consolidation would train against), bisimulation distance,
+        constrained (CMDP) composition, pairwise judging, conformal triage.
+  \item \textbf{Impossibility boundary and Assumption Ledger}
+        (\texttt{theory.tex} \S\S10--11) --- extended by one row:
+        $\varepsilon_{\mathrm{sim}}$ (Definition~\ref{def:defect}),
+        estimable via paraphrase/order-invariance probes on frozen replay
+        scenarios (Prediction~\ref{pred:defect}).
+\end{enumerate}
+
+%======================================================================
+\section{Position for the paper}
+%======================================================================
+
+The claimable contribution, in one paragraph: \emph{skill-library learning
+systems (Voyager, AWM, ACE, GEPA descendants) have been described as prompt
+engineering with memory; we give them training-theoretic semantics. Via the
+de Finetti equivalence (conditioning $=$ parameter update on predictives)
+and the dual-form identity (attention over stored data $=$ a GD-trained
+layer), a governed text library is the nonparametric component of a
+semi-parametric model, and library curation is training in the dual
+coordinates --- in a selection-controlled regime with exact per-update
+credit, no destructive forgetting, statistical step-validation, and an
+elicitation ceiling that the system's own psychometrics can detect. The
+framework yields falsifiable predictions (saturation--jump, elicitable
+failure concentration, patch additivity) testable on the system's own
+telemetry.} To our knowledge no published work connects this citation chain
+to skill libraries with a formal statement; the nearest neighbors treat ICL
+theory and memory systems separately.
+
+%======================================================================
+\begin{thebibliography}{99}\small
+
+\bibitem{definetti} B.~de Finetti.
+La pr\'evision: ses lois logiques, ses sources subjectives.
+\emph{Annales de l'Institut Henri Poincar\'e}, 7:1--68, 1937.
+
+\bibitem{bernardosmith} J.~Bernardo and A.~Smith.
+\emph{Bayesian Theory}. Wiley, 1994. (Representation theorems, Ch.~4.)
+
+\bibitem{xie} S.~M. Xie, A.~Raghunathan, P.~Liang, T.~Ma.
+An explanation of in-context learning as implicit Bayesian inference.
+\emph{ICLR}, 2022. arXiv:2111.02080.
+
+\bibitem{irie} K.~Irie, I.~Schlag, R.~Csord\'as, J.~Schmidhuber.
+The dual form of neural networks revisited: connecting test-time predictions
+to training patterns via spotlights of attention.
+\emph{ICML}, 2022. arXiv:2202.05798.
+
+\bibitem{vonoswald} J.~von Oswald, E.~Niklasson, E.~Randazzo,
+J.~Sacramento, A.~Mordvintsev, A.~Zhmoginov, M.~Vladymyrov.
+Transformers learn in-context by gradient descent.
+\emph{ICML}, 2023. arXiv:2212.07677.
+
+\bibitem{akyurek} E.~Aky\"urek, D.~Schuurmans, J.~Andreas, T.~Ma, D.~Zhou.
+What learning algorithm is in-context learning? Investigations with linear
+models. \emph{ICLR}, 2023. arXiv:2211.15661.
+
+\bibitem{ahn} K.~Ahn, X.~Cheng, H.~Daneshmand, S.~Sra.
+Transformers learn to implement preconditioned gradient descent for
+in-context learning. \emph{NeurIPS}, 2023. arXiv:2306.00297.
+
+\bibitem{dai} D.~Dai, Y.~Sun, L.~Dong, Y.~Hao, S.~Ma, Z.~Sui, F.~Wei.
+Why can GPT learn in-context? Language models implicitly perform gradient
+descent as meta-optimizers. \emph{Findings of ACL}, 2023. arXiv:2212.10559.
+
+\bibitem{shen} L.~Shen, A.~Mishra, D.~Khashabi.
+Do pretrained transformers really learn in-context by gradient descent?
+arXiv:2310.08540, 2023.
+
+\bibitem{taskvectors} R.~Hendel, M.~Geva, A.~Globerson.
+In-context learning creates task vectors. \emph{Findings of EMNLP}, 2023.
+arXiv:2310.15916.
+
+\bibitem{functionvectors} E.~Todd, M.~Li, A.~Sharma, A.~Mueller,
+B.~Wallace, D.~Bau. Function vectors in large language models.
+\emph{ICLR}, 2024. arXiv:2310.15213.
+
+\bibitem{petrov} A.~Petrov, P.~Torr, A.~Bibi.
+When do prompting and prefix-tuning work? A theory of capabilities and
+limitations. \emph{ICLR}, 2024. arXiv:2310.19698.
+
+\bibitem{lester} B.~Lester, R.~Al-Rfou, N.~Constant.
+The power of scale for parameter-efficient prompt tuning.
+\emph{EMNLP}, 2021. arXiv:2104.08691.
+
+\bibitem{knnlm} U.~Khandelwal, O.~Levy, D.~Jurafsky, L.~Zettlemoyer,
+M.~Lewis. Generalization through memorization: nearest neighbor language
+models. \emph{ICLR}, 2020. arXiv:1911.00172.
+
+\bibitem{agentpsych} (Agent psychometrics.)
+Task-level performance prediction in agentic coding benchmarks:
+decomposing model and scaffold ability. arXiv:2604.00594, 2026.
+
+\end{thebibliography}
+
+\end{document}

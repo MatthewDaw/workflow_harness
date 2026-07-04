@@ -1,0 +1,46 @@
+<!-- 04 · Walk PRs + noise filter -->
+<section class="slide" id="slide-04" data-title="Walk & filter"
+  data-narration="First it walks the merged pull requests, newest first. But most repos are full of bot noise — automated dependency bumps from Renovate or Dependabot. Those are filtered out during the walk, so the budget is spent only on real, human changes worth learning from.">
+  <style>
+    #slide-04 .stage{height:min(44vh,400px)}
+    #slide-04 .pr{rx:9}
+    #slide-04 .human{fill:rgba(45,212,191,.10);stroke:var(--teal)}
+    #slide-04 .bot{fill:rgba(251,113,133,.10);stroke:var(--rose)}
+    #slide-04 .funnel{fill:rgba(167,139,250,.07);stroke:var(--violet)}
+    #slide-04.active .drop{animation:s04drop 2.6s ease-in forwards}
+    @keyframes s04drop{to{transform:translateY(150px);opacity:0}}
+  </style>
+  <h2 class="headline plain reveal" style="--d:.05s">Walk the history,<br><span class="t-teal">skip the noise</span></h2>
+  <div class="stage">
+    <svg viewBox="0 0 820 340" width="100%" height="100%">
+      <!-- incoming stream -->
+      <g font-size="13" font-family="monospace" text-anchor="middle">
+        <g class="reveal" style="--d:.3s"><rect class="pr bot"   x="20"  y="40" width="150" height="34" rx="9"/><text x="95" y="62" fill="#f3c7cd">⤴ renovate bump</text></g>
+        <g class="reveal" style="--d:.45s"><rect class="pr human" x="20"  y="84" width="150" height="34" rx="9"/><text x="95" y="106" fill="#bdf3ea">fix: trim input</text></g>
+        <g class="reveal" style="--d:.6s"><rect class="pr bot"   x="20" y="128" width="150" height="34" rx="9"/><text x="95" y="150" fill="#f3c7cd">⤴ dependabot</text></g>
+        <g class="reveal" style="--d:.75s"><rect class="pr human" x="20" y="172" width="150" height="34" rx="9"/><text x="95" y="194" fill="#bdf3ea">feat: cache layer</text></g>
+        <g class="reveal" style="--d:.9s"><rect class="pr human" x="20" y="216" width="150" height="34" rx="9"/><text x="95" y="238" fill="#bdf3ea">refactor: mapper</text></g>
+      </g>
+
+      <!-- funnel -->
+      <g class="reveal" style="--d:1s">
+        <polygon class="funnel" points="300,70 470,70 410,170 360,170"/>
+        <text x="385" y="55" text-anchor="middle" fill="var(--violet)" font-size="14" font-weight="700">noise filter</text>
+        <text x="385" y="128" text-anchor="middle" fill="var(--mut)" font-size="12">bot? deps-only?</text>
+      </g>
+      <line class="draw" style="--d:1.1s" x1="172" y1="150" x2="300" y2="120" stroke="var(--line)" stroke-width="2" pathLength="1"/>
+
+      <!-- rejected to trash -->
+      <text class="drop" x="385" y="200" text-anchor="middle" font-size="22" style="animation-delay:1.4s">🗑️</text>
+      <text x="385" y="250" text-anchor="middle" fill="var(--rose)" font-size="12" class="fade" style="--d:1.6s">bots dropped</text>
+
+      <!-- passed to right -->
+      <line class="draw" style="--d:1.3s" x1="410" y1="120" x2="560" y2="120" stroke="var(--teal)" stroke-width="2.5" pathLength="1"/>
+      <g class="pop" style="--d:1.5s">
+        <rect class="pr human" x="560" y="76" width="220" height="92" rx="14"/>
+        <text x="670" y="112" text-anchor="middle" fill="#bdf3ea" font-size="15" font-weight="700">real human PRs only</text>
+        <text x="670" y="140" text-anchor="middle" fill="var(--mut)" font-size="13">the signal we learn from</text>
+      </g>
+    </svg>
+  </div>
+</section>

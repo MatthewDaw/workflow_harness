@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Context Engineering: What Comes After Gradient Descent — full render</title>
+<script>
+  window.MathJax = { tex:{ inlineMath:[['\\(','\\)']], displayMath:[['\\[','\\]']] }, svg:{ fontCache:'global' } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<style>
+  body { background:#ffffff; color:#242424; margin:0;
+    font-family: Georgia, "Source Serif Pro", Charter, "Times New Roman", serif; }
+  .wrap { max-width: 740px; margin: 0 auto; padding: 56px 24px 140px; }
+  h1 { font-size: 38px; line-height: 1.18; letter-spacing: -0.011em; margin: 0 0 36px; }
+  h2 { font-size: 27px; line-height: 1.25; margin: 48px 0 8px; }
+  h3 { font-size: 21px; line-height: 1.3; margin: 36px 0 4px; }
+  p  { font-size: 19px; line-height: 1.68; margin: 16px 0; }
+  .eqfig { margin: 28px 0; }
+  .eqlabel { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 13px; letter-spacing: .04em;
+    color:#9a9a9a; text-transform: uppercase; margin-bottom: 2px; text-align:center; }
+  .math { font-size: 135%; text-align: center; padding: 8px 0 2px; }
+  .cap { text-align:center; font-size: 15px; color:#6b6b6b; font-style: italic; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; margin: 18px 0 8px; font-size: 17px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e6e6e6; vertical-align: top; }
+  thead th { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12px; letter-spacing: .08em;
+    text-transform: uppercase; color:#6b6b6b; border-bottom: 2px solid #242424; font-weight: 600; }
+  td:first-child { white-space: nowrap; width: 9ch; }
+  td .sym { font-size: 115%; }
+  ul.terms { list-style:none; padding:0 0 0 8px; margin:14px 0; font-size:18px; line-height:1.65; }
+  ul.terms li { margin-bottom:14px; }
+  .draft { border: 2px dashed #c9a227; border-radius: 10px; padding: 4px 22px 18px; margin-top: 56px; background: #fffdf5; }
+  .draft-tag { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 13px; letter-spacing: .06em;
+    text-transform: uppercase; color:#c9a227; font-weight: 700; margin-top: 14px; }
+  blockquote { border-left: 3px solid #242424; margin: 20px 0; padding: 2px 0 2px 20px; font-style: italic; font-size: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Context Engineering: What Comes After Gradient Descent</h1>
+
+<figure style="margin: 0 0 40px;">
+  <img src="escher-drawing-hands.png" alt="M. C. Escher, Drawing Hands — two hands drawing each other"
+       style="width:100%; height:auto; display:block;" />
+  <figcaption style="text-align:center; font-size:14px; color:#6b6b6b; margin-top:10px; font-family:-apple-system,'Segoe UI',sans-serif;">
+    M.&nbsp;C.&nbsp;Escher, <em>Drawing Hands</em> (1948)
+  </figcaption>
+</figure>
+
+<h2>Deep Learning Training Is Just Capability Accumulation</h2>
+<p>When training a machine learning model, the fundamental thing you do is present an input, do a transformation, assess the value of the output, and train the model to reproduce that output. The mapping of more inputs to outputs can be though of like increasing the capabilities of a model.</p>
+<p>In computer vision for example, you can present first an image of a cat, tell the model it's a cat, then when training against that the capability being composed down is the ability of determining if an image is of a cat or not. When you introduce an image of a new animal like a dog, that new data point is training in a new additional capability of being able to predict if an image is of a dog or not. More data points in the training set effectively means more capabilities.</p>
+<p>This can be extended to software that is made for code generation, where units of data are natural language descriptions of coding features, and the output is actual code that implements that feature. More data points, more inherent coding abilities.</p>
+<p>The primary focus of the companies like Anthropic or OpenAI is to increase the capabilities of their models to cover the whole set of skills that are demonstrated on the web. As the model grows smarter, it is better able to infer what capabilities work together and so when a prompt comes in like "make me a login page" it will automatically know to trigger not only the capabilities explicitly asked for like creating the the login form, but even perhaps additional things like triggering a UX design to make the form look nice, a retrieval tool to find the right place to put in your code base, and so on.</p>
+
+<h2>Describing Capability Accumulation Rigorously</h2>
+<p>To give this a more mathematical foundation, we will restrict our model of interest to a single neural network layer, ie, a 2 dimentional matrix. The ideas being expressed carry over directly to larger complicated models. With that simplification, we can rigorously demonstrate how models learn new "capabilities" in just four equations. To do that, we first need the following symbols:</p>
+
+<table>
+  <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><span class="sym">\( q \)</span></td><td>the input you're running right now (the "query") — a vector</td></tr>
+    <tr><td><span class="sym">\( y \)</span></td><td>the model's output — a vector</td></tr>
+    <tr><td><span class="sym">\( W \)</span></td><td>the weight matrix: the model's entire memory</td></tr>
+    <tr><td><span class="sym">\( x_i \)</span></td><td>training example number \(i\) (the cat photo, the feature description)</td></tr>
+    <tr><td><span class="sym">\( \sigma_i \)</span></td><td>the <em>error signal</em> for example \(i\) — how wrong the model was on it, and in which direction to correct</td></tr>
+    <tr><td><span class="sym">\( x_i^{\top} q \)</span></td><td>a dot product — a single number scoring how <em>similar</em> the new input is to training example \(i\)</td></tr>
+  </tbody>
+</table>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 1 — a single layer network</div>
+  <div class="math">\[ y = W q \]</div>
+</div>
+<p>Essentially all deep learning models always transform all input into vectors, so q can generalize to any input, whether it's an image, request for some code, or anything else. Our ML model W is (in our super simplified example) is just a single 2 dimensional matrix that transforms the input to a prediction we want, perhaps for example if the image vector q is a cat and we're trying to make it output the y vector [1,0] where the first index represents a cat and the second index represents a dog.</p>
+<p>To do the training then, we execute the operation W dotted with q to produce a prediction vector y. If that vector is wrong, we do back propagation and generate an update to the weights with something like this.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 2 — a learning update step</div>
+  <div class="math">\[ W \;\leftarrow\; W + \sigma_i\, x_i^{\top} \]</div>
+</div>
+<p>This is what a single gradient-descent step does, written out. You present example \(x_i\) (the cat photo), the model produces an output, you compare it to the right answer, and the mismatch becomes the error signal \(\sigma_i\) — "the output should have moved this way." The update is the product of the two: the input \(x_i\) tells the model which weights were responsible (the ones the input activated), and \(\sigma_i\) tells it how to fix them. The product \(\sigma_i x_i^{\top}\) is a little matrix patch — one stored lesson, shaped like "when you see something like this, push the answer like that."</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 3 — training is the accumulation of those lessons</div>
+  <div class="math">\[ W_T \;=\; W_0 + \sigma_1 x_1^{\top} + \sigma_2 x_2^{\top} + \cdots + \sigma_T x_T^{\top} \;=\; W_0 + \sum_{i=1}^{T} \sigma_i\, x_i^{\top} \]</div>
+</div>
+<p>Run the whole training set through and the patches simply add up. Look at what this equation says: the trained weights are the starting weights plus one term per training example. The training data hasn't been melted into some inscrutable soup — each example is sitting right there in the sum, as its own correction. This is the formal version of the cat-and-dog story: the cat photo contributed the \(\sigma_{cat} x_{cat}^{\top}\) term, the dog photo contributed \(\sigma_{dog} x_{dog}^{\top}\), and "more data points means more capabilities" becomes literal — more examples means more terms in the sum, and each term is a stored capability shard.</p>
+<p>Now run the trained model on a brand-new input q, and just multiply through:</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 4 — inference is a similarity-weighted replay of the training set</div>
+  <div class="math">\[ W_T\, q \;=\; W_0\, q \;+\; \sum_{i=1}^{T} \sigma_i \,\bigl(x_i^{\top} q\bigr) \]</div>
+</div>
+<p>Read each piece. \(W_0 q\) is the base response — what the untrained model would have said. Then, for every training example the model ever saw, there's a term \(\sigma_i (x_i^{\top} q)\): the lesson from example \(i\), scaled by the number \(x_i^{\top} q\) — how much does my new input resemble that example? If q looks nothing like the cat photo, that score is near zero and the cat lesson stays silent. If q looks a lot like it, the cat correction comes through at full strength.</p>
+<p>And that structure — score every stored item by its similarity to the query, then blend their stored payloads by those scores — has a name. It is exactly the attention operation:</p>
+
+<div class="eqfig">
+  <div class="math">\[ W_T\, q \;=\; W_0\, q \;+\; \mathrm{Attention}\bigl(\,\text{query}=q;\ \text{keys}=\{x_i\},\ \text{values}=\{\sigma_i\}\,\bigr) \]</div>
+</div>
+<p>where in essence, what the model is trying to do is take an input, find the most similar data point that it trained over, and do the same operation or apply the same "capability" it did to that data point during training.</p>
+
+<h2>Attention As Synergetic Capability Expression</h2>
+<p>As deep learning progressed, models became extremely good at creating capabilities that are incredibly confiscated and work well. However, there is a theoretical limit to have complicated a single capability can be before the expressiveness of it begins to get exhausted. To get past that, researches wanted to deliberately structure the model that small parts of it could learn to more directly specialize then only come to work in coordination when it was strictly needed. The system that was designed to do that is the self attention.</p>
+<p>To explain this, we will need 5 more equations and these symbols:</p>
+
+<table>
+  <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><span class="sym">\( P \)</span></td><td>the prompt — every context token, stacked as the columns of one matrix (tokens \(p_j\))</td></tr>
+    <tr><td><span class="sym">\( W_K, W_V \)</span></td><td>the <em>coordination weights</em> — learned by gradient descent, frozen at inference</td></tr>
+    <tr><td><span class="sym">\( k_j = W_K p_j \)</span></td><td>token \(j\)'s <em>key</em> — what it advertises itself as being about</td></tr>
+    <tr><td><span class="sym">\( v_j = W_V p_j \)</span></td><td>token \(j\)'s <em>value</em> — what it contributes if it's listened to</td></tr>
+    <tr><td><span class="sym">\( P_0,\ C \)</span></td><td>the prompt you already had, and the context you <em>add</em></td></tr>
+    <tr><td><span class="sym">\( \Delta W_C \)</span></td><td>the <em>context patch</em> — an operator assembled at runtime from the added context</td></tr>
+    <tr><td><span class="sym">\( \tilde q \)</span></td><td>the enriched query after attention (residual connection): \( \tilde q = q + F(q) \)</td></tr>
+    <tr><td><span class="sym">\( \theta \)</span></td><td>a latent <em>skill</em> — one of the behaviors training wrote into the model</td></tr>
+  </tbody>
+</table>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 5 — the self-attention layer</div>
+  <div class="math">\[ F(q) \;=\; W_V\, P\,\bigl(W_K\, P\bigr)^{\top} q \]</div>
+</div>
+<p>Three new symbols. P is the prompt — every vector of content, stacked as the columns of one matrix. \(W_K\) and \(W_V\) are two new weight matrices, learned by gradient descent just like before — call them the coordination weights. And q is, as always, the thing being computed right now.</p>
+<p>Read the formula from the inside out. \((W_K P)\) turns every prompt token into a key — a little advertisement saying "this is what I'm about." \((W_K P)^{\top} q\) scores every key against the current query — one similarity number per token of context. Then \(W_V P\) turns every prompt token into a value — the contribution it makes if it's listened to — and the formula blends the values by the scores. (Real attention adds a softmax over the scores; we drop it here for clean algebra, which is exact for so-called linear attention and the leading-order picture of the real thing.)</p>
+<p>Notice what kind of object this is. The capability bank from the previous section was a transformation baked into weights. Self-attention is a transformation assembled at runtime from the prompt. Gradient descent built \(W_K\) and \(W_V\) — the machinery of coordination — but what flows through that machinery is whatever you put in the context window. The model learned how to listen; the prompt decides what is said.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 6 — one steering term per token</div>
+  <div class="math">\[ F(q) \;=\; \sum_{j} \bigl(W_V\, p_j\bigr)\bigl(W_K\, p_j\bigr)^{\top} q \;=\; \sum_{j} v_j\,\bigl(k_j^{\top} q\bigr) \]</div>
+</div>
+<p>This is the same matrix identity we used on the training side: a matrix product unpacks into a sum of outer products, one term per column — here, one term per prompt token. And the shape should look familiar: it is exactly the shape of the capability shards \(\sigma_i x_i^{\top}\) from Equation 3. But look at what's different. A training shard stored a lesson — an error signal that knew the right answer. A prompt term stores a routing instruction: "if the query resembles \(k_j\), push the computation toward \(v_j\)." No labels, no corrections, no new lessons. Same algebra, different job.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 7 — adding context adds an operator</div>
+  <div class="math">\[
+  \begin{gathered}
+  P = \bigl[\, P_0 \;\|\; C \,\bigr] \quad\Longrightarrow\quad
+     F(q) \;=\; W_{P_0}\, q \;+\; \Delta W_C\, q \\[10pt]
+  \Delta W_C \;=\; \sum_{c \,\in\, C} \bigl(W_V c\bigr)\bigl(W_K c\bigr)^{\top}
+  \end{gathered}
+  \]</div>
+</div>
+<p>Now do the one move this whole essay has been building toward. Split the prompt's columns into two groups: \(P_0\), the prompt you already had, and C, the context you add — the extra instructions, the examples, the retrieved documentation. Because Equation 6 is a sum over tokens, the sum splits cleanly along that line, and the added context collapses into its own matrix: \(\Delta W_C\). Adding context to a prompt is, mathematically, adding a new operator into the model's computation — a steering matrix assembled on the fly from your words, sitting right inside the attention pathway. It was never trained, it vanishes when the context changes, and it touched no stored weight. But it is there, multiplying your query, every forward pass.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 8 — the proof: context biases which capabilities fire</div>
+  <div class="math">\[
+  \begin{gathered}
+  \tilde q \;=\; q + F(q) \\[12pt]
+  \underbrace{x_i^{\top}\tilde q}_{\text{capability } i}
+     \;=\; \underbrace{x_i^{\top} q}_{\text{input}}
+     \;+\; \underbrace{x_i^{\top} W_{P_0}\, q}_{\text{prompt}}
+     \;+\; \underbrace{x_i^{\top} \Delta W_C\, q}_{\text{added context}}
+  \end{gathered}
+  \]</div>
+</div>
+<p>Here is where the two halves of the essay meet. In a transformer, attention's output doesn't replace the query — it's added to it (the residual connection), producing an enriched representation \(\tilde q = q + F(q)\), and that is what flows into the trained layers downstream. The downstream layers are the capability bank from Equation 4: base response plus one term per stored lesson, each gated by a similarity score. Substitute \(\tilde q\) in, and the activation of every single capability decomposes into three readable pieces:</p>
+<ul class="terms">
+  <li><span class="sym">\( x_i^{\top} q \)</span> — how much the raw input resembles lesson \(i\). This is what fires &ldquo;on average,&rdquo; with no help.</li>
+  <li><span class="sym">\( x_i^{\top} W_{P_0}\, q \)</span> — the steering your original prompt already applied.</li>
+  <li><span class="sym">\( x_i^{\top} \Delta W_C\, q \)</span> — <em>the added context's entire effect</em>: a bias term, injected into the activation score of every capability the model owns.</li>
+</ul>
+<p>This is the theorem of the essay, stated plainly: added context cannot create a capability — there is no new \(\sigma_i x_i^{\top}\) term anywhere in these equations, and only gradient descent can write one. What added context does is add \(x_i^{\top} \Delta W_C\, q\) to every capability's trigger score — turning some lessons up and others down, for this query, right now. Gradient descent generates the repertoire; the prompt conducts it. When the right line of context makes the model suddenly "remember" to add validation to your login form, this term is what happened: the context shifted the query's effective direction until it overlapped the validation shards that were sitting in the weights all along, silent, one dot product away from firing.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 9 — the same statement, one level up</div>
+  <div class="math">\[ p\,(y \mid q,\, C) \;=\; \sum_{\theta} \; \underbrace{p\,(y \mid q,\, \theta)}_{\text{written by training}} \;\cdot\; \underbrace{p\,(\theta \mid C)}_{\text{selected by context}} \]</div>
+</div>
+<p>There's a complementary way to say all of this that's worth keeping in your pocket, because it's how the research literature frames it. Treat the model as a mixture over latent skills \(\theta\): for each skill, a fixed input-output behavior \(p(y \mid q, \theta)\), and over them, a distribution for which skill is in play. Training edits the first factor — it writes and refines the skills themselves. Context edits only the second — it sharpens \(p(\theta \mid C)\), the model's belief about which of its skills you're asking for. The empirical evidence for this division is striking: in-context examples work nearly as well with random labels as with correct ones (Min et al., 2022) — impossible if context were teaching new input-output mappings, exactly what you'd expect if context is identifying a task the model already knows. And there's a matching theoretical ceiling (Petrov et al., 2024): prompting provably cannot create attention patterns the frozen model doesn't already represent. It can only elicit.</p>
+<p>So the division of labor is clean, and it's the right mental model for everything that follows: gradient descent specializes in capability generation — it is the only writer. Prompt engineering specializes in capability coordination — it owns the bias term \(x_i^{\top}\Delta W_C\, q\) in every activation, which is to say, it owns the conducting. The art of prompting is not teaching the model anything. It is constructing the \(\Delta W_C\) that routes a query to the right ensemble of things the model already knows.</p>
+
+<h2>Prompt Engineering Optimization</h2>
+<p>The problem of prompt engineering optimization then is just to instill into your requests the specific capability you want drawn out. The space of capabilities for modern state of the art LLM's is immense in part because it trains on so much data, but also because the compression of those capabilities is efficient enough to draw out very fundamental core things that when applied to different contexts, generate results that look original, but are actually just subtle combinations of more basic fundamental things. This depth of capability is so great that it is a truly very hard challenge to find a problem the LLM can not complete if just given the right prompt. As such, very many coding projects can shift from humans manually typing out code to just finding the right prompts to incite the right already existing capabilities to complete the full coding project.</p>
+<p>In general, OpenAI and Anthropic does do the best it can to train the models to infer what extra capabilities need to be triggered given a prompt. However, the fundamental constraint that will always exist is that the models are trained to optimize for every conceivable workflow. Hence, it will always be impossible for the system to know the particulars or prioritize the specific nuiances or goals of what your system is trying to build. Plus, we aren't at the limit anyway and the models often just fail to to call the right obvious capabilities and the models just need to some pushing to go down the right path. Hence, prompt engineering and getting the right details to get the capabilities you specifically want is a problem that will be around for a long time, and it will require you siting down and expressing these nuances directly.</p>
+<p>The big differentiator though is how the specific insights you come up with will be retrieved.</p>
+
+<h3>L1: Single Conversation Context</h3>
+<p>At the most basic level, people can just open ChatGPT.com and directly type out exactly wat they want. The only part of this that is saved is in the conversation history. Eventually, the conversation context starts to bloat, and the user has to close out and usually loses all of their history.</p>
+<p>There is no retrival here, the user manually hands everything in.</p>
+
+<h3>L2: CLAUDE.MD</h3>
+<p>The next thing people learn to do is that they can save the general most important things to the claude.md file. This is loaded in every conversation so it has to be limited to only the truly most important things in a project.</p>
+<p>There is a little retrieval here in that the system retrieves the same blob of text at the start of every single conversation.</p>
+
+<h3>L3: Skills</h3>
+<p>Rather than dumping everything into a single file, you can start to break it up into smaller files. For each of the files, you give a brief description. When the conversation starts, all of the file descriptions are loaded into the memory context, then the model has the learned capability to retrieve the full file during the execution if the header has a high similarity to the conversation.</p>
+<p>The retrieval here is starting to be conditioned by the rest of the conversation because it just gives the agent a little bit and lets them retrieve more if there is a need to.</p>
+
+<h3>L4: Tool Calling</h3>
+<p>A tool call is a very small extension of a skill. Like skills, a brief description of each tool is loaded in at the start of the conversation, the only difference is that when the agent wants to look more into the tool it triggers some function and the results of that function is returned instead of just a fixed text file like for skills.</p>
+
+<h3>L5: Knowledge Graphs</h3>
+<p>Knowledge graphs are an evolution of skills. The weakness of skills is that the index itself starts to bloat: every file needs a description loaded at the start of every conversation, so as your collection of insights grows, you run into the same problem CLAUDE.md had, just one level up. Knowledge graphs fix this by linking the files to each other instead of listing them all in one flat index. Each insight becomes a node, and the edges encode how insights relate — this debugging note connects to that architecture decision, which connects to the constraint that motivated it. Now the agent only needs an entry point. It retrieves one relevant node, and the links tell it what else is worth pulling in, hop by hop, conditioned on where the conversation is actually going. Nothing has to be loaded up front beyond a way in.</p>
+<p>The retrieval here is fully conversational and compositional: the agent isn't picking from a fixed menu it saw at the start, it's traversing a structure, where each thing it retrieves reveals the next set of things it could retrieve. The graph does for your accumulated insights what the LLM's own training did for its capabilities — compresses them into connected fundamentals that can be recombined on demand, rather than stored as one giant blob.</p>
+
+<h3>L6: Multi Agent Workflows</h3>
+<p>Instead of everything being done in a single LLM call, multi-agent workflows distribute work across several LLM calls. This can be combined tool calling concept where agents can trigger other LLM instances and this can also be paired with skills by having the LLM's have specific preset context to make them "specialists" for handling a specific kind of task.</p>
+<p>The only real new thing here is that after an LLM has generated a certain amount of context, it clears it's context load then reloads in some curated load that either comes from a handoff prompt of the LLM retrieving more context.</p>
+
+<h2>The General Arch Of These Techniques</h2>
+<p>Look back at the ladder from L1 to L6 and notice the thing that never changed: the model. Same weights, same capability bank, same coordination machinery at every level. Not one of these techniques taught the model anything. The only thing that improved, level over level, is what lands in the context window, and when.</p>
+<p>The math of this essay says that's exactly what we should expect. At inference time there is only one free variable left in the whole system: \(\Delta W_C\), the operator assembled from whatever you load into context. Everything else is frozen. So every technique in the ladder is really just a policy for constructing \(\Delta W_C\). CLAUDE.md constructs it the same way every single time. Skills construct a sliver of it up front (the index) and the rest conditionally, when the conversation calls for it. Knowledge graphs construct it hop by hop, each retrieval revealing the next. Multi-agent workflows tear it down entirely between stages and rebuild a fresh one per specialist. The ladder isn't six different ideas. It's one idea, assemble the steering operator, done with increasing intelligence about what to include.</p>
+<p>Why does the assembly need to be intelligent at all? Two constraints, and the second one is the one people miss.</p>
+<p>The first is the obvious one: the window is finite. An agent's working memory is its context, and it is tiny compared to everything you know about your project. Your codebase conventions, your architectural decisions, the debugging scars, the reasons behind the constraints — none of it fits at once.</p>
+<p>The second constraint is that context isn't free even below the limit. Equation 6 said every token you load contributes its own steering term to the sum. Load the right insight and it biases exactly the capabilities you need. Load junk and the junk also steers — every irrelevant token adds its own little push to every activation score in the model. Context bloat isn't just "running out of room." It is actively degrading the conducting, smearing the model's attention across capabilities you never wanted. This is the mathematical reason that dumping your entire wiki into the prompt makes the agent worse, not better.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 10 — every loaded token steers, for good or ill</div>
+  <div class="math" style="font-size:120%">\[
+  \Delta W_C = \underbrace{\sum_{c \in \text{relevant}} v_c\, k_c^{\top}}_{\text{signal}}
+  + \underbrace{\sum_{c \in \text{junk}} v_c\, k_c^{\top}}_{\text{noise — steers anyway}}
+  \]</div>
+</div>
+
+<p>Put those two constraints together and the problem takes on a familiar shape: it's information theory. You have a large store of accumulated knowledge on one side, a narrow channel of tokens in the middle, and on the other side a receiver whose behavior is determined entirely by what makes it through. The engineering problem is coding: per moment, transmit the few tokens that maximally shift the model's capability activations toward the task at hand, and nothing else. Maximum signal per token. The L-ladder, read this way, is just a history of better codes — from "retransmit everything every time" (L1, L2) to a two-level code with an index (L3, L4) to a linked, conditional code that decompresses on demand (L5) to re-encoding between stages entirely (L6).</p>
+<p>And that framing exposes the two directions all of agentic progress is actually moving along:</p>
+<p><strong>Decompose in time.</strong> When a task requires more capabilities than one window can coordinate, you don't need a bigger window — you need smaller jobs. Break the work into sequential steps whose required capability ensembles each fit in working memory: plan first, then tickets, then one ticket at a time, each step getting its own fresh, small, focused context. This is why every serious agentic system converges on some version of plan → execute → verify loops. Iterative decomposition is context management on the time axis.</p>
+<p><strong>Retrieve in space.</strong> For each small job, reach into everything you've ever learned and pull only the handful of insights that most precisely bias the capabilities that job needs — the convention that applies to this file, the pitfall that applies to this API, the decision that constrains this feature. This is context management on the knowledge axis, and it's where the retrieval ladder (skills, graphs, specialist handoffs) lives.</p>
+<p>Both directions are the same objective stated on different axes: keep the working set small, and keep its relevance density as high as possible. The right \(\Delta W_C\), at the right time, and nothing else in it.</p>
+<p>So the general architecture of every one of these techniques — and, I'd argue, of every agentic technique still to come — is this: an outer loop that breaks the work into jobs small enough for a context window to coordinate, an inner retrieval that loads the optimal slice of accumulated knowledge for each job, and in the middle, a fixed model serving as a capability bank that the whole apparatus exists to conduct. The model brings the repertoire. The architecture brings the conducting. And the quality of an agentic system is decided almost entirely by how well it answers two questions, over and over: what is the next small job, and what is the very best context for it?</p>
+
+<h2>The Equation After Gradient Descent</h2>
+<p>That closing question pair is not rhetoric. It is an optimization problem, and it is worth writing down — because once it is on the page, every technique in this essay becomes a line of attack on one objective, and the title of this essay becomes an equation. Four equations close the essay, and they need one final set of symbols:</p>
+
+<table>
+  <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><span class="sym">\( q \)</span></td><td>a job — the next small unit of work (the "query" is now a whole task)</td></tr>
+    <tr><td><span class="sym">\( G \)</span></td><td>the organization of your knowledge — the files, the links, the hierarchy, the partition into specialists</td></tr>
+    <tr><td><span class="sym">\( K_G(q) \)</span></td><td>the knowledge the organization makes findable for job \(q\)</td></tr>
+    <tr><td><span class="sym">\( C \)</span></td><td>the context chosen for the job — bounded by noise, not by a size limit</td></tr>
+    <tr><td><span class="sym">\( D(q, C) \)</span></td><td>the job's measured loss given context \(C\) — did the build pass, did the tests go green, did the work land</td></tr>
+    <tr><td><span class="sym">\( \lambda \)</span></td><td>the price of structure — what a unit of organization costs to carry</td></tr>
+    <tr><td><span class="sym">\( L(G),\ L(\text{traces} \mid G) \)</span></td><td>description lengths — the bits to describe the organization, and the bits to describe your actual retrieval history given it</td></tr>
+    <tr><td><span class="sym">\( m(q),\ s(\cdot),\ r(\cdot) \)</span></td><td>the module (specialist) that handles job \(q\); search cost within a module; routing cost between modules</td></tr>
+    <tr><td><span class="sym">\( V(s),\ s' \)</span></td><td>the value of the project in state \(s\); \(s'\) is the state after the job lands</td></tr>
+    <tr><td><span class="sym">\( \ell(\text{job}, C) \)</span></td><td>the cost of doing one job with context \(C\)</td></tr>
+  </tbody>
+</table>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 11 — what comes after gradient descent</div>
+  <div class="math" style="font-size:118%">\[
+  \begin{aligned}
+  \textbf{training:}\qquad & W^{*} \;=\; \operatorname*{arg\,min}_{W}\; \mathbb{E}_{x}\Bigl[\; \mathcal{L}\bigl(f_{W}(x)\bigr) \;\Bigr] \\[14pt]
+  \textbf{context engineering:}\qquad & G^{*} \;=\; \operatorname*{arg\,min}_{G}\; \Bigl\{\; \mathbb{E}_{q}\Bigl[\; \min_{C \,\subseteq\, K_G(q)} D(q,\, C) \;\Bigr] \;+\; \lambda\, L(G) \;\Bigr\}
+  \end{aligned}
+  \]</div>
+  <div class="cap">the same nesting, one level up — gradient descent searches the weights; context engineering searches the organization of your knowledge</div>
+</div>
+
+<p>Read the two lines together. The first is the whole story of the opening sections: training searches the space of weights, by gradient descent, to minimize expected loss over inputs. The second is the whole story of everything since: context engineering searches the space of organizations — \(G\) is your accumulated knowledge with all of its structure: the files, the links, the hierarchy, the partition into specialists — to minimize the same kind of expectation. For each job \(q\), the inner bracket chooses the context: the subset \(C\) of the knowledge the organization makes findable for that job (\(K_G(q)\)) that minimizes the job's loss \(D(q, C)\) — did the build pass, did the tests go green, did the work land. Around it, the outer argmin chooses the organization itself, paying a carrying cost \(\lambda L(G)\) for structure. The bracket structure is the answer to this essay's title: it is the same nesting, one level up. Gradient descent searched weights so that inference would be cheap. This searches your library so that conducting is cheap.</p>
+
+<p>One more thing the equation makes visible: the inner bracket is where the research field already lives. Example selection, retrieval training, context compression — REPLUG's perplexity distillation, information-bottleneck filtering, submodular selection under a token budget — are all tractable proxies for that inner min. The outer bracket — what structure to grow so the inner problem stays easy as your knowledge grows — is, as far as I can find, formally open.</p>
+
+<p>Now, a confession about the inner min: nobody computes it. Nobody ever will — you would have to run every candidate context against the job to know. But there is a sixty-year-old precedent for exactly this situation. Belady's optimal cache rule — evict the page you will need farthest in the future — is provably perfect and impossible to implement, because it requires knowing the future. Its entire value is as the measuring stick every real policy is judged against. The inner min plays the same role here: a clairvoyant ideal. The L1-to-L6 ladder is a sequence of policies — similarity search, graph hops, specialist routing — each closing the gap to an oracle none of them can be. It is a criterion, not a certificate.</p>
+
+<p>And notice what is <em>missing</em> from the equation: a window budget. There is no \(|C| \le B\) anywhere, and that is deliberate. Modern context limits are enormous, and they are not what binds. What binds is Equation 10: every irrelevant token steers, so past the point where added context stops carrying signal, more context actively raises \(D\). The loss is U-shaped in what you load — too little starves the conducting, too much smears it — and the minimum is interior, enforced by the model's own attention, not by a wall. The window limit still exists out at the edge, but the noise wall arrives first, every time. Which settles a question people keep asking: million-token context windows do not end context engineering. The constraint was never space. It was always interference.</p>
+
+<p>So what is \(L(G)\), the cost of an organization? The previous section said the problem is information theory; here is that sentence made literal.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 12 — the cost of an organization</div>
+  <div class="math">\[ \mathrm{cost}(G) \;=\; L(G) \;+\; L(\text{traces} \mid G) \]</div>
+  <div class="cap">storage and access are two levels of one code, measured on what your agents actually retrieved</div>
+</div>
+
+<p>To use your knowledge you spend bits in two ways: routing bits to get to the right neighborhood — which file, which module, which specialist — and search bits to find the item inside it. Those are not two costs. They are the two levels of one code, and the total codelength is measured against your actual usage: the traces of what your agents really retrieved, job after job. This is the map equation from network science — community detection as compression of walks — pointed at a knowledge graph, and it is computable tonight, from logs, with no model call. Junk in your library is, literally, bits that compress nothing. One caveat information theory forces: a codelength is always relative to a declared coding scheme, so this is a criterion for comparing two organizations, never a certificate that one is the minimum.</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 13 — why specialists exist</div>
+  <div class="math" style="font-size:120%">\[
+  \mathrm{cost}(\text{partition}) \;=\; \mathbb{E}_{q}\Bigl[\;
+  \underbrace{s\bigl(|K_{m(q)}|\bigr)}_{\text{search within the module}}
+  \;+\;
+  \underbrace{r\bigl(\mathrm{depth}(m(q))\bigr)}_{\text{route between modules}}
+  \;\Bigr]
+  \]</div>
+  <div class="cap">one giant module and one-idea modules both blow up; a hierarchy of specialists is the minimum</div>
+</div>
+
+<p>This is the term that decides the agents. Consider the two extreme organizations. One giant generalist agent: zero routing cost, and a search cost that grows with everything you know — until interference (Equation 10 again) eats it alive. One micro-agent per idea: zero search cost, and routing that costs more than the work. The minimum sits between, and an economist already proved what it looks like: Garicano's theory of knowledge hierarchies in firms — frontline workers learn the common problems, rare problems escalate to specialists, and the org chart is the solution of exactly this search-versus-routing trade-off. Agents, in other words, are not designed. They are derived: the modules of the organization that minimizes Equation 13, recomputed as the knowledge grows. Two fine points. The partition changes what is cheap to find, never what an agent is allowed to reach. And the modern condition for when to split work across context windows is known: divide when the noise from a longer context grows faster than the noise added by coordinating two of them.</p>
+
+<p>One last honesty, about the outer argmin: it averages over jobs, which assumes you know which jobs are coming. You do not, and the distribution drifts — last quarter's hot module is this quarter's cold one. So in practice the slow loop is not a solved minimization; it is a self-organizing rule — what gets used moves up, what fires together gets linked, what bloats gets split — with the guarantee shape of a splay tree: never much worse than the best static organization you could have designed in hindsight, achieved without ever knowing the frequencies. That is why it is a loop and not a design document.</p>
+
+<p>So here is the answer to this essay's title, compressed. Gradient descent was the slow loop that optimized the weights, so that inference would be cheap. What comes after it is a second slow loop, one level up, that optimizes the library, so that conducting is cheap. Its parameters are your accumulated ideas. Its update step is adding one. Its loss is description length. And the fast loop that runs inside it, over and over, is exactly the question pair the last section ended on — which turns out to be the oldest equation in sequential decision-making:</p>
+
+<div class="eqfig">
+  <div class="eqlabel">Equation 14 — the last equation</div>
+  <div class="math">\[
+  V(s) \;=\;
+  \underbrace{\min_{\text{job}}}_{\text{the next small job}}\;
+  \underbrace{\min_{C}}_{\text{the best context for it}}\;
+  \Bigl[\; \ell(\text{job},\, C) \;+\; V(s') \;\Bigr]
+  \]</div>
+  <div class="cap">s = the project as it stands; s′ = the project after the job lands</div>
+</div>
+
+<p>The first min is "what is the next small job." The second is "what is the very best context for it." The state \(s\) is your project as it stands; \(s'\) is the project after the job lands; and the value of where you are is the cost of the next job plus the value of where it leaves you. Ask those two questions well, over and over, and you are not doing prompt hygiene. You are running the optimization that comes after gradient descent.</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!-- 01 · Title -->
+<section class="slide" id="slide-01" data-title="Intro"
+  data-narration="This is Verified Learning. It turns the merged pull requests already sitting in your codebase into trusted, reusable knowledge for your AI agents. Let's walk through how it works, one step at a time.">
+  <style>
+    #slide-01 .stage{height:min(46vh,420px)}
+    #slide-01 .pr{fill:var(--card2);stroke:var(--line)}
+    #slide-01 .flow{stroke:var(--violet);fill:none;opacity:.5}
+    #slide-01.active .spark{animation:s01move 3.2s ease-in-out infinite}
+    #slide-01 .spark:nth-of-type(2){animation-delay:-1.1s}
+    #slide-01 .spark:nth-of-type(3){animation-delay:-2.2s}
+    @keyframes s01move{0%{offset-distance:0%;opacity:0}10%{opacity:1}90%{opacity:1}100%{offset-distance:100%;opacity:0}}
+    #slide-01 .core{transform-origin:center}
+  </style>
+  <div class="kicker reveal" style="--d:.05s">How it works</div>
+  <h1 class="headline reveal" style="--d:.2s">Merged code, turned into knowledge</h1>
+  <div class="stage">
+    <svg viewBox="0 0 760 360" width="100%" height="100%">
+      <!-- converging flow paths -->
+      <path class="flow draw" style="--d:.5s"  d="M70,60  C260,60 300,180 380,180" pathLength="1"/>
+      <path class="flow draw" style="--d:.65s" d="M60,180 C220,180 250,180 380,180" pathLength="1"/>
+      <path class="flow draw" style="--d:.8s"  d="M70,300 C260,300 300,180 380,180" pathLength="1"/>
+      <!-- PR tokens -->
+      <g class="pop" style="--d:.9s"><rect class="pr" x="20" y="42" width="78" height="36" rx="9"/><text x="59" y="65" text-anchor="middle" fill="#cdd7f5" font-size="15" font-family="monospace">PR #214</text></g>
+      <g class="pop" style="--d:1s"><rect class="pr" x="12" y="162" width="86" height="36" rx="9"/><text x="55" y="185" text-anchor="middle" fill="#cdd7f5" font-size="15" font-family="monospace">PR #377</text></g>
+      <g class="pop" style="--d:1.1s"><rect class="pr" x="20" y="282" width="78" height="36" rx="9"/><text x="59" y="305" text-anchor="middle" fill="#cdd7f5" font-size="15" font-family="monospace">PR #491</text></g>
+      <!-- travelling sparks -->
+      <circle class="spark" r="5" fill="var(--teal)" style="offset-path:path('M70,60 C260,60 300,180 380,180')"/>
+      <circle class="spark" r="5" fill="var(--violet)" style="offset-path:path('M60,180 C220,180 250,180 380,180')"/>
+      <circle class="spark" r="5" fill="var(--blue)" style="offset-path:path('M70,300 C260,300 300,180 380,180')"/>
+      <!-- knowledge core -->
+      <g class="pop core pulse" style="--d:1.2s">
+        <polygon points="470,110 590,110 650,180 590,250 470,250 410,180" fill="rgba(45,212,191,.10)" stroke="var(--teal)" stroke-width="2"/>
+        <circle cx="530" cy="180" r="6" fill="var(--teal)"/>
+        <circle cx="500" cy="150" r="4" fill="var(--violet)"/><circle cx="566" cy="156" r="4" fill="var(--blue)"/>
+        <circle cx="498" cy="212" r="4" fill="var(--blue)"/><circle cx="566" cy="208" r="4" fill="var(--violet)"/>
+        <line x1="530" y1="180" x2="500" y2="150" stroke="var(--line)"/><line x1="530" y1="180" x2="566" y2="156" stroke="var(--line)"/>
+        <line x1="530" y1="180" x2="498" y2="212" stroke="var(--line)"/><line x1="530" y1="180" x2="566" y2="208" stroke="var(--line)"/>
+        <text x="530" y="295" text-anchor="middle" fill="#cdd7f5" font-size="15">knowledge graph</text>
+      </g>
+    </svg>
+  </div>
+  <p class="sub reveal" style="--d:1.3s">Every merge is a small, hard-won lesson. Verified Learning remembers them.</p>
+</section>

@@ -1,0 +1,45 @@
+<!-- 14 · The result -->
+<section class="slide" id="slide-14" data-title="The result"
+  data-narration="The result is a living knowledge graph of verified lessons — grounded in real merges, weighted by evidence, pinned to real symbols, and kept current. Any agent can query it before it writes a line of code, so it starts each task already knowing what your team learned the hard way.">
+  <style>
+    #slide-14 .stage{height:min(46vh,420px)}
+    #slide-14 .gnode{fill:var(--card2);stroke:var(--line)}
+    #slide-14 .ed{stroke:var(--line);stroke-width:1.5}
+    #slide-14.active .q{animation:s14q 2.2s ease-in-out infinite}
+    @keyframes s14q{0%,100%{opacity:.5}50%{opacity:1}}
+    #slide-14.active .core{animation:s14pulse 2.6s ease-in-out infinite}
+    @keyframes s14pulse{0%,100%{filter:drop-shadow(0 0 0 rgba(45,212,191,0))}50%{filter:drop-shadow(0 0 18px rgba(45,212,191,.6))}}
+  </style>
+  <h2 class="headline reveal" style="--d:.05s">A living graph your agents query</h2>
+  <div class="stage">
+    <svg viewBox="0 0 880 380" width="100%" height="100%">
+      <!-- graph -->
+      <g class="reveal core" style="--d:.4s">
+        <g class="ed">
+          <line x1="300" y1="120" x2="430" y2="190"/><line x1="430" y1="190" x2="560" y2="120"/>
+          <line x1="430" y1="190" x2="300" y2="270"/><line x1="430" y1="190" x2="560" y2="270"/>
+          <line x1="300" y1="120" x2="300" y2="270"/><line x1="560" y1="120" x2="560" y2="270"/>
+          <line x1="430" y1="190" x2="430" y2="70"/>
+        </g>
+        <g>
+          <circle class="gnode" cx="430" cy="190" r="30" fill="rgba(45,212,191,.16)" stroke="var(--teal)"/>
+          <circle class="gnode" cx="300" cy="120" r="22" stroke="var(--violet)"/>
+          <circle class="gnode" cx="560" cy="120" r="22" stroke="var(--blue)"/>
+          <circle class="gnode" cx="300" cy="270" r="22" stroke="var(--blue)"/>
+          <circle class="gnode" cx="560" cy="270" r="22" stroke="var(--violet)"/>
+          <circle class="gnode" cx="430" cy="70" r="18" stroke="var(--green)"/>
+        </g>
+        <text x="430" y="330" text-anchor="middle" fill="var(--mut)" font-size="13">verified lessons · grounded · current</text>
+      </g>
+
+      <!-- agent querying -->
+      <g class="reveal" style="--d:1s">
+        <rect class="card" x="680" y="150" width="170" height="92" rx="16"/>
+        <text x="765" y="190" text-anchor="middle" font-size="26">🤖</text>
+        <text x="765" y="220" text-anchor="middle" fill="#cdd7f5" font-size="13">agent · new task</text>
+        <path class="q draw" style="--d:1.3s" d="M680,196 C640,196 520,192 462,191" stroke="var(--teal)" stroke-width="2.5" fill="none" stroke-dasharray="6 6" pathLength="1"/>
+        <text x="585" y="172" text-anchor="middle" fill="var(--teal)" font-size="12" class="fade" style="--d:1.5s">query before coding</text>
+      </g>
+    </svg>
+  </div>
+</section>

@@ -1,0 +1,53 @@
+<!-- 05 · Distill -->
+<section class="slide" id="slide-05" data-title="Distill"
+  data-narration="Each surviving pull request is read by a language model — not just its title, but its actual diff. The model distills a single, transferable engineering lesson. For example, from a real change it learned: apply normalization in the entity setter rather than the mapper, so there's one enforcement point regardless of how the object is built.">
+  <style>
+    #slide-05 .stage{height:min(46vh,420px);width:min(1180px,96vw)}
+    #slide-05 .panel{fill:var(--card);stroke:var(--line)}
+    #slide-05 .code{font-family:"JetBrains Mono",monospace;font-size:12.5px}
+    #slide-05 .add{fill:var(--green)}#slide-05 .del{fill:var(--rose)}#slide-05 .dim{fill:var(--mut)}
+    #slide-05 .llm{fill:url(#s05g)}
+    #slide-05.active .llm{animation:s05pulse 2s ease-in-out infinite}
+    @keyframes s05pulse{0%,100%{filter:drop-shadow(0 0 0 rgba(167,139,250,0))}50%{filter:drop-shadow(0 0 16px rgba(167,139,250,.7))}}
+  </style>
+  <h2 class="headline reveal" style="--d:.05s">From diff to lesson</h2>
+  <div class="stage">
+    <svg viewBox="0 0 1180 380" width="100%" height="100%">
+      <defs><linearGradient id="s05g" x1="0" x2="1"><stop offset="0" stop-color="var(--violet)"/><stop offset="1" stop-color="var(--blue)"/></linearGradient></defs>
+      <!-- diff panel -->
+      <g class="reveal" style="--d:.3s">
+        <rect class="panel" x="20" y="40" width="430" height="300" rx="14"/>
+        <text x="44" y="74" class="dim code">— the PR diff —</text>
+        <text x="44" y="108" class="del code">- description = dto.description();</text>
+        <text x="44" y="134" class="add code">+ public void setDescription(String d){</text>
+        <text x="64" y="160" class="add code">+   this.description = StringUtils.trim(d);</text>
+        <text x="44" y="186" class="add code">+ }</text>
+        <text x="44" y="226" class="dim code">TeamMapper.toTeam(...) // unchanged</text>
+        <text x="44" y="252" class="dim code">billing/Team.java</text>
+        <text x="44" y="300" class="dim code" font-size="11">test: TeamMapperTest ✓</text>
+      </g>
+
+      <!-- LLM -->
+      <line class="draw" style="--d:.7s" x1="452" y1="190" x2="520" y2="190" stroke="var(--mut)" stroke-width="3" pathLength="1"/>
+      <g class="pop" style="--d:.8s">
+        <rect class="llm" x="522" y="150" width="120" height="80" rx="16"/>
+        <text x="582" y="186" text-anchor="middle" fill="#06121a" font-size="16" font-weight="800">LLM</text>
+        <text x="582" y="208" text-anchor="middle" fill="#06121a" font-size="11" font-weight="600">distill</text>
+      </g>
+      <text x="582" y="262" text-anchor="middle" fill="var(--mut)" font-size="11" class="fade" style="--d:1s">reads the change,<br/>not the title</text>
+      <line class="draw" style="--d:1s" x1="644" y1="190" x2="712" y2="190" stroke="var(--mut)" stroke-width="3" pathLength="1"/>
+
+      <!-- insight card -->
+      <g class="reveal" style="--d:1.2s">
+        <rect class="panel" x="714" y="60" width="446" height="260" rx="14" stroke="var(--teal)"/>
+        <text x="740" y="96" fill="var(--teal)" font-size="14" font-weight="800">💡 LEARNED INSIGHT</text>
+        <foreignObject x="738" y="112" width="404" height="150">
+          <div xmlns="http://www.w3.org/1999/xhtml" style="color:#dbe4ff;font:600 15px/1.45 'Segoe UI',sans-serif">
+            Apply normalization in the entity <span style="color:#2dd4bf">setter</span>, not the mapper — a single enforcement point that holds however the object is built.
+          </div>
+        </foreignObject>
+        <text x="740" y="296" class="code" fill="var(--amber)" font-size="12">rung: test · kind: bugfix-failure-mode</text>
+      </g>
+    </svg>
+  </div>
+</section>

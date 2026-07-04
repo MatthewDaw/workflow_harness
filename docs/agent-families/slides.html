@@ -1,0 +1,1197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Families — The Bitter Lesson</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #131826;
+    --ink: #e8edf7;
+    --muted: #8b97ad;
+    --accent: #6ea8fe;
+    --accent2: #7ee0b8;
+    --warn: #ffb86b;
+    --line: #232a3b;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+  /* ----- deck plumbing ----- */
+  .deck { height: 100vh; width: 100vw; position: relative; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    padding: 6vh 8vw;
+    animation: fade .35s ease;
+  }
+  .slide.active { display: flex; }
+  @keyframes fade { from { opacity: 0; transform: translateY(8px);} to {opacity:1; transform:none;} }
+
+  /* title slide with full-bleed background art */
+  .titleslide {
+    background: #000 url("bitter-lesson-bg.png") center/cover no-repeat;
+  }
+  .titleslide::before {
+    content: ""; position: absolute; inset: 0; z-index: 0;
+    background: linear-gradient(100deg, rgba(5,7,12,.92) 0%, rgba(5,7,12,.78) 42%, rgba(5,7,12,.30) 100%);
+  }
+  .titleslide > * { position: relative; z-index: 1; }
+  .titleslide h1 { text-shadow: 0 4px 30px rgba(0,0,0,.8); }
+  .titleslide .lede { color: #c4cee0; text-shadow: 0 2px 16px rgba(0,0,0,.9); }
+
+  /* ----- type ----- */
+  .kicker {
+    font: 600 0.8rem/1 var(--mono);
+    letter-spacing: .22em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 1.2rem;
+  }
+  h1 { font-size: clamp(2.4rem, 6vw, 5rem); line-height: 1.02; letter-spacing: -0.02em; font-weight: 800; }
+  h2 { font-size: clamp(1.8rem, 3.6vw, 3rem); line-height: 1.05; letter-spacing: -0.015em; font-weight: 800; margin-bottom: 1.6rem; }
+  .lede { font-size: clamp(1.05rem, 1.7vw, 1.5rem); color: var(--muted); max-width: 60ch; margin-top: 1.4rem; line-height: 1.45; }
+  .accent { color: var(--accent); }
+  .accent2 { color: var(--accent2); }
+  .warn { color: var(--warn); }
+  code, .mono { font-family: var(--mono); }
+
+  ul.points { list-style: none; margin-top: .4rem; display: grid; gap: 1rem; max-width: 70ch; }
+  ul.points li {
+    font-size: clamp(1.05rem, 1.8vw, 1.55rem); line-height: 1.4;
+    padding-left: 1.6rem; position: relative; color: var(--ink);
+  }
+  ul.points li::before {
+    content: "▸"; position: absolute; left: 0; color: var(--accent); font-size: .9em; top: .12em;
+  }
+  ul.points li .sub { display: block; font-size: .82em; color: var(--muted); margin-top: .2rem; }
+
+  /* ----- image slides ----- */
+  .imgwrap { display: flex; align-items: center; justify-content: center; height: 100%; }
+  .imgwrap img { max-width: 100%; max-height: 78vh; border-radius: 14px; background:#fff;
+    box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .titleimg img { max-height: 52vh; }
+  /* phoneme DAG: pure-black art on black — no card */
+  .imgwrap img.dagimg { background: transparent; box-shadow: none; border-radius: 0;
+    max-width: 96vw; max-height: 88vh; }
+  .imgwrap img.dagimg.plainlat { clip-path: inset(0 0 6% 0); }  /* crop the screenshot taskbar */
+
+  /* ----- table ----- */
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; font-size: clamp(.85rem,1.25vw,1.15rem); }
+  th, td { text-align: left; padding: .85rem 1rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    background: linear-gradient(180deg, #1a2236, #141a29);
+    color: var(--accent2); font-family: var(--mono); font-size: .9em;
+    letter-spacing: .04em; border-bottom: 2px solid #2c3650;
+  }
+  thead th:first-child { background: transparent; color: var(--muted); }
+  tbody th { font-family: var(--mono); color: var(--muted); font-weight: 600; white-space: nowrap;
+    font-size: .9em; letter-spacing: .03em; }
+  td .yes { color: var(--accent2); } td .no { color: var(--muted); }
+  td small { color: var(--muted); display:block; margin-top:.25rem; font-size:.82em; }
+
+  /* big, back-of-the-room cards + flow — slide 3 */
+  .bigtable { align-items: center; justify-content: center; padding: 4vh 5vw; }
+  .bigtable-title { text-align: center; margin-bottom: 3vh; }
+  .flowwrap { position: relative; width: 100%; }
+  .arrows { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; overflow: visible; }
+  .toprow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7vw; position: relative; z-index: 1; }
+  .botrow { display: flex; justify-content: center; margin-top: 13vh; position: relative; z-index: 1; }
+  .famcard {
+    background: var(--panel); border: 1px solid var(--line); border-top: 4px solid var(--accent);
+    border-radius: 16px; padding: 2.6vh 1.4vw; text-align: center;
+    display: flex; flex-direction: column; gap: 1.6vh; justify-content: center;
+    box-shadow: 0 18px 50px rgba(0,0,0,.35);
+  }
+  .botrow .famcard { width: 30%; }
+  .famcard.plan { border-top-color: #6ea8fe; }
+  .famcard.work { border-top-color: #7ee0b8; }
+  .famcard.verify { border-top-color: #ffb86b; }
+  .famcard.retrieve { border-top-color: #c89bff; }
+  .famname { font-size: clamp(1.4rem, 2.4vw, 2.4rem); font-weight: 800; letter-spacing: -0.01em; }
+  .famcard.plan .famname { color: #6ea8fe; }
+  .famcard.work .famname { color: #7ee0b8; }
+  .famcard.verify .famname { color: #ffb86b; }
+  .famcard.retrieve .famname { color: #c89bff; }
+  .famperm { font-size: clamp(1.05rem, 1.7vw, 1.7rem); font-weight: 700; line-height: 1.3; color: var(--ink); }
+
+  /* ----- pipeline diagram ----- */
+  .flow { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: 1.6rem 0; }
+  .node {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: .8rem 1.1rem; font-weight: 700; font-size: clamp(.9rem,1.4vw,1.2rem);
+  }
+  .node.plan { border-color:#3a557f; } .node.work { border-color:#3a6f57; } .node.verify { border-color:#7a5a32; }
+  .arrow { color: var(--muted); font-size: 1.4rem; }
+  .loopback { color: var(--warn); font-family: var(--mono); font-size: .85rem; }
+
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 2.4rem; align-items: start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1.4rem 1.6rem; }
+  .card h3 { font-family: var(--mono); font-size: .9rem; letter-spacing:.05em; color: var(--accent); margin-bottom:.6rem; text-transform: uppercase; }
+  .card p { color: var(--ink); font-size: clamp(.95rem,1.4vw,1.2rem); line-height:1.4; }
+  .card .big { font-size: clamp(1.4rem,2.4vw,2.2rem); font-weight:800; color:var(--accent2); font-family:var(--mono); }
+
+  .pill { display:inline-block; font-family:var(--mono); font-size:.78em; padding:.2em .6em; border-radius:999px;
+    border:1px solid var(--line); color:var(--muted); margin-right:.4em; }
+
+  /* ===== animated slides (4 & 5) ===== */
+  .animslide { align-items: center; }
+  .anim-title { text-align: center; font-size: clamp(1.6rem, 3.2vw, 2.8rem); margin-bottom: 1rem; }
+  .anim-title code { font-family: var(--mono); color: var(--accent2); }
+  .anim-sub { text-align: center; color: var(--muted); max-width: 64ch; margin: 0 auto;
+    font-size: clamp(.9rem, 1.4vw, 1.2rem); line-height: 1.4; }
+
+  /* --- slide 4: idea registration --- */
+  .stage { position: relative; width: 100%; margin-top: 4vh; display: flex; justify-content: center; }
+  .family-box {
+    position: relative; display: flex; align-items: center; gap: 3vw; justify-content: center;
+    background: rgba(19,24,38,.5); border: 2px dashed #2c3650; border-radius: 22px;
+    padding: 5vh 3vw 4vh; min-width: 72vw;
+  }
+  .family-label {
+    position: absolute; top: -.95rem; left: 50%; transform: translateX(-50%);
+    background: var(--bg); padding: 0 .9rem; color: var(--accent);
+    font-family: var(--mono); font-size: clamp(.85rem,1.2vw,1.05rem); letter-spacing: .05em;
+  }
+  .router-node {
+    background: #1a2236; border: 1px solid #3a557f; color: var(--accent); font-weight: 700;
+    border-radius: 12px; padding: 1.6vh 1.4vw; font-size: clamp(1rem,1.6vw,1.4rem);
+  }
+  .router-node.lit { box-shadow: 0 0 0 2px var(--accent), 0 0 30px rgba(110,168,254,.5); transform: scale(1.05); }
+  .agent-col { display: flex; flex-direction: column; gap: 1.6vh; }
+  .mini-agent {
+    background: var(--panel); border: 1px solid var(--line); border-left: 4px solid #2c3650;
+    border-radius: 12px; padding: 1.4vh 1.2vw; min-width: 26vw; transition: .3s;
+  }
+  .mini-agent.hot { border-left-color: #7ee0b8; box-shadow: 0 0 0 2px #7ee0b8, 0 0 30px rgba(126,224,184,.35); transform: scale(1.03); }
+  .ma-name { font-weight: 800; font-size: clamp(1rem,1.5vw,1.35rem); margin-bottom: .9vh; }
+  .ma-skills { display: flex; gap: .5vw; flex-wrap: wrap; }
+  .skp {
+    background: #0f1422; border: 1px solid var(--line); border-radius: 999px;
+    padding: .45vh .9vw; font-size: clamp(.8rem,1.1vw,1.05rem); color: var(--muted); transition: .3s;
+  }
+  .skp.skp-hot { color: #fff; border-color: #7ee0b8; box-shadow: 0 0 18px rgba(126,224,184,.55); transform: scale(1.14); }
+  .idea-dot {
+    position: absolute; left: 0; top: 0; width: 3rem; height: 3rem; display: grid; place-items: center;
+    font-size: 1.6rem; background: radial-gradient(circle, #ffe08a, #ffb86b); border-radius: 50%;
+    box-shadow: 0 0 26px rgba(255,184,107,.7); z-index: 5; pointer-events: none; opacity: 0;
+    transition: transform .55s cubic-bezier(.4,.1,.2,1), opacity .35s;
+  }
+
+  /* --- slide 5: grow then split --- */
+  .splitstage { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 4vw; width: 100%; margin-top: 3vh; }
+  .splitpanel { transition: opacity .5s; }
+  .splitpanel.dim { opacity: .22; }
+  .sp-cap { text-align: center; color: var(--muted); font-family: var(--mono);
+    font-size: clamp(.85rem,1.25vw,1.1rem); margin-bottom: 2.5vh; }
+  .sp-body { position: relative; min-height: 44vh; display: flex; align-items: center; justify-content: center; }
+  .growbox {
+    position: relative; background: var(--panel); border: 1px solid var(--line); border-top: 4px solid #6ea8fe;
+    border-radius: 14px; padding: 2.6vh 1.8vw; min-width: 15vw; text-align: center;
+    transition: opacity .45s, transform .45s, box-shadow .3s;
+  }
+  .growbox.agentbox { border-top-color: #7ee0b8; }
+  .growbox.flash, .growbox.full { box-shadow: 0 0 0 2px var(--warn), 0 0 44px rgba(255,184,107,.5); }
+  .growbox.hidden { opacity: 0; transform: scale(.78); pointer-events: none; }
+  .gb-title { font-weight: 800; font-size: clamp(1.05rem,1.7vw,1.55rem); margin-bottom: 1.4vh; }
+  .gb-dots { display: flex; flex-wrap: wrap; gap: .55rem; justify-content: center; max-width: 15vw; margin: 0 auto 1.4vh; min-height: 2.6rem; }
+  .gb-skills { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; max-width: 18vw; margin: 0 auto; min-height: 2.6rem; }
+  .ins-dot { width: .95rem; height: .95rem; border-radius: 50%; background: #6ea8fe; animation: pop .3s ease; }
+  .ins-dot.cb { background: #7ee0b8; }
+  .gb-count { color: var(--muted); font-family: var(--mono); font-size: clamp(.85rem,1.2vw,1.1rem); }
+  .splitresult {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 2.4vw;
+    opacity: 0; transform: scale(.85); transition: opacity .5s, transform .5s; pointer-events: none;
+  }
+  .splitresult.show { opacity: 1; transform: scale(1); }
+  .growbox.small { min-width: 11vw; padding: 2vh 1.2vw; }
+  .growbox.small.alt { border-top-color: #7ee0b8; }
+  .growbox.small.agentbox.alt { border-top-color: #c89bff; }
+  .skp.pop { animation: pop .3s ease; }
+  @keyframes pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+  /* --- slides 7 & 8: step-revealed pipelines --- */
+  [data-reveal] { opacity: 0; transform: translateY(10px); transition: opacity .45s ease, transform .45s ease; }
+  [data-reveal].revealed { opacity: 1; transform: none; }
+  .reveal-stage { width: 100%; margin-top: 3vh; display: flex; flex-direction: column; align-items: center; gap: 4vh; position: relative; }
+  .pipe-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 1vw; }
+  .pipe-row .arrow { display: inline-block; }
+  .pipe-row .node { font-size: clamp(.95rem, 1.5vw, 1.35rem); }
+  .node small { display: block; font-weight: 400; font-size: .62em; color: var(--muted); margin-top: .35em; letter-spacing: 0; }
+  .node.grade { border-color: #7a5a32; }
+  .node.reflector { border-color: #c89bff; }
+  .ep-target { background: #15110a; border: 1px solid #4a3a1f; border-radius: 12px; padding: 1.2vh 1.2vw;
+    text-align: center; font-size: clamp(.95rem, 1.5vw, 1.35rem); font-weight: 700; }
+  .ep-target small { display: block; color: var(--muted); font-size: .62em; font-weight: 400; margin-top: .35em; }
+  .ep-eye { font-family: var(--mono); color: var(--muted); font-size: clamp(.78rem, 1.05vw, 1rem); white-space: nowrap; }
+  .ralphbox { display: inline-flex; align-items: center; gap: .7vw; border: 1px dashed #3a6f57; border-radius: 14px; padding: 1.1vh 1vw; }
+  .ralph { font-family: var(--mono); color: #7ee0b8; font-size: clamp(1rem, 1.6vw, 1.5rem); display: flex; flex-direction: column; align-items: center; line-height: 1; }
+  .ralph small { font-size: .5em; color: var(--muted); margin-top: .3em; }
+  .idea-batch { display: flex; gap: .35rem; justify-content: center; margin-top: .7em; }
+  .library { text-align: center; }
+  .lib-title { font-weight: 700; margin-bottom: .8vh; font-size: clamp(.95rem, 1.4vw, 1.3rem); }
+  .lib-stack { display: flex; flex-direction: column-reverse; gap: .4rem; align-items: center; }
+  .lib-block { width: 8vw; max-width: 120px; height: 2vh; min-height: 16px; background: #2c3650; border-radius: 5px; }
+  .lib-block.grow { height: auto; min-height: 0; padding: .5vh .6vw; display: grid; place-items: center;
+    background: linear-gradient(120deg, #7ee0b8, #6ea8fe); color: #08110d; font: 800 clamp(.72rem,1vw,.95rem) var(--mono);
+    box-shadow: 0 0 22px rgba(126,224,184,.55); }
+  .curve-wrap { display: flex; flex-direction: column; align-items: center; gap: 1vh; }
+  .curve-label { font-family: var(--mono); color: var(--accent2); font-size: clamp(.88rem, 1.3vw, 1.15rem); }
+  .step-caption { text-align: center; max-width: 72ch; font-size: clamp(1rem, 1.65vw, 1.45rem); line-height: 1.45; color: var(--ink); min-height: 3em; }
+  .step-caption b { color: var(--accent2); font-weight: 700; }
+
+  /* --- slide 8: OpenEMR screenshot → build prompt --- */
+  .imgslide { justify-content: center; gap: 3vh; }
+  .imgslide .imgwrap { height: auto; }
+  .imgwrap img.shot { max-height: 72vh; border: 1px solid var(--line); background: #fff; }
+  .episode-stage { width: 100%; margin-top: 2vh; display: flex; flex-direction: column; align-items: center; position: relative; }
+  .ep-top { display: flex; align-items: center; justify-content: center; gap: 2.5vw; min-height: 56vh; width: 100%; }
+  .ep-shot { transition: transform .6s cubic-bezier(.4,.1,.2,1); }
+  .ep-shot img { display: block; max-height: 52vh; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+  .ep-shot.docked { transform: translateX(-3vw) scale(.66); }
+  .ep-bigarrow { font-size: clamp(1.6rem, 2.8vw, 2.6rem); color: var(--muted); }
+  .prompt-card {
+    max-width: 34vw; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent2);
+    border-radius: 12px; padding: 2.2vh 1.6vw; font-size: clamp(1rem, 1.5vw, 1.4rem); line-height: 1.5;
+    color: var(--ink); font-style: italic;
+  }
+  .pc-label { font-style: normal; font-family: var(--mono); font-size: .68em; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--accent2); margin-bottom: .8vh; }
+
+  /* --- slide 9: planning (Q&A → tickets) --- */
+  .plan-stage { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2vw; width: 100%; margin-top: 4vh; }
+  .plan-stage .prompt-card { max-width: 30vw; font-size: clamp(1rem, 1.5vw, 1.4rem); }
+  .pc-expand { display: flex; flex-direction: column; gap: .55vh; }
+  .pc-expand[data-reveal] { max-height: 0; overflow: hidden; margin-top: 0;
+    transition: max-height .55s ease, opacity .4s ease, margin-top .45s ease; }
+  .pc-expand[data-reveal].revealed { max-height: 40vh; margin-top: 1.2vh; }
+  .pc-exline { font-style: normal; font-family: var(--mono); font-size: .72em; color: var(--accent2); line-height: 1.3; }
+  .plan-mid { display: flex; flex-direction: column; align-items: center; gap: 1.2vh; }
+  .explorer-box { background: var(--panel); border: 1px solid var(--line); border-top: 4px solid #7ee0b8;
+    border-radius: 12px; padding: 1.4vh 1.8vw; font-weight: 800; font-size: clamp(1rem, 1.5vw, 1.35rem); }
+  .qa-arrow { display: flex; flex-direction: column; align-items: center; line-height: 1.1; color: var(--warn);
+    font-size: clamp(1.3rem, 2.2vw, 2rem); }
+  .qa-arrow small { font-size: .42em; color: var(--muted); font-family: var(--mono); margin-top: .2em; letter-spacing: .04em; }
+  .planfamily { background: var(--panel); border: 1px solid var(--line); border-top: 4px solid #6ea8fe;
+    border-radius: 14px; padding: 2vh 1.8vw; text-align: center; font-weight: 800; font-size: clamp(1.05rem, 1.7vw, 1.55rem); }
+  .planfamily small { display: block; font-weight: 400; color: var(--muted); font-size: .58em; margin-top: .45em; letter-spacing: .03em; }
+  .tickets { display: flex; flex-direction: column; gap: .7rem; }
+  .ticket { background: #0f1422; border: 1px solid var(--line); border-left: 3px solid #7ee0b8; border-radius: 8px;
+    padding: .85vh 1.1vw; font-family: var(--mono); font-size: clamp(.78rem, 1.1vw, 1.05rem); color: var(--ink); white-space: nowrap; }
+  .ticket b { color: var(--accent2); }
+
+  /* --- slides 12-14: coder / verifier / grader pipeline --- */
+  .coder-stage { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2vw; width: 100%; margin-top: 3vh; position: relative; }
+  .coder-tickets .ticket { font-size: clamp(.72rem, 1vw, .95rem); }
+  .pickout { transition: transform .5s cubic-bezier(.4,.1,.2,1), box-shadow .3s; }
+  .pickout.picked { transform: translateX(1.6vw) scale(1.04); box-shadow: 0 0 22px rgba(126,224,184,.45); }
+  .coder-tickets .pickout.picked { border-left-color: var(--accent2); }
+  .coder-mid { display: flex; flex-direction: column; align-items: center; gap: 1.1vh; }
+  .coder-box { background: var(--panel); border: 1px solid var(--line); border-top: 4px solid #7ee0b8; border-radius: 14px;
+    padding: 1.8vh 1.8vw; text-align: center; font-weight: 800; font-size: clamp(1.05rem, 1.7vw, 1.55rem); }
+  .coder-box.verifier { border-top-color: #ffb86b; }
+  .coder-box.grader { border-top-color: #c89bff; }
+  .coder-box small { display: block; font-weight: 400; color: var(--muted); font-size: .56em; margin-top: .45em; }
+  .ctx-arrow { color: #c89bff; }
+  .ctx-box { background: var(--panel); border: 1px solid var(--line); border-top: 4px solid #c89bff; border-radius: 12px;
+    padding: 1.2vh 1.4vw; text-align: center; font-weight: 700; font-size: clamp(.85rem, 1.3vw, 1.15rem); }
+  .ctx-box.checks { border-top-color: #ffb86b; }
+  .ctx-box.targetsrc { background: #15110a; border-color: #4a3a1f; border-top-color: #ffb86b; }
+  .ctx-box small { display: block; font-weight: 400; color: var(--muted); font-size: .62em; margin-top: .35em; }
+  .code-out { background: #0d1018; border: 1px solid var(--line); border-left: 3px solid #7ee0b8; border-radius: 10px;
+    padding: 1.4vh 1.2vw; text-align: left; max-width: 26vw; }
+  .co-label { font-family: var(--mono); font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent2); margin-bottom: .8vh; }
+  .code-out pre { margin: 0; font-family: var(--mono); font-size: clamp(.7rem, 1vw, .95rem); line-height: 1.55; color: #cdd6e6; white-space: pre; overflow-x: auto; }
+  .code-out .kw { color: #c89bff; } .code-out .str { color: #7ee0b8; }
+  .verdict { text-align: center; }
+  .verdict-pass { font-weight: 800; font-size: clamp(1.4rem, 2.4vw, 2.4rem); color: #7ee0b8; }
+  .verdict-pass.score { color: #6ea8fe; }
+  .verdict-sub { color: var(--muted); font-family: var(--mono); font-size: clamp(.76rem, 1.1vw, 1rem); margin-top: .7vh; }
+  .findings { text-align: left; }
+  .score-line { font-family: var(--mono); font-size: clamp(.9rem, 1.3vw, 1.2rem); color: var(--muted); margin-bottom: 1.2vh; }
+  .score-num { color: #6ea8fe; font-weight: 800; font-size: 1.5em; }
+  .finding { color: #ff9b9b; font-family: var(--mono); font-size: clamp(.8rem, 1.1vw, 1.05rem); margin-top: .6vh; line-height: 1.3; }
+  .idea-list { display: flex; flex-direction: column; gap: .6rem; margin-top: 1.2vh; }
+  .idea-card { background: #0f1422; border: 1px solid var(--line); border-left: 3px solid #ffb86b; border-radius: 8px;
+    padding: .7vh 1vw; font-family: var(--mono); font-size: clamp(.75rem, 1vw, .98rem); color: var(--ink); white-space: nowrap; text-align: left; }
+  .idea-card.alt { border-left-color: #6ea8fe; }
+
+  /* --- slide 15: ideas inserted into agents --- */
+  .ideas-stage { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2.5vw; width: 100%; margin-top: 4vh; position: relative; }
+  .grader-box { background: var(--panel); border: 1px solid var(--line); border-top: 4px solid #c89bff; border-radius: 14px;
+    padding: 2vh 2vw; text-align: center; }
+  .gb-name { font-weight: 800; font-size: clamp(1.1rem, 1.7vw, 1.6rem); }
+  .gb-sub { color: var(--muted); font-family: var(--mono); font-size: .62em; margin-top: .5em; }
+  .idea-batch.big { margin: 1vh 0 .4vh; }
+  .idea-batch.big .ins-dot { width: 1.05rem; height: 1.05rem; }
+  .ideas-agents { display: flex; flex-direction: column; gap: 2vh; }
+  .skp.newskill { color: #08110d; background: linear-gradient(120deg, #7ee0b8, #6ea8fe); border-color: #7ee0b8;
+    font-weight: 700; box-shadow: 0 0 16px rgba(126,224,184,.5); }
+
+  /* --- slide 16: iteration finale (step-through) --- */
+  .grow-stage { width: 100%; margin-top: 1vh; display: flex; flex-direction: column; align-items: center; gap: 4vh; position: relative; }
+  .loop-meta { display: flex; align-items: center; gap: 2vw; font-family: var(--mono); font-size: clamp(.9rem, 1.3vw, 1.2rem); color: var(--muted); }
+  .loop-meta b { color: var(--ink); font-size: 1.2em; }
+  .score-readout b { color: #7ee0b8; }
+  .score-bar { width: 22vw; height: 1vh; min-height: 8px; background: #1a2236; border-radius: 999px; overflow: hidden; }
+  .score-fill { height: 100%; width: 61%; background: linear-gradient(90deg, #6ea8fe, #7ee0b8); border-radius: 999px; transition: width .5s ease; }
+  .cyc-ring { display: inline-block; font-size: 1.5rem; color: var(--accent2); animation: spin 4s linear infinite; align-self: center; margin-left: .3vw; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .family-row { display: flex; align-items: flex-start; justify-content: center; gap: .8vw; flex-wrap: wrap; width: 100%; }
+  .fam { background: rgba(19,24,38,.5); border: 1.5px dashed #2c3650; border-radius: 14px; padding: 1.4vh 1vw; min-width: 8vw; text-align: center; }
+  .fam-label { font-weight: 800; font-size: clamp(.82rem, 1.2vw, 1.12rem); margin-bottom: 1vh; white-space: nowrap; }
+  .fam-agents { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: center; max-width: 12vw; min-height: 1.8rem; }
+  .ag-chip { background: #0f1422; border: 1px solid var(--line); border-radius: 999px; padding: .4vh .8vw;
+    font-size: clamp(.7rem, 1vw, .95rem); color: var(--ink); white-space: nowrap; animation: pop .3s ease; }
+  .fam-explorer { border-color: #3a6f57; } .fam-explorer .fam-label { color: #7ee0b8; }
+  .fam-planner { border-color: #3a557f; } .fam-planner .fam-label { color: #6ea8fe; } .fam-planner .ag-chip { border-left: 3px solid #6ea8fe; }
+  .fam-worker { border-color: #3a6f57; } .fam-worker .fam-label { color: #7ee0b8; } .fam-worker .ag-chip { border-left: 3px solid #7ee0b8; }
+  .fam-verifier { border-color: #7a5a32; } .fam-verifier .fam-label { color: #ffb86b; } .fam-verifier .ag-chip { border-left: 3px solid #ffb86b; }
+  .fam-grader { border-color: #5a4a7a; } .fam-grader .fam-label { color: #c89bff; }
+  .flow-arrow { color: var(--muted); font-size: clamp(1.1rem, 1.8vw, 1.6rem); align-self: center; }
+  @keyframes famglow { 40% { box-shadow: 0 0 26px rgba(110,168,254,.55); border-color: var(--accent); } }
+
+  /* --- slide 17: advantages bullets --- */
+  .adv-stage { position: relative; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3.5vh; margin-top: 3vh; }
+  .adv-list { max-width: 66ch; gap: 2.4vh; }
+  .adv-list li { font-size: clamp(1.2rem, 2.2vw, 2rem); }
+  .adv-list code { font-family: var(--mono); color: var(--accent2); font-size: .92em; }
+  .adv-note { text-align: center; max-width: 60ch; font-size: clamp(1.2rem, 2.1vw, 1.9rem); color: var(--accent2);
+    padding-top: 2.5vh; border-top: 1px solid var(--line); }
+  .adv-note b { color: #fff; }
+
+  .replay {
+    position: absolute; right: 0; bottom: -3rem; background: transparent; border: 1px solid var(--line);
+    color: var(--muted); border-radius: 8px; padding: .5rem .9rem; font-family: var(--mono);
+    font-size: .85rem; cursor: pointer; z-index: 6; transition: .2s;
+  }
+  .replay:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* --- research extensions: prompting as training --- */
+  .equiv { display: flex; flex-direction: column; align-items: center; gap: 2.6vh; width: 100%; margin-top: 4vh; }
+  .equiv-row { display: flex; align-items: center; gap: 1vw; flex-wrap: nowrap; }
+  .equiv-tag { font-family: var(--mono); font-size: clamp(.78rem, 1.15vw, 1.05rem); letter-spacing: .1em;
+    text-transform: uppercase; width: 11ch; text-align: right; color: var(--muted); flex: 0 0 auto; }
+  .equiv-tag.train { color: var(--warn); }
+  .equiv-tag.prompt { color: var(--accent2); }
+  .equiv-row .node { font-size: clamp(.95rem, 1.5vw, 1.35rem); }
+  .equiv-sign { font-size: clamp(2.2rem, 4.5vw, 3.6rem); font-weight: 800; color: var(--accent); line-height: 1; text-align: center; }
+  .equiv-sign small { display: block; font-family: var(--mono); font-size: .24em; letter-spacing: .06em;
+    color: var(--muted); text-transform: uppercase; margin-top: .7em; font-weight: 600; }
+  .equiv-foot { text-align: center; margin-top: 3.2vh; font-size: clamp(1rem, 1.6vw, 1.45rem);
+    color: var(--ink); max-width: 72ch; line-height: 1.45; }
+  .equiv-foot b { color: var(--accent2); }
+
+  /* --- research: the dual-form proof (slide 19) — equations only --- */
+  .proof { display: grid; grid-template-columns: 10ch auto; align-items: baseline;
+    column-gap: 2vw; row-gap: 2.4vh; margin: 3vh auto 0; justify-content: center; }
+  .eq-tag { font-family: var(--mono); font-size: clamp(.72rem, 1.05vw, .95rem); letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted); text-align: right; }
+  .eq { font-family: "Cambria Math", Cambria, Georgia, "Times New Roman", serif; font-style: italic;
+    font-size: clamp(1.5rem, 3vw, 2.9rem); line-height: 1.1; color: var(--ink); white-space: nowrap; }
+  .eq sub, .eq sup { font-style: normal; font-size: .58em; }
+  .eq .op { font-style: normal; color: var(--muted); margin: 0 .14em; }
+  .eq .w { color: var(--warn); }                 /* weights — the "training" side */
+  .eq .d { color: var(--accent2); }              /* data / keys / query — the "prompt" side */
+  .eq .v { color: var(--accent); }               /* values / error signal */
+  .eq .att { font-style: normal; font-weight: 700; color: var(--accent2); }
+  .proof-row.punch .eq { font-size: clamp(1.6rem, 3.3vw, 3.2rem); }
+  .dual { grid-column: 2; display: flex; align-items: center; gap: 1.4vw; margin-top: -.6vh;
+    font-family: var(--mono); font-size: clamp(.8rem, 1.2vw, 1.05rem); }
+  .dual .t { color: var(--warn); } .dual .p { color: var(--accent2); } .dual .e { color: var(--muted); font-size: 1.4em; }
+  .proof-cite { text-align: center; margin-top: 3.4vh; font-family: var(--mono);
+    font-size: clamp(.72rem, 1vw, .92rem); color: var(--muted); letter-spacing: .02em; }
+  /* ICL variant: tighter, holds the longer lines */
+  .proof.icl { grid-template-columns: 13ch auto; row-gap: 2.1vh; }
+  .proof.icl .eq { font-size: clamp(1.05rem, 2.05vw, 2.05rem); }
+  .proof.icl .proof-row.punch .eq { font-size: clamp(1.2rem, 2.4vw, 2.4rem); }
+  .eq .kw2 { font-style: normal; color: var(--muted); }   /* projection weights W_K, W_V (frozen) */
+
+  /* symbol legend on the proof slides */
+  .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem 1.7rem;
+    margin: 2.6vh auto 0; max-width: 84ch; }
+  .legend span { font-family: var(--mono); font-size: clamp(.72rem, 1.05vw, .94rem);
+    color: var(--muted); white-space: nowrap; }
+  .legend b { font-family: "Cambria Math", Cambria, Georgia, serif; font-style: italic;
+    font-weight: 400; font-size: 1.18em; margin-right: .4em; }
+  .legend b sub { font-style: normal; font-size: .62em; }
+  .legend .sw { color: var(--warn); }      /* weights */
+  .legend .sd { color: var(--accent2); }   /* data · query · keys */
+  .legend .sv { color: var(--accent); }    /* values · error signal */
+  .legend .sn { color: var(--ink); }       /* frozen projections */
+
+  /* --- research: two knobs on one formula --- */
+  .twin { display: flex; flex-direction: column; gap: 5vh; width: 100%; max-width: 82ch; margin: 4vh auto 0; }
+  .twin-line { display: flex; flex-direction: column; align-items: center; gap: 1.3vh; }
+  .twin-tag { font-family: var(--mono); font-size: clamp(.78rem, 1.15vw, 1.02rem);
+    letter-spacing: .12em; text-transform: uppercase; }
+  .twin-tag.train { color: var(--warn); } .twin-tag.prompt { color: var(--accent2); }
+  .twin .eq { font-family: "Cambria Math", Cambria, Georgia, "Times New Roman", serif; font-style: italic;
+    font-size: clamp(1.1rem, 2.15vw, 2.05rem); line-height: 1.15; color: var(--ink); white-space: nowrap; }
+  .twin .eq sub, .twin .eq sup { font-style: normal; font-size: .6em; }
+  .twin .eq .op { font-style: normal; color: var(--muted); margin: 0 .12em; }
+  .twin .eq .sm { font-style: normal; color: var(--muted); }     /* softmax, √d */
+  .twin .hot { border-bottom: 2px solid currentColor; padding-bottom: .04em; text-shadow: 0 0 16px currentColor; }
+  .twin .hot.w { color: var(--warn); } .twin .hot.d { color: var(--accent2); }
+  .twin .dim { opacity: .22; }
+  .twin .dim.w { color: var(--warn); } .twin .dim.d { color: var(--accent2); }
+  .twin-foot { text-align: center; margin-top: 1.5vh; font-size: clamp(1rem, 1.6vw, 1.45rem);
+    color: var(--ink); max-width: 70ch; margin-left: auto; margin-right: auto; line-height: 1.5; }
+  .twin-foot .tw { color: var(--warn); font-weight: 700; } .twin-foot .pr { color: var(--accent2); font-weight: 700; }
+
+  /* --- research: directions (slide 20) — terse --- */
+  .dirs { max-width: 70ch; gap: 2.8vh; margin-top: 3vh; }
+  .dirs li { font-size: clamp(1.2rem, 2.2vw, 1.9rem); line-height: 1.25; }
+  .dirs li b { color: var(--accent2); }
+  .dirs li .eqmini { font-family: "Cambria Math", Cambria, Georgia, serif; font-style: italic; color: var(--accent); }
+
+  /* ----- chrome ----- */
+  .chrome { position: fixed; bottom: 1.1rem; left: 0; right: 0; display:flex; justify-content:space-between;
+    align-items:center; padding: 0 1.4rem; font: 500 .8rem var(--mono); color: var(--muted); pointer-events:none; }
+  .progress { position: fixed; top: 0; left: 0; height: 3px; background: var(--accent); transition: width .3s ease; z-index: 10; }
+  .hint { opacity:.6; }
+  .deckname { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 — THE BITTER LESSON -->
+  <section class="slide active titleslide">
+    <h1>The Bitter&nbsp;Lesson</h1>
+  </section>
+
+  <!-- 2 — PHONEME LATTICE (plain) -->
+  <section class="slide">
+    <div class="imgwrap">
+      <img class="dagimg plainlat" src="phoneme-dag-plain.png" alt="phoneme lattice from start to end" />
+    </div>
+  </section>
+
+  <!-- 3 — PHONEME LATTICE (decoded) -->
+  <section class="slide">
+    <div class="imgwrap">
+      <img class="dagimg" src="phoneme-dag.png" alt="phoneme lattice decoded with highlighted path" />
+    </div>
+  </section>
+
+  <!-- 4 — HIDDEN MARKOV MODEL -->
+  <section class="slide">
+    <div class="imgwrap">
+      <img class="dagimg" src="hmm.png" alt="Hidden Markov Model phoneme trellis" />
+    </div>
+  </section>
+
+  <!-- 5 — THE MEME -->
+  <section class="slide">
+    <div class="imgwrap">
+      <img src="bitter-lesson-meme.jpg" alt="haha gpus go bitterrr meme" />
+    </div>
+  </section>
+
+  <!-- 6 — RLHF vs RLVR (human preferences → verifiable rewards) -->
+  <section class="slide">
+    <div class="imgwrap">
+      <img class="dagimg" src="rlhf-rlvr.png" alt="RLHF (reinforcement learning from human feedback) vs RLVR (reinforcement learning with verifiable rewards)" />
+    </div>
+  </section>
+
+  <!-- 10 — THE TURN (agent factories) -->
+  <section class="slide">
+    <div class="kicker">The bitter lesson, today</div>
+    <h2>Everyone is building <span class="warn">agent factories</span></h2>
+    <ul class="points">
+      <li>Hand-wired DAGs of agents, each stuffed with <span class="warn">domain knowledge and hard constraints</span>.</li>
+      <li>It nails the demo — and then it's the exact part that <span class="warn">won't scale</span>.</li>
+      <li>The lesson is 70 years old: hand-built knowledge gets <span class="accent">overtaken</span> by a system that <span class="accent2">learns</span>.</li>
+    </ul>
+    <p class="adv-note" style="margin-top:3vh">What if the agent system <b>learned its own skills</b> — instead of us baking them in?</p>
+  </section>
+
+  <!-- 11 — AGENT FAMILIES CARDS + FLOW -->
+  <section class="slide bigtable flowslide">
+    <h2 class="bigtable-title">Agent Families</h2>
+    <div class="flowwrap" id="flowwrap">
+      <svg class="arrows" id="arrows" preserveAspectRatio="none"></svg>
+      <div class="toprow">
+        <div class="famcard plan" id="c-plan">
+          <div class="famname">Planner</div>
+          <div class="famperm">Ticket Write</div>
+        </div>
+        <div class="famcard work" id="c-work">
+          <div class="famname">Worker</div>
+          <div class="famperm">Write Code</div>
+        </div>
+        <div class="famcard verify" id="c-verify">
+          <div class="famname">Verifier</div>
+          <div class="famperm">Execute Code</div>
+        </div>
+      </div>
+      <div class="botrow">
+        <div class="famcard retrieve" id="c-retrieve">
+          <div class="famname">Retriever</div>
+          <div class="famperm">Code / Internet Search</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 — ADD AN IDEA (step-through) -->
+  <section class="slide animslide" data-anim="register" data-steps="3">
+    <h2 class="anim-title">One operation: <code>add_idea()</code></h2>
+    <p class="anim-sub">No weights, no gradients — the system learns by routing each new idea to the right skill.</p>
+    <div class="stage" id="stage-register">
+      <div class="idea-dot" id="idea1">💡</div>
+      <div class="family-box">
+        <div class="family-label">Worker Family</div>
+        <div class="router-node" id="reg-router">Router</div>
+        <div class="agent-col">
+          <div class="mini-agent" id="reg-agentA">
+            <div class="ma-name">Agent A</div>
+            <div class="ma-skills"><span class="skp">CRUD</span><span class="skp">Auth</span></div>
+          </div>
+          <div class="mini-agent" id="reg-agentB">
+            <div class="ma-name">Agent B</div>
+            <div class="ma-skills"><span class="skp">Forms</span><span class="skp" id="reg-target">Validation</span></div>
+          </div>
+          <div class="mini-agent" id="reg-agentC">
+            <div class="ma-name">Agent C</div>
+            <div class="ma-skills"><span class="skp">Styling</span></div>
+          </div>
+        </div>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 5 — GROW, THEN SPLIT (step-through) -->
+  <section class="slide animslide" data-anim="split" data-steps="4">
+    <h2 class="anim-title">Grow, then split</h2>
+    <div class="splitstage" id="stage-split">
+      <div class="splitpanel" id="sp-skill">
+        <div class="sp-cap">A skill grows with each idea…</div>
+        <div class="sp-body">
+          <div class="growbox" id="skill-grow">
+            <div class="gb-title">Validation</div>
+            <div class="gb-dots" id="skill-dots">
+              <span class="ins-dot"></span><span class="ins-dot"></span><span class="ins-dot"></span><span class="ins-dot"></span>
+              <span class="ins-dot"></span><span class="ins-dot"></span><span class="ins-dot"></span><span class="ins-dot"></span>
+            </div>
+            <div class="gb-count" id="skill-count">4 / 8 insights</div>
+          </div>
+          <div class="splitresult" id="skill-split">
+            <div class="growbox small">
+              <div class="gb-title">Sync</div>
+              <div class="gb-dots"><span class="ins-dot"></span><span class="ins-dot"></span><span class="ins-dot"></span><span class="ins-dot"></span></div>
+            </div>
+            <div class="growbox small alt">
+              <div class="gb-title">Async</div>
+              <div class="gb-dots"><span class="ins-dot cb"></span><span class="ins-dot cb"></span><span class="ins-dot cb"></span><span class="ins-dot cb"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="splitpanel dim" id="sp-agent">
+        <div class="sp-cap">…until the agent splits into specialists</div>
+        <div class="sp-body">
+          <div class="growbox agentbox" id="agent-grow">
+            <div class="gb-title">Worker Agent</div>
+            <div class="gb-skills" id="agent-skills">
+              <span class="skp">CRUD</span><span class="skp">Auth</span><span class="skp">Forms</span>
+              <span class="skp">Validation</span><span class="skp">Routing</span><span class="skp">Caching</span>
+            </div>
+          </div>
+          <div class="splitresult" id="agent-split">
+            <div class="growbox small agentbox">
+              <div class="gb-title">Forms Specialist</div>
+              <div class="gb-skills"><span class="skp">CRUD</span><span class="skp">Forms</span><span class="skp">Validation</span></div>
+            </div>
+            <div class="growbox small agentbox alt">
+              <div class="gb-title">API Specialist</div>
+              <div class="gb-skills"><span class="skp">Auth</span><span class="skp">Routing</span><span class="skp">Caching</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 7 — THE TARGET (OpenEMR) -->
+  <section class="slide imgslide">
+    <h2 class="anim-title">The goal: reverse-code real apps — like OpenEMR</h2>
+    <div class="imgwrap"><img class="shot" src="openemr-dashboard.png" alt="OpenEMR patient summary dashboard" /></div>
+  </section>
+
+  <!-- 8 — EXPLORER WRITES THE PROMPT (step-through) -->
+  <section class="slide animslide" data-anim="episode" data-steps="1">
+    <h2 class="anim-title">The explorer turns the app into a build prompt</h2>
+    <div class="episode-stage">
+      <div class="ep-top">
+        <div class="ep-shot" id="ep-shot"><img src="openemr-dashboard.png" alt="OpenEMR dashboard" /></div>
+        <span class="arrow ep-bigarrow" data-reveal="1">→</span>
+        <div class="prompt-card" data-reveal="1">
+          <div class="pc-label">Build prompt</div>
+          “Build a patient-records web app where staff can register patients, schedule
+          appointments on a calendar, and write a visit note for each patient.”
+        </div>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 9 — PLANNING: Q&A THEN TICKETS (step-through) -->
+  <section class="slide animslide" data-anim="reveal" data-steps="4">
+    <h2 class="anim-title">Planning: expand the requirements, then ticket them</h2>
+    <div class="plan-stage">
+      <div class="prompt-card" id="plan-prompt">
+        <div class="pc-label">Build prompt</div>
+        <div class="pc-base">“Build a patient-records web app where staff can register patients, schedule appointments, and write visit notes…”</div>
+        <div class="pc-expand" data-reveal="3">
+          <div class="pc-exline">+ front-desk vs. clinician roles &amp; permissions</div>
+          <div class="pc-exline">+ appointment states: booked · checked-in · cancelled</div>
+          <div class="pc-exline">+ visit notes timestamped, immutable once signed</div>
+          <div class="pc-exline">+ patient search by name, DOB, or MRN</div>
+        </div>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="1">→</span>
+      <div class="plan-mid">
+        <div class="explorer-box" data-reveal="2">Explorer</div>
+        <span class="qa-arrow" data-reveal="2">⇅<small>pushback Q&amp;A</small></span>
+        <div class="planfamily" data-reveal="1">Planner<small>router · planner agents</small></div>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="4">→</span>
+      <div class="tickets" data-reveal="4">
+        <div class="ticket"><b>TKT-1</b> · Register patient</div>
+        <div class="ticket"><b>TKT-2</b> · Appointment calendar</div>
+        <div class="ticket"><b>TKT-3</b> · Visit-note editor</div>
+        <div class="ticket"><b>TKT-4</b> · Patient search</div>
+        <div class="ticket"><b>TKT-5</b> · Auth &amp; roles</div>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 12 — CODING A TICKET (step-through) -->
+  <section class="slide animslide" data-anim="coder" data-steps="3">
+    <h2 class="anim-title">The worker codes one ticket at a time</h2>
+    <div class="coder-stage">
+      <div class="tickets coder-tickets">
+        <div class="ticket pickout"><b>TKT-1</b> · Register patient</div>
+        <div class="ticket"><b>TKT-2</b> · Appointment calendar</div>
+        <div class="ticket"><b>TKT-3</b> · Visit-note editor</div>
+        <div class="ticket"><b>TKT-4</b> · Patient search</div>
+        <div class="ticket"><b>TKT-5</b> · Auth &amp; roles</div>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="1">→</span>
+      <div class="coder-mid">
+        <div class="coder-box">Coder<small>worker agent</small></div>
+        <span class="qa-arrow ctx-arrow" data-reveal="2">↑<small>pull context</small></span>
+        <div class="ctx-box" data-reveal="2">Context Retriever<small>codebase · docs · web</small></div>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="3">→</span>
+      <div class="code-out" data-reveal="3">
+        <div class="co-label">Code</div>
+<pre><span class="kw">export function</span> RegisterPatient() {
+  <span class="kw">const</span> [form, setForm] = useState(blank)
+  <span class="kw">return</span> (
+    &lt;Form onSubmit={save}&gt;
+      &lt;Field name=<span class="str">"name"</span> /&gt;
+      &lt;Field name=<span class="str">"dob"</span> type=<span class="str">"date"</span> /&gt;
+    &lt;/Form&gt;
+  )
+}</pre>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 13 — VERIFY (step-through) -->
+  <section class="slide animslide" data-anim="coder" data-steps="3">
+    <h2 class="anim-title">The verifier checks the work</h2>
+    <div class="coder-stage">
+      <div class="code-out pickout">
+        <div class="co-label">Code</div>
+<pre><span class="kw">export function</span> RegisterPatient() {
+  <span class="kw">const</span> [form, setForm] = useState(blank)
+  <span class="kw">return</span> &lt;Form onSubmit={save}&gt;…&lt;/Form&gt;
+}</pre>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="1">→</span>
+      <div class="coder-mid">
+        <div class="coder-box verifier">Verifier<small>sole verdict authority</small></div>
+        <span class="qa-arrow ctx-arrow" data-reveal="2">↑<small>run checks</small></span>
+        <div class="ctx-box checks" data-reveal="2">Build · Integration · Browser<small>machine-checkable evidence</small></div>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="3">→</span>
+      <div class="verdict" data-reveal="3">
+        <div class="verdict-pass">✓ PASS</div>
+        <div class="verdict-sub">build green · tests pass · browser ok</div>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 14 — GRADE (step-through) -->
+  <section class="slide animslide" data-anim="coder" data-steps="3">
+    <h2 class="anim-title">The grader scores the clone against the target</h2>
+    <div class="coder-stage">
+      <div class="code-out pickout">
+        <div class="co-label">Verified clone</div>
+<pre><span class="kw">const</span> app = buildPatientRecords()
+<span class="str">// the running clone</span>
+app.listen(3000)</pre>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="1">→</span>
+      <div class="coder-mid">
+        <div class="coder-box grader">Grader<small>sees everything</small></div>
+        <span class="qa-arrow ctx-arrow" data-reveal="2">↑<small>read target source</small></span>
+        <div class="ctx-box targetsrc" data-reveal="2">Target source code<small>OpenEMR · DB · traffic</small></div>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="3">→</span>
+      <div class="findings" data-reveal="3">
+        <div class="score-line"><span class="score-num">82%</span> scenarios passed</div>
+        <div class="finding">✗ Slots can double-book</div>
+        <div class="finding">✗ Search ignores the DOB filter</div>
+        <div class="finding">✗ Notes editable without a role check</div>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 15 — IDEAS INTO AGENT FAMILIES (step-through) -->
+  <section class="slide animslide" data-anim="reveal" data-steps="2">
+    <h2 class="anim-title">Those ideas route into the agent families</h2>
+    <div class="ideas-stage">
+      <div class="grader-box">
+        <div class="gb-name">Grader</div>
+        <div class="idea-list">
+          <div class="idea-card">Block conflicting slots</div>
+          <div class="idea-card">Honor every search filter</div>
+          <div class="idea-card alt">Elicit role permissions</div>
+        </div>
+      </div>
+      <span class="arrow ep-bigarrow" data-reveal="1">→</span>
+      <div class="ideas-agents">
+        <div class="mini-agent" data-reveal="1">
+          <div class="ma-name">Worker Family</div>
+          <div class="ma-skills">
+            <span class="skp">Forms</span>
+            <span class="skp newskill" data-reveal="2">+ block conflicting slots</span>
+            <span class="skp newskill" data-reveal="2">+ honor search filters</span>
+          </div>
+        </div>
+        <div class="mini-agent" data-reveal="1">
+          <div class="ma-name">Planner Family</div>
+          <div class="ma-skills">
+            <span class="skp">Elicitation</span>
+            <span class="skp newskill" data-reveal="2">+ ask about role permissions</span>
+          </div>
+        </div>
+      </div>
+      <button class="replay">⟲ Reset</button>
+    </div>
+  </section>
+
+  <!-- 16 — ITERATION FINALE (step-through) -->
+  <section class="slide animslide" data-anim="grow" data-steps="6">
+    <h2 class="anim-title">The loop runs — and the families grow themselves</h2>
+    <div class="grow-stage">
+      <div class="loop-meta">
+        <span>episode <b id="cyc-n">0</b></span>
+        <span class="score-readout">score <b id="score-n">61%</b></span>
+        <div class="score-bar"><div class="score-fill" id="score-fill"></div></div>
+      </div>
+      <div class="family-row" id="family-row">
+        <div class="fam fam-explorer"><div class="fam-label">👤 Explorer</div><div class="fam-agents"><span class="ag-chip">human sim</span></div></div>
+        <span class="flow-arrow">→</span>
+        <div class="fam fam-planner" data-fam="planner"><div class="fam-label">Planner Family</div><div class="fam-agents"></div></div>
+        <span class="flow-arrow">→</span>
+        <div class="fam fam-worker" data-fam="worker"><div class="fam-label">Worker Family</div><div class="fam-agents"></div></div>
+        <span class="flow-arrow">→</span>
+        <div class="fam fam-verifier" data-fam="verifier"><div class="fam-label">Verifier Family</div><div class="fam-agents"></div></div>
+        <span class="flow-arrow">→</span>
+        <div class="fam fam-grader"><div class="fam-label">Grader</div><div class="fam-agents"><span class="ag-chip">grader</span></div></div>
+        <span class="cyc-ring">⟳</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 — ADVANTAGES (step-through) -->
+  <section class="slide animslide" data-anim="reveal" data-steps="7">
+    <h2 class="anim-title">Advantages of This System</h2>
+    <div class="adv-stage">
+      <ul class="points adv-list">
+        <li data-reveal="1">One lever to improve the entire system — just <code>add_idea()</code></li>
+        <li data-reveal="2">Principled, clusterable, self-consistent, structured skills &amp; agents</li>
+        <li data-reveal="3">Better skill-cap thresholding via vector-based retrieval</li>
+        <li data-reveal="4">Auto-learns engineering skills and company tribal knowledge</li>
+        <li data-reveal="5">Learns from a simulated human — or a real one</li>
+        <li data-reveal="6">Auto-integrates into a normal Claude Code user's flow</li>
+        <li data-reveal="7">All manually orchestrated DAG factories are special cases of this algorithm</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 18 — RESEARCH EXTENSION: PROMPTING AS TRAINING -->
+  <section class="slide">
+    <div class="kicker" style="text-align:center; color:var(--accent2)">Research extension · the claim</div>
+    <h2 class="anim-title">Prompting <span class="accent2">is</span> training</h2>
+    <div class="equiv">
+      <div class="equiv-row">
+        <span class="equiv-tag train">Training</span>
+        <div class="node">Curated data</div>
+        <span class="arrow">→</span>
+        <div class="node verify">Gradient step</div>
+        <span class="arrow">→</span>
+        <div class="node">New weights<small>permanent · opaque</small></div>
+      </div>
+      <div class="equiv-sign">≡<small>same predictive distribution · de Finetti</small></div>
+      <div class="equiv-row">
+        <span class="equiv-tag prompt">Our system</span>
+        <div class="node">Curated insight</div>
+        <span class="arrow">→</span>
+        <div class="node work">Into context</div>
+        <span class="arrow">→</span>
+        <div class="node">Same behavior<small>transient · legible</small></div>
+      </div>
+      <div class="equiv-foot">A retrieved insight <b>is</b> the weight update training on it would have produced — applied transiently, in legible coordinates.</div>
+    </div>
+  </section>
+
+  <!-- 19 — RESEARCH EXTENSION: THE PROOF (equation step-through) -->
+  <section class="slide animslide" data-anim="reveal" data-steps="5">
+    <div class="kicker" style="text-align:center; color:var(--accent2)">Research extension · the proof</div>
+    <h2 class="anim-title"><span class="warn">Trained weights</span> <span class="accent">⟺</span> <span class="accent2">attention over data</span></h2>
+    <div class="proof">
+      <div class="eq-tag">layer</div>
+      <div class="eq"><span class="d">y</span> <span class="op">=</span> <span class="w">W</span><span class="d">q</span></div>
+
+      <div class="eq-tag" data-reveal="1">1 GD step</div>
+      <div class="eq" data-reveal="1"><span class="w">W</span> <span class="op">⟵</span> <span class="w">W</span> <span class="op">+</span> <span class="v">σ<sub>i</sub></span><span class="d">x<sub>i</sub><sup>⊤</sup></span></div>
+
+      <div class="eq-tag" data-reveal="2"><span class="d">T</span> steps</div>
+      <div class="eq" data-reveal="2"><span class="w">W<sub>T</sub></span> <span class="op">=</span> <span class="w">W<sub>0</sub></span> <span class="op">+</span> <span class="op">∑<sub>i</sub></span> <span class="v">σ<sub>i</sub></span><span class="d">x<sub>i</sub><sup>⊤</sup></span></div>
+
+      <div class="eq-tag" data-reveal="3">new input <span class="d">q</span></div>
+      <div class="eq" data-reveal="3"><span class="w">W<sub>T</sub></span><span class="d">q</span> <span class="op">=</span> <span class="w">W<sub>0</sub></span><span class="d">q</span> <span class="op">+</span> <span class="op">∑<sub>i</sub></span> <span class="v">σ<sub>i</sub></span><span class="op">(</span><span class="d">x<sub>i</sub><sup>⊤</sup>q</span><span class="op">)</span></div>
+
+      <div class="eq-tag" data-reveal="4">= attention</div>
+      <div class="proof-row punch" data-reveal="4">
+        <div class="eq"><span class="w">W<sub>T</sub></span><span class="d">q</span> <span class="op">=</span> <span class="w">W<sub>0</sub></span><span class="d">q</span> <span class="op">+</span> <span class="att">Attn</span><span class="op">(</span><span class="d">q</span> <span class="op">;</span> <span class="d">x<sub>i</sub></span><span class="op">,</span> <span class="v">σ<sub>i</sub></span><span class="op">)</span></div>
+      </div>
+      <div class="dual" data-reveal="4">
+        <span class="t">a trained network</span><span class="e">⟺</span><span class="p">a lookup over its data</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><b class="sw">W</b> weights</span>
+      <span><b class="sd">q</b> input you're running now</span>
+      <span><b class="sd">x<sub>i</sub></b> training example</span>
+      <span><b class="sv">σ<sub>i</sub></b> its error signal</span>
+      <span><b class="sn">x<sub>i</sub><sup>⊤</sup>q</b> similarity score</span>
+    </div>
+    <div class="proof-cite" data-reveal="5">exact for linear attention — Irie 2022 · von&nbsp;Oswald 2023&nbsp;&nbsp;|&nbsp;&nbsp;general: implicit Bayesian conditioning (de&nbsp;Finetti)</div>
+    <button class="replay">⟲ Reset</button>
+  </section>
+
+  <!-- 20 — RESEARCH EXTENSION: THE PROMPT DIRECTION (equation step-through) -->
+  <section class="slide animslide" data-anim="reveal" data-steps="6">
+    <div class="kicker" style="text-align:center; color:var(--accent2)">Research extension · the proof, other direction</div>
+    <h2 class="anim-title">A <span class="accent2">prompt</span> <span class="accent">⟹</span> an <span class="warn">effective weight update</span></h2>
+    <div class="proof icl">
+      <div class="eq-tag">self-attention</div>
+      <div class="eq">F(<span class="d">q</span>) <span class="op">=</span> <span class="kw2">W</span><sub>V</sub><span class="d">P</span> <span class="op">(</span><span class="kw2">W</span><sub>K</sub><span class="d">P</span><span class="op">)</span><sup>⊤</sup><span class="d">q</span></div>
+
+      <div class="eq-tag" data-reveal="1">= one term / token</div>
+      <div class="eq" data-reveal="1">F(<span class="d">q</span>) <span class="op">=</span> <span class="op">∑<sub>j</sub></span><span class="op">(</span><span class="kw2">W</span><sub>V</sub><span class="d">p<sub>j</sub></span><span class="op">)(</span><span class="kw2">W</span><sub>K</sub><span class="d">p<sub>j</sub></span><span class="op">)</span><sup>⊤</sup><span class="d">q</span></div>
+
+      <div class="eq-tag" data-reveal="2">split <span class="d">base</span> ‖ <span class="d">demos</span></div>
+      <div class="eq" data-reveal="2">F(<span class="d">q</span>) <span class="op">=</span> <span class="w">W</span><sub>ZS</sub><span class="d">q</span> <span class="op">+</span> <span class="op">∑<sub>i</sub></span><span class="op">(</span><span class="kw2">W</span><sub>V</sub><span class="d">x<sub>i</sub></span><span class="op">)(</span><span class="kw2">W</span><sub>K</sub><span class="d">x<sub>i</sub></span><span class="op">)</span><sup>⊤</sup><span class="d">q</span></div>
+
+      <div class="eq-tag" data-reveal="3">base + patch</div>
+      <div class="eq" data-reveal="3">F(<span class="d">q</span>) <span class="op">=</span> <span class="op">(</span><span class="w">W</span><sub>ZS</sub> <span class="op">+</span> <span class="w">ΔW</span><sub>ctx</sub><span class="op">)</span><span class="d">q</span></div>
+
+      <div class="eq-tag" data-reveal="4">the patch <span class="op">=</span> attention</div>
+      <div class="proof-row punch" data-reveal="4">
+        <div class="eq"><span class="w">ΔW</span><sub>ctx</sub> <span class="op">=</span> <span class="op">∑<sub>i</sub></span> <span class="v">v<sub>i</sub></span> <span class="op">⊗</span> <span class="d">k<sub>i</sub></span></div>
+      </div>
+
+      <div class="eq-tag" data-reveal="5">one GD step</div>
+      <div class="eq" data-reveal="5"><span class="w">ΔW</span><sub>GD</sub> <span class="op">=</span> <span class="op">∑<sub>i</sub></span> <span class="v">e<sub>i</sub></span> <span class="op">⊗</span> <span class="d">x<sub>i</sub></span></div>
+
+      <div class="dual" data-reveal="6">
+        <span class="p">in-context examples</span><span class="e">⟺</span><span class="t">a gradient step</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><b class="sd">q</b> query</span>
+      <span><b class="sd">P</b> the prompt <span style="opacity:.6">(tokens p<sub>j</sub>)</span></span>
+      <span><b class="sd">x<sub>i</sub></b> in-context example</span>
+      <span><b class="sd">k<sub>i</sub></b> key <span style="opacity:.6">= W<sub>K</sub>x<sub>i</sub></span></span>
+      <span><b class="sv">v<sub>i</sub></b> value <span style="opacity:.6">= W<sub>V</sub>x<sub>i</sub></span></span>
+      <span><b class="sn">W<sub>K</sub>, W<sub>V</sub></b> the learned weights <span style="opacity:.6">(frozen)</span></span>
+      <span><b class="sw">W<sub>ZS</sub></b> effective base operator <span style="opacity:.6">(from the prompt)</span></span>
+      <span><b class="sw">ΔW</b> effective weight patch <span style="opacity:.6">(from the examples)</span></span>
+      <span><b class="sv">e<sub>i</sub></b> error signal</span>
+    </div>
+    <div class="proof-cite" data-reveal="6">the prompt builds an effective <span class="warn">ΔW</span> — the learned weights <span class="kw2">W<sub>K</sub></span>,&nbsp;<span class="kw2">W<sub>V</sub></span> never change — Dai 2022 · von&nbsp;Oswald 2023</div>
+    <button class="replay">⟲ Reset</button>
+  </section>
+
+  <!-- 20b — RESEARCH EXTENSION: WHAT CONTEXT ACTUALLY DOES (task selection) -->
+  <section class="slide animslide" data-anim="reveal" data-steps="4">
+    <div class="kicker" style="text-align:center; color:var(--accent2)">Research extension · what context actually does</div>
+    <h2 class="anim-title"><span class="warn">Training writes</span> the skills · <span class="accent2">context selects</span> the skill</h2>
+    <div class="proof icl">
+      <div class="eq-tag">the model</div>
+      <div class="eq">p(<span class="d">y</span> <span class="op">|</span> <span class="d">q</span>) <span class="op">=</span> <span class="op">∑<sub>θ</sub></span> <span class="w">p(y | q, θ)</span> <span class="op">·</span> p(θ)</div>
+
+      <div class="eq-tag" data-reveal="1">add context <span class="d">C</span></div>
+      <div class="proof-row punch" data-reveal="1">
+        <div class="eq">p(<span class="d">y</span> <span class="op">|</span> <span class="d">q</span><span class="op">,</span> <span class="d">C</span>) <span class="op">=</span> <span class="op">∑<sub>θ</sub></span> <span class="w">p(y | q, θ)</span> <span class="op">·</span> <span class="v">p(θ | C)</span></div>
+      </div>
+
+      <div class="eq-tag" data-reveal="2">training edits</div>
+      <div class="eq" data-reveal="2"><span class="w">p(y | q, θ)</span> <span class="sm">— the skills</span></div>
+
+      <div class="eq-tag" data-reveal="3">context edits</div>
+      <div class="eq" data-reveal="3"><span class="v">p(θ | C)</span> <span class="sm">— which skill is in play</span></div>
+
+      <div class="dual" data-reveal="4">
+        <span class="t">fine-tuning rewrites the library</span><span class="e">·</span><span class="p">a prompt sharpens the posterior over it</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><b class="sw">θ</b> a latent task / skill <span style="opacity:.6">(learned in pretraining)</span></span>
+      <span><b class="sd">C</b> the context</span>
+      <span><b class="sd">q</b> query</span>
+      <span><b class="sv">p(θ | C)</b> posterior — concentrates as C grows</span>
+    </div>
+    <div class="proof-cite" data-reveal="4">ICL works with <em>random labels</em> ⇒ selection, not learning — Min 2022 · Xie 2021 (Bayesian view) · Hendel 2023 (task vectors) · Petrov 2024 (elicitation ceiling)</div>
+  </section>
+
+  <!-- 21b — RESEARCH EXTENSION: TWO KNOBS ON ONE FORMULA -->
+  <section class="slide animslide" data-anim="reveal" data-steps="2">
+    <div class="kicker" style="text-align:center; color:var(--accent2)">Research extension · same formula, two knobs</div>
+    <h2 class="anim-title"><span class="warn">Training</span> moves the weights · a <span class="accent2">prompt</span> moves the data</h2>
+    <div class="twin">
+      <div class="twin-line">
+        <div class="twin-tag train">what training updates ↓</div>
+        <div class="eq">F(q) <span class="op">=</span> <span class="hot w">W<sub>V</sub></span> <span class="dim d">P</span> <span class="sm">softmax</span><span class="op">(</span><span class="op">(</span><span class="hot w">W<sub>K</sub></span> <span class="dim d">P</span><span class="op">)</span><sup>⊤</sup><span class="hot w">W<sub>Q</sub></span> <span class="dim d">q</span> <span class="op">/</span> <span class="sm">√d</span><span class="op">)</span></div>
+      </div>
+      <div class="twin-line" data-reveal="1">
+        <div class="twin-tag prompt">what a prompt changes ↓</div>
+        <div class="eq">F(q) <span class="op">=</span> <span class="dim w">W<sub>V</sub></span> <span class="hot d">P</span> <span class="sm">softmax</span><span class="op">(</span><span class="op">(</span><span class="dim w">W<sub>K</sub></span> <span class="hot d">P</span><span class="op">)</span><sup>⊤</sup><span class="dim w">W<sub>Q</sub></span> <span class="hot d">q</span> <span class="op">/</span> <span class="sm">√d</span><span class="op">)</span></div>
+      </div>
+    </div>
+    <div class="twin-foot" data-reveal="2">Same formula — <span class="tw">training</span> rewrites the weights, a <span class="pr">prompt</span> rewrites the data. Both reshape <span style="font-family:'Cambria Math',Georgia,serif;font-style:italic">F(q)</span>.</div>
+    <div class="legend">
+      <span><b class="sw">W<sub>Q</sub>, W<sub>K</sub>, W<sub>V</sub></b> the learned weights</span>
+      <span><b class="sd">P</b> prompt tokens</span>
+      <span><b class="sd">q</b> query</span>
+      <span><b class="sn">softmax, √d</b> fixed operations</span>
+    </div>
+  </section>
+
+  <!-- 21 — RESEARCH EXTENSION: DIRECTIONS (terse step-through) -->
+  <section class="slide animslide" data-anim="reveal" data-steps="4">
+    <div class="kicker" style="text-align:center; color:var(--accent2)">Research extension · the program</div>
+    <h2 class="anim-title">Where this goes</h2>
+    <div class="adv-stage">
+      <ul class="points dirs">
+        <li data-reveal="1">Prompting <b>≡</b> training <span class="sub" style="display:block;font-size:.62em;color:var(--muted);margin-top:.3rem">the ML toolbox transfers — curate now, <b>distill into weights</b> later</span></li>
+        <li data-reveal="2">Grader <b>→</b> differentiable loss <span class="eqmini">ρ(φ, trace)</span></li>
+        <li data-reveal="3">Library <b>→</b> measurement system <span class="sub" style="display:block;font-size:.62em;color:var(--muted);margin-top:.3rem">IRT difficulty · e-value gates · causal credit</span></li>
+        <li data-reveal="4">DAG factories <b>⊂</b> this algorithm</li>
+      </ul>
+    </div>
+    <button class="replay">⟲ Reset</button>
+  </section>
+
+</div>
+
+<div class="chrome">
+  <span></span>
+  <span class="hint">→ step · ↓ skip to next slide · ← back · ⇧-click skips · F = fullscreen</span>
+  <span><span id="cur">1</span> / <span id="total">8</span><span id="stepind"></span></span>
+</div>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  let i = 0;
+  const total = slides.length;
+  document.getElementById('total').textContent = total;
+
+  let step = 0;                                  // current build step within the active slide
+  const stepsOf = idx => Number(slides[idx].dataset.steps || 0);
+
+  function show(n) {
+    i = Math.max(0, Math.min(total - 1, n));
+    step = 0;
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    document.getElementById('cur').textContent = i + 1;
+    document.getElementById('progress').style.width = ((i + 1) / total * 100) + '%';
+    requestAnimationFrame(() => { drawArrows(); renderSteps(); });
+  }
+  function next() { if (step < stepsOf(i)) { step++; renderSteps(); } else show(i + 1); }
+  function prev() { if (step > 0) { step--; renderSteps(); } else show(i - 1); }
+
+  // ----- build-step rendering (presenter-triggered, idempotent) -----
+  function renderSteps() {
+    const s = slides[i];
+    if (s.dataset.anim === 'register') renderRegister(step);
+    else if (s.dataset.anim === 'split') renderSplit(step);
+    else if (s.dataset.anim === 'reveal') renderReveal(s, step);
+    else if (s.dataset.anim === 'episode') { renderReveal(s, step); document.getElementById('ep-shot')?.classList.toggle('docked', step >= 1); }
+    else if (s.dataset.anim === 'coder') { renderReveal(s, step); s.querySelector('.pickout')?.classList.toggle('picked', step >= 1); }
+    else if (s.dataset.anim === 'grow') renderGrow(s, step);
+    const N = stepsOf(i);
+    document.getElementById('stepind').textContent = N ? `  ·  step ${step}/${N}` : '';
+  }
+
+  // generic step reveal (slides 7 & 8): show [data-reveal] <= step, swap [data-cap]
+  function renderReveal(s, step) {
+    s.querySelectorAll('[data-reveal]').forEach(el => el.classList.toggle('revealed', step >= Number(el.dataset.reveal)));
+    const caps = [...s.querySelectorAll('[data-cap]')];
+    if (caps.length) {
+      let best = -1;
+      caps.forEach(c => { const n = Number(c.dataset.cap); if (n <= step && n > best) best = n; });
+      caps.forEach(c => c.style.display = Number(c.dataset.cap) === best ? '' : 'none');
+    }
+  }
+  document.querySelectorAll('.replay').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); step = 0; renderSteps(); });
+  });
+
+  // ----- slide 16: iteration finale (step-through) -----
+  // each step = one episode; families grow / split agents inside their box; score climbs
+  const GROW_STAGES = [
+    { ep: 0, sc: 61, p: ['Planner'], w: ['Worker'], v: ['Verifier'] },
+    { ep: 1, sc: 71, p: ['Planner'], w: ['Forms', 'API'], v: ['Verifier'] },
+    { ep: 2, sc: 79, p: ['Elicit', 'Tickets'], w: ['Forms', 'API'], v: ['Verifier'] },
+    { ep: 3, sc: 86, p: ['Elicit', 'Tickets'], w: ['Forms', 'API', 'Data'], v: ['Build', 'Browser'] },
+    { ep: 4, sc: 91, p: ['Elicit', 'Tickets', 'Scope'], w: ['Forms', 'Validation', 'API', 'Data'], v: ['Build', 'Browser'] },
+    { ep: 5, sc: 95, p: ['Elicit', 'Tickets', 'Scope'], w: ['Forms', 'Validation', 'Calendar', 'API', 'Data', 'Auth'], v: ['Build', 'Browser', 'Integration'] },
+    { ep: 6, sc: 97, p: ['Elicit', 'Tickets', 'Scope', 'Risk'], w: ['Forms', 'Validation', 'Calendar', 'Search', 'API', 'Data', 'Auth'], v: ['Build', 'Browser', 'Integration'] },
+  ];
+  function setFam(fam, names) {
+    const box = document.querySelector(`.fam[data-fam="${fam}"] .fam-agents`);
+    if (box) box.innerHTML = names.map(n => `<span class="ag-chip">${n}</span>`).join('');
+  }
+  function renderGrow(s, step) {
+    const st = GROW_STAGES[Math.min(step, GROW_STAGES.length - 1)];
+    document.getElementById('cyc-n').textContent = st.ep;
+    document.getElementById('score-n').textContent = st.sc + '%';
+    document.getElementById('score-fill').style.width = st.sc + '%';
+    setFam('planner', st.p); setFam('worker', st.w); setFam('verifier', st.v);
+    // sweep a glow through the families = the workflow flowing through them
+    const fams = [...s.querySelectorAll('.fam')];
+    fams.forEach(f => f.style.animation = 'none');
+    void s.offsetWidth;
+    fams.forEach((f, idx) => f.style.animation = `famglow .55s ease ${idx * 0.13}s`);
+  }
+
+  // slide 4 — idea travels router → agent → skill, one step at a time
+  function renderRegister(step) {
+    const stage = document.getElementById('stage-register'); if (!stage) return;
+    const dot = document.getElementById('idea1');
+    const router = document.getElementById('reg-router');
+    const agentB = document.getElementById('reg-agentB');
+    const skill = document.getElementById('reg-target');
+    const sb = stage.getBoundingClientRect();
+    if (!sb.width) return;
+    const ctr = el => { const b = el.getBoundingClientRect(); return { x: (b.left + b.right) / 2 - sb.left, y: (b.top + b.bottom) / 2 - sb.top }; };
+    const dw = dot.offsetWidth / 2, dh = dot.offsetHeight / 2;
+    const rc = ctr(router);
+    const target = [ { x: 60, y: rc.y }, rc, ctr(agentB), ctr(skill) ][Math.min(step, 3)];
+    dot.style.opacity = 1;
+    dot.style.transform = `translate(${target.x - dw}px, ${target.y - dh}px)`;
+    router.classList.toggle('lit', step >= 1);
+    agentB.classList.toggle('hot', step >= 2);
+    skill.classList.toggle('skp-hot', step >= 3);
+  }
+
+  // slide 5 — skill grows then splits; agent grows then splits
+  function renderSplit(step) {
+    const dots = [...document.querySelectorAll('#skill-dots .ins-dot')];
+    const full = step >= 1;
+    dots.forEach((d, idx) => d.style.display = idx < (full ? 8 : 4) ? '' : 'none');
+    document.getElementById('skill-count').textContent = full ? '8 / 8 — full' : '4 / 8 insights';
+    document.getElementById('skill-grow').classList.toggle('full', full && step < 2);
+    document.getElementById('skill-grow').classList.toggle('hidden', step >= 2);
+    document.getElementById('skill-split').classList.toggle('show', step >= 2);
+    document.getElementById('sp-agent').classList.toggle('dim', step < 3);
+    [...document.querySelectorAll('#agent-skills .skp')].forEach(s => s.style.display = step >= 3 ? '' : 'none');
+    document.getElementById('agent-grow').classList.toggle('full', step === 3);
+    document.getElementById('agent-grow').classList.toggle('hidden', step >= 4);
+    document.getElementById('agent-split').classList.toggle('show', step >= 4);
+  }
+
+  // ----- flow arrows on the Agent Families slide -----
+  function drawArrows() {
+    const wrap = document.getElementById('flowwrap');
+    const svg = document.getElementById('arrows');
+    if (!wrap || !svg) return;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    if (!W || !H) return;                       // slide hidden → rects are 0
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const wb = wrap.getBoundingClientRect();
+    const box = id => {
+      const b = document.getElementById(id).getBoundingClientRect();
+      return { l: b.left - wb.left, r: b.right - wb.left, t: b.top - wb.top, b: b.bottom - wb.top,
+               cx: (b.left + b.right) / 2 - wb.left, cy: (b.top + b.bottom) / 2 - wb.top };
+    };
+    const p = box('c-plan'), w = box('c-work'), v = box('c-verify'), rt = box('c-retrieve');
+    const gap = 14;                             // pull arrow ends off the card edges
+    // straight horizontal: planner → worker → verifier
+    const hLine = (a, b) => `M ${a.r + gap} ${a.cy} L ${b.l - gap} ${b.cy}`;
+    // curved rise: retriever top → top card bottom (arrowhead lands on the card)
+    const drop = (a, tx) =>
+      `M ${tx} ${rt.t - gap} C ${tx} ${(a.b + rt.t) / 2}, ${a.cx} ${(a.b + rt.t) / 2}, ${a.cx} ${a.b + gap}`;
+    const paths = [
+      hLine(p, w), hLine(w, v),
+      drop(p, rt.l + (rt.r - rt.l) * 0.32),
+      drop(w, rt.l + (rt.r - rt.l) * 0.68),
+    ];
+    svg.innerHTML = `
+      <defs>
+        <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L9,4.5 L0,9 Z" fill="#9aa7bd"/>
+        </marker>
+      </defs>
+      ${paths.map(d => `<path d="${d}" fill="none" stroke="#9aa7bd" stroke-width="2.5" marker-end="url(#ah)"/>`).join('')}
+    `;
+  }
+  window.addEventListener('resize', () => requestAnimationFrame(() => { drawArrows(); renderSteps(); }));
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', ' ', 'PageDown'].includes(e.key)) { e.preventDefault(); next(); }
+    else if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); prev(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); show(i + 1); }   // skip steps → next slide
+    else if (e.key === 'ArrowUp') { e.preventDefault(); show(i - 1); }     // skip steps → prev slide
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(total - 1);
+    else if (e.key.toLowerCase() === 'f') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+  document.addEventListener('click', e => {
+    const fwd = e.clientX > window.innerWidth * 0.5;
+    if (e.shiftKey) { show(fwd ? i + 1 : i - 1); }   // shift-click skips remaining steps → whole slide
+    else { fwd ? next() : prev(); }
+  });
+  show(0);
+</script>
+</body>
+</html>
